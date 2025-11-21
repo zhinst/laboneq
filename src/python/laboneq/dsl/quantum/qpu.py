@@ -21,13 +21,14 @@ from __future__ import annotations
 
 import inspect
 from typing import TYPE_CHECKING, Any, Sequence
+
 from typing_extensions import deprecated
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.quantum.qpu_topology import QPUTopology
 from laboneq.dsl.quantum.quantum_element import QuantumElement
-from laboneq.dsl.session import Session
 from laboneq.dsl.quantum.quantum_operations import QuantumOperations
+from laboneq.dsl.session import Session
 
 if TYPE_CHECKING:
     from laboneq.dsl.device import DeviceSetup

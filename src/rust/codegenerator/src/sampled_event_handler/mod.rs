@@ -7,7 +7,7 @@ mod feedback_register_config;
 mod feedback_register_layout;
 mod handler;
 pub mod seqc_tracker;
-mod shfppc_sweeper_config;
+pub(super) mod shfppc_sweeper_config;
 mod shfppc_sweeper_config_tracker;
 
 use indexmap::IndexMap;
@@ -34,7 +34,7 @@ pub struct SeqcResults {
     pub wave_indices: IndexMap<String, (WaveIndex, SignalType)>,
     pub command_table: Option<Value>,
     pub parameter_phase_increment_map: Option<HashMap<String, Vec<ParameterPhaseIncrement>>>,
-    pub shf_sweeper_config: Option<SHFPPCSweeperConfig>,
+    pub shf_sweeper_config: Option<String>,
     pub feedback_register_config: FeedbackRegisterConfig,
 }
 

@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from typing import Callable, Dict, Tuple
-from itertools import takewhile
+
 import warnings
+from itertools import takewhile
+from typing import Callable, Dict, Tuple
+
 from laboneq._utils import id_generator
-from laboneq.dsl.experiment import Section
-from laboneq.dsl.experiment.pulse import Pulse
 from laboneq.dsl import quantum
-from laboneq.dsl.experiment import builtins_dsl
+from laboneq.dsl.experiment import Section, builtins_dsl
+from laboneq.dsl.experiment.pulse import Pulse
 from laboneq.openqasm3.openqasm_error import OpenQasmException
 
 

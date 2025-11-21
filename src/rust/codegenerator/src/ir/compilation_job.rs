@@ -7,10 +7,34 @@ use anyhow::anyhow;
 use numeric_array::NumericArray;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::ops::Deref;
 use std::sync::Arc;
 
 pub type Samples = i64;
 pub type ChannelIndex = u8;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DeviceUid(Arc<String>);
+
+impl Deref for DeviceUid {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl From<&str> for DeviceUid {
+    fn from(s: &str) -> Self {
+        DeviceUid(Arc::new(s.to_string()))
+    }
+}
+
+impl From<String> for DeviceUid {
+    fn from(s: String) -> Self {
+        DeviceUid(Arc::new(s))
+    }
+}
 
 /// Represents different kinds of pulse definitions.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,16 +140,16 @@ pub enum AwgKind {
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct AwgKey {
-    device_name: Arc<String>,
+    device_name: DeviceUid,
     index: u16,
 }
 
 impl AwgKey {
-    pub fn new(device_name: Arc<String>, index: u16) -> Self {
+    pub fn new(device_name: DeviceUid, index: u16) -> Self {
         AwgKey { device_name, index }
     }
 
-    pub fn device_name(&self) -> &str {
+    pub fn device_name(&self) -> &DeviceUid {
         &self.device_name
     }
 
@@ -136,17 +160,17 @@ impl AwgKey {
 
 #[derive(Debug, Clone)]
 pub struct Device {
-    name: Arc<String>,
+    uid: DeviceUid,
     kind: DeviceKind,
 }
 
 impl Device {
-    pub fn new(name: Arc<String>, kind: DeviceKind) -> Self {
-        Device { name, kind }
+    pub fn new(uid: DeviceUid, kind: DeviceKind) -> Self {
+        Device { uid, kind }
     }
 
-    pub fn name(&self) -> &str {
-        &self.name
+    pub fn uid(&self) -> &DeviceUid {
+        &self.uid
     }
 
     pub fn kind(&self) -> &DeviceKind {
@@ -203,7 +227,7 @@ impl AwgCore {
     }
 
     pub fn key(&self) -> AwgKey {
-        AwgKey::new(Arc::clone(&self.device.name), self.uid)
+        AwgKey::new(self.device.uid.clone(), self.uid)
     }
 
     /// A mapping from signal UID to the index of the oscillator in the `osc_allocation` map.

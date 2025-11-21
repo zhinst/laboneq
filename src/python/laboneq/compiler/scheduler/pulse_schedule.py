@@ -20,7 +20,6 @@ class PulseSchedule(IntervalSchedule):
     set_oscillator_phase: Optional[float] = None
     increment_oscillator_phase: Optional[float] = None
     incr_phase_param_name: str | None = None
-    section: str
     play_pulse_params: Optional[Dict[str, Any]] = None
     pulse_pulse_params: Optional[Dict[str, Any]] = None
     pulse_params_id: int | None = None

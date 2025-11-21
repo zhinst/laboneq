@@ -2,17 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from typing import Callable
-import wrapt
-from opentelemetry import trace
-from opentelemetry.instrumentation.utils import unwrap
-from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 
-from laboneq import __version__
+import laboneq.compiler
 import laboneq.compiler.scheduler.scheduler
 import laboneq.compiler.seqc.code_generator
-import laboneq.compiler
-import laboneq.dsl.session
 import laboneq.controller.controller
+import laboneq.dsl.session
+import wrapt
+from laboneq import __version__
+from opentelemetry import trace
+from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+from opentelemetry.instrumentation.utils import unwrap
+
 from laboneq_benchmark.instrumentation import otel
 
 

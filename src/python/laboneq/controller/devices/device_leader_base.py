@@ -4,17 +4,17 @@
 from __future__ import annotations
 
 import logging
-from enum import IntEnum
 import time
+from enum import IntEnum
 
 from laboneq.controller.devices.async_support import ResponseWaiterAsync, _sleep
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.devices.node_control import (
-    Setting,
     Condition,
     NodeControlBase,
     Response,
+    Setting,
 )
 from laboneq.controller.recipe_processor import RecipeData
 from laboneq.controller.utilities.exception import LabOneQControllerException

@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 from laboneq.compiler import CompilerSettings
+from laboneq.compiler.common.iface_compiler_output import (
+    RTCompilerOutputContainer,
+)
 from laboneq.compiler.workflow.compiler_hooks import get_compiler_hooks
 from laboneq.compiler.workflow.compiler_output import (
     CombinedRTCompilerOutputContainer,
-)
-from laboneq.compiler.common.iface_compiler_output import (
-    RTCompilerOutputContainer,
 )
 
 

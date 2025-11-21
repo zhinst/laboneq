@@ -3,7 +3,7 @@
 
 use crate::ir::{AcquirePulse, IrNode, NodeKind, PlayAcquire, Samples};
 use crate::passes::handle_oscillators::SoftwareOscillatorParameters;
-use crate::tinysample::floor_to_grid;
+use crate::utils::floor_to_grid;
 use crate::{Error, Result};
 use std::sync::Arc;
 

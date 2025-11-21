@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Mapping, Sequence, NamedTuple
-import numpy as np
 import math
+from dataclasses import dataclass
+from typing import Mapping, NamedTuple, Sequence
+
+import numpy as np
+
 from laboneq.data.compilation_job import OutputRoute
 
 

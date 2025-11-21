@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+
 from laboneq.controller.devices.device_leader_base import DeviceLeaderBase
 from laboneq.controller.devices.device_utils import NodeCollector
 

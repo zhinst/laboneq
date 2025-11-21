@@ -5,11 +5,8 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import math
 from typing import TYPE_CHECKING, Any, Dict, cast
 
-import orjson
-from sortedcontainers import SortedDict
 from zhinst.core import __version__ as zhinst_version
 
 from laboneq._utils import ensure_list
@@ -23,7 +20,7 @@ from laboneq.compiler.common.integration_times import IntegrationTimes
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC, NeartimeStep
-from laboneq.compiler.seqc.measurement_calculator import SignalDelays
+from laboneq.compiler.seqc.types import SignalDelays
 from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
 from laboneq.compiler.workflow.precompensation_helpers import (
     precompensation_is_nonzero,
@@ -444,21 +441,16 @@ class RecipeGenerator:
         initialization.awgs.append(awg)
 
         if shfppc_sweep_configuration is not None:
-            ppc_device = shfppc_sweep_configuration.pop("ppc_device")
-            ppc_channel_idx = shfppc_sweep_configuration.pop("ppc_channel")
+            ppc_device = shfppc_sweep_configuration.ppc_device
+            ppc_channel_idx = shfppc_sweep_configuration.ppc_channel
             ppc_initialization = self._find_initialization(ppc_device)
-            for ppchannel in ppc_initialization.ppchannels:
-                if ppchannel["channel"] == ppc_channel_idx:
+            for ppc_channel in ppc_initialization.ppchannels:
+                if ppc_channel["channel"] == ppc_channel_idx:
+                    # Attach the sweep configuration to the correct PPC channel
+                    ppc_channel["sweep_config"] = shfppc_sweep_configuration.json
                     break
             else:
                 raise AssertionError("channel not found")
-
-            # remove the swept fields from the initialization; no need to set it in NT
-            for field in shfppc_sweep_configuration["dimensions"]:
-                del ppchannel[field]
-            ppchannel["sweep_config"] = orjson.dumps(
-                shfppc_sweep_configuration
-            ).decode()
 
     def add_neartime_execution_step(self, nt_step: NeartimeStep):
         self._recipe.realtime_execution_init.append(
@@ -493,125 +485,13 @@ class RecipeGenerator:
     def add_max_step_execution_time(self, max_step_execution_time):
         self._recipe.max_step_execution_time = max_step_execution_time
 
-    def add_measurements(self, measurement_map: dict[str, list[dict]]):
+    def add_measurements(self, measurements: dict[str, Measurement]):
         for initialization in self._recipe.initializations:
             device_uid = initialization.device_uid
-            if device_uid in measurement_map:
-                initialization.measurements = [
-                    Measurement(
-                        length=m.get("length"),
-                        channel=m.get("channel"),
-                    )
-                    for m in measurement_map[device_uid]
-                ]
+            initialization.measurements = measurements.get(device_uid, [])
 
     def recipe(self) -> Recipe:
         return self._recipe
-
-
-def calc_awg_number(channel, device_type: DeviceType):
-    if device_type == DeviceType.UHFQA:
-        return 0
-    return int(math.floor(channel / device_type.channels_per_awg))
-
-
-def calc_measurement_map(
-    experiment_dao: ExperimentDAO, integration_times: IntegrationTimes
-):
-    measurement_sections: list[str] = []
-
-    for section_name in experiment_dao.sections():
-        section_info = experiment_dao.section_info(section_name)
-        if section_info.acquisition_type is not None:
-            measurement_sections.append(section_name)
-
-    section_measurement_infos = []
-
-    for section_name in measurement_sections:
-        section_signals = experiment_dao.section_signals_with_children(section_name)
-
-        def empty_device():
-            return {"signals": set(), "monitor": None}
-
-        infos_by_device_awg = {}
-        for signal in section_signals:
-            signal_info_for_section = experiment_dao.signal_info(signal)
-            device_type = DeviceType.from_device_info_type(
-                signal_info_for_section.device.device_type
-            )
-            awg_nr = calc_awg_number(signal_info_for_section.channels[0], device_type)
-
-            if signal_info_for_section.type == SignalInfoType.INTEGRATION:
-                device_id = signal_info_for_section.device.uid
-                device_awg_key = (device_id, awg_nr)
-                if device_awg_key not in infos_by_device_awg:
-                    infos_by_device_awg[device_awg_key] = {
-                        "section_name": section_name,
-                        "devices": {},
-                    }
-                section_measurement_info = infos_by_device_awg[device_awg_key]
-
-                device = section_measurement_info["devices"].setdefault(
-                    (device_id, awg_nr), empty_device()
-                )
-                device["signals"].add(signal)
-
-                _logger.debug(
-                    "Added measurement device %s",
-                    signal_info_for_section.device.uid,
-                )
-
-        section_measurement_infos.extend(infos_by_device_awg.values())
-
-    _logger.debug("Found section_measurement_infos  %s", section_measurement_infos)
-    measurements = {}
-
-    for info in section_measurement_infos:
-        for device_awg_nr, device_details in info["devices"].items():
-            device_id, awg_nr = device_awg_nr
-            if (device_id, awg_nr) in measurements:
-                _logger.debug(
-                    "Expanding existing measurement record for device %s awg %d (when looking at section %s )",
-                    device_id,
-                    awg_nr,
-                    info["section_name"],
-                )
-                measurement = measurements[(device_id, awg_nr)]
-            else:
-                measurement = {"length": None}
-
-                lengths_in_samples = [
-                    signal_info.length_in_samples
-                    for signal_id in device_details["signals"]
-                    if (signal_info := integration_times.signal_info(signal_id))
-                    is not None
-                ]
-
-                if lengths_in_samples:
-                    # We communicate only the maximum length to the rest of the compiler.
-                    # Other parts of the compiler should check that the maximum length
-                    # is supported by the device and adjust shorter integrations as needed.
-                    measurement["length"] = max(lengths_in_samples)
-                else:
-                    del measurement["length"]
-                _logger.debug(
-                    "Added measurement %s\n  for %s", measurement, device_awg_nr
-                )
-
-            measurements[(device_id, awg_nr)] = measurement
-
-    retval = {}
-    for device_awg_key, v in measurements.items():
-        device_id, awg_nr = device_awg_key
-        if device_id not in retval:
-            # make sure measurements are sorted by awg_nr
-            retval[device_id] = SortedDict()
-        retval[device_id][awg_nr] = v
-        v["channel"] = awg_nr
-    for k in list(retval.keys()):
-        retval[k] = list(retval[k].values())
-
-    return retval
 
 
 def calc_outputs(
@@ -945,11 +825,15 @@ def generate_recipe(
     )
 
     recipe_generator.add_acquire_lengths(combined_compiler_output.integration_times)
-
-    recipe_generator.add_measurements(
-        calc_measurement_map(experiment_dao, combined_compiler_output.integration_times)
-    )
-
+    measurement_map_per_device = {}
+    for meas in combined_compiler_output.measurements:
+        measurement_map_per_device.setdefault(meas.device, []).append(
+            Measurement(
+                length=meas.length,
+                channel=meas.channel,
+            )
+        )
+    recipe_generator.add_measurements(measurement_map_per_device)
     recipe_generator.add_simultaneous_acquires(
         combined_compiler_output.simultaneous_acquires
     )

@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from laboneq.workflow.timestamps import utc_now
 from laboneq.workflow.blocks.block import Block
 from laboneq.workflow.executor import ExecutionStatus, ExecutorState
 from laboneq.workflow.reference import Reference
 from laboneq.workflow.result import TaskResult
+from laboneq.workflow.timestamps import utc_now
 
 if TYPE_CHECKING:
     from laboneq.workflow.opts import TaskOptions

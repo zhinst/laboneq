@@ -8,11 +8,12 @@ from __future__ import annotations
 import functools
 from typing import TYPE_CHECKING, Callable, overload
 
-from laboneq.dsl.calibration import Calibration
+from typing_extensions import ParamSpec
+
 from laboneq.core.exceptions import LabOneQException
+from laboneq.dsl.calibration import Calibration
 from laboneq.dsl.experiment import builtins
 from laboneq.dsl.quantum import QuantumElement
-from typing_extensions import ParamSpec
 
 if TYPE_CHECKING:
     from laboneq.simple import (
@@ -246,6 +247,34 @@ def add_quantum_elements(
         exp_calibration.calibration_items.update(calibration)
     else:
         experiment.set_calibration(Calibration(calibration_items=calibration))
+
+
+def add_signal(
+    uid: str | None = None,
+    connect_to: str | None = None,
+    *,
+    experiment: Experiment | None = None,
+) -> None:
+    """Add an experiment signal to the experiment with/without an experiment context.
+
+    Arguments:
+        uid:
+            The unique id of the new experiment signal (optional).
+        connect_to:
+            The `LogicalSignal` this experiment signal shall be connected to (optional).
+            Defaults to None, meaning that there is no connection defined yet.
+        experiment:
+            The experiment, if called without an experiment context (optional).
+    """
+    # Fetch the experiment (if in an experiment context)
+    if experiment is None:
+        experiment = builtins._active_experiment()
+
+    # Add signal to the experiment
+    experiment.add_signal(
+        uid=uid,
+        connect_to=connect_to,
+    )
 
 
 def build(

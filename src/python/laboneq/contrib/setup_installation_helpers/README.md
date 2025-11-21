@@ -16,7 +16,7 @@ The script will play an individual pulse sequence on each output channel of the 
 
 Supported device types are:
 
-HDAWG (=HDAWG8), HDAWG4, HDAWG8, SHFQA (=SHFQA4), SHFQA2, SHFQA4, SHFSG (=SHFSG8), SHFSG4, SHFSG8, SHFQC.
+HDAWG (=HDAWG8), HDAWG4, HDAWG8, SHFQA (=SHFQA4), SHFQA2, SHFQA4, SHFSG (=SHFSG8), SHFSG2, SHFSG4, SHFSG8, SHFQC.
 
 UHFQA devices are not yet supported.
 

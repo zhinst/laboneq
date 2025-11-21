@@ -5,15 +5,15 @@ from __future__ import annotations
 
 import abc
 import logging
+import time
 from builtins import frozenset
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
-import time
 
 from laboneq.compiler import CompilerSettings
+from laboneq.compiler.common.iface_compiler_output import RTCompilerOutputContainer
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.workflow import rt_linker
-from laboneq.compiler.common.iface_compiler_output import RTCompilerOutputContainer
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
 from laboneq.compiler.workflow.rt_linker import CombinedRTCompilerOutputContainer
 from laboneq.executor.executor import (

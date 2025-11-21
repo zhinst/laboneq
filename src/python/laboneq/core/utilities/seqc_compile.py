@@ -2,23 +2,24 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 import asyncio
 import concurrent.futures
-from dataclasses import dataclass
 import logging
 import os
 import re
+from dataclasses import dataclass
 
 import zhinst.core
 from zhinst.core.errors import CoreError as LabOneCoreError
 
-from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.resource_usage import (
     ResourceUsage,
     ResourceUsageCollector,
     UsageClassification,
 )
+from laboneq.core.exceptions.laboneq_exception import LabOneQException
 
 _logger = logging.getLogger(__name__)
 

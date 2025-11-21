@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-import attrs
 from typing import Any, Callable, Union
+
+import attrs
 
 from laboneq._utils import UIDReference
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter

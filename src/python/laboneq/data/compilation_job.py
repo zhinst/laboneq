@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from laboneq.data import EnumReprMixin
+from laboneq.data.calibration import CancellationSource
 from laboneq.data.experiment_description import (
     AveragingMode,
     ExecutionType,
@@ -18,10 +19,9 @@ from laboneq.data.experiment_description import (
     SectionAlignment,
 )
 
-from laboneq.data.calibration import CancellationSource
-
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
+
     from laboneq.core.types.enums.acquisition_type import AcquisitionType
     from laboneq.data.calibration import (
         BounceCompensation,
@@ -30,8 +30,8 @@ if TYPE_CHECKING:
         HighPassCompensation,
         PortMode,
     )
-    from laboneq.executor.executor import Statement
     from laboneq.data.experiment_description import Experiment
+    from laboneq.executor.executor import Statement
 
 
 #
@@ -234,6 +234,11 @@ class SectionInfo:
     triggers: list[dict[str, Any]] = field(default_factory=list)
     parameters: list[ParameterInfo] = field(default_factory=list)
     play_after: list[str] = field(default_factory=list)
+    # Rust migration helpers
+    # List of all children in the order they are defined.
+    sections_and_operations: list[SectionInfo | SectionSignalPulse] = field(
+        default_factory=list
+    )
 
 
 @dataclass

@@ -6,6 +6,7 @@
 //! The module converts Python DSL Experiment into Rust Scheduler IR.
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt::Display;
 use std::sync::Arc;
 
 use crate::error::{Error, Result};
@@ -15,18 +16,20 @@ use laboneq_scheduler::experiment::ExperimentNode;
 use laboneq_scheduler::experiment::sweep_parameter::SweepParameter;
 use laboneq_scheduler::experiment::types::Chunking;
 use laboneq_scheduler::experiment::types::NumericLiteral;
+use laboneq_scheduler::experiment::types::ValueOrParameter;
 use laboneq_scheduler::experiment::types::{
     Acquire, AcquisitionType, AveragingLoop, AveragingMode, Case, Delay, ExternalParameterUid,
-    HandleUid, Marker, MarkerSelector, Match, MatchTarget, NumericValue, Operation, ParameterUid,
-    PlayPulse, PrngLoop, PrngSetup, PulseLength, PulseParameterValue, PulseRef, PulseUid,
-    RepetitionMode, Reserve, ResetOscillatorPhase, Section, SectionAlignment, SectionUid,
-    SignalUid, Sweep, Trigger, Value,
+    HandleUid, Marker, MarkerSelector, Match, MatchTarget, Operation, ParameterUid, PlayPulse,
+    PrngLoop, PrngSetup, PulseLength, PulseParameterValue, PulseRef, PulseUid, RepetitionMode,
+    Reserve, ResetOscillatorPhase, Section, SectionAlignment, SectionUid, SignalUid, Sweep,
+    Trigger,
 };
 use laboneq_units::duration::seconds;
 use num_complex::Complex64;
 use numeric_array::NumericArray;
 use pyo3::intern;
 use pyo3::prelude::*;
+use pyo3::types::PyComplex;
 use pyo3::types::{PyDict, PyList, PyString};
 
 pub struct ExperimentBuilder<'py> {
@@ -210,45 +213,46 @@ impl<'a> DslTypes<'a> {
     }
 }
 
-fn extract_numeric_value(obj: &Bound<'_, PyAny>) -> Result<Value> {
+fn extract_numeric_value(obj: &Bound<'_, PyAny>) -> Result<NumericLiteral> {
     if let Ok(v) = obj.extract::<i64>() {
-        return Ok(Value::Int(v));
+        return Ok(NumericLiteral::Int(v));
     }
-    if let Ok(c) = obj.extract::<Complex64>() {
-        if c.im == 0.0 {
-            return Ok(Value::Float(c.re));
-        }
-        return Ok(Value::Complex(c));
+    // Extracting f64 on NumPy complex will drop the imaginary part, so check for complex first
+    if is_complex(obj) {
+        let c: Complex64 = obj.extract()?;
+        return Ok(NumericLiteral::Complex(c));
     }
     if let Ok(v) = obj.extract::<f64>() {
-        return Ok(Value::Float(v));
+        return Ok(NumericLiteral::Float(v));
     }
     Err(Error::new(
         "Expected a numeric literal (int, float, or complex)",
     ))
 }
 
-pub fn extract_value(
+fn is_complex(obj: &Bound<'_, PyAny>) -> bool {
+    obj.is_instance_of::<PyComplex>()
+}
+
+pub fn extract_value_or_parameter<T: TryFrom<NumericLiteral>>(
     obj: &Bound<'_, PyAny>,
     builder: &mut ExperimentBuilder,
-) -> Result<Option<Value>> {
+) -> Result<Option<ValueOrParameter<T>>>
+where
+    T::Error: Display,
+{
     if obj.is_none() {
         return Ok(None);
     }
     let py: Python<'_> = obj.py();
     if let Ok(value) = extract_numeric_value(obj) {
+        let value = ValueOrParameter::<T>::Value(value.try_into().map_err(Error::new)?);
         return Ok(Some(value));
-    }
-    if let Ok(value) = obj.extract::<bool>() {
-        return Ok(Some(Value::Bool(value)));
-    }
-    if let Ok(value) = obj.extract::<String>() {
-        return Ok(Some(Value::String(value)));
     }
     if obj.is_instance(builder.dsl_types.laboneq_type(DslType::Parameter))? {
         let py_value = obj.getattr(intern!(py, "uid"))?;
         let parameter = builder.register_uid(py_value.extract::<&str>()?);
-        return Ok(Some(Value::ParameterUid(parameter.into())));
+        return Ok(Some(ValueOrParameter::Parameter(parameter.into())));
     }
     Err(Error::new(
         "Expected a numeric literal, string, bool or a parameter",
@@ -262,7 +266,7 @@ fn extract_section_alignment(obj: &Bound<'_, PyAny>) -> Result<SectionAlignment>
     let py = obj.py();
     let out = match obj
         .getattr(intern!(py, "name"))?
-        .downcast_into::<PyString>()
+        .cast_into::<PyString>()
         .map_err(PyErr::from)?
         .to_cow()?
         .as_ref()
@@ -293,33 +297,30 @@ fn extract_parameter(
     let sweep_parameter_py = builder.dsl_types.laboneq_type(DslType::SweepParameter);
 
     if obj.is_instance(linear_sweep_parameter_py)? {
-        let start = extract_value(&obj.getattr(intern!(py, "start"))?, builder)?.unwrap();
-        let stop = extract_value(&obj.getattr(intern!(py, "stop"))?, builder)?.unwrap();
+        let start = extract_numeric_value(&obj.getattr(intern!(py, "start"))?)?;
+        let stop = extract_numeric_value(&obj.getattr(intern!(py, "stop"))?)?;
         let count = obj.getattr(intern!(py, "count"))?.extract::<usize>()?;
         let values = match start {
-            Value::Float(start) => {
-                let stop: f64 = TryInto::<NumericLiteral>::try_into(stop)
-                    .map_err(Error::new)?
+            NumericLiteral::Float(start) => {
+                let stop: f64 = stop
                     .try_into()
-                    .map_err(Error::new)?;
+                    .map_err(Error::new)
+                    .with_context(|| "Linear sweep 'start' and 'stop' must be of same type")?;
                 NumericArray::linspace(start, stop, count)
             }
-            Value::Int(start) => {
-                let stop: f64 = TryInto::<NumericLiteral>::try_into(stop)
-                    .map_err(Error::new)?
+            NumericLiteral::Int(start) => {
+                let stop: f64 = stop
                     .try_into()
-                    .map_err(Error::new)?;
+                    .map_err(Error::new)
+                    .with_context(|| "Linear sweep 'start' and 'stop' must be of same type")?;
                 NumericArray::linspace(start as f64, stop, count)
             }
-            Value::Complex(start) => {
-                let stop: Complex64 = TryInto::<NumericLiteral>::try_into(stop)
-                    .map_err(Error::new)?
+            NumericLiteral::Complex(start) => {
+                let stop: Complex64 = stop
                     .try_into()
-                    .map_err(Error::new)?;
+                    .map_err(Error::new)
+                    .with_context(|| "Linear sweep 'start' and 'stop' must be of same type")?;
                 NumericArray::linspace_complex(start, stop, count)
-            }
-            _ => {
-                return Err(Error::new("Linear sweep start must be a numeric value"));
             }
         };
         let parameter = SweepParameter::new(uid, values);
@@ -413,7 +414,7 @@ fn extract_delay(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Res
     let py = obj.py();
     let signal_name = obj.getattr(intern!(py, "signal"))?.extract::<String>()?;
     let signal_uid = builder.register_uid(&signal_name);
-    let time = extract_value(&obj.getattr(intern!(py, "time"))?, builder)?;
+    let time = extract_value_or_parameter::<f64>(&obj.getattr(intern!(py, "time"))?, builder)?;
 
     let precompensation_clear = obj
         .getattr(intern!(obj.py(), "precompensation_clear"))?
@@ -421,10 +422,7 @@ fn extract_delay(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Res
         .unwrap_or(false);
     let out = Delay {
         signal: SignalUid(signal_uid),
-        time: time.map_or_else(
-            || Err(Error::new("Delay time cannot be None")),
-            |v| v.try_into().map_err(Error::new),
-        )?,
+        time: time.ok_or_else(|| Error::new("Delay time must be specified"))?,
         precompensation_clear,
     };
     Ok(out)
@@ -446,7 +444,7 @@ fn extract_pulse_parameters(
     if obj.is_none() {
         return Ok(HashMap::new());
     }
-    let obj = obj.downcast::<PyDict>().map_err(PyErr::from)?;
+    let obj = obj.cast::<PyDict>().map_err(PyErr::from)?;
     let mut out = HashMap::new();
     for (key, value) in obj.iter() {
         let key = Arc::new(key.extract::<String>()?);
@@ -555,7 +553,7 @@ fn extract_marker_dict(
         return Ok(vec![]);
     }
     let mut markers = vec![];
-    for (marker_selector_name, marker) in obj.downcast::<PyDict>().map_err(PyErr::from)?.iter() {
+    for (marker_selector_name, marker) in obj.cast::<PyDict>().map_err(PyErr::from)?.iter() {
         let marker_selector = match marker_selector_name.extract::<&str>()? {
             "marker1" => MarkerSelector::M1,
             "marker2" => MarkerSelector::M2,
@@ -563,7 +561,7 @@ fn extract_marker_dict(
                 return Err(Error::new(format!("Unknown marker selector: {other}")));
             }
         };
-        let marker = marker.downcast::<PyDict>().map_err(PyErr::from)?;
+        let marker = marker.cast::<PyDict>().map_err(PyErr::from)?;
         let enable = marker
             .get_item(intern!(py, "enable"))?
             .map_or(Ok(false), |o: Bound<'_, PyAny>| -> PyResult<bool> {
@@ -608,23 +606,31 @@ fn extract_play_pulse(
     } else {
         None
     };
-    let amplitude: Option<NumericValue> =
-        extract_value(&obj.getattr(intern!(py, "amplitude"))?, builder)?
-            .map(|v| v.try_into().expect("Amplitude must be a real value"));
+    let amplitude =
+        extract_value_or_parameter::<Complex64>(&obj.getattr(intern!(py, "amplitude"))?, builder)
+            .map_err(|e| {
+                Error::new(format!(
+                    "PlayPulse amplitude must be a numeric value or parameter: {}",
+                    e
+                ))
+            })
+            .unwrap();
     let precompensation_clear = obj
         .getattr(intern!(py, "precompensation_clear"))?
         .extract::<Option<bool>>()?
         .unwrap_or(false);
-    let phase = extract_value(&obj.getattr(intern!(py, "phase"))?, builder)?;
+    let phase = extract_value_or_parameter::<f64>(&obj.getattr(intern!(py, "phase"))?, builder)?;
 
-    let increment_oscillator_phase = extract_value(
+    let increment_oscillator_phase = extract_value_or_parameter::<f64>(
         &obj.getattr(intern!(py, "increment_oscillator_phase"))?,
         builder,
     )?;
-    let set_oscillator_phase =
-        extract_value(&obj.getattr(intern!(py, "set_oscillator_phase"))?, builder)?;
+    let set_oscillator_phase = extract_value_or_parameter::<f64>(
+        &obj.getattr(intern!(py, "set_oscillator_phase"))?,
+        builder,
+    )?;
 
-    let length = extract_value(&obj.getattr(intern!(py, "length"))?, builder)?;
+    let length = extract_value_or_parameter::<f64>(&obj.getattr(intern!(py, "length"))?, builder)?;
     let parameters =
         extract_pulse_parameters(&obj.getattr(intern!(py, "pulse_parameters"))?, builder)?;
     let markers = extract_marker_dict(&obj.getattr(intern!(py, "marker"))?, builder)?;
@@ -633,17 +639,11 @@ fn extract_play_pulse(
             builder.register_uid(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?),
         ),
         pulse: pulse.as_ref().map(|x| x.0),
-        amplitude: amplitude.unwrap_or(NumericValue::Float(1.0)),
-        phase: phase.map(|v| v.try_into().expect("Phase must be a real value")),
-        increment_oscillator_phase: increment_oscillator_phase.map(|v| {
-            v.try_into()
-                .expect("Increment oscillator phase must be a real value")
-        }),
-        set_oscillator_phase: set_oscillator_phase.map(|v| {
-            v.try_into()
-                .expect("Set oscillator phase must be a real value")
-        }),
-        length: length.map(|v| v.try_into().expect("Length must be a real value")),
+        amplitude: amplitude.unwrap_or(ValueOrParameter::Value(Complex64::new(1.0, 0.0))),
+        phase,
+        increment_oscillator_phase,
+        set_oscillator_phase,
+        length,
         precompensation_clear,
         parameters,
         pulse_parameters: pulse.map(|x| x.1).unwrap_or_default(),
@@ -658,10 +658,7 @@ fn extract_case(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Resu
     let uid = SectionUid(builder.register_uid(obj.getattr(intern!(py, "uid"))?.extract::<&str>()?));
     let state = extract_numeric_value(&obj.getattr(intern!(py, "state"))?)
         .with_context(|| Error::new("Match case state must be numeric"))?;
-    let out = Case {
-        uid,
-        state: state.try_into().map_err(Error::new)?,
-    };
+    let out = Case { uid, state };
     Ok(out)
 }
 
@@ -688,12 +685,15 @@ fn extract_match(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Res
             .extract::<u16>()?;
         MatchTarget::UserRegister(value)
     } else if !sweep_parameter.is_none() {
-        let parameter_uid =
-            builder.register_uid(obj.getattr(intern!(py, "uid"))?.extract::<&str>()?);
+        let parameter_uid = builder.register_uid(
+            sweep_parameter
+                .getattr(intern!(py, "uid"))?
+                .extract::<&str>()?,
+        );
         MatchTarget::SweepParameter(ParameterUid(parameter_uid))
     } else if !prng_sample.is_none() {
         let parameter_uid =
-            builder.register_uid(obj.getattr(intern!(py, "uid"))?.extract::<&str>()?);
+            builder.register_uid(prng_sample.getattr(intern!(py, "uid"))?.extract::<&str>()?);
         MatchTarget::PrngSample(SectionUid(parameter_uid))
     } else {
         return Err(Error::new(
@@ -758,7 +758,7 @@ fn extract_section(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> R
         .map(seconds);
     let play_after = extract_play_after(&obj.getattr(intern!(py, "play_after"))?, builder)?;
     let trigger_py = obj.getattr(intern!(py, "trigger"))?;
-    let trigger_map = trigger_py.downcast::<PyDict>().map_err(PyErr::from)?;
+    let trigger_map = trigger_py.cast::<PyDict>().map_err(PyErr::from)?;
     let mut triggers = vec![];
     for (signal_uid, trigger) in trigger_map.iter() {
         let trigger_signal = signal_uid.extract::<&str>()?;
@@ -788,7 +788,7 @@ fn extract_averaging_mode(obj: &Bound<'_, PyAny>) -> Result<AveragingMode> {
     let py = obj.py();
     let out = match obj
         .getattr(intern!(py, "name"))?
-        .downcast_into::<PyString>()
+        .cast_into::<PyString>()
         .map_err(PyErr::from)?
         .to_cow()?
         .as_ref()
@@ -813,7 +813,7 @@ fn extract_repetition_mode(
     let py = obj.py();
     let out = match obj
         .getattr(intern!(py, "name"))?
-        .downcast_into::<PyString>()
+        .cast_into::<PyString>()
         .map_err(PyErr::from)?
         .to_cow()?
         .as_ref()
@@ -915,8 +915,9 @@ fn extract_reset_oscillator_phase(
     let signal_uid = obj
         .getattr(intern!(py, "signal"))?
         .extract::<Option<String>>()?;
+    let signals = signal_uid.map(|uid| SignalUid(builder.register_uid(&uid)));
     let obj = ResetOscillatorPhase {
-        signal: signal_uid.map(|uid| SignalUid(builder.register_uid(&uid))),
+        signals: signals.into_iter().collect(),
     };
     Ok(obj)
 }
@@ -1056,72 +1057,54 @@ mod tests {
     use super::*;
     use pyo3::ffi::c_str;
 
-    #[pymodule]
-    mod test_funcs {
-        use super::*;
-
-        #[pyfunction]
-        fn test_int(value: Bound<'_, PyAny>) {
-            let value = extract_numeric_value(&value).unwrap();
-            assert_eq!(value, Value::Int(42));
-        }
-
-        #[pyfunction]
-        fn test_float(value: Bound<'_, PyAny>) {
-            let value = extract_numeric_value(&value).unwrap();
-            assert_eq!(value, Value::Float(3.16));
-        }
-
-        #[pyfunction]
-        fn test_complex(value: Bound<'_, PyAny>) {
-            let value = extract_numeric_value(&value).unwrap();
-            assert_eq!(value, Value::Complex(Complex64::new(1.0, 2.0)));
-        }
-    }
-
     #[test]
-    fn test_extract_numeric_value() {
-        pyo3::append_to_inittab!(test_funcs);
+    fn test_numeric_literal_python_rust_conversion() {
         Python::attach(|py| {
-            Python::run(
-                py,
-                c_str!("import test_funcs; test_funcs.test_int(42)"),
-                None,
-                None,
-            )
-            .unwrap();
-            Python::run(
-                py,
-                c_str!("import test_funcs; test_funcs.test_float(3.16)"),
-                None,
-                None,
-            )
-            .unwrap();
-            Python::run(
-                py,
-                c_str!("import test_funcs; test_funcs.test_complex(1 + 2j)"),
-                None,
-                None,
-            )
-            .unwrap();
+            let code = c_str!(
+                r#"
+import numpy as np
 
-            Python::run(
-                py,
-                c_str!("import test_funcs; import numpy as np; test_funcs.test_int(np.int64(42))"),
-                None,
-                None,
-            )
-            .unwrap();
-            Python::run(
-                py,
-                c_str!(
-                    "import test_funcs; import numpy as np; test_funcs.test_float(np.float64(3.16))"
-                ),
-                None,
-                None,
-            )
-            .unwrap();
-            Python::run(py, c_str!("import test_funcs; import numpy as np; test_funcs.test_complex(np.complex128(1 + 2j))"), None, None).unwrap();
+python_int = 42
+python_float = 3.16
+python_complex = 1 + 2j
+numpy_int = np.int64(42)
+numpy_float = np.float64(3.16)
+numpy_complex = np.complex128(1 + 2j)
+foobar_string = "foobar"
+"#
+            );
+            let test_module: Py<PyAny> = PyModule::from_code(py, code, c_str!(""), c_str!(""))
+                .unwrap()
+                .into();
+            let globals = test_module.bind(py);
+
+            let python_int = globals.getattr("python_int").unwrap();
+            let value = extract_numeric_value(&python_int).unwrap();
+            assert_eq!(value, NumericLiteral::Int(42));
+
+            let python_float = globals.getattr("python_float").unwrap();
+            let value = extract_numeric_value(&python_float).unwrap();
+            assert_eq!(value, NumericLiteral::Float(3.16));
+
+            let python_complex = globals.getattr("python_complex").unwrap();
+            let value = extract_numeric_value(&python_complex).unwrap();
+            assert_eq!(value, NumericLiteral::Complex(Complex64::new(1.0, 2.0)));
+
+            let numpy_int = globals.getattr("numpy_int").unwrap();
+            let value = extract_numeric_value(&numpy_int).unwrap();
+            assert_eq!(value, NumericLiteral::Int(42));
+
+            let numpy_float = globals.getattr("numpy_float").unwrap();
+            let value = extract_numeric_value(&numpy_float).unwrap();
+            assert_eq!(value, NumericLiteral::Float(3.16));
+
+            let numpy_complex = globals.getattr("numpy_complex").unwrap();
+            let value = extract_numeric_value(&numpy_complex).unwrap();
+            assert_eq!(value, NumericLiteral::Complex(Complex64::new(1.0, 2.0)));
+
+            let foobar_string = globals.getattr("foobar_string").unwrap();
+            let result = extract_numeric_value(&foobar_string);
+            assert!(result.is_err());
         });
     }
 }

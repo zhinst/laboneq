@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-import attrs
 from typing import List, Optional
 
+import attrs
 import numpy as np
 from numpy.typing import ArrayLike
 

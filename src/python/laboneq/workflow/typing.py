@@ -25,11 +25,10 @@ Type hints
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import TypeAlias
 
-
 from laboneq.dsl.quantum import QuantumElement
-from collections.abc import Sequence
 
 __all__ = [
     "QuantumElements",

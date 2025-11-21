@@ -3,15 +3,15 @@
 
 from __future__ import annotations
 
-import attrs
 import copy
 from typing import TYPE_CHECKING, Any
 
+import attrs
 from typing_extensions import TypeAlias, deprecated
 
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.core.utilities.attribute_wrapper import AttributeWrapper
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 from ..calibration import Calibration
 from .acquired_result import AcquiredResult, AcquiredResults

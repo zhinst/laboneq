@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from laboneq import workflow
-
 from laboneq.dsl.result import Results
 
 

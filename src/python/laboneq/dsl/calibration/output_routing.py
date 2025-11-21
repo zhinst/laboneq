@@ -3,15 +3,16 @@
 
 from __future__ import annotations
 
-import attrs
 from typing import TYPE_CHECKING
+
+import attrs
 
 from laboneq.dsl.parameter import Parameter
 
 if TYPE_CHECKING:
     from laboneq.dsl.device.io_units.logical_signal import LogicalSignal
     from laboneq.dsl.experiment import ExperimentSignal
-    from laboneq.dsl.parameter import SweepParameter, LinearSweepParameter
+    from laboneq.dsl.parameter import LinearSweepParameter, SweepParameter
 
 
 def _source_converter(

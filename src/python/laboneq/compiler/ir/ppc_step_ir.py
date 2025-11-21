@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-
 from attrs import define
 
 from laboneq.compiler.ir.interval_ir import IntervalIR
@@ -11,9 +10,6 @@ from laboneq.compiler.ir.interval_ir import IntervalIR
 
 @define(kw_only=True, slots=True)
 class PPCStepIR(IntervalIR):
-    section: str
-    qa_device: str
-    qa_channel: int
     ppc_device: str
     ppc_channel: int
     trigger_duration: int

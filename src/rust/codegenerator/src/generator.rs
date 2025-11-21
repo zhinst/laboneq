@@ -18,7 +18,9 @@ use crate::passes::analyze_measurements;
 use crate::passes::fanout_awg::fanout_for_awg;
 use crate::result::AwgCodeGenerationResult;
 use crate::result::FeedbackRegisterConfig;
+use crate::result::Measurement;
 use crate::result::SeqCGenOutput;
+use crate::result::ShfPpcSweepJson;
 use crate::result::SignalIntegrationInfo;
 use crate::sample_waveforms::{
     AwgWaveforms, WaveDeclaration, collect_and_finalize_waveforms, collect_integration_kernels,
@@ -28,11 +30,11 @@ use crate::sampled_event_handler::SeqcResults;
 use crate::sampled_event_handler::handle_sampled_events;
 use crate::sampled_event_handler::seqc_tracker::FeedbackRegisterIndex;
 use crate::sampled_event_handler::seqc_tracker::awg::Awg;
-use crate::tinysample::TINYSAMPLE;
 use crate::waveform_sampler::SampleWaveforms;
 
 use anyhow::Context;
 use laboneq_log::warn;
+use laboneq_units::tinysample::{tiny_samples, tinysamples_to_seconds};
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -172,8 +174,15 @@ fn generate_code_for_awg<T: SampleWaveforms>(
     let output = AwgCodeGenerationResult {
         seqc: awg_events.seqc,
         wave_indices: awg_events.wave_indices,
-        command_table: awg_events.command_table,
-        shf_sweeper_config: awg_events.shf_sweeper_config,
+        command_table: awg_events
+            .command_table
+            .map(|ct| serde_json::to_string(&ct).unwrap()),
+        shf_sweeper_config: awg_events
+            .shf_sweeper_config
+            .map(|config_json| ShfPpcSweepJson {
+                ppc_device: awg_info.ppc_device().cloned().unwrap(),
+                json: config_json,
+            }),
         sampled_waveforms,
         integration_weights,
         signal_delays: measurement_info
@@ -181,7 +190,6 @@ fn generate_code_for_awg<T: SampleWaveforms>(
             .iter()
             .map(|(k, v)| (k.to_string(), v.delay_port().into()))
             .collect(),
-        ppc_device: awg_info.ppc_device().cloned(),
         integration_lengths: measurement_info
             .integration_lengths
             .into_iter()
@@ -253,7 +261,7 @@ fn generate_code_for_multiple_awgs<T: SampleWaveforms + Sync + Send>(
 }
 
 fn estimate_total_execution_time(root: &IrNode) -> f64 {
-    root.data().length() as f64 * TINYSAMPLE
+    tinysamples_to_seconds(tiny_samples(root.data().length())).into()
 }
 
 pub fn generate_code<T: SampleWaveforms + Sync + Send>(
@@ -286,10 +294,60 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
         &feedback_config,
         feedback_register_layout,
     )?;
+    let measurements = evaluate_measurement_per_device(awgs, &awg_results);
     let result = SeqCGenOutput {
         awg_results,
         total_execution_time,
         simultaneous_acquires: feedback_config.into_acquisitions(),
+        measurements,
     };
     Ok(result)
+}
+
+/// Evaluate the measurements per device.
+///
+/// The measurements are grouped by device and channel, and the maximum length
+/// of the measurements is taken for each channel.
+fn evaluate_measurement_per_device(
+    awgs: &[AwgCore],
+    awg_results: &[AwgCodeGenerationResult<impl SampleWaveforms>],
+) -> Vec<Measurement> {
+    let mut measurements_by_awg: HashMap<AwgKey, Vec<Measurement>> = HashMap::new();
+    for (awg, result) in awgs.iter().zip(awg_results.iter()) {
+        if result.integration_lengths.is_empty() {
+            continue;
+        }
+        let max = result
+            .integration_lengths
+            .values()
+            .filter_map(|meas| {
+                if !meas.is_play {
+                    Some(meas.length)
+                } else {
+                    None
+                }
+            })
+            .max()
+            .unwrap_or_default();
+        measurements_by_awg
+            .entry(awg.key())
+            .and_modify(|measurement| {
+                for meas in measurement.iter_mut() {
+                    meas.length = meas.length.max(max);
+                }
+            })
+            .or_default()
+            .push(Measurement {
+                device: awg.device.uid().clone(),
+                channel: awg.uid,
+                length: max,
+            });
+    }
+    let mut measurements = measurements_by_awg
+        .into_values()
+        .flatten()
+        .collect::<Vec<Measurement>>();
+    // Sorted for output consistency
+    measurements.sort_by(|a, b| a.channel.cmp(&b.channel));
+    measurements
 }

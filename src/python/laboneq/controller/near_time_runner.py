@@ -9,7 +9,6 @@ from inspect import iscoroutinefunction
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from weakref import ReferenceType
 
-
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.protected_session import ProtectedSession
 from laboneq.controller.utilities.exception import LabOneQControllerException
@@ -21,8 +20,8 @@ from laboneq.data.recipe import NtStepKey
 from laboneq.executor.executor import AsyncExecutorBase, LoopFlags, LoopingMode
 
 if TYPE_CHECKING:
-    from laboneq.core.types.numpy_support import NumPyArray
     from laboneq.controller.controller import Controller, ExecutionContext
+    from laboneq.core.types.numpy_support import NumPyArray
 
 _logger = logging.getLogger(__name__)
 

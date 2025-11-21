@@ -15,8 +15,8 @@ from __future__ import annotations
 import abc
 import copy
 import itertools
-from typing import TYPE_CHECKING
 import warnings
+from typing import TYPE_CHECKING
 
 import laboneq.core.path as qct_path
 from laboneq.core.exceptions import LabOneQException
@@ -31,13 +31,13 @@ from laboneq.dsl.device.instrument import Instrument
 from laboneq.dsl.device.instruments import (
     HDAWG,
     PQSC,
+    PRETTYPRINTERDEVICE,
     QHUB,
     SHFPPC,
     SHFQA,
     SHFQC,
     SHFSG,
     UHFQA,
-    PRETTYPRINTERDEVICE,
 )
 from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
 from laboneq.dsl.device.io_units.physical_channel import (

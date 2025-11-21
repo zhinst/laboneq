@@ -10,9 +10,9 @@ from typing import Iterable, Type
 from openqasm3 import ast
 
 from .namespace import (
+    Array,
     ClassicalRef,
     Frame,
-    Array,
     NamespaceStack,
     QubitRef,
     QubitRegisterRef,

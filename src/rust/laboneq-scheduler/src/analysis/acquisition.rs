@@ -8,13 +8,13 @@ use crate::experiment::ExperimentNode;
 use crate::experiment::types::{Acquire, Operation, PulseLength, PulseRef, PulseUid, SignalUid};
 use crate::signal_info::SignalInfo;
 use laboneq_common::types::AwgKey;
-use laboneq_units::duration::{Duration, Seconds, seconds};
+use laboneq_units::duration::{Duration, Second, seconds};
 
 pub fn calculate_max_acquisition_time(
     node: &ExperimentNode,
     pulses: &HashMap<PulseUid, PulseRef>,
     signals: &HashMap<SignalUid, impl SignalInfo>,
-) -> Result<HashMap<AwgKey, Duration<Seconds>>> {
+) -> Result<HashMap<AwgKey, Duration<Second>>> {
     let mut acquires: Vec<&Acquire> = Vec::new();
     collect_acquires(node, &mut acquires);
     calculate_max_acquisition_time_impl(acquires, pulses, signals)
@@ -33,8 +33,8 @@ fn calculate_max_acquisition_time_impl(
     acquires: Vec<&Acquire>,
     pulses: &HashMap<PulseUid, PulseRef>,
     signals: &HashMap<SignalUid, impl SignalInfo>,
-) -> Result<HashMap<AwgKey, Duration<Seconds>>> {
-    let mut max_acquire_time: HashMap<AwgKey, Duration<Seconds>> = HashMap::new();
+) -> Result<HashMap<AwgKey, Duration<Second>>> {
+    let mut max_acquire_time: HashMap<AwgKey, Duration<Second>> = HashMap::new();
     for acquire in acquires.iter() {
         let signal_info = signals.get(&acquire.signal).unwrap();
         let acquire_length = if let Some(length) = &acquire.length {
@@ -55,7 +55,7 @@ fn calculate_max_acquisition_time_impl(
     Ok(max_acquire_time)
 }
 
-fn pulse_length_seconds(pulse: &PulseRef, sampling_rate: f64) -> Duration<Seconds> {
+fn pulse_length_seconds(pulse: &PulseRef, sampling_rate: f64) -> Duration<Second> {
     match &pulse.length {
         PulseLength::Seconds(dur) => *dur,
         PulseLength::Samples(samples) => seconds(*samples as f64 / sampling_rate),

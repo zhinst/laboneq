@@ -26,7 +26,7 @@ fn test_derived_parameters() {
             .unwrap()
             .map(|py_signal| {
                 let binding: Bound<'_, PyAny> = py_signal.unwrap().clone();
-                let signal = binding.downcast::<SignalPy>().unwrap();
+                let signal = binding.cast::<SignalPy>().unwrap();
                 signal.clone()
             })
             .collect::<Vec<_>>();

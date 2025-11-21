@@ -6,6 +6,7 @@
 See the functions below named `serialize_` for the list of types that can be serialized.
 """
 
+# ruff: noqa: I001
 from __future__ import annotations
 
 import abc

@@ -4,17 +4,19 @@
 from __future__ import annotations
 
 import math
-from typing import Iterator, Any
+from typing import Iterator
 
-from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
     DeviceAttribute,
     DeviceAttributesView,
 )
+from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import DeviceBase
+from laboneq.controller.devices.ppchannel import PPChannel
 from laboneq.controller.recipe_processor import RecipeData
+from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.data.calibration import CancellationSource
 from laboneq.data.recipe import Initialization
 
@@ -33,6 +35,7 @@ class DeviceSHFPPC(DeviceBase):
         super().__init__(*args, **kwargs)
         self.dev_type = "SHFPPC"
         self.dev_opts = []
+        self._ppchannels: list[PPChannel] = []
         self._use_internal_clock = False
         self._channels = 4
         self._allocated_sweepers = set()
@@ -43,6 +46,10 @@ class DeviceSHFPPC(DeviceBase):
     def is_leader(self):
         return False
 
+    def allocated_cores(self, recipe_data: RecipeData) -> Iterator[CoreBase]:
+        for ch in self._allocated_sweepers:
+            yield self._ppchannels[ch]
+
     def _process_dev_opts(self):
         if self.dev_type == "SHFPPC4":
             self._channels = 4
@@ -50,6 +57,16 @@ class DeviceSHFPPC(DeviceBase):
             self._channels = 2
         else:
             raise ValueError(f"Invalid device type: {self.dev_type}")
+        self._ppchannels = [
+            PPChannel(
+                api=self._api,
+                subscriber=self._subscriber,
+                device_uid=self.uid,
+                serial=self.serial,
+                core_index=core_index,
+            )
+            for core_index in range(self._channels)
+        ]
 
     def _key_to_path(self, key: str, ch: int):
         keys_to_paths = {
@@ -165,27 +182,3 @@ class DeviceSHFPPC(DeviceBase):
         for channel in sorted(self._allocated_sweepers):
             nc.add(f"ppchannels/{channel}/sweeper/enable", 1, cache=False)
         await self.set_async(nc)
-
-    def conditions_for_execution_ready(
-        self, recipe_data: RecipeData
-    ) -> dict[str, tuple[Any, str]]:
-        conditions = {
-            f"/{self.serial}/ppchannels/{channel}/sweeper/enable": (
-                1,
-                f"Sweeper {channel} didn't start.",
-            )
-            for channel in self._allocated_sweepers
-        }
-        return conditions
-
-    def conditions_for_execution_done(
-        self, recipe_data: RecipeData
-    ) -> dict[str, tuple[Any, str]]:
-        conditions = {
-            f"/{self.serial}/ppchannels/{sweeper_index}/sweeper/enable": (
-                0,
-                f"Sweeper on channel {sweeper_index} didn't stop. Check trigger connection.",
-            )
-            for sweeper_index in self._allocated_sweepers
-        }
-        return conditions

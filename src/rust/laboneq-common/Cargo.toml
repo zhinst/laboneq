@@ -1,13 +1,18 @@
 [package]
 name = "laboneq-common"
-version.workspace = true
 authors.workspace = true
+description.workspace = true
+documentation.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
 string-interner = { workspace = true }
 regex = { workspace = true }
+laboneq-units = { path = "../laboneq-units" }
 
 [lints]
 workspace = true

@@ -90,6 +90,19 @@ class AwgCodeGenerationResult:
     parameter_phase_increment_map: dict[str, list[int]] | None
     feedback_register_config: FeedbackRegisterConfig
 
+class Measurement:
+    """Measurement information for a device.
+
+    Attributes:
+        device: The device identifier.
+        length: The length of the measurement in samples.
+        channel: The channel number of the device for the measurement.
+    """
+
+    device: str
+    length: int
+    channel: int
+
 class SeqCGenOutput:
     """Output of the SeqC code generation process.
 
@@ -99,11 +112,13 @@ class SeqCGenOutput:
         simultaneous_acquires: List of simultaneous acquisitions.
             Each element is a mapping from signal name to its acquisition handle which
             happen at the same time.
+        measurements: List of Measurement objects.
     """
 
     awg_results: list[AwgCodeGenerationResult]
     total_execution_time: float = 0.0
     simultaneous_acquires: list[dict[str, str]] = []
+    measurements: list[Measurement] = []
 
 def generate_code(
     ir: IRTree,

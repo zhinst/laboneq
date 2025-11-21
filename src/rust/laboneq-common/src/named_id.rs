@@ -6,7 +6,7 @@ use string_interner::Symbol;
 use string_interner::symbol::SymbolU32;
 use string_interner::{DefaultBackend, StringInterner};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Hash)]
 pub struct NamedId {
     uid: SymbolU32,
 }

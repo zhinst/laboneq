@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Any, Optional
+
 import attrs
 import numpy as np
-from typing import TYPE_CHECKING, Any, Optional
-from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
+
 from laboneq.core.exceptions import LabOneQException
+from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 from .operation import Operation
 from .pulse import Pulse

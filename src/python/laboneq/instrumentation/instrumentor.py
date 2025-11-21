@@ -4,18 +4,19 @@
 """Instrumentors for LabOne Q."""
 
 from typing import Callable
+
 import wrapt
 from opentelemetry import trace
-from opentelemetry.instrumentation.utils import unwrap
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+from opentelemetry.instrumentation.utils import unwrap
 
-from laboneq import __version__
+import laboneq.compiler
 import laboneq.compiler.scheduler.scheduler
 import laboneq.compiler.seqc.code_generator
-import laboneq.core.utilities.seqc_compile
-import laboneq.compiler
-import laboneq.dsl.session
 import laboneq.controller.controller
+import laboneq.core.utilities.seqc_compile
+import laboneq.dsl.session
+from laboneq import __version__
 from laboneq.instrumentation import otel
 
 

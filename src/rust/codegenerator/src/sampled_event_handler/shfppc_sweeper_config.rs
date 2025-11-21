@@ -1,10 +1,7 @@
 // // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
-
-use crate::ir::{PpcDevice, experiment::SweepCommand};
-use serde_json::Value;
+use crate::ir::experiment::SweepCommand;
 
 fn swept_field_names(command: &SweepCommand) -> Vec<&str> {
     let mut fields = Vec::new();
@@ -59,6 +56,7 @@ fn are_all_fields_some(command: &SweepCommand) -> bool {
         && command.cancellation_phase.is_some()
         && command.cancellation_attenuation.is_some()
 }
+
 pub struct SHFPPCSweeperConfig {
     pub count: u64,
     pub commands: Vec<SweepCommand>,
@@ -72,7 +70,7 @@ impl SHFPPCSweeperConfig {
     ///
     /// Do not modifying the commands after calling this function.
     ///
-    pub fn finalize(&mut self, ppc_device: Arc<PpcDevice>) -> Value {
+    pub fn finalize(&mut self) -> String {
         let mut active_values = SweepCommand::default();
 
         // We start by finding the 'default' values, ie. those that will be set first.
@@ -111,16 +109,14 @@ impl SHFPPCSweeperConfig {
                 .collect()
             })
             .collect();
-
         serde_json::json!({
             // Order of the fields matters! FW requires the "header" field to be first.
             "header": {"version": "1.0"},
             "dimensions": swept_field_names(&active_values),
             "flat_list": flat_list,
             "repetitions": self.count,
-            "ppc_device": ppc_device.device,
-            "ppc_channel": ppc_device.channel
         })
+        .to_string()
     }
 }
 
@@ -147,11 +143,7 @@ mod tests {
         ];
 
         let mut config = SHFPPCSweeperConfig { count: 1, commands };
-        let ppc_device = Arc::new(PpcDevice {
-            device: "SHFQA".to_string(),
-            channel: 123,
-        });
-        let table = config.finalize(ppc_device);
+        let table = config.finalize();
         assert_eq!(
             table,
             serde_json::json!({
@@ -163,9 +155,8 @@ mod tests {
                     [90.0, 5000000000.0],
                 ],
                 "repetitions": 1,
-                "ppc_device": "SHFQA",
-                "ppc_channel": 123
             })
+            .to_string()
         );
     }
 }

@@ -12,12 +12,13 @@ use crate::scheduler::parameter_store::create_parameter_store;
 use crate::scheduler::py_conversion::ExperimentBuilder;
 use crate::scheduler::py_schedules::PyScheduleCompat;
 use crate::scheduler::py_schedules::generate_py_schedules;
+use crate::scheduler::signal::AmplifierPumpPy;
 use crate::scheduler::signal::SweepParameterPy;
 use crate::scheduler::signal::{OscillatorPy, py_signal_to_signal};
 use laboneq_common::named_id::{NamedIdStore, resolve_ids};
 use laboneq_scheduler::ChunkingInfo;
 use laboneq_scheduler::experiment::types::RepetitionMode;
-use laboneq_scheduler::{Experiment as SchedulerExperiment, TinySample, schedule_experiment};
+use laboneq_scheduler::{ExperimentContext, schedule_experiment};
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
@@ -89,7 +90,7 @@ struct ScheduleResult {
     #[pyo3(get)]
     repetition_info: Option<RepetitionInfoPy>,
     #[pyo3(get)]
-    system_grid: TinySample,
+    system_grid: i64,
     /// Parameters used in the experiment
     #[pyo3(get)]
     used_parameters: HashSet<String>,
@@ -120,13 +121,13 @@ fn schedule_experiment_py(
     let experiment = &experiment.inner;
     let mut parameter_store = create_parameter_store(parameters, &experiment.id_store);
     let result = schedule_experiment(
-        SchedulerExperiment {
-            sections: experiment.sections.iter().collect(),
+        &experiment.sections,
+        ExperimentContext {
             id_store: &experiment.id_store,
             parameters: experiment.parameters.clone(),
             pulses: &experiment.pulses,
+            signals: &experiment.signals,
         },
-        &experiment.signals,
         &parameter_store,
         chunking_info.map(|(index, count)| ChunkingInfo { index, count }),
     )
@@ -157,7 +158,7 @@ fn schedule_experiment_py(
                     .unwrap(),
             }
         }),
-        system_grid: result.system_grid,
+        system_grid: result.system_grid.value(),
         used_parameters: parameter_store
             .empty_queries()
             .iter()
@@ -176,5 +177,6 @@ pub fn create_py_module<'py>(py: Python<'py>, name: &str) -> Result<Bound<'py, P
     m.add_class::<SignalPy>()?;
     m.add_class::<OscillatorPy>()?;
     m.add_class::<SweepParameterPy>()?;
+    m.add_class::<AmplifierPumpPy>()?;
     Ok(m)
 }

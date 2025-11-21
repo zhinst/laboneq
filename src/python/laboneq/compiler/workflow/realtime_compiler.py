@@ -6,22 +6,23 @@ from __future__ import annotations
 
 import copy
 import logging
+import time
 from itertools import groupby
 from typing import TypedDict
-import time
-from laboneq.compiler.event_list.preorder_map import preorder_map
+
 from laboneq.compiler import CompilerSettings
-from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
-from laboneq.compiler.ir.section_ir import SectionIR
-from laboneq.compiler.event_list.event_list_generator import generate_event_list_from_ir
 from laboneq.compiler.common.iface_code_generator import ICodeGenerator
 from laboneq.compiler.common.iface_compiler_output import (
     RTCompilerOutput,
     RTCompilerOutputContainer,
 )
 from laboneq.compiler.common.signal_obj import SignalObj
+from laboneq.compiler.event_list.event_list_generator import generate_event_list_from_ir
+from laboneq.compiler.event_list.preorder_map import preorder_map
 from laboneq.compiler.experiment_access import ExperimentDAO
+from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir.ir import IRTree
+from laboneq.compiler.ir.section_ir import SectionIR
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.scheduler.scheduler import Scheduler
@@ -102,12 +103,7 @@ class RealtimeCompiler:
     def _generate_code(self):
         ir = self._lower_to_ir()
         _logger.debug("IR lowering complete")
-
         self._ir = ir
-
-        if self._settings.FORCE_IR_ROUNDTRIP:
-            ir.round_trip()
-
         self._lower_ir_to_code(ir)
         _logger.debug("lowering IR to code complete")
 

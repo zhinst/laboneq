@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import sys
 import logging
+import sys
 from enum import Enum
 from functools import partial
 from typing import ClassVar, Type, Union

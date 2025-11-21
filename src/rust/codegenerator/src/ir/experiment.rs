@@ -147,11 +147,6 @@ impl SetOscillatorFrequency {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PhaseReset {
-    // Whether or not the phase reset should reset the software oscillators
-    // listed in `signals`.
-    // If `reset_sw_oscillators` is false, the phase reset will only
-    // apply to hardware oscillators.
-    pub reset_sw_oscillators: bool,
     pub signals: Vec<Arc<Signal>>,
 }
 

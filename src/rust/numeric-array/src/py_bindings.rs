@@ -28,13 +28,13 @@ fn extract_numeric_array(arr: &Bound<'_, PyAny>) -> Result<NumericArray, PyErr> 
     } else {
         arr
     };
-    if let Ok(arr) = py_arr.downcast::<PyArray1<f64>>() {
+    if let Ok(arr) = py_arr.cast::<PyArray1<f64>>() {
         return Ok(NumericArray::Float64(arr.try_readonly()?.to_vec()?));
     }
-    if let Ok(arr) = py_arr.downcast::<PyArray1<i64>>() {
+    if let Ok(arr) = py_arr.cast::<PyArray1<i64>>() {
         return Ok(NumericArray::Integer64(arr.try_readonly()?.to_vec()?));
     }
-    if let Ok(arr) = py_arr.downcast::<PyArray1<Complex64>>() {
+    if let Ok(arr) = py_arr.cast::<PyArray1<Complex64>>() {
         return Ok(NumericArray::Complex64(arr.try_readonly()?.to_vec()?));
     }
     Err(PyValueError::new_err(

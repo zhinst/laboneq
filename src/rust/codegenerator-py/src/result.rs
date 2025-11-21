@@ -7,17 +7,16 @@
 //! represent the result of the code generation process for an AWG.
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use pythonize::pythonize;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
+use codegenerator::ir::compilation_job::DeviceUid;
 use codegenerator::ir::{Samples, compilation_job::AwgKind};
-use codegenerator::result::Acquisition;
 use codegenerator::result::AwgCodeGenerationResult;
 use codegenerator::result::ParameterPhaseIncrement;
 use codegenerator::result::SampledWaveform;
 use codegenerator::result::SeqCGenOutput;
 use codegenerator::result::SignalType;
+use codegenerator::result::{Acquisition, ShfPpcSweepJson};
 
 use crate::waveform_sampler::SampledWaveformSignaturePy;
 use crate::waveform_sampler::WaveformSamplerPy;
@@ -104,17 +103,41 @@ pub struct SignalIntegrationInfoPy {
     pub length: Samples,
 }
 
+#[pyclass(name = "PpcSweeperConfig")]
+#[derive(Debug)]
+pub struct PpcSweeperConfigPy {
+    inner: ShfPpcSweepJson,
+}
+
+#[pymethods]
+impl PpcSweeperConfigPy {
+    #[getter]
+    pub fn ppc_device(&self) -> &str {
+        &self.inner.ppc_device.device
+    }
+
+    #[getter]
+    pub fn ppc_channel(&self) -> i64 {
+        self.inner.ppc_device.channel as i64
+    }
+
+    #[getter]
+    pub fn json(&self) -> &str {
+        &self.inner.json
+    }
+}
+
 /// Result structure for single AWG code generation.
-#[pyclass(name = "AwgCodeGenerationResult", frozen, unsendable)]
+#[pyclass(name = "AwgCodeGenerationResult", frozen)]
 pub struct AwgCodeGenerationResultPy {
     #[pyo3(get)]
     seqc: String,
     #[pyo3(get)]
     wave_indices: Vec<(String, (u32, String))>,
     #[pyo3(get)]
-    command_table: Option<Py<PyAny>>,
+    command_table: Option<String>,
     #[pyo3(get)]
-    shf_sweeper_config: Option<Py<PyAny>>,
+    shf_sweeper_config: Option<Py<PpcSweeperConfigPy>>,
     sampled_waveforms: Vec<Py<SampledWaveformPy>>,
     integration_weights: Vec<Py<IntegrationWeightPy>>,
     #[pyo3(get)]
@@ -172,19 +195,10 @@ impl AwgCodeGenerationResultPy {
                 )
             })
             .collect();
-        let shf_sweeper_config = match result.shf_sweeper_config {
-            Some(mut config) => Some(
-                pythonize(
-                    py,
-                    &config.finalize(Arc::clone(
-                        &result
-                            .ppc_device
-                            .expect("Internal error: PPC device missing"),
-                    )),
-                )?
-                .unbind(),
-            ),
-            None => None,
+        let shf_sweeper_config = if let Some(config) = result.shf_sweeper_config {
+            Some(Py::new(py, PpcSweeperConfigPy { inner: config })?)
+        } else {
+            None
         };
         let parameter_phase_increment_map = result.parameter_phase_increment_map.map(|p| {
             p.into_iter()
@@ -201,13 +215,6 @@ impl AwgCodeGenerationResultPy {
                 })
                 .collect()
         });
-        let command_table = match result.command_table {
-            Some(ct) => Some({
-                let ct = pythonize(py, &ct)?;
-                ct.unbind()
-            }),
-            None => None,
-        };
         let signal_delays = result.signal_delays;
         // We take a detour via a Vec to ensure the order of wave indices is preserved
         let wave_indices = result
@@ -243,7 +250,7 @@ impl AwgCodeGenerationResultPy {
         let output = AwgCodeGenerationResultPy {
             seqc: result.seqc,
             wave_indices,
-            command_table,
+            command_table: result.command_table,
             shf_sweeper_config,
             sampled_waveforms,
             integration_weights,
@@ -298,6 +305,8 @@ pub struct SeqCGenOutputPy {
     #[pyo3(get)]
     total_execution_time: f64,
     simultaneous_acquires: Vec<Vec<Acquisition>>,
+    #[pyo3(get)]
+    measurements: Vec<MeasurementPy>,
 }
 
 impl SeqCGenOutputPy {
@@ -310,10 +319,20 @@ impl SeqCGenOutputPy {
                     .expect("Failed to create AwgCodeGenerationResultPy")
             })
             .collect();
+        let measurements = results
+            .measurements
+            .into_iter()
+            .map(|m| MeasurementPy {
+                device: m.device,
+                channel: m.channel,
+                length: m.length,
+            })
+            .collect();
         SeqCGenOutputPy {
             awg_results,
             total_execution_time: results.total_execution_time,
             simultaneous_acquires: results.simultaneous_acquires,
+            measurements,
         }
     }
 }
@@ -336,5 +355,23 @@ impl SeqCGenOutputPy {
             sim_acquires.push(dict.into_pyobject(py)?.into());
         }
         Ok(sim_acquires)
+    }
+}
+
+#[pyclass(name = "Measurement")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeasurementPy {
+    pub device: DeviceUid,
+    #[pyo3(get)]
+    pub channel: u16,
+    #[pyo3(get)]
+    pub length: Samples,
+}
+
+#[pymethods]
+impl MeasurementPy {
+    #[getter]
+    fn device(&self) -> &str {
+        &self.device
     }
 }

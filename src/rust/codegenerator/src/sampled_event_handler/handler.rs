@@ -1248,7 +1248,7 @@ impl<'a> SampledEventHandler<'a> {
         let mut index_select = None;
         let (codeword_bitshift, width, mask) = if local {
             let register = &FeedbackRegister::Local {
-                device: qa_signal_awg.device_name().to_string(),
+                device: qa_signal_awg.device_name().clone(),
             };
             self.register_bitshift(register, qa_signal, true)
         } else {
@@ -1655,7 +1655,10 @@ impl<'a> SampledEventHandler<'a> {
             wave_indices: self.wave_indices.finish(),
             command_table,
             parameter_phase_increment_map,
-            shf_sweeper_config: self.shfppc_sweeper_config_tracker.finish(),
+            shf_sweeper_config: self
+                .shfppc_sweeper_config_tracker
+                .finish()
+                .map(|mut config| config.finalize()),
             feedback_register_config: self.feedback_register_config,
         })
     }

@@ -7,6 +7,7 @@ import attrs
 
 from laboneq.core.types.enums import ReferenceClockSource
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
+
 from ..instrument import Instrument
 
 

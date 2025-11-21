@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-
 from attrs import define, field
 
 from laboneq.compiler.ir.section_ir import SectionIR

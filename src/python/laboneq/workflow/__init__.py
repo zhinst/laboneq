@@ -6,6 +6,7 @@
 The package provides tools and building blocks to define workflows.
 """
 
+# ruff: noqa: I001
 from laboneq.workflow.blocks import (
     break_,
     elif_,
@@ -19,7 +20,12 @@ from laboneq.workflow.core import (
     workflow,
 )
 from laboneq.workflow.exceptions import WorkflowError
-from laboneq.workflow.executor import execution_info
+from laboneq.workflow.executor import (
+    comment,
+    execution_info,
+    log,
+    save_artifact,
+)
 from laboneq.workflow.opts import (
     TaskOptions,
     WorkflowOptions,
@@ -29,17 +35,12 @@ from laboneq.workflow.opts import (
     workflow_options,
     task_options,
 )
-from laboneq.workflow.recorder import (
-    comment,
-    log,
-    save_artifact,
-)
 from laboneq.workflow.result import TaskResult, WorkflowResult
 from laboneq.workflow.task_wrapper import task
 from laboneq.workflow import logbook
 from laboneq.workflow import tasks
 
-__all__ = [
+__all__ = [  # noqa: RUF022
     # Decorators
     "task",
     "tasks",

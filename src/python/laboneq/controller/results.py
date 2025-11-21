@@ -10,9 +10,9 @@ import numpy as np
 from laboneq.data.experiment_results import AcquiredResult, ExperimentResults
 
 if TYPE_CHECKING:
+    from laboneq.controller.recipe_processor import RecipeData
     from laboneq.core.types.numpy_support import NumPyArray
     from laboneq.data.recipe import NtStepKey
-    from laboneq.controller.recipe_processor import RecipeData
 
 
 def init_empty_result_by_shape(recipe_data: RecipeData) -> ExperimentResults:

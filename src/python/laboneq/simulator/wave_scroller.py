@@ -9,8 +9,8 @@ from typing import List, Optional, Set
 
 import numpy as np
 from numpy.typing import ArrayLike
-from laboneq.dsl.device.io_units.physical_channel import PhysicalChannelType
 
+from laboneq.dsl.device.io_units.physical_channel import PhysicalChannelType
 from laboneq.simulator.seqc_parser import (
     CommandTableEntryInfo,
     Operation,

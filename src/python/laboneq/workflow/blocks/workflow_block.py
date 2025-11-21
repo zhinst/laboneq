@@ -8,13 +8,12 @@ from __future__ import annotations
 from inspect import signature
 from typing import TYPE_CHECKING, Callable
 
-from laboneq.workflow.timestamps import utc_now
-from laboneq.workflow import variable_tracker
-from laboneq.workflow import blocks
+from laboneq.workflow import blocks, variable_tracker
 from laboneq.workflow.executor import ExecutionStatus, ExecutorState
 from laboneq.workflow.opts import WorkflowOptions, get_and_validate_param_type
 from laboneq.workflow.reference import Reference, notset
 from laboneq.workflow.result import WorkflowResult
+from laboneq.workflow.timestamps import utc_now
 
 if TYPE_CHECKING:
     from laboneq.workflow.opts import TaskOptions

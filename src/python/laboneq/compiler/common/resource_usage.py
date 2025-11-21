@@ -3,12 +3,11 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from enum import Enum, auto
-import logging
 
 from laboneq.compiler import CompilerSettings
-
 
 _logger = logging.getLogger(__name__)
 

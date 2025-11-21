@@ -125,10 +125,7 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
             if signals.is_empty() {
                 return;
             }
-            let ob = PhaseReset {
-                signals,
-                reset_sw_oscillators: ob.reset_sw_oscillators,
-            };
+            let ob = PhaseReset { signals };
             let new_node = IrNode::new(NodeKind::PhaseReset(ob), *node.offset() + parent_offset);
             nodes.push(new_node);
         }
@@ -241,7 +238,7 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
 /// # Returns
 ///
 /// A new [`IrNode`] that contains the filtered nodes for the AWG.
-/// If not relevant nodes are found, a Nop node is returned with the length of the original node.
+/// If no relevant nodes are found, a Nop node is returned with the length of the original node.
 pub fn fanout_for_awg(node: &IrNode, awg: &AwgCore) -> IrNode {
     let ctx = Context {
         signals: awg.signals.iter().map(|s| s.uid.as_str()).collect(),

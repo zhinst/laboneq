@@ -307,7 +307,7 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
                         sampled_waveforms
                             .insert_sampled_signature(waveform.waveform, sampled_signature);
                     }
-                    if let Ok(compressed_parts) = output.downcast::<PyList>() {
+                    if let Ok(compressed_parts) = output.cast::<PyList>() {
                         let compressed_parts = convert_compressed_waveform_parts(compressed_parts)
                             .expect("Internal error: Failed to convert compressed parts");
                         sampled_waveforms
@@ -375,7 +375,7 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
                     )
                     .map_err(Error::with_error)?;
                 let samples_i_q = result
-                    .downcast::<PyTuple>()
+                    .cast::<PyTuple>()
                     .expect("Internal error: Expected a tuple from Python sampler");
                 let samples_i = samples_i_q.get_item(0).map_err(Error::with_error)?;
                 let samples_q = samples_i_q.get_item(1).map_err(Error::with_error)?;
@@ -434,7 +434,7 @@ fn convert_compressed_waveform_parts(
     let py = compressed_parts.py();
     let mut out_parts = Vec::with_capacity(compressed_parts.len());
     for result in compressed_parts.iter() {
-        if let Ok(ps) = result.downcast::<PlaySamplesPy>() {
+        if let Ok(ps) = result.cast::<PlaySamplesPy>() {
             let ps = ps.borrow();
             let samples_id = SamplesSignatureID {
                 uid: ps.uid,
@@ -455,7 +455,7 @@ fn convert_compressed_waveform_parts(
                 signature,
             };
             out_parts.push(obj);
-        } else if let Ok(ph) = result.downcast::<PlayHoldPy>() {
+        } else if let Ok(ph) = result.cast::<PlayHoldPy>() {
             let ph = ph.borrow();
             let obj = CompressedWaveformPart::PlayHold {
                 offset: ph.offset,

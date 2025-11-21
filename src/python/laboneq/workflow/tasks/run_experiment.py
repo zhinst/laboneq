@@ -9,12 +9,12 @@ import warnings
 from typing import TYPE_CHECKING
 
 from laboneq import workflow
+from laboneq.core.utilities.attribute_wrapper import AttributeWrapper  # noqa: F401
 
 # Import of AcquiredResult and AttributeWrapper is to support
 # laboneq_applications/analysis/plotting_helpers which imports
 # it from here.
 from laboneq.dsl.result import AcquiredResult, Results  # noqa: F401
-from laboneq.core.utilities.attribute_wrapper import AttributeWrapper  # noqa: F401
 
 if TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment

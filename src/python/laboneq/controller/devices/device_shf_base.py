@@ -3,19 +3,18 @@
 
 from __future__ import annotations
 
+import logging
 from enum import IntEnum
 
 from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.devices.node_control import (
     Command,
-    Setting,
     Condition,
     NodeControlBase,
     Response,
+    Setting,
     WaitCondition,
 )
-
-import logging
 
 _logger = logging.getLogger(__name__)
 

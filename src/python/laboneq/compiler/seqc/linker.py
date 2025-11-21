@@ -9,7 +9,7 @@ from typing import Any
 
 import numpy as np
 
-from laboneq._rust.codegenerator import FeedbackRegisterConfig
+import laboneq._rust.codegenerator as codegen_rs
 from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
@@ -20,7 +20,7 @@ from laboneq.compiler.common.iface_compiler_output import (
 )
 from laboneq.compiler.common.iface_linker import ILinker
 from laboneq.compiler.common.integration_times import IntegrationTimes
-from laboneq.compiler.seqc.measurement_calculator import (
+from laboneq.compiler.seqc.types import (
     SignalDelays,
 )
 from laboneq.core.exceptions import LabOneQException
@@ -61,14 +61,14 @@ class CombinedRTOutputSeqC(CombinedOutput):
     parameter_phase_increment_map: dict[str, ParameterPhaseIncrementMap] = field(
         default_factory=dict
     )
-    feedback_register_configurations: dict[AwgKey, FeedbackRegisterConfig] = field(
-        default_factory=dict
-    )
+    feedback_register_configurations: dict[
+        AwgKey, codegen_rs.FeedbackRegisterConfig
+    ] = field(default_factory=dict)
     neartime_steps: list[NeartimeStep] = field(default_factory=list)
     shfppc_sweep_configurations: dict[AwgKey, dict[str, object]] = field(
         default_factory=dict
     )
-
+    measurements: list[codegen_rs.Measurement] = field(default_factory=list)
     total_execution_time: float = 0
     max_execution_time_per_step: float = 0
 
@@ -120,10 +120,10 @@ class SeqCGenOutput(RTCompilerOutput):
     command_tables: dict[AwgKey, dict[str, Any]]
     pulse_map: dict[str, PulseMapEntry]
     parameter_phase_increment_map: dict[AwgKey, dict[str, list]]
-    feedback_register_configurations: dict[AwgKey, FeedbackRegisterConfig]
+    feedback_register_configurations: dict[AwgKey, codegen_rs.FeedbackRegisterConfig]
     shfppc_sweep_configurations: dict[AwgKey, dict[str, object]]
-
     total_execution_time: float = 0
+    measurements: list[codegen_rs.Measurement] = field(default_factory=list)
 
 
 def _check_compatibility(this, new):
@@ -227,6 +227,7 @@ class SeqCLinker(ILinker):
             ),
             parameter_phase_increment_map=parameter_phase_increment_map,
             shfppc_sweep_configurations=output.shfppc_sweep_configurations,
+            measurements=output.measurements,
         )
 
     @staticmethod

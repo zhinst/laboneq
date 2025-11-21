@@ -16,9 +16,10 @@ from laboneq.core.exceptions import LabOneQException
 
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
-    from laboneq.core.types.numpy_support import NumPyArray
+
     from laboneq.core.types.enums.acquisition_type import AcquisitionType
     from laboneq.core.types.enums.averaging_mode import AveragingMode
+    from laboneq.core.types.numpy_support import NumPyArray
 
 
 class LoopFlags(Flag):

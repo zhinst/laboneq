@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 import uuid
 
+from laboneq.compiler import Compiler
 from laboneq.data.compilation_job import CompilationJob, ExperimentInfo
 from laboneq.data.execution_payload import ExecutionPayload, TargetSetup
 from laboneq.data.experiment_description import Experiment
@@ -15,7 +17,6 @@ from laboneq.implementation.payload_builder.experiment_info_builder.experiment_i
 from laboneq.implementation.payload_builder.target_setup_generator import (
     TargetSetupGenerator,
 )
-from laboneq.compiler import Compiler
 
 
 def _compile(job: CompilationJob):

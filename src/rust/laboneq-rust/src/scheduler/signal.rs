@@ -1,18 +1,21 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::str::FromStr;
+
 use laboneq_common::types::{AwgKey, DeviceKind};
-use laboneq_scheduler::experiment::types::SignalUid;
+use laboneq_scheduler::experiment::builders::AmplifierPumpBuilder;
+use laboneq_scheduler::experiment::types::{AmplifierPump, SignalUid, ValueOrParameter};
 use pyo3::prelude::*;
 
-use crate::scheduler::experiment::Signal;
+use crate::scheduler::experiment::{Signal, SignalKind};
 use crate::{
     error::{Error, Result},
-    scheduler::py_conversion::{ExperimentBuilder, extract_value},
+    scheduler::py_conversion::ExperimentBuilder,
 };
 use laboneq_scheduler::experiment::sweep_parameter::SweepParameter;
 use laboneq_scheduler::experiment::types::{
-    Oscillator, OscillatorKind, OscillatorUid, ParameterUid, RealValue, Value,
+    Oscillator, OscillatorKind, OscillatorUid, ParameterUid,
 };
 use numeric_array::NumericArray;
 
@@ -25,10 +28,13 @@ pub struct SignalPy {
     pub oscillator: Option<Py<OscillatorPy>>,
     pub lo_frequency: Option<Py<PyAny>>,
     pub voltage_offset: Option<Py<PyAny>>,
+    pub amplifier_pump: Option<Py<AmplifierPumpPy>>,
+    pub kind: SignalKind,
 }
 
 #[pymethods]
 impl SignalPy {
+    #[allow(clippy::too_many_arguments)]
     #[new]
     pub fn new(
         uid: String,
@@ -38,6 +44,8 @@ impl SignalPy {
         oscillator: Option<Py<OscillatorPy>>,
         lo_frequency: Option<Py<PyAny>>,
         voltage_offset: Option<Py<PyAny>>,
+        amplifier_pump: Option<Py<AmplifierPumpPy>>,
+        kind: &str,
     ) -> Self {
         Self {
             uid,
@@ -47,6 +55,8 @@ impl SignalPy {
             oscillator,
             lo_frequency,
             voltage_offset,
+            amplifier_pump,
+            kind: SignalKind::from_str(kind).unwrap(),
         }
     }
 }
@@ -89,6 +99,45 @@ impl SweepParameterPy {
     }
 }
 
+#[pyclass(name = "AmplifierPump", frozen)]
+pub struct AmplifierPumpPy {
+    device: String,
+    channel: u16,
+    pump_power: Py<PyAny>,
+    pump_frequency: Py<PyAny>,
+    probe_power: Py<PyAny>,
+    probe_frequency: Py<PyAny>,
+    cancellation_phase: Py<PyAny>,
+    cancellation_attenuation: Py<PyAny>,
+}
+
+#[allow(clippy::too_many_arguments)]
+#[pymethods]
+impl AmplifierPumpPy {
+    #[new]
+    pub fn new(
+        device: String,
+        channel: u16,
+        pump_power: Py<PyAny>,
+        pump_frequency: Py<PyAny>,
+        probe_power: Py<PyAny>,
+        probe_frequency: Py<PyAny>,
+        cancellation_phase: Py<PyAny>,
+        cancellation_attenuation: Py<PyAny>,
+    ) -> Self {
+        Self {
+            device,
+            channel,
+            pump_power,
+            pump_frequency,
+            probe_power,
+            probe_frequency,
+            cancellation_phase,
+            cancellation_attenuation,
+        }
+    }
+}
+
 /// Convert a `SignalPy` to a `Signal`, registering any parameters in the provided `ExperimentBuilder`.
 ///
 /// The used parameters within the Signal must be register in the `ExperimentBuilder` as they might use
@@ -109,8 +158,7 @@ pub fn py_signal_to_signal(
                     signal_py.uid
                 )));
             }
-            let frequency =
-                extract_maybe_parameter::<RealValue>(osc_py.frequency.bind(py), builder)?;
+            let frequency = extract_value_or_parameter::<f64>(osc_py.frequency.bind(py), builder)?;
             Ok(Oscillator {
                 uid: OscillatorUid(builder.id_store.get_or_insert(&osc_py.uid)),
                 frequency: frequency.unwrap(),
@@ -126,7 +174,7 @@ pub fn py_signal_to_signal(
         .lo_frequency
         .as_ref()
         .map(|lo_freq| -> Result<_> {
-            extract_maybe_parameter::<RealValue>(lo_freq.bind(py), builder)
+            extract_value_or_parameter::<f64>(lo_freq.bind(py), builder)
         })
         .transpose()?
         .flatten();
@@ -134,10 +182,11 @@ pub fn py_signal_to_signal(
         .voltage_offset
         .as_ref()
         .map(|lo_freq| -> Result<_> {
-            extract_maybe_parameter::<RealValue>(lo_freq.bind(py), builder)
+            extract_value_or_parameter::<f64>(lo_freq.bind(py), builder)
         })
         .transpose()?
         .flatten();
+    let amplifier_pump = extract_amplifier_pump(py, signal_py, builder)?;
     let s = Signal {
         uid: SignalUid(
             // We must insert the signal as Compiler may add dummy signals that do not exist in the experiment.
@@ -149,6 +198,8 @@ pub fn py_signal_to_signal(
         device_type: signal_py.device_type,
         lo_frequency,
         voltage_offset,
+        amplifier_pump,
+        kind: signal_py.kind.clone(),
     };
     Ok(s)
 }
@@ -167,17 +218,18 @@ fn extract_device_kind(device: &str) -> Result<DeviceKind> {
     Ok(kind)
 }
 
-fn extract_maybe_parameter<T: TryFrom<Value>>(
-    obj: &Bound<'_, PyAny>,
+fn extract_value_or_parameter<'py, T: FromPyObjectOwned<'py, Error = PyErr>>(
+    obj: &Bound<'py, PyAny>,
     builder: &mut ExperimentBuilder,
-) -> Result<Option<T>> {
-    let py = obj.py();
-    if let Ok(parameter) = obj.downcast::<SweepParameterPy>() {
+) -> Result<Option<ValueOrParameter<T>>> {
+    if obj.is_none() {
+        return Ok(None);
+    }
+    let py: Python<'_> = obj.py();
+    if let Ok(parameter) = obj.cast::<SweepParameterPy>() {
         let parameter = parameter.borrow();
         let uid = ParameterUid(builder.register_uid(&parameter.uid));
-        let value: T = Value::ParameterUid(uid)
-            .try_into()
-            .map_err(|_| Error::new(format!("Failed to convert parameter: {obj}")))?;
+        let value: ValueOrParameter<T> = ValueOrParameter::Parameter(uid);
         if builder.parameters.contains_key(&uid) {
             return Ok(Some(value));
         }
@@ -195,14 +247,52 @@ fn extract_maybe_parameter<T: TryFrom<Value>>(
         });
         return Ok(Some(value));
     }
-    let val = extract_value(obj, builder)?;
-    let value_out = if let Some(val) = val {
-        let value: T = val
-            .try_into()
-            .map_err(|_| Error::new(format!("Failed to convert parameter: {obj}")))?;
-        value
-    } else {
-        return Ok(None);
-    };
-    Ok(Some(value_out))
+    let value = ValueOrParameter::<T>::Value(obj.extract::<T>()?);
+    Ok(Some(value))
+}
+
+pub fn extract_amplifier_pump(
+    py: Python,
+    signal_py: &SignalPy,
+    builder: &mut ExperimentBuilder,
+) -> Result<Option<AmplifierPump>> {
+    if let Some(pump) = signal_py.amplifier_pump.as_ref() {
+        let pump = pump.bind(py).borrow();
+        let mut amplifier_pump_builder =
+            AmplifierPumpBuilder::new(builder.register_uid(&pump.device).into(), pump.channel);
+        if let Some(pump_power) =
+            extract_value_or_parameter::<f64>(pump.pump_power.bind(py), builder)?
+        {
+            amplifier_pump_builder = amplifier_pump_builder.pump_power(pump_power);
+        }
+        if let Some(pump_frequency) =
+            extract_value_or_parameter::<f64>(pump.pump_frequency.bind(py), builder)?
+        {
+            amplifier_pump_builder = amplifier_pump_builder.pump_frequency(pump_frequency);
+        }
+        if let Some(probe_power) =
+            extract_value_or_parameter::<f64>(pump.probe_power.bind(py), builder)?
+        {
+            amplifier_pump_builder = amplifier_pump_builder.probe_power(probe_power);
+        }
+        if let Some(probe_frequency) =
+            extract_value_or_parameter::<f64>(pump.probe_frequency.bind(py), builder)?
+        {
+            amplifier_pump_builder = amplifier_pump_builder.probe_frequency(probe_frequency);
+        }
+        if let Some(cancellation_phase) =
+            extract_value_or_parameter::<f64>(pump.cancellation_phase.bind(py), builder)?
+        {
+            amplifier_pump_builder = amplifier_pump_builder.cancellation_phase(cancellation_phase);
+        }
+        if let Some(cancellation_attenuation) =
+            extract_value_or_parameter::<f64>(pump.cancellation_attenuation.bind(py), builder)?
+        {
+            amplifier_pump_builder =
+                amplifier_pump_builder.cancellation_attenuation(cancellation_attenuation);
+        }
+        let amplifier_pump = amplifier_pump_builder.build();
+        return Ok(Some(amplifier_pump));
+    }
+    Ok(None)
 }

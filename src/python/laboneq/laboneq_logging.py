@@ -347,7 +347,7 @@ def add_logging_level(level_name, level_num, method_name=None):
     logging.addLevelName(level_num, level_name)
 
 
-from logging import CRITICAL, ERROR, WARNING, INFO, DEBUG, NOTSET  # noqa: F401
+from logging import CRITICAL, DEBUG, ERROR, INFO, NOTSET, WARNING  # noqa: F401
 
 DIAGNOSTIC = logging.INFO - 5
 

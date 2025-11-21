@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import warnings
+
 import attrs
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter

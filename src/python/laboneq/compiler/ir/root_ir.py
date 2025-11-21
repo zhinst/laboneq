@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 from attrs import define
+
 from laboneq.compiler.ir.interval_ir import IntervalIR
 from laboneq.core.types.enums import AcquisitionType
 

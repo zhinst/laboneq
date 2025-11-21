@@ -9,7 +9,16 @@ from collections.abc import ItemsView, Iterator
 from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, KeysView, Literal, TypeVar, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Iterable,
+    KeysView,
+    Literal,
+    TypeVar,
+    cast,
+    overload,
+)
 
 import numpy as np
 import zhinst.utils  # type: ignore[import-untyped]
@@ -700,7 +709,7 @@ class _LoopStackEntry:
     is_averaging: bool
     is_chunked: bool
     axis_names: list[str] = field(default_factory=list)
-    axis_points: list[NumPyArray] = field(default_factory=list)
+    axis_points: list[NumPyArray | Iterable[int]] = field(default_factory=list)
 
     @property
     def axis_name(self) -> str | list[str]:
@@ -708,7 +717,9 @@ class _LoopStackEntry:
 
     @property
     def axis(self) -> NumPyArray | list[NumPyArray]:
-        return self.axis_points[0] if len(self.axis_points) == 1 else self.axis_points
+        if len(self.axis_points) == 1:
+            return np.array(self.axis_points[0])
+        return [np.array(axis) for axis in self.axis_points]
 
 
 @dataclass
@@ -791,10 +802,10 @@ class _LoopsPreprocessor(ExecutorBase):
         assert self._current_rt_state is not None
         return self._current_rt_state
 
-    def _single_shot_axis(self) -> NumPyArray:
-        return np.linspace(
-            0, self.current_rt_state.averages - 1, self.current_rt_state.averages
-        )
+    def _single_shot_axis(self) -> range:
+        # The number of averages may potentially be large,
+        # so we represent it with a lazy iterator.
+        return range(self.current_rt_state.averages)
 
     def acquire_handler(self, handle: str, signal: str, parent_uid: str):
         # Determine result shape for each acquire handle

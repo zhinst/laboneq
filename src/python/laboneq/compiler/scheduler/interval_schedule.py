@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Set, TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional, Set
 
 from attrs import define, field
+
 from laboneq.compiler.scheduler.utils import lcm
 
 if TYPE_CHECKING:

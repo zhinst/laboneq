@@ -10,15 +10,15 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from laboneq.workflow.timestamps import utc_now
 from laboneq.workflow import reference
 from laboneq.workflow._context import LocalContext
 from laboneq.workflow.exceptions import WorkflowError
 from laboneq.workflow.opts import WorkflowOptions
 from laboneq.workflow.recorder import (
-    ExecutionRecorder,
+    Artifact,
     ExecutionRecorderManager,
 )
+from laboneq.workflow.timestamps import utc_now
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -30,6 +30,10 @@ if TYPE_CHECKING:
         WorkflowResult,
     )
     from laboneq.workflow.blocks import Block
+    from laboneq.workflow.recorder import (
+        ExecutionRecorder,
+    )
+    from laboneq.workflow.typing import SimpleDict
 
 
 class _ExecutorSignal(Exception):  # noqa: N818
@@ -322,3 +326,71 @@ def execution_info() -> WorkflowExecutionInfoView | None:
     if not active_context:
         return None
     return WorkflowExecutionInfoView(active_context)
+
+
+def comment(message: str) -> None:
+    """Add a comment to the current workflow logbook.
+
+    Arguments:
+        message:
+            The comment to record.
+    """
+    ctx = ExecutorStateContext.get_active()
+    if ctx is not None:
+        ctx.recorder.comment(message)
+    else:
+        raise RuntimeError(
+            "Workflow comments are currently not supported outside of tasks.",
+        )
+
+
+def log(level: int, message: str, *args: object) -> None:
+    """Add a log message to the current workflow logbook.
+
+    Arguments:
+        message:
+            The log message to record.
+        level:
+            The logging level of the message (optional). See the `logging`
+            module for the list of default levels.
+        args:
+            Additional arguments to format the message.
+    """
+    ctx = ExecutorStateContext.get_active()
+    if ctx is not None:
+        ctx.recorder.log(level, message, *args)
+    else:
+        raise RuntimeError(
+            "Workflow log messages are currently not supported outside of tasks.",
+        )
+
+
+def save_artifact(
+    name: str,
+    artifact: object,
+    *,
+    metadata: SimpleDict | None = None,
+    options: SimpleDict | None = None,
+) -> None:
+    """Save an artifact to the current workflow logbook.
+
+    Arguments:
+        name:
+            A name hint for the artifact. Logbooks may use this to generate
+            meaningful filenames for artifacts when they are saved to disk,
+            for example.
+        artifact:
+            The object to be recorded.
+        metadata:
+            Additional metadata for the artifact (optional).
+        options:
+            Serialization options for the artifact (optional).
+    """
+    ctx = ExecutorStateContext.get_active()
+    if ctx is not None:
+        artifact = Artifact(name, artifact, metadata=metadata, options=options)
+        ctx.recorder.save(artifact)
+    else:
+        raise RuntimeError(
+            "Workflow artifact saving is currently not supported outside of tasks.",
+        )

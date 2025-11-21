@@ -46,10 +46,3 @@ class IRTree:
     signals: list[SignalIR]
     root: RootScheduleIR
     pulse_defs: list[PulseDef]
-
-    def round_trip(self):
-        from laboneq.dsl.serialization import Serializer
-
-        json = Serializer.to_json(self)
-        rt = Serializer.from_json(json, IRTree)
-        assert rt == self

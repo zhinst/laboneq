@@ -4,10 +4,10 @@
 import contextlib
 import inspect
 from collections.abc import Callable
-from typing import Union, get_origin, get_args
 from types import UnionType
+from typing import Union, get_args, get_origin
 
-from multimethod import multimethod, subtype, DispatchError, signature
+from multimethod import DispatchError, multimethod, signature, subtype
 
 from laboneq.dsl.quantum.quantum_element import QuantumElement
 

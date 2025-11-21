@@ -549,7 +549,7 @@ mod tests {
         other_pulse.sub_channel = 1.into();
         assert_ne!(create_hash(&pulse), create_hash(&other_pulse));
 
-        for marker in vec![
+        for marker in [
             Marker::new("1".to_string(), true, 0.0.into(), 1.0.into(), None),
             Marker::new("0".to_string(), false, 0.0.into(), 1.0.into(), None),
             Marker::new("0".to_string(), true, 0.1.into(), 1.0.into(), None),

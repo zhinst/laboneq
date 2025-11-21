@@ -11,8 +11,8 @@ use crate::passes::{
     handle_precompensation_resets, handle_prng, handle_qa_events, handle_signatures,
     handle_triggers, lower_for_awg,
 };
-use crate::tinysample::tinysample_to_samples;
 use crate::virtual_signal::create_virtual_signals;
+use laboneq_units::tinysample::tinysamples_to_samples;
 use std::collections::{HashMap, HashSet};
 
 /// Transform the IR program into a AWG events for the target AWG.
@@ -38,7 +38,8 @@ pub fn transform_ir_to_awg_events(
         &awg.signals,
         awg.device_kind(),
         |signal_uid, ts| {
-            tinysample_to_samples(ts, awg.sampling_rate) + awg_timing.signal_delay(signal_uid)
+            tinysamples_to_samples(ts.into(), awg.sampling_rate)
+                + awg_timing.signal_delay(signal_uid)
         },
     )?;
     lower_for_awg::convert_to_samples(&mut program, awg);

@@ -58,15 +58,15 @@ from laboneq.dsl.experiment import (
 )
 from laboneq.dsl.experiment import builtins_dsl as dsl
 from laboneq.dsl.quantum import (
+    QPU,
+    QPUTopology,
     QuantumElement,
     QuantumParameters,
+    QuantumPlatform,
     Qubit,
     QubitParameters,
     Transmon,
     TransmonParameters,
-    QPU,
-    QPUTopology,
-    QuantumPlatform,
 )
 from laboneq.dsl.result import Results
 from laboneq.dsl.session import Session

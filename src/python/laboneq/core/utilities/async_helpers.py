@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
+import asyncio
 import concurrent
 import concurrent.futures
-from contextlib import contextmanager
 import signal
 import threading
-from typing import Coroutine, Generic, TypeVar, Callable
-import asyncio
-
+from contextlib import contextmanager
+from typing import Callable, Coroutine, Generic, TypeVar
 
 T = TypeVar("T")
 

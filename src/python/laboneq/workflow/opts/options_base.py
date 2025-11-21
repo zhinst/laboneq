@@ -5,18 +5,18 @@
 
 from __future__ import annotations
 
-from functools import wraps
 import sys
 import typing
+from functools import wraps
 from io import StringIO
 from typing import Callable, Type, final
 
 import attr
+from attrs import setters
 from rich.console import Console
 from rich.pretty import pprint
 
 from laboneq.workflow.opts.options_parser import check_type
-from attrs import setters
 
 
 def _type_validator(inst, attr: attr.Attribute, value) -> None:  # noqa: ANN001

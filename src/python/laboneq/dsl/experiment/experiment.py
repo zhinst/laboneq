@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
-import attrs
 from collections import deque
 from typing import TYPE_CHECKING, Any, Callable, Iterator, NoReturn, final
+
+import attrs
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import DSLVersion
@@ -745,10 +746,6 @@ class Experiment:
                 # here come the operations that shall be executed in the acquire_loop_rt section
         ```
 
-        !!! note
-            A near time section cannot be defined in the scope of a real
-            time section.
-
         Arguments:
             uid:
                 The unique ID for this section.
@@ -780,6 +777,13 @@ class Experiment:
             reset_oscillator_phase:
                 When True, the phase of every oscillator is reset at
                 the start of the each step of the acquire loop.
+
+        !!! note
+            When an acquire loop is present in an experiment, it automatically defines the boundary between
+            real-time and near-time operations.
+
+            All sections within it and defined without a default execution type will default to real-time execution. Including any
+            near-time sections inside it will result in a compilation error.
         """
         return Experiment._AcquireLoopRtSectionContext(
             self,

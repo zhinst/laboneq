@@ -9,7 +9,7 @@ explicitly decided to drop support for loading such objects
 from older versions of LabOne Q.
 """
 
-__all__ = [
+__all__ = [  # noqa: RUF022
     "CompiledExperimentSerializer",
     "CalibrationSerializer",
     "DeviceSetupSerializer",

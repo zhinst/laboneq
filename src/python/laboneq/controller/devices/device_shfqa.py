@@ -2,13 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 import asyncio
-
 import logging
-from typing import Any, Iterator
+from typing import Iterator
 
-from laboneq.controller.devices.channel_base import ChannelBase
-from laboneq.controller.devices.qachannel import QAChannel
 import numpy as np
 
 from laboneq.controller.attribute_value_tracker import (
@@ -17,9 +15,11 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttributesView,
 )
 from laboneq.controller.devices.async_support import _gather
+from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_shf_base import DeviceSHFBase
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.device_zi import SequencerPaths, RawReadoutData
+from laboneq.controller.devices.device_zi import RawReadoutData
+from laboneq.controller.devices.qachannel import QAChannel
 from laboneq.controller.recipe_processor import (
     RecipeData,
     RtExecutionInfo,
@@ -37,7 +37,6 @@ from laboneq.data.recipe import (
     NtStepKey,
 )
 from laboneq.data.scheduled_experiment import ArtifactsCodegen, ScheduledExperiment
-
 
 _logger = logging.getLogger(__name__)
 
@@ -80,14 +79,10 @@ class DeviceSHFQA(DeviceSHFBase):
         self._wait_for_awgs = True
         self._emit_trigger = False
 
-    @property
-    def has_pipeliner(self) -> bool:
-        return True
-
-    def all_channels(self) -> Iterator[ChannelBase]:
+    def all_cores(self) -> Iterator[CoreBase]:
         return iter(self._qachannels)
 
-    def allocated_channels(self, recipe_data: RecipeData) -> Iterator[ChannelBase]:
+    def allocated_cores(self, recipe_data: RecipeData) -> Iterator[CoreBase]:
         for ch in recipe_data.allocated_awgs(self.uid):
             yield self._qachannels[ch]
 
@@ -124,25 +119,13 @@ class DeviceSHFQA(DeviceSHFBase):
                 subscriber=self._subscriber,
                 device_uid=self.uid,
                 serial=self.serial,
-                channel=ch,
+                core_index=core_index,
                 integrators=self._integrators,
                 repr_base=self.dev_repr,
                 is_plus=self._is_plus,
             )
-            for ch in range(self._channels)
+            for core_index in range(self._channels)
         ]
-
-    def _get_sequencer_type(self) -> str:
-        return "qa"
-
-    def get_sequencer_paths(self, index: int) -> SequencerPaths:
-        qachannel = self._qachannels[index]
-        return SequencerPaths(
-            elf=qachannel.nodes.generator_elf_data,
-            progress=qachannel.nodes.generator_elf_progress,
-            enable=qachannel.nodes.generator_enable,
-            ready=qachannel.nodes.generator_ready,
-        )
 
     def _validate_range(self, io: IO, is_out: bool):
         if io.range is None:
@@ -235,8 +218,8 @@ class DeviceSHFQA(DeviceSHFBase):
 
     async def disable_outputs(self, outputs: set[int], invert: bool):
         await for_each(
-            self.all_channels(),
-            ChannelBase.disable_output,
+            self.all_cores(),
+            CoreBase.disable_output,
             outputs=outputs,
             invert=invert,
         )
@@ -254,8 +237,8 @@ class DeviceSHFQA(DeviceSHFBase):
 
     async def start_execution(self, recipe_data: RecipeData):
         await for_each(
-            self.allocated_channels(recipe_data=recipe_data),
-            ChannelBase.start_execution,
+            self.allocated_cores(recipe_data=recipe_data),
+            CoreBase.start_execution,
             with_pipeliner=recipe_data.rt_execution_info.with_pipeliner,
         )
 
@@ -286,45 +269,6 @@ class DeviceSHFQA(DeviceSHFBase):
             )
             await self.set_async(nc)
 
-    def conditions_for_execution_ready(
-        self, recipe_data: RecipeData
-    ) -> dict[str, tuple[Any, str]]:
-        conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in recipe_data.allocated_awgs(self.uid):
-            if recipe_data.rt_execution_info.with_pipeliner:
-                conditions.update(
-                    self._qachannels[
-                        awg_index
-                    ].pipeliner.conditions_for_execution_ready()
-                )
-            else:
-                # TODO(janl): Not sure whether we need this condition on the SHFQA (including SHFQC)
-                # as well. The state of the generator enable wasn't always picked up reliably, so we
-                # only check in cases where we rely on external triggering mechanisms.
-                conditions[self.get_sequencer_paths(awg_index).enable] = (
-                    1,
-                    f"Readout pulse generator {awg_index} didn't start.",
-                )
-        return conditions
-
-    def conditions_for_execution_done(
-        self, recipe_data: RecipeData
-    ) -> dict[str, tuple[Any, str]]:
-        conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in recipe_data.allocated_awgs(self.uid):
-            if recipe_data.rt_execution_info.with_pipeliner:
-                conditions.update(
-                    self._qachannels[
-                        awg_index
-                    ].pipeliner.conditions_for_execution_done()
-                )
-            else:
-                conditions[self.get_sequencer_paths(awg_index).enable] = (
-                    0,
-                    f"Generator {awg_index} didn't stop. Missing start trigger? Check ZSync.",
-                )
-        return conditions
-
     async def teardown_one_step_execution(self, recipe_data: RecipeData):
         if not self.is_standalone():
             # Deregister this instrument from synchronization via ZSync.
@@ -334,7 +278,7 @@ class DeviceSHFQA(DeviceSHFBase):
             )
 
         await for_each(
-            self.allocated_channels(recipe_data=recipe_data),
+            self.allocated_cores(recipe_data=recipe_data),
             QAChannel.teardown_one_step_execution,
             with_pipeliner=recipe_data.rt_execution_info.with_pipeliner,
         )
@@ -379,7 +323,7 @@ class DeviceSHFQA(DeviceSHFBase):
             return
 
         await for_each(
-            self.all_channels(),
+            self.all_cores(),
             QAChannel.apply_initialization,
             device_recipe_data=device_recipe_data,
         )
@@ -388,8 +332,8 @@ class DeviceSHFQA(DeviceSHFBase):
         self, recipe_data: RecipeData, attributes: DeviceAttributesView
     ):
         await for_each(
-            self.all_channels(),
-            ChannelBase.set_nt_step_nodes,
+            self.all_cores(),
+            CoreBase.set_nt_step_nodes,
             recipe_data=recipe_data,
             attributes=attributes,
         )
@@ -403,13 +347,6 @@ class DeviceSHFQA(DeviceSHFBase):
         if is_spectroscopy(acquisition_type):
             return self._qachannels[awg_index].upload_spectroscopy_envelope(wave)
         return self._qachannels[awg_index].upload_generator_wave(wave)
-
-    async def set_before_awg_upload(self, recipe_data: RecipeData):
-        await for_each(
-            self.all_channels(),
-            QAChannel.set_before_awg_upload,
-            recipe_data=recipe_data,
-        )
 
     async def configure_trigger(self, recipe_data: RecipeData):
         device_recipe_data = recipe_data.device_settings[self.uid]
@@ -434,7 +371,7 @@ class DeviceSHFQA(DeviceSHFBase):
             )
 
         await for_each(
-            self.allocated_channels(recipe_data=recipe_data),
+            self.allocated_cores(recipe_data=recipe_data),
             QAChannel.configure_trigger,
             trig_channel=trig_channel,
         )
@@ -536,6 +473,6 @@ class DeviceSHFQA(DeviceSHFBase):
 
     def _collect_warning_nodes(self) -> list[tuple[str, str]]:
         warning_nodes = []
-        for channel in self.all_channels():
+        for channel in self.all_cores():
             warning_nodes.extend(channel.collect_warning_nodes())
         return warning_nodes

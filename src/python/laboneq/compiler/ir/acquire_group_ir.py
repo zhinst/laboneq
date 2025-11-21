@@ -15,7 +15,5 @@ from laboneq.data.compilation_job import SectionSignalPulse
 class AcquireGroupIR(IntervalIR):
     pulses: list[SectionSignalPulse]
     amplitudes: list[float]
-    phases: list[float]
-    section: str
     play_pulse_params: list[Optional[Dict[str, Any]]]
     pulse_pulse_params: list[Optional[Dict[str, Any]]]

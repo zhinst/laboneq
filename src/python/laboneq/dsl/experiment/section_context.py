@@ -26,10 +26,10 @@ from laboneq.dsl.experiment.section import (
     AcquireLoopRt,
     Case,
     Match,
+    PRNGLoop,
+    PRNGSetup,
     Section,
     Sweep,
-    PRNGSetup,
-    PRNGLoop,
 )
 from laboneq.dsl.experiment.uid_generator import GLOBAL_UID_GENERATOR
 from laboneq.dsl.prng import PRNGSample

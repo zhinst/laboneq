@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-import attrs
 from typing import Optional
+
+import attrs
 
 from laboneq.core.types.enums import PortMode
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter

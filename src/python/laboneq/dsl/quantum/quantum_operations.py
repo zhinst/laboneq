@@ -13,22 +13,21 @@ from numbers import Number
 from typing import TYPE_CHECKING, Callable, ClassVar
 
 import numpy as np
-from laboneq.dsl.quantum._multimethod import MultiMethod
 
+from laboneq.core.types.enums.execution_type import ExecutionType
+from laboneq.core.utilities.highlight import pygmentize
 from laboneq.dsl.experiment import builtins, pulse_library
 from laboneq.dsl.experiment.build_experiment import _qubits_from_args
 from laboneq.dsl.parameter import Parameter
 from laboneq.dsl.quantum import QuantumElement
-from laboneq.core.types.enums.execution_type import ExecutionType
-from laboneq.core.utilities.highlight import pygmentize
-
+from laboneq.dsl.quantum._multimethod import MultiMethod
 
 if TYPE_CHECKING:
     from laboneq.dsl.experiment.pulse import Pulse
+    from laboneq.dsl.quantum.qpu import QPU
     from laboneq.simple import (
         Section,
     )
-    from laboneq.dsl.quantum.qpu import QPU
 
 
 def quantum_operation(

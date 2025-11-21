@@ -3,11 +3,12 @@
 
 use crate::ir::compilation_job::{DeviceKind, Signal};
 use crate::ir::{IrNode, NodeKind, Samples, SectionId, SectionInfo};
-use crate::tinysample::{samples_to_grid, samples_to_length, tinysample_to_samples};
+use crate::utils::{samples_to_grid, samples_to_length};
 use crate::{Error, Result};
 use anyhow::Context as AnyhowContext;
 use laboneq_units::duration;
-use laboneq_units::duration::{Duration, Seconds};
+use laboneq_units::duration::{Duration, Second};
+use laboneq_units::tinysample::{tiny_samples, tinysamples_to_samples};
 use std::collections::{HashMap, HashSet};
 
 struct SampleToSecondsConverter {
@@ -19,7 +20,7 @@ impl SampleToSecondsConverter {
         SampleToSecondsConverter { sampling_rate }
     }
 
-    fn to_seconds(&self, samples: Samples) -> Duration<Seconds> {
+    fn to_seconds(&self, samples: Samples) -> Duration<Second> {
         duration::seconds(samples_to_length(samples, self.sampling_rate))
     }
 
@@ -106,9 +107,9 @@ fn collect_section_measurements<'a>(
             let section_info = section_info.expect("Internal error: Acquire must be in a section");
             let meas_info = section_map.get_mut(&section_info.id).unwrap();
             meas_info.acquire_operations.push(AcquireOperation {
-                start: tinysample_to_samples(*node.offset(), sampling_rate)
+                start: tinysamples_to_samples(tiny_samples(*node.offset()), sampling_rate)
                     + ob.signal.signal_delay,
-                length: tinysample_to_samples(ob.length, sampling_rate),
+                length: tinysamples_to_samples(tiny_samples(ob.length), sampling_rate),
                 signal: &ob.signal,
             });
             return Ok(());
@@ -120,9 +121,9 @@ fn collect_section_measurements<'a>(
             let section_info = section_info.expect("Internal error: Play must be in a section");
             let meas_info = section_map.get_mut(&section_info.id).unwrap();
             meas_info.play_operations.push(PlayOperation {
-                start: tinysample_to_samples(*node.offset(), sampling_rate)
+                start: tinysamples_to_samples(tiny_samples(*node.offset()), sampling_rate)
                     + ob.signal.signal_delay,
-                length: tinysample_to_samples(ob.length, sampling_rate),
+                length: tinysamples_to_samples(tiny_samples(ob.length), sampling_rate),
                 signal: &ob.signal,
             });
             return Ok(());
@@ -141,7 +142,7 @@ fn collect_section_measurements<'a>(
             .entry(section_info.id)
             .or_insert_with(|| SectionMeasurement {
                 section_info,
-                section_start: tinysample_to_samples(section_start, sampling_rate),
+                section_start: tinysamples_to_samples(tiny_samples(section_start), sampling_rate),
                 play_operations: vec![],
                 acquire_operations: vec![],
             });
@@ -169,7 +170,7 @@ pub struct SignalDelay {
     /// The delay in samples that the signal should be delayed in the AWG by code.
     delay_sequencer: Samples,
     /// The additional delay that the instrument should apply (via node setting).
-    delay_port: Duration<Seconds>,
+    delay_port: Duration<Second>,
 }
 
 impl SignalDelay {
@@ -184,7 +185,7 @@ impl SignalDelay {
         self.delay_sequencer
     }
 
-    pub fn delay_port(&self) -> Duration<Seconds> {
+    pub fn delay_port(&self) -> Duration<Second> {
         self.delay_port
     }
 }
@@ -619,7 +620,7 @@ mod tests {
     use super::*;
     use crate::ir::compilation_job::{DeviceKind, PulseDef, PulseDefKind, Signal, SignalKind};
     use crate::ir::{AcquirePulse, IrNode, NodeKind, PlayPulse, Section, SectionInfo};
-    use crate::tinysample::samples_to_tinysample;
+    use laboneq_units::tinysample::samples_to_tinysamples;
 
     struct IrBuilder {
         node_stack: Vec<IrNode>,
@@ -741,14 +742,14 @@ mod tests {
         builder.with(|b| {
             b.section("s0", 0, 0, |b| {
                 b.play(
-                    samples_to_tinysample(0, srate),
+                    samples_to_tinysamples(0, srate).value(),
                     signals.get("measure").unwrap(),
-                    samples_to_tinysample(320, srate),
+                    samples_to_tinysamples(320, srate).value(),
                 );
                 b.acquire(
-                    samples_to_tinysample(16, srate),
+                    samples_to_tinysamples(16, srate).value(),
                     signals.get("acquire").unwrap(),
-                    samples_to_tinysample(320, srate),
+                    samples_to_tinysamples(320, srate).value(),
                 );
             });
         });
@@ -790,14 +791,14 @@ mod tests {
         builder.with(|b| {
             b.section("s0", 0, 0, |b| {
                 b.play(
-                    samples_to_tinysample(0, srate),
+                    samples_to_tinysamples(0, srate).value(),
                     signals.get("measure").unwrap(),
-                    samples_to_tinysample(320, srate),
+                    samples_to_tinysamples(320, srate).value(),
                 );
                 b.acquire(
-                    samples_to_tinysample(offset, srate),
+                    samples_to_tinysamples(offset, srate).value(),
                     signals.get("acquire").unwrap(),
-                    samples_to_tinysample(320, srate),
+                    samples_to_tinysamples(320, srate).value(),
                 );
             });
         });
@@ -828,43 +829,43 @@ mod tests {
             ("measure".to_string(), (create_signal("measure", 0))),
         ]);
         let s0_offset = 0;
-        let s0_offset_ts = samples_to_tinysample(s0_offset, srate);
-        let s0_play_offset = samples_to_tinysample(212, srate);
-        let s0_play_length = samples_to_tinysample(600, srate);
-        let s0_acquire_offset = samples_to_tinysample(240, srate);
-        let s0_acquire_length = samples_to_tinysample(2000, srate);
+        let s0_offset_ts = samples_to_tinysamples(s0_offset, srate);
+        let s0_play_offset = samples_to_tinysamples(212, srate);
+        let s0_play_length = samples_to_tinysamples(600, srate);
+        let s0_acquire_offset = samples_to_tinysamples(240, srate);
+        let s0_acquire_length = samples_to_tinysamples(2000, srate);
 
         let s1_offset = 240;
-        let s1_offset_ts = samples_to_tinysample(s1_offset, srate);
-        let s1_play_offset = samples_to_tinysample(212, srate);
-        let s1_play_length = samples_to_tinysample(600, srate);
-        let s1_acquire_offset = samples_to_tinysample(240, srate);
-        let s1_acquire_length = samples_to_tinysample(2000, srate);
+        let s1_offset_ts = samples_to_tinysamples(s1_offset, srate);
+        let s1_play_offset = samples_to_tinysamples(212, srate);
+        let s1_play_length = samples_to_tinysamples(600, srate);
+        let s1_acquire_offset = samples_to_tinysamples(240, srate);
+        let s1_acquire_length = samples_to_tinysamples(2000, srate);
 
         let mut builder = IrBuilder::new();
         builder.with(|b| {
-            b.section("s0", 0, s0_offset_ts, |b| {
+            b.section("s0", 0, s0_offset_ts.value(), |b| {
                 b.play(
-                    s0_play_offset,
+                    s0_play_offset.value(),
                     signals.get("measure").unwrap(),
-                    s0_play_length,
+                    s0_play_length.value(),
                 );
                 b.acquire(
-                    s0_acquire_offset,
+                    s0_acquire_offset.value(),
                     signals.get("acquire").unwrap(),
-                    s0_acquire_length,
+                    s0_acquire_length.value(),
                 );
             });
-            b.section("s1", 0, s1_offset_ts, |b| {
+            b.section("s1", 0, s1_offset_ts.value(), |b| {
                 b.play(
-                    s1_play_offset,
+                    s1_play_offset.value(),
                     signals.get("measure").unwrap(),
-                    s1_play_length,
+                    s1_play_length.value(),
                 );
                 b.acquire(
-                    s1_acquire_offset,
+                    s1_acquire_offset.value(),
                     signals.get("acquire").unwrap(),
-                    s1_acquire_length,
+                    s1_acquire_length.value(),
                 );
             });
         });

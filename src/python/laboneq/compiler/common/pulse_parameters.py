@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-import pickle
 import hashlib
+import pickle
+
 from laboneq.core.utilities.pulse_sampler import combine_pulse_parameters
 
 

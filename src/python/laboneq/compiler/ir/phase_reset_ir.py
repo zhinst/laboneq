@@ -9,5 +9,4 @@ from laboneq.compiler.ir.interval_ir import IntervalIR
 
 @define(kw_only=True, slots=True)
 class PhaseResetIR(IntervalIR):
-    section: str
-    reset_sw_oscillators: bool
+    """Phase reset for all included signals."""

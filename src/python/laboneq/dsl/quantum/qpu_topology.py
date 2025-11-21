@@ -4,16 +4,16 @@
 from __future__ import annotations
 
 import itertools
+from collections import Counter
 from typing import TYPE_CHECKING
 
-from collections import Counter
 import matplotlib.pyplot as plt
 import networkx as nx
 
 from laboneq.core.utilities.add_exception_note import add_note
-from laboneq.dsl.quantum._qpu_topology_theme import zi_draw_nx_theme
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.quantum import QuantumElement
+from laboneq.dsl.quantum._qpu_topology_theme import zi_draw_nx_theme
 
 if TYPE_CHECKING:
     from typing import Generator

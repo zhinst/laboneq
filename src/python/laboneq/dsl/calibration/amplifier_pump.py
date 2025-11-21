@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import attrs
+
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.data.calibration import CancellationSource
 from laboneq.dsl.parameter import Parameter

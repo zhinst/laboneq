@@ -2,6 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
+from typing import TypeVar
+
+import attrs
+
 from laboneq.dsl.calibration.physical_channel_calibration import (
     PhysicalChannelCalibration,
 )
@@ -10,9 +15,6 @@ from laboneq.dsl.calibration.signal_calibration import (
 )
 
 from .io_units import LogicalSignal, PhysicalChannel
-import attrs
-
-from typing import TypeVar
 
 _T = TypeVar("_T")
 

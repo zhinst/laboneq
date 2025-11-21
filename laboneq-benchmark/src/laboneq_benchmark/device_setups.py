@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
-from itertools import takewhile
 import math
 import random
+from itertools import takewhile
 
 from laboneq import __version__ as laboneq_version
 from laboneq.contrib.example_helpers.example_notebook_helper import (

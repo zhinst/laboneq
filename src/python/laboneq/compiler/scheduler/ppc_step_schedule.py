@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-
 from attrs import define
 
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
@@ -11,9 +10,6 @@ from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
 
 @define(kw_only=True, slots=True)
 class PPCStepSchedule(IntervalSchedule):
-    section: str
-    qa_device: str
-    qa_channel: int
     ppc_device: str
     ppc_channel: int
     trigger_duration: float

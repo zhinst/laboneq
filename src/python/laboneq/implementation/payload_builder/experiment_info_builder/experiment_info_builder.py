@@ -8,7 +8,7 @@ import logging
 import re
 from collections import defaultdict
 from types import SimpleNamespace
-from typing import Dict, Literal, TypeVar
+from typing import Dict, TypeVar
 
 import numpy as np
 
@@ -57,7 +57,6 @@ from laboneq.data.experiment_description import (
     Experiment,
     ExperimentSignal,
     Match,
-    Operation,
     PrngLoop,
     Reserve,
     ResetOscillatorPhase,
@@ -106,7 +105,6 @@ class ExperimentInfoBuilder:
         self._device_info = DeviceInfoBuilder(self._device_setup)
         self._setup_helper = SetupHelper(self._device_setup)
 
-        self._section_operations_to_add = []
         self._ppc_connections = self._setup_helper.ppc_connections()
 
         self._parameter_parents: dict[str, list[str]] = {}
@@ -128,17 +126,6 @@ class ExperimentInfoBuilder:
             self._walk_sections(section, section_uid_map, visit_count)
             for section in self._experiment.sections
         ]
-
-        # Need to defer the insertion of section operations. In sequential averaging mode,
-        # the tree-walking order might otherwise make us visit operations which depend on parameters
-        # we haven't seen the sweep of yet.
-        # todo (Pol): this is no longer required, load operations together with sections
-        for (
-            section,
-            section_info,
-            acquisition_type,
-        ) in self._section_operations_to_add:
-            self._load_section_operations(section, section_info, acquisition_type)
 
         self._sweep_all_derived_parameters(root_sections)
         self._validate_realtime(root_sections)
@@ -608,80 +595,53 @@ class ExperimentInfoBuilder:
             visit_count,
         )
 
-        if any(
-            isinstance(op, ResetOscillatorPhase) and op.signal is None
-            for op in section.children
-        ):
-            # Remove any mentions of the split section
-            self._section_operations_to_add.pop()
-            section_uid_map.pop(section.uid)
-            visit_count.pop(section.uid)
-
-            self._split_phase_reset_sections(
-                section_info, section, section_uid_map, visit_count
-            )
-        else:
-            for child_section in section.children:
-                if isinstance(child_section, Section):
-                    section_info.children.append(
-                        self._walk_sections(
-                            child_section,
-                            section_uid_map,
-                            visit_count,
-                        )
-                    )
-        return section_info
-
-    def _split_phase_reset_sections(
-        self,
-        section_info: SectionInfo,
-        section: Section,
-        section_uid_map: dict[str, Section],
-        visit_count: dict[str, int],
-    ):
-        sections_ops: list[list[Operation | Section] | Literal["reset"]] = [[]]
-        for child in section.children:
-            assert isinstance(child, Operation)
-            if isinstance(child, ResetOscillatorPhase) and child.signal is None:
-                sections_ops.append("reset")
-                sections_ops.append([])
-            else:
-                sections_ops[-1].append(child)
-        signals = set(
-            op.signal
-            for ops in sections_ops
-            if ops != "reset"
-            for op in ops
-            if isinstance(op, SignalOperation) and op.signal is not None
-        )
-        for section_ops in sections_ops:
-            if len(section_ops) == 0:
-                continue
-            i = 0
-            new_section_uid = f"{section_info.uid}_reset_phase_{i}"
-            while new_section_uid in section_uid_map:
-                i += 1
-                new_section_uid = f"{section_info.uid}_reset_phase_{i}"
-            new_section = Section(
-                uid=new_section_uid,
-                alignment=section.alignment,
-            )
-
-            if section_ops != "reset":
-                new_section.children = section_ops
-            for signal in signals:
-                new_section.children.append(Reserve(signal=signal))
-            section_uid_map[new_section_uid] = new_section
-            visit_count[new_section_uid] = 0
-            section_info.children.append(
-                self._load_section(
-                    new_section,
-                    self._acquisition_type,
+        _auto_pulse_id = (f"{section.uid}__auto_pulse_{i}" for i in itertools.count())
+        for child_operation in section.children:
+            if isinstance(child_operation, Section):
+                child_section = self._walk_sections(
+                    child_operation,
+                    section_uid_map,
                     visit_count,
                 )
-            )
-            if section_ops == "reset":
-                section_info.children[-1].reset_oscillator_phase = True
+                section_info.children.append(child_section)
+                section_info.sections_and_operations.append(child_section)
+            elif (
+                type(child_operation) is ResetOscillatorPhase
+                and child_operation.signal is None
+            ):
+                section_info.sections_and_operations.append(
+                    SectionSignalPulse(signal=None, reset_oscillator_phase=True)
+                )
+            elif isinstance(child_operation, SignalOperation):
+                assert child_operation.signal is not None
+                try:
+                    signal_info = self._signal_infos[child_operation.signal]
+                except KeyError as e:
+                    raise LabOneQException(
+                        f"Signal {child_operation.signal} not present in experiment."
+                        f" Available signal(s) are: {', '.join(self._signal_infos)}."
+                    ) from e
+                operations = self._load_ssp(
+                    child_operation,
+                    signal_info,
+                    _auto_pulse_id,
+                    self._acquisition_type,
+                    section_info,
+                )
+                section_info.pulses.extend(operations)
+                section_info.sections_and_operations.extend(operations)
+        for trigger_signal in section.trigger:
+            try:
+                signal_info = self._signal_infos[trigger_signal]
+            except KeyError as e:
+                raise LabOneQException(
+                    f"Trigger on section {section.uid} played on signal"
+                    f" {trigger_signal} not present in experiment."
+                    f" Available signal(s) are: {', '.join(self._signal_infos)}."
+                ) from e
+            if signal_info not in section_info.signals:
+                section_info.signals.append(signal_info)
+        return section_info
 
     def _load_markers(self, operation):
         markers_raw = getattr(operation, "marker", None) or {}
@@ -712,11 +672,12 @@ class ExperimentInfoBuilder:
         auto_pulse_id,
         acquisition_type,
         section: SectionInfo,
-    ):
+    ) -> list[SectionSignalPulse]:
+        ssps = []
         if isinstance(operation, Delay):
             pulse_offset = self.opt_param(operation.time)
             precompensation_clear = operation.precompensation_clear
-            section.pulses.append(
+            ssps.append(
                 SectionSignalPulse(
                     signal=signal_info,
                     pulse=None,
@@ -726,26 +687,20 @@ class ExperimentInfoBuilder:
             )
             if signal_info not in section.signals:
                 section.signals.append(signal_info)
-            return
+            return ssps
         if isinstance(operation, Reserve):
             if signal_info not in section.signals:
                 section.signals.append(signal_info)
-            return
+            return []
         if isinstance(operation, ResetOscillatorPhase):
-            if (
-                signal_info.type == SignalInfoType.RF
-                and signal_info.oscillator is not None
-                and signal_info.oscillator.is_hardware
-            ):
-                raise LabOneQException(
-                    f"Phase reset on hardware modulated RF signal '{signal_info.uid}' is not supported."
-                )
-            section.pulses.append(
+            # NOTE: RF hardware oscillator phase reset is not supported,
+            # validated in Rust compiler.
+            ssps.append(
                 SectionSignalPulse(signal=signal_info, reset_oscillator_phase=True)
             )
             if signal_info not in section.signals:
                 section.signals.append(signal_info)
-            return
+            return ssps
 
         pulses = []
         markers = self._load_markers(operation)
@@ -859,7 +814,7 @@ class ExperimentInfoBuilder:
                         for param, val in pulse_pulse_parameters.items()
                     }
 
-                section.pulses.append(
+                ssps.append(
                     SectionSignalPulse(
                         signal=signal_info,
                         pulse=pulse_def,
@@ -907,7 +862,7 @@ class ExperimentInfoBuilder:
                             f"parameter {par} not supported for virtual Z gates"
                         )
 
-                section.pulses.append(
+                ssps.append(
                     SectionSignalPulse(
                         signal=signal_info,
                         precompensation_clear=False,
@@ -917,44 +872,7 @@ class ExperimentInfoBuilder:
                 )
                 if signal_info not in section.signals:
                     section.signals.append(signal_info)
-
-    def _load_section_operations(
-        self,
-        section: Section,
-        section_info: SectionInfo,
-        acquisition_type,
-    ):
-        _auto_pulse_id = (f"{section.uid}__auto_pulse_{i}" for i in itertools.count())
-
-        for operation in section.children:
-            if not isinstance(operation, SignalOperation):
-                continue
-            assert operation.signal is not None
-            try:
-                signal_info = self._signal_infos[operation.signal]
-            except KeyError as e:
-                raise LabOneQException(
-                    f"Signal {operation.signal} not present in experiment."
-                    f" Available signal(s) are: {', '.join(self._signal_infos)}."
-                ) from e
-            self._load_ssp(
-                operation,
-                signal_info,
-                _auto_pulse_id,
-                acquisition_type,
-                section_info,
-            )
-        for trigger_signal in section.trigger:
-            try:
-                signal_info = self._signal_infos[trigger_signal]
-            except KeyError as e:
-                raise LabOneQException(
-                    f"Trigger on section {section.uid} played on signal"
-                    f" {trigger_signal} not present in experiment."
-                    f" Available signal(s) are: {', '.join(self._signal_infos)}."
-                ) from e
-            if signal_info not in section_info.signals:
-                section_info.signals.append(signal_info)
+        return ssps
 
     def _load_section(
         self,
@@ -1087,10 +1005,6 @@ class ExperimentInfoBuilder:
             parameters=section_parameters,
             prng=prng_setup_info,
             prng_sample=prng_sample,
-        )
-
-        self._section_operations_to_add.append(
-            (section, section_info, exp_acquisition_type)
         )
 
         return section_info
@@ -1338,8 +1252,9 @@ class ExperimentInfoBuilder:
             parent.sections = acquire_loop.children
         # ... and then re-insert it into the bottom of the tree.
         acquire_loop.children = innermost_sweep.children
+        acquire_loop.sections_and_operations = innermost_sweep.sections_and_operations
         innermost_sweep.children = [acquire_loop]
-
+        innermost_sweep.sections_and_operations = [acquire_loop]
         # Similarly, move the pulses (also children) of the loops. Here, the added
         # caveat is that any pulses directly in the acquire loop have nowhere to go, so
         # we forbid them.

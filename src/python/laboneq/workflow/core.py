@@ -13,17 +13,16 @@ from typing import TYPE_CHECKING, Callable, Generic, cast, overload
 from typing_extensions import ParamSpec
 
 from laboneq.core.utilities.highlight import pygmentize
-from laboneq.workflow import _utils, exceptions, executor, variable_tracker
+from laboneq.workflow import _utils, exceptions, executor, opts, variable_tracker
 from laboneq.workflow.blocks import (
     Block,
     BlockBuilderContext,
     TaskBlock,
     WorkflowBlock,
 )
-from laboneq.workflow.task_wrapper import task_
 from laboneq.workflow.graph import WorkflowGraph
-from laboneq.workflow import opts
 from laboneq.workflow.reference import Reference
+from laboneq.workflow.task_wrapper import task_
 from laboneq.workflow.visitors import SpecificBlockTypeCollector
 
 if TYPE_CHECKING:

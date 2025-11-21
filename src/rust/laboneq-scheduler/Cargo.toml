@@ -1,18 +1,24 @@
 [package]
 name = "laboneq-scheduler"
-version.workspace = true
 authors.workspace = true
+description.workspace = true
+documentation.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 num-complex = { workspace = true }
+num-traits = { workspace = true }
 num-integer = { workspace = true }
 
 laboneq-common = { path = "../laboneq-common" }
 laboneq-units = { path = "../laboneq-units" }
+laboneq-log = { path = "../laboneq-log" }
 numeric-array = { path = "../numeric-array" }
 
 [dev-dependencies]

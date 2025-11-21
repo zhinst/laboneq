@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 import logging
 from collections import deque
+from dataclasses import asdict
 from typing import TYPE_CHECKING
+
 from jsonschema import ValidationError
 
 from laboneq._utils import cached_method

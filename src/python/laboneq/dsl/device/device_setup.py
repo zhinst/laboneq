@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import attrs
 from typing import TYPE_CHECKING, Any
+
+import attrs
 
 from laboneq.core import path as qct_path
 from laboneq.core.exceptions import LabOneQException

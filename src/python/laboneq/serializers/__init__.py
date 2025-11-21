@@ -8,9 +8,9 @@ from .core import from_dict, from_json, load, save, to_dict, to_json
 
 __all__ = [
     "from_dict",
-    "to_dict",
     "from_json",
-    "to_json",
     "load",
     "save",
+    "to_dict",
+    "to_json",
 ]

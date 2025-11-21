@@ -3,14 +3,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
+from dataclasses import dataclass
 
-from laboneq.data.calibration import PortMode
 import numpy as np
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AcquisitionType
+from laboneq.data.calibration import PortMode
 from laboneq.data.compilation_job import (
     AmplifierPumpInfo,
     ChunkingInfo,

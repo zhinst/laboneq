@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
 import warnings
+from typing import Any, Callable
 
 import numpy as np
 from numpy.typing import ArrayLike
-from laboneq.core.utilities.pulse_sampler import _pulse_samplers, _pulse_factories
+
+from laboneq.core.utilities.pulse_sampler import _pulse_factories, _pulse_samplers
 from laboneq.dsl.experiment.pulse import (
     PulseFunctional,
     PulseSampled,

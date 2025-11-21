@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from typing import Any
 
 from laboneq.controller.attribute_value_tracker import DeviceAttributesView
 from laboneq.controller.devices.async_support import (
@@ -14,28 +16,25 @@ from laboneq.controller.recipe_processor import RecipeData
 from laboneq.data.recipe import NtStepKey
 
 
-class ChannelBase(ABC):
+class CoreBase(ABC):
     def __init__(
         self,
+        *,
         api: InstrumentConnection,
         subscriber: AsyncSubscriber,
         device_uid: str,
         serial: str,
-        channel: int,
+        core_index: int,
     ):
         self._api = api
         self._subscriber = subscriber
         self._device_uid = device_uid
         self._serial = serial
-        self._channel = channel
-
-    @property
-    def channel(self) -> int:
-        return self._channel
+        self._core_index = core_index
 
     async def disable_output(self, outputs: set[int], invert: bool):
         """Disable the output of the channel if it matches the criteria."""
-        if (self._channel in outputs) != invert:
+        if (self._core_index in outputs) != invert:
             await self._api.set_parallel(self._disable_output())
 
     @abstractmethod
@@ -70,6 +69,20 @@ class ChannelBase(ABC):
         raise NotImplementedError("This method should be implemented by subclasses.")
 
     @abstractmethod
+    def conditions_for_execution_ready(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        """Return conditions that must be met for execution to be ready."""
+        raise NotImplementedError("This method should be implemented by subclasses.")
+
+    @abstractmethod
     async def start_execution(self, with_pipeliner: bool):
         """Start the execution of the channel's sequencer program."""
+        raise NotImplementedError("This method should be implemented by subclasses.")
+
+    @abstractmethod
+    def conditions_for_execution_done(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        """Return conditions that indicate execution is done."""
         raise NotImplementedError("This method should be implemented by subclasses.")

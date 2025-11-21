@@ -6,7 +6,6 @@ import logging
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 
-
 _logger = logging.getLogger(__name__)
 
 

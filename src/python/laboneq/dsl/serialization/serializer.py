@@ -17,7 +17,6 @@ from laboneq.dsl.serialization.class_config import (
     entity_config,
 )
 
-
 T = TypeVar("T")
 
 

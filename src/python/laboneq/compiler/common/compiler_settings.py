@@ -7,7 +7,6 @@ import warnings
 from dataclasses import dataclass, fields
 from typing import Dict, TypeVar
 
-
 _USER_ENABLED_SETTINGS = [
     "MAX_EVENTS_TO_PUBLISH",
     "PHASE_RESOLUTION_BITS",
@@ -24,7 +23,6 @@ _USER_ENABLED_SETTINGS = [
     "SHFSG_FORCE_COMMAND_TABLE",
     "USE_AMPLITUDE_INCREMENT",
     "OUTPUT_EXTRAS",
-    "FORCE_IR_ROUNDTRIP",
     "LOG_REPORT",
     "USE_EXPERIMENTAL_ASSEMBLER",
     "IGNORE_RESOURCE_LIMITATION_ERRORS",
@@ -60,7 +58,6 @@ class CompilerSettings:
     MAX_EVENTS_TO_PUBLISH: int = 1000
     EXPAND_LOOPS_FOR_SCHEDULE: bool = True
     OUTPUT_EXTRAS: bool = False
-    FORCE_IR_ROUNDTRIP: bool = False
 
     HDAWG_MIN_PLAYWAVE_HINT: int = 128
     HDAWG_MIN_PLAYZERO_HINT: int = 128

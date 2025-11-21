@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
+from laboneq._rust import init_logging
 from laboneq.core.types import CompiledExperiment
 from laboneq.implementation.legacy_adapters.converters_experiment_description import (
     convert_Experiment,
@@ -20,11 +22,19 @@ if TYPE_CHECKING:
     from laboneq.dsl.experiment.experiment import Experiment
 
 
+def _setup_logging():
+    """Set up the configuration for the logging system used in the
+    Rust compiler.
+    """
+    init_logging(logging.getLogger("laboneq").getEffectiveLevel())
+
+
 def laboneq_compile(
     device_setup: DeviceSetup,
     experiment: Experiment,
     compiler_settings: dict | None = None,
 ) -> CompiledExperiment:
+    _setup_logging()
     new_setup = convert_device_setup_to_setup(device_setup)
     new_experiment = convert_Experiment(experiment)
     signal_mapping = convert_signal_map(experiment)

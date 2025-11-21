@@ -13,8 +13,8 @@ from rich.console import Console
 from rich.pretty import pprint
 
 if typing.TYPE_CHECKING:
-    from laboneq.workflow.opts.options_core import WorkflowOptions
     from laboneq.workflow.opts.options_base import BaseOptions
+    from laboneq.workflow.opts.options_core import WorkflowOptions
 
 
 class OptionBuilder:

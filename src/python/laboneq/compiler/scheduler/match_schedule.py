@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import TYPE_CHECKING, Iterable, List, Tuple
+from typing import TYPE_CHECKING, List, Tuple
 
 from attrs import define
 from zhinst.timing_models import (
@@ -29,6 +29,8 @@ from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.utilities.compressed_formatter import CompressableLogEntry
 
 if TYPE_CHECKING:
+    from laboneq.compiler.common.signal_obj import SignalObj
+    from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
     from laboneq.compiler.scheduler.schedule_data import ScheduleData
 
 
@@ -56,31 +58,15 @@ def _generate_warning(warnings: List[Tuple[str, str, float]]):
 
 
 def _compute_start_with_latency(
-    schedule_data: ScheduleData,
-    start: int,
+    acquire_signal: SignalObj,
+    acquire_absolute_start: int,
+    acquire_length: float,
     local: bool,
-    handle: str,
-    section: str,
-    signals: Iterable[str],
+    signal_objects: dict[str, SignalObj],
     grid: int,
+    sampling_rate_tracker: SamplingRateTracker,
 ) -> int:
-    acquire_pulse = schedule_data.acquire_pulses.get(handle)
-    if not acquire_pulse or len(acquire_pulse) == 0:
-        raise LabOneQException(
-            f"No acquire found for Match section '{section}' with handle '{handle}'."
-        )
-    acquire_pulse = acquire_pulse[-1]
-    if acquire_pulse.absolute_start is None:
-        # For safety reasons; this should never happen, i.e., being caught before
-        raise LabOneQException(
-            f"Match section '{section}' with handle '{handle}' can not be"
-            " scheduled because the corresponding acquire is within"
-            " a right-aligned section or within a loop with repetition mode AUTO."
-        )
-    assert acquire_pulse.length is not None
-
     earliest_execute_table_entry = 0
-
     # Calculate the end of the integration in samples from trigger. The following
     # elements need to be considered:
     # - The start time (in samples from trigger) of the acquisition
@@ -90,13 +76,7 @@ def _compute_start_with_latency(
     #   for measure and acquire pulse
     # - The sum of the settings of the port_delay parameter for the acquisition device
     #   for measure and acquire pulse
-
-    if hasattr(acquire_pulse, "pulses"):
-        p = acquire_pulse.pulses[0]
-    else:
-        p = acquire_pulse.pulse
-    qa_signal_obj = schedule_data.signal_objects[p.signal.uid]
-
+    qa_signal_obj = acquire_signal
     qa_device_type = qa_signal_obj.awg.device_type
     qa_sampling_rate = qa_signal_obj.awg.sampling_rate
 
@@ -107,8 +87,8 @@ def _compute_start_with_latency(
             qa_device_type.str_value
         )
 
-    acq_start = acquire_pulse.absolute_start * TINYSAMPLE
-    acq_length = acquire_pulse.length * TINYSAMPLE
+    acq_start = acquire_absolute_start * TINYSAMPLE
+    acq_length = acquire_length * TINYSAMPLE
     qa_lead_time = qa_signal_obj.start_delay or 0.0
     qa_delay_signal = qa_signal_obj.delay_signal or 0.0
     qa_port_delay = qa_signal_obj.port_delay or 0.0
@@ -146,8 +126,7 @@ def _compute_start_with_latency(
         + qa_total_port_delay
     )
 
-    for signal in signals:
-        sg_signal_obj = schedule_data.signal_objects[signal]
+    for sg_signal_obj in signal_objects.values():
         sg_device_type = sg_signal_obj.awg.device_type
         if sg_signal_obj.is_qc:
             toolkit_sgtype = SGType.SHFQC
@@ -184,7 +163,7 @@ def _compute_start_with_latency(
                 time_of_arrival_at_register + EXECUTETABLEENTRY_LATENCY
             )
 
-            sg_seq_rate = schedule_data.sampling_rate_tracker.sequencer_rate_for_device(
+            sg_seq_rate = sampling_rate_tracker.sequencer_rate_for_device(
                 sg_signal_obj.awg.device_id
             )
             sg_seq_dt_for_latency_in_ts = round(1 / (2 * sg_seq_rate * TINYSAMPLE))
@@ -223,18 +202,7 @@ def _compute_start_with_latency(
                 grid,
             ),
         )
-
-    if earliest_execute_table_entry > start:
-        schedule_data.combined_warnings.setdefault(
-            "match_start_shifted", (_generate_warning, [])
-        )[1].append(
-            (
-                section,
-                handle,
-                (earliest_execute_table_entry - start) * TINYSAMPLE,
-            )
-        )
-    return max(earliest_execute_table_entry, start)
+    return earliest_execute_table_entry
 
 
 @define(kw_only=True, slots=True)
@@ -259,17 +227,41 @@ class MatchSchedule(SectionSchedule):
                     " a subsection of a right-aligned section or within a loop with"
                     " repetition mode AUTO."
                 )
-
-            start = _compute_start_with_latency(
-                schedule_data,
-                start,
+            acquire_pulses = schedule_data.acquire_pulses.get(self.handle)
+            if not acquire_pulses or len(acquire_pulses) == 0:
+                raise LabOneQException(
+                    f"No acquire found for Match section '{self.section}' with handle '{self.handle}'."
+                )
+            acquire_pulse = acquire_pulses[-1]
+            if acquire_pulse.absolute_start is None:
+                # For safety reasons; this should never happen, i.e., being caught before
+                raise LabOneQException(
+                    f"Match section '{self.section}' with handle '{self.handle}' can not be"
+                    " scheduled because the corresponding acquire is within"
+                    " a right-aligned section or within a loop with repetition mode AUTO."
+                )
+            assert acquire_pulse.length is not None
+            [acquire_signal] = acquire_pulse.signals
+            earliest_execute_table_entry = _compute_start_with_latency(
+                schedule_data.signal_objects[acquire_signal],
+                acquire_pulse.absolute_start,
+                acquire_pulse.length,
                 self.local,
-                self.handle,
-                self.section,
-                self.signals,
+                {s: schedule_data.signal_objects[s] for s in self.signals},
                 self.grid,
+                schedule_data.sampling_rate_tracker,
             )
-
+            if earliest_execute_table_entry > start:
+                schedule_data.combined_warnings.setdefault(
+                    "match_start_shifted", (_generate_warning, [])
+                )[1].append(
+                    (
+                        self.section,
+                        self.handle,
+                        (earliest_execute_table_entry - start) * TINYSAMPLE,
+                    )
+                )
+            start = max(earliest_execute_table_entry, start)
         for c in self.children:
             assert isinstance(c, CaseSchedule)
             child_start = c.calculate_timing(schedule_data, start, start_may_change)

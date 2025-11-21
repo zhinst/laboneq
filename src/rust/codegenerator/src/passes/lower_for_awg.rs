@@ -5,14 +5,14 @@ use crate::Result;
 use crate::awg_delays::AwgTiming;
 use crate::ir::compilation_job as cjob;
 use crate::ir::{self, NodeKind};
-use crate::tinysample;
+use laboneq_units::tinysample::{tiny_samples, tinysamples_to_samples};
 
 /// Transformation pass to convert tiny samples to unit samples on target AWG.
 pub fn convert_to_samples(node: &mut ir::IrNode, awg: &cjob::AwgCore) {
-    *node.offset_mut() = tinysample::tinysample_to_samples(*node.offset(), awg.sampling_rate);
-    let len_ts = node.data().length();
+    *node.offset_mut() = tinysamples_to_samples(tiny_samples(*node.offset()), awg.sampling_rate);
+    let len_ts = tiny_samples(node.data().length());
     node.data_mut()
-        .set_length(tinysample::tinysample_to_samples(len_ts, awg.sampling_rate));
+        .set_length(tinysamples_to_samples(len_ts, awg.sampling_rate));
     for child in node.iter_children_mut() {
         convert_to_samples(child, awg);
     }

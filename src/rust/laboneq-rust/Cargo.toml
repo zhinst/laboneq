@@ -1,9 +1,13 @@
 [package]
 name = "laboneq-rust"
-version.workspace = true
 authors.workspace = true
+description.workspace = true
+documentation.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [lints]
 workspace = true
@@ -24,3 +28,4 @@ codegenerator-py = { path = "../codegenerator-py" }
 laboneq-scheduler = { path = "../laboneq-scheduler" }
 numeric-array = { path = "../numeric-array", features = ["pyo3"] }
 laboneq-units = { path = "../laboneq-units" }
+laboneq-log = { path = "../laboneq-log" }

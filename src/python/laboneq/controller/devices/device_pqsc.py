@@ -4,9 +4,9 @@
 from laboneq.controller.devices.device_leader_base import DeviceLeaderBase
 from laboneq.controller.devices.node_control import (
     Command,
-    WaitCondition,
     NodeControlBase,
     Response,
+    WaitCondition,
 )
 
 

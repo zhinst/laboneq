@@ -7,7 +7,6 @@ from typing import Any, TypeVar
 
 from laboneq.controller.devices.async_support import _gather
 
-
 Ret = TypeVar("Ret")
 
 

@@ -1,8 +1,12 @@
 [workspace.package]
-version = "25.10.2"
+version = "26.1.0-b1"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
 edition = "2024"
 publish = false
+rust-version = "1.91"
+description = "LabOne Q"
+documentation = "README.md"
+license = "Apache-2.0"
 
 [workspace]
 members = [
@@ -25,17 +29,16 @@ md5 = "0.8.0"
 num-complex = "0.4.6"
 num-integer = "0.1.46"
 num-traits = "0.2.19"
-numpy = "0.26.0"
-pyo3 = { version = "0.26.0", features = [
+numpy = "0.27.0"
+pyo3 = { version = "0.27.0", features = [
   "abi3-py310",
   "generate-import-lib",
   "num-complex",
   "auto-initialize",
   "anyhow",
 ] }
-pyo3-ffi = "0.26.0"
-pyo3-log = "0.13.0"
-pythonize = "0.26.0"
+pyo3-ffi = "0.27.0"
+pyo3-log = "0.13.2"
 rayon = "1.11.0"
 regex = "1.11.3"
 serde = "1.0"
@@ -60,6 +63,6 @@ style = { level = "warn", priority = -1 }
 suspicious = { level = "warn", priority = -1 }
 clone_on_ref_ptr = "warn"
 missing_assert_message = "allow"               # todo: warn
-multiple_crate_versions = "allow"              # string-interner 0.19 requires hashbrown 0.15, indexmap 2.11 requires hashbrown 0.16
+multiple_crate_versions = "allow"
 todo = "warn"
 verbose_file_reads = "warn"

@@ -1,10 +1,13 @@
 [package]
 name = "codegenerator-py"
-version.workspace = true
 authors.workspace = true
+description.workspace = true
+documentation.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
-license = "MIT"
+rust-version.workspace = true
+version.workspace = true
 
 [lints]
 workspace = true
@@ -14,7 +17,6 @@ pyo3 = { workspace = true, features = ["anyhow"] }
 anyhow = { workspace = true }
 num-complex = { workspace = true }
 thiserror = { workspace = true }
-pythonize = { workspace = true }
 
 codegenerator = { path = "../codegenerator" }
 numeric-array = { path = "../numeric-array", features = ["pyo3"] }

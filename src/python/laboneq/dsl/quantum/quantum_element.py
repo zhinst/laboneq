@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import os
 from collections import defaultdict
-from typing import Any, Dict, List, Union, ClassVar
-from typing_extensions import deprecated
+from typing import Any, ClassVar, Dict, List, Union
 
 import attrs
+from typing_extensions import deprecated
 
 from laboneq.core.path import remove_logical_signal_prefix
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter

@@ -4,14 +4,14 @@
 """Logbooks for recording the operations of workflows."""
 
 __all__ = [
-    "LogbookStore",
-    "Logbook",
+    "DEFAULT_LOGGING_STORE",
     "FolderStore",
+    "Logbook",
+    "LogbookStore",
     "LoggingStore",
     "SaveMode",
     "active_logbook_stores",
     "format_time",
-    "DEFAULT_LOGGING_STORE",
 ]
 
 

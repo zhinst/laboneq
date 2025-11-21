@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 import copy
-from dataclasses import dataclass, field
 import logging
+from collections import defaultdict
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ItemsView, Iterator
 
 from laboneq.controller.versioning import SetupCaps

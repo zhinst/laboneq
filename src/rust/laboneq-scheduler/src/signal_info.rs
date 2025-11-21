@@ -4,7 +4,7 @@
 //! This module defines signal information that is required by
 //! the Scheduler.
 use crate::{
-    experiment::types::{Oscillator, RealValue, SignalUid},
+    experiment::types::{AmplifierPump, Oscillator, SignalUid, ValueOrParameter},
     utils::SignalGridInfo,
 };
 use laboneq_common::{device_traits::DeviceTraits, types::AwgKey};
@@ -15,10 +15,11 @@ pub trait SignalInfo {
     fn sampling_rate(&self) -> f64;
     fn device_traits(&self) -> &'static DeviceTraits;
     fn oscillator(&self) -> Option<&Oscillator>;
-    fn lo_frequency(&self) -> Option<&RealValue>;
+    fn lo_frequency(&self) -> Option<&ValueOrParameter<f64>>;
     fn supports_initial_local_oscillator_frequency(&self) -> bool;
-    fn voltage_offset(&self) -> Option<&RealValue>;
+    fn voltage_offset(&self) -> Option<&ValueOrParameter<f64>>;
     fn supports_initial_voltage_offset(&self) -> bool;
+    fn amplifier_pump(&self) -> Option<&AmplifierPump>;
 }
 
 impl<T: SignalInfo> SignalGridInfo for T {

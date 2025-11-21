@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-import attrs
 from typing import TYPE_CHECKING, Optional
+
+import attrs
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.experiment.operation import Operation

@@ -4,8 +4,8 @@
 
 from __future__ import annotations
 
-from dataclasses import fields, dataclass
-from typing import Iterable, Callable, TypeVar, Protocol, cast
+from dataclasses import dataclass, fields
+from typing import Callable, Iterable, Protocol, TypeVar, cast
 
 
 @dataclass

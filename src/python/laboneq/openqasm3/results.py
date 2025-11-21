@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+
+from laboneq.dsl.calibration import Calibration
 from laboneq.dsl.experiment.section import Section
 from laboneq.openqasm3.openqasm_error import OpenQasmException
-from laboneq.dsl.calibration import Calibration
 
 
 class MeasurementResult:

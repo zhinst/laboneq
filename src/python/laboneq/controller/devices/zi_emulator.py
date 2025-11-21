@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-import asyncio
-from collections import defaultdict
 
+import asyncio
 import functools
 import json
 import logging
@@ -12,6 +11,7 @@ import re
 import sched
 import time
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from dataclasses import InitVar, dataclass, field
 from enum import Enum
 from functools import partial
@@ -21,7 +21,6 @@ from weakref import ReferenceType, ref
 
 import numpy as np
 from numpy import typing as npt
-
 
 _logger = logging.getLogger(__name__)
 
@@ -1251,6 +1250,8 @@ class DevEmuSHFSGBase(DevEmuSHFBase):
             self._output_to_synth_map = [0, 0, 1, 1, 2, 2, 3, 3]
         elif self.devtype == "SHFSG4":
             self._output_to_synth_map = [0, 1, 2, 3]
+        elif self.devtype == "SHFSG2":
+            self._output_to_synth_map = [0, 1]
         elif self.devtype == "SHFQC":
             assert isinstance(self.options, str)
             options_list = self.options.split("\n")

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 from typing import TYPE_CHECKING, Any
+
 from numpy import typing as npt
 
 from laboneq.controller.utilities.exception import LabOneQControllerException
@@ -12,11 +13,11 @@ from laboneq.controller.utilities.simple_proxy import SimpleProxy
 from laboneq.core.exceptions import AbortExecution
 
 if TYPE_CHECKING:
-    from laboneq.dsl.result.results import Results
-    from laboneq.dsl.experiment.pulse import Pulse
-    from laboneq.data.experiment_results import ExperimentResults
     from laboneq.controller.controller import Controller
     from laboneq.controller.recipe_processor import RecipeData
+    from laboneq.data.experiment_results import ExperimentResults
+    from laboneq.dsl.experiment.pulse import Pulse
+    from laboneq.dsl.result.results import Results
 
 
 class ProtectedSession(SimpleProxy):

@@ -6,8 +6,9 @@
 from __future__ import annotations
 
 from collections.abc import ItemsView, Iterator, KeysView, ValuesView
-import attrs
 from typing import Any
+
+import attrs
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration.signal_calibration import SignalCalibration

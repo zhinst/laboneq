@@ -9,9 +9,9 @@ use crate::passes::handle_oscillators::SoftwareOscillatorParameters;
 use crate::signature::{
     PulseSignature, WaveformSignature, sort_pulses, split_complex_pulse_amplitude,
 };
-use crate::tinysample::ceil_to_grid;
-use crate::tinysample::floor_to_grid;
 use crate::utils;
+use crate::utils::ceil_to_grid;
+use crate::utils::floor_to_grid;
 use crate::virtual_signal::{VirtualSignal, VirtualSignals};
 use anyhow::anyhow;
 use interval_calculator::calculate_intervals;

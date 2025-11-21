@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import itertools
 from typing import Any, Callable, Iterator
-from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 
 from laboneq.compiler import ir as ir_mod
+from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.event_list.event_type import EventList, EventType
 from laboneq.data.compilation_job import ParameterInfo
@@ -25,6 +25,8 @@ class EventListGenerator:
         self.id_tracker = itertools.count() if id_tracker is None else id_tracker
         self.expand_loops = expand_loops
         self.signals = {s.uid: s for s in signals} if signals is not None else {}
+        # Keep track of the current section name so that it can be added to events.
+        self._section_stack: list[str] = []
 
     # This is consumed mainly by the PSV and attached to the
     # CompiledExperiment with compiler flag `OUTPUT_EXTRAS`
@@ -39,7 +41,15 @@ class EventListGenerator:
         visitor: Callable[..., EventList] = getattr(
             self, f"visit_{ir.__class__.__name__}", self.generic_visit
         )
-        return visitor(ir, start, max_events)
+        if (
+            isinstance(ir, ir_mod.SectionIR) and ir.section is not None
+        ):  # Check for `None` as e.g. `LoopIterationIR` also inherits from `SectionIR` in the future
+            self._section_stack.append(ir.section)
+            out = visitor(ir, start, max_events)
+            self._section_stack.pop()
+            return out
+        else:
+            return visitor(ir, start, max_events)
 
     def generic_visit(
         self, node: ir_mod.IntervalIR, start: int, max_events: int | float
@@ -49,6 +59,9 @@ class EventListGenerator:
             for child in node.children
             for event in self.visit(child, start, max_events)
         ]
+
+    def _section_name(self) -> str | None:
+        return self._section_stack[-1] if self._section_stack else None
 
     def visit_SectionIR(
         self, section_ir: ir_mod.SectionIR, start: int, max_events: int | float
@@ -88,7 +101,6 @@ class EventListGenerator:
         assert (
             len(acquire_group_ir.pulses)
             == len(acquire_group_ir.amplitudes)
-            == len(acquire_group_ir.phases)
             == len(acquire_group_ir.play_pulse_params)
             == len(acquire_group_ir.pulse_pulse_params)
         )
@@ -102,11 +114,10 @@ class EventListGenerator:
         assert all(p.signal.uid == signal_id for p in acquire_group_ir.pulses)
         assert all(p.pulse is not None for p in acquire_group_ir.pulses)
         d = {
-            "section_name": acquire_group_ir.section,
             "signal": signal_id,
-            "play_wave_id": [p.pulse.uid for p in acquire_group_ir.pulses],
+            "section_name": self._section_name(),
+            "play_wave_id": ",".join([p.pulse.uid for p in acquire_group_ir.pulses]),
             "parametrized_with": [],
-            "phase": acquire_group_ir.phases,
             "chain_element_id": start_id,
             "acquire_handle": acquire_group_ir.pulses[0].acquire_params.handle,
         }
@@ -280,7 +291,7 @@ class EventListGenerator:
     ) -> EventList:
         assert loop_iteration_ir.length is not None
         common = {
-            "section_name": loop_iteration_ir.section,
+            "section_name": self._section_name(),
             "iteration": loop_iteration_ir.iteration,
             "num_repeats": loop_iteration_ir.num_repeats,
             "nesting_level": 0,
@@ -363,7 +374,7 @@ class EventListGenerator:
         }
         d_end: dict[str, Any] = {"id": next(self.id_tracker)}
         d_common = {
-            "section_name": pulse_ir.section,
+            "section_name": self._section_name(),
             "signal": pulse_ir.pulse.signal.uid,
             "play_wave_id": play_wave_id,
             "chain_element_id": start_id,

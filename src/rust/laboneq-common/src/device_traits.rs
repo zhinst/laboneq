@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::types::DeviceKind;
+use laboneq_units::duration::{Duration, Frequency, Hertz, Second, hertz, seconds};
 
 /// Commonly used device traits
 pub struct DeviceTraits {
@@ -9,6 +10,9 @@ pub struct DeviceTraits {
     pub sampling_rate: f64,
     pub sample_multiple: u16,
     pub device_class: u8,
+    pub oscillator_set_latency: Duration<Second>,
+    pub oscillator_reset_duration: Duration<Second>,
+    pub lo_frequency_granularity: Option<Frequency<Hertz>>,
 }
 
 impl DeviceTraits {
@@ -28,6 +32,9 @@ pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     channels_per_awg: 2,
     sample_multiple: 16,
     device_class: 0,
+    oscillator_set_latency: seconds(304e-9),
+    oscillator_reset_duration: seconds(80e-9),
+    lo_frequency_granularity: None,
 };
 
 pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -35,6 +42,9 @@ pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     channels_per_awg: 2,
     sample_multiple: 8,
     device_class: 0,
+    oscillator_set_latency: seconds(0.0),
+    oscillator_reset_duration: seconds(40e-9),
+    lo_frequency_granularity: None,
 };
 
 pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
@@ -42,6 +52,9 @@ pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     channels_per_awg: 1,
     sample_multiple: 16,
     device_class: 0,
+    oscillator_set_latency: seconds(88e-9),
+    oscillator_reset_duration: seconds(56e-9),
+    lo_frequency_granularity: Some(hertz(100e6)),
 };
 
 pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -49,6 +62,9 @@ pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     channels_per_awg: 1,
     sample_multiple: 16,
     device_class: 0,
+    oscillator_set_latency: seconds(88e-9),
+    oscillator_reset_duration: seconds(56e-9),
+    lo_frequency_granularity: Some(hertz(100e6)),
 };
 
 pub const PRETTYPRINTERDEVICE_TRAITS: DeviceTraits = DeviceTraits {
@@ -56,4 +72,7 @@ pub const PRETTYPRINTERDEVICE_TRAITS: DeviceTraits = DeviceTraits {
     channels_per_awg: 1,
     sample_multiple: 4,
     device_class: 1,
+    oscillator_set_latency: seconds(36e-9),
+    oscillator_reset_duration: seconds(32e-9),
+    lo_frequency_granularity: None,
 };

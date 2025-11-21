@@ -7,8 +7,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from numpy.typing import ArrayLike
 import numpy as np
+from numpy.typing import ArrayLike
+
 from laboneq.core.types.enums import (
     AveragingMode,
     ExecutionType,
@@ -18,7 +19,7 @@ from laboneq.core.types.enums import (
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.calibration import Calibration
 from laboneq.data.parameter import Parameter
-from laboneq.data.prng import PRNGSample, PRNG
+from laboneq.data.prng import PRNG, PRNGSample
 
 
 @dataclass

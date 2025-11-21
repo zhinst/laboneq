@@ -130,7 +130,6 @@ fn insert_to_innermost_sweep(
 mod tests {
     use super::*;
     use laboneq_common::named_id::NamedIdStore;
-    use laboneq_scheduler::experiment::node::Node;
     use laboneq_scheduler::experiment::types::{
         AcquisitionType, AveragingLoop, RepetitionMode, Reserve, SectionAlignment, SectionUid,
         SignalUid, Sweep,

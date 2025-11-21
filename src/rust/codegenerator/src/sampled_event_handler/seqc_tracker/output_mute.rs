@@ -1,8 +1,9 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::device_traits::DeviceTraits;
+use crate::utils::length_to_samples;
 use crate::{Result, ir::Samples};
-use crate::{device_traits::DeviceTraits, tinysample::length_to_samples};
 use anyhow::anyhow;
 
 fn ceil(value: i64, grid: u16) -> Samples {

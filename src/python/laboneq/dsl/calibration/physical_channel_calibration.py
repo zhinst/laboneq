@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import TypeVar
 
+import attrs
 
 from laboneq.core.types.enums import PortMode
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
@@ -14,7 +15,6 @@ from laboneq.dsl.calibration.oscillator import Oscillator
 from laboneq.dsl.calibration.output_routing import OutputRoute
 from laboneq.dsl.calibration.precompensation import Precompensation
 from laboneq.dsl.parameter import Parameter
-import attrs
 
 T = TypeVar("T")
 

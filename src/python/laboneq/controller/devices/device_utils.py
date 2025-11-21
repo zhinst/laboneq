@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from collections.abc import Iterable, Iterator
-import math
 
+import math
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from importlib.metadata import version
 from typing import TYPE_CHECKING, Any

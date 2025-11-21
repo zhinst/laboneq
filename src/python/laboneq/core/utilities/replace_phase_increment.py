@@ -4,24 +4,22 @@
 from __future__ import annotations
 
 import typing
-
-import numpy as np
-
 from copy import deepcopy
 from typing import Any
 
+import numpy as np
+
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types import CompiledExperiment
-
 from laboneq.data.scheduled_experiment import (
-    ArtifactsCodegen,
     COMPLEX_USAGE,
+    ArtifactsCodegen,
     CommandTableMapEntry,
 )
 
 if typing.TYPE_CHECKING:
-    from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.data.parameter import Parameter
+    from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.dsl import Session
 
 

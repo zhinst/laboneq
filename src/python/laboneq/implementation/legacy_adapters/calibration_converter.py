@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 from dataclasses import asdict, is_dataclass
-import attrs
 from typing import Any, Callable, Optional
+
+import attrs
 
 from laboneq.core.types import enums as legacy_enums
 from laboneq.core.types.enums.modulation_type import ModulationType

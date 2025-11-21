@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 import asyncio
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
-from enum import Enum, IntFlag
 import json
 import logging
 import shlex
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from enum import Enum, IntFlag
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -20,25 +21,24 @@ from typing import (
     cast,
     overload,
 )
-from laboneq.controller.devices.device_utils import is_expected, to_l1_timeout
 
 import numpy as np
-from laboneq.controller.devices.device_utils import (
-    NodeActionSet,
-    NodeCollector,
-    zhinst_core_version,
-)
-
-from laboneq.controller.devices.zi_emulator import EmulatorState, KernelSessionEmulator
-
-from zhinst.comms_schemas.labone import KernelSession, KernelInfo
+from zhinst.comms_schemas.labone import KernelInfo, KernelSession
 from zhinst.comms_schemas.labone.core import (
-    DataQueue,
     AnnotatedValue,
+    DataQueue,
     ShfGeneratorWaveformVectorData,
 )
 from zhinst.comms_schemas.labone.core.errors import NotFoundError
 
+from laboneq.controller.devices.device_utils import (
+    NodeActionSet,
+    NodeCollector,
+    is_expected,
+    to_l1_timeout,
+    zhinst_core_version,
+)
+from laboneq.controller.devices.zi_emulator import EmulatorState, KernelSessionEmulator
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.versioning import (
     RECOMMENDED_MINIMUM_LABONE_VERSION,
@@ -47,11 +47,11 @@ from laboneq.controller.versioning import (
 )
 
 if TYPE_CHECKING:
-    from laboneq.core.types.numpy_support import NumPyArray
     from laboneq.controller.devices.device_setup_dao import (
-        ServerQualifier,
         DeviceQualifier,
+        ServerQualifier,
     )
+    from laboneq.core.types.numpy_support import NumPyArray
 
 _logger = logging.getLogger(__name__)
 
@@ -250,14 +250,8 @@ class DataServerConnection:
 
         dataserver_version = LabOneVersion.from_version_string(self.fullversion_str)
 
-        if python_api_version < dataserver_version:
-            version_spec = f"{dataserver_version.year}.{dataserver_version.month}.{dataserver_version.patch}"
-            err_msg = (
-                f"Version of LabOne Python API ({python_api_version}) is older than "
-                f"LabOne Data Server ({dataserver_version}). "
-                f"You can install a matching or newer version of the LabOne Python API with: "
-                f"pip install --upgrade zhinst-core~={version_spec}"
-            )
+        if dataserver_version != python_api_version:
+            err_msg = f"Version of LabOne Data Server ({dataserver_version}) and Python API ({python_api_version}) do not match."
             if ignore_version_mismatch:
                 _logger.warning("Ignoring that %s", err_msg)
             else:

@@ -28,11 +28,11 @@ from laboneq.dsl.experiment.section_context import (
     AcquireLoopRtSectionContextManager,
     CaseSectionContextManager,
     MatchSectionContextManager,
+    PRNGLoopContextManager,
+    PRNGSetupContextManager,
     SectionContextManager,
     SweepSectionContextManager,
     current_section_context,
-    PRNGSetupContextManager,
-    PRNGLoopContextManager,
 )
 from laboneq.dsl.experiment.uid_generator import (
     GLOBAL_UID_GENERATOR,
@@ -45,10 +45,10 @@ if typing.TYPE_CHECKING:
     from laboneq.dsl.enums import ExecutionType
     from laboneq.dsl.experiment import (
         Experiment,
-        Section,
-        PlayPulse,
-        Operation,
         ExperimentSignal,
+        Operation,
+        PlayPulse,
+        Section,
     )
     from laboneq.dsl.prng import PRNG, PRNGSample
 
@@ -60,16 +60,16 @@ __all__ = [
     "call",
     "case",
     "delay",
-    "experiment_calibration",
     "experiment",
+    "experiment_calibration",
     "for_each",
     "map_signal",
     "match",
     "measure",
     "play",
     "play_indexed",
-    "prng_setup",
     "prng_loop",
+    "prng_setup",
     "reserve",
     "reset_global_uid_generator",
     "reset_oscillator_phase",

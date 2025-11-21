@@ -5,7 +5,7 @@
 use std::vec;
 
 use crate::ir::compilation_job::DeviceKind;
-use crate::tinysample::ceil_to_grid;
+use crate::utils::ceil_to_grid;
 use crate::{Error, Result};
 
 #[derive(Debug, Clone)]

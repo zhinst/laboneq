@@ -4,21 +4,22 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
 from collections import namedtuple
 from dataclasses import dataclass, field
 from typing import Protocol
-import hashlib
-from laboneq._rust import codegenerator as codegen_rs
+
 import numpy as np
 import numpy.typing as npt
-from laboneq.compiler.seqc.utils import normalize_phase
+
+from laboneq._rust import codegenerator as codegen_rs
+from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.seqc.wave_compressor import (
     PlayHold,
     PlaySamples,
     compress_wave,
 )
-from laboneq.compiler.common.device_type import DeviceType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
     length_to_samples,
@@ -319,22 +320,16 @@ class WaveformSampler:
             if pulse_part.pulse is None:
                 continue
             pulse_def = self._pulse_defs[pulse_part.pulse]
-
-            if pulse_def.amplitude is None:
-                pulse_def = copy.deepcopy(pulse_def)
-                pulse_def.amplitude = 1.0
-
+            assert pulse_def.amplitude is not None, (
+                "Pulse amplitude should have been set"
+            )
             amplitude = pulse_def.amplitude
             if pulse_part.amplitude is not None:
                 amplitude *= pulse_part.amplitude
 
             used_oscillator_frequency = pulse_part.oscillator_frequency
 
-            iq_phase = 0.0
-            if pulse_part.phase is not None:
-                iq_phase += pulse_part.phase
-            iq_phase = normalize_phase(iq_phase)
-
+            iq_phase = pulse_part.phase
             if pulse_part.id_pulse_params is not None:
                 pulse_params = pulse_parameters[pulse_part.id_pulse_params]
                 params_pulse_pulse = pulse_params.pulse_parameters or {}

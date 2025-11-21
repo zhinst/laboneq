@@ -3,12 +3,13 @@
 
 use std::rc::Rc;
 
-use crate::{TinySample, ir::IrKind, schedule_info::ScheduleInfo};
+use crate::{ir::IrKind, schedule_info::ScheduleInfo};
 
 pub type NodeRef = Rc<Node>;
 
 /// A node that hold the scheduling information of an IR node and its children.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Node {
     pub kind: IrKind,
     pub schedule: ScheduleInfo,
@@ -16,7 +17,8 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn new(kind: IrKind, schedule: ScheduleInfo) -> Self {
+    pub fn new(kind: IrKind, mut schedule: ScheduleInfo) -> Self {
+        schedule.signals.extend(kind.signals().into_iter().cloned());
         Self {
             kind,
             schedule,
@@ -24,7 +26,8 @@ impl Node {
         }
     }
 
-    pub fn add_child(&mut self, offset: TinySample, child: Node) {
+    pub fn add_child(&mut self, offset: TinySamples, child: Node) {
+        self.schedule.signals.extend(&child.schedule.signals);
         self.children.push(NodeChild {
             offset,
             node: Rc::new(child),
@@ -38,7 +41,7 @@ impl Node {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeChild {
-    pub offset: TinySample,
+    pub offset: TinySamples,
     pub node: NodeRef,
 }
 
@@ -70,17 +73,19 @@ macro_rules! ir_node_structure {
             let mut node = $crate::ScheduledNode::new($kind.clone(), $crate::schedule_info::ScheduleInfoBuilder::default().build());
             $(
                 let child = self::ir_node_structure!($child, $subtree);
-                node.add_child($offset, child);
+                node.add_child($offset.into(), child);
             )*
             node
         }};
     }
 #[cfg(test)]
 pub(crate) use ir_node_structure;
+use laboneq_units::tinysample::TinySamples;
 
 #[cfg(test)]
 mod tests {
     use crate::scheduled_node::ir_node_structure;
+    use laboneq_units::tinysample::tiny_samples;
 
     use super::*;
 
@@ -104,11 +109,11 @@ mod tests {
         assert_eq!(node0_children.len(), 1);
         let node1 = &node0_children[0];
         assert_eq!(node1.node.kind, IrKind::NotYetImplemented);
-        assert_eq!(node1.offset, 10);
+        assert_eq!(node1.offset, tiny_samples(10));
 
         // Test nested child
         let node2 = &node1.node.children[0];
-        assert_eq!(node2.offset, 0);
+        assert_eq!(node2.offset, tiny_samples(0));
         assert_eq!(node2.node.kind, IrKind::NotYetImplemented);
     }
 }

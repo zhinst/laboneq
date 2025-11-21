@@ -3,16 +3,16 @@
 
 from __future__ import annotations
 
-import attrs
 from enum import Enum
 from typing import Optional
+
+import attrs
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import Calibratable, SignalCalibration
 from laboneq.dsl.calibration.physical_channel_calibration import (
     PhysicalChannelCalibration,
 )
-
 
 PHYSICAL_CHANNEL_CALIBRATION_FIELDS = tuple(
     attrs.fields_dict(PhysicalChannelCalibration).keys()

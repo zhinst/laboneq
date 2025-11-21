@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import inspect
 import sys
-import typing
 import types
+import typing
 
 _PY_LT_V313 = sys.version_info < (3, 13)
 

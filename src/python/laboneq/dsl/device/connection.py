@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-import attrs
 from typing import Iterable, Optional
+
+import attrs
 
 from laboneq.core import path as qct_path
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter

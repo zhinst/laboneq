@@ -20,7 +20,6 @@ class PulseIR(IntervalIR):
     set_oscillator_phase: float | None = None
     increment_oscillator_phase: float | None = None
     incr_phase_param_name: str | None = None
-    section: str
     play_pulse_params: Dict[str, Any] | None = None
     pulse_pulse_params: Dict[str, Any] | None = None
     pulse_params_id: int | None = None

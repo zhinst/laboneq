@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
-from contextlib import asynccontextmanager
-from enum import Enum
-import json
 
+import json
 import logging
 import re
 from collections import defaultdict
+from contextlib import asynccontextmanager
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Iterator, cast
 
 from laboneq.controller.devices.async_support import (
@@ -26,12 +26,12 @@ from laboneq.controller.devices.device_utils import (
     prepare_emulator_state,
 )
 from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
-from laboneq.controller.devices.zi_emulator import EmulatorState
 from laboneq.controller.devices.node_control import (
     NodeControlBase,
     NodeControlKind,
     filter_states,
 )
+from laboneq.controller.devices.zi_emulator import EmulatorState
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.for_each import for_each
 from laboneq.controller.versioning import SetupCaps

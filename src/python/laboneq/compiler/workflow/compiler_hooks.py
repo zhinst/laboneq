@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
     from laboneq.compiler.common.awg_info import AWGInfo
-    from laboneq.compiler.common.iface_compiler_output import CombinedOutput
     from laboneq.compiler.common.iface_code_generator import ICodeGenerator
+    from laboneq.compiler.common.iface_compiler_output import CombinedOutput
     from laboneq.compiler.common.iface_linker import ILinker
     from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
     from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker

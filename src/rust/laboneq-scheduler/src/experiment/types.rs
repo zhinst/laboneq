@@ -2,31 +2,31 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use laboneq_common::named_id::NamedId;
-use laboneq_units::duration::{Duration, Seconds};
+use laboneq_units::duration::{Duration, Second};
 use num_complex::Complex64;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::error;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct SectionUid(pub NamedId);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct PulseUid(pub NamedId);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct OscillatorUid(pub NamedId);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct ParameterUid(pub NamedId);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct HandleUid(pub NamedId);
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct DeviceUid(pub NamedId);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct SignalUid(pub NamedId);
 
 #[macro_export]
@@ -65,52 +65,107 @@ pub struct ExternalParameterUid(pub u64);
 
 // Common type definitions
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum Value {
-    Float(f64),
-    Int(i64),
-    Complex(Complex64),
-    Bool(bool),
-    String(String),
-    ParameterUid(ParameterUid),
+#[derive(Debug, Clone, PartialEq, Copy)]
+pub enum ValueOrParameter<T> {
+    Value(T),
+    Parameter(ParameterUid),
+    // Value resolved from parameter
+    ResolvedParameter { value: T, uid: ParameterUid },
 }
 
-#[derive(Debug, Clone, PartialEq, Copy)]
+impl TryFrom<ValueOrParameter<f64>> for f64 {
+    type Error = &'static str;
+
+    fn try_from(value: ValueOrParameter<f64>) -> Result<Self, Self::Error> {
+        match value {
+            ValueOrParameter::Value(v) => Ok(v),
+            ValueOrParameter::Parameter(_) => Err("Cannot convert Parameter to f64"),
+            ValueOrParameter::ResolvedParameter { value, uid: _ } => Ok(value),
+        }
+    }
+}
+
+impl TryFrom<NumericLiteral> for ValueOrParameter<f64> {
+    type Error = &'static str;
+
+    fn try_from(value: NumericLiteral) -> Result<ValueOrParameter<f64>, Self::Error> {
+        Ok(ValueOrParameter::Value(value.try_into()?))
+    }
+}
+
+impl TryFrom<NumericLiteral> for ValueOrParameter<Complex64> {
+    type Error = &'static str;
+
+    fn try_from(value: NumericLiteral) -> Result<ValueOrParameter<Complex64>, Self::Error> {
+        Ok(ValueOrParameter::Value(value.try_into()?))
+    }
+}
+
+impl From<f64> for ValueOrParameter<f64> {
+    fn from(value: f64) -> Self {
+        ValueOrParameter::Value(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum NumericLiteral {
     Float(f64),
     Int(i64),
     Complex(Complex64),
 }
 
-impl TryFrom<Value> for NumericLiteral {
-    type Error = &'static str;
+impl Eq for NumericLiteral {}
 
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        match value {
-            Value::Float(v) => Ok(NumericLiteral::Float(v)),
-            Value::Int(v) => Ok(NumericLiteral::Int(v)),
-            Value::Complex(v) => Ok(NumericLiteral::Complex(v)),
-            _ => Err("Value is not numeric literal"),
+impl std::fmt::Display for NumericLiteral {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NumericLiteral::Float(v) => write!(f, "{}", v),
+            NumericLiteral::Int(v) => write!(f, "{}", v),
+            NumericLiteral::Complex(v) => write!(f, "{} + {}j", v.re, v.im),
         }
     }
 }
 
-impl TryInto<f64> for NumericLiteral {
+impl TryFrom<NumericLiteral> for f64 {
     type Error = &'static str;
-    fn try_into(self) -> Result<f64, Self::Error> {
-        match self {
+    fn try_from(value: NumericLiteral) -> Result<f64, Self::Error> {
+        match value {
             NumericLiteral::Float(v) => Ok(v),
             NumericLiteral::Int(v) => Ok(v as f64),
-            NumericLiteral::Complex(_) => Err("Cannot convert complex to f64"),
+            NumericLiteral::Complex(v) => {
+                if v.im == 0.0 {
+                    Ok(v.re)
+                } else {
+                    Err("Cannot convert complex to f64")
+                }
+            }
         }
     }
 }
 
-impl TryInto<Complex64> for NumericLiteral {
+impl TryFrom<NumericLiteral> for usize {
     type Error = &'static str;
+    fn try_from(value: NumericLiteral) -> Result<usize, Self::Error> {
+        match value {
+            NumericLiteral::Float(v) => {
+                if v.fract() == 0.0 {
+                    usize::try_from(v as i64)
+                        .map_err(|_| "Cannot convert negative float to unsigned integer")
+                } else {
+                    Err("Cannot convert float to unsigned integer")
+                }
+            }
+            NumericLiteral::Int(v) => usize::try_from(v)
+                .map_err(|_| "Cannot convert negative integer to unsigned integer"),
+            NumericLiteral::Complex(_) => Err("Cannot convert complex to unsigned integer"),
+        }
+    }
+}
 
-    fn try_into(self) -> Result<Complex64, Self::Error> {
-        match self {
+impl TryFrom<NumericLiteral> for Complex64 {
+    type Error = &'static str;
+    fn try_from(value: NumericLiteral) -> Result<Complex64, Self::Error> {
+        match value {
             NumericLiteral::Float(v) => Ok(Complex64::new(v, 0.0)),
             NumericLiteral::Int(v) => Ok(Complex64::new(v as f64, 0.0)),
             NumericLiteral::Complex(v) => Ok(v),
@@ -118,75 +173,15 @@ impl TryInto<Complex64> for NumericLiteral {
     }
 }
 
-impl TryInto<RealValue> for NumericLiteral {
-    type Error = &'static str;
-
-    fn try_into(self) -> Result<RealValue, Self::Error> {
-        match self {
-            NumericLiteral::Float(v) => Ok(RealValue::Float(v)),
-            NumericLiteral::Int(v) => Ok(RealValue::Int(v)),
-            _ => Err("Value is not real value"),
-        }
-    }
-}
-
-impl TryInto<f64> for RealValue {
-    type Error = &'static str;
-
-    fn try_into(self) -> Result<f64, Self::Error> {
-        match self {
-            RealValue::Float(v) => Ok(v),
-            RealValue::Int(v) => Ok(v as f64),
-            _ => Err("Value is not a float"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Copy)]
-pub enum NumericValue {
-    Float(f64),
-    Int(i64),
-    Complex(Complex64),
-    ParameterUid(ParameterUid),
-}
-
-impl TryFrom<Value> for NumericValue {
-    type Error = &'static str;
-
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        match value {
-            Value::Float(v) => Ok(NumericValue::Float(v)),
-            Value::Int(v) => Ok(NumericValue::Int(v)),
-            Value::Complex(v) => Ok(NumericValue::Complex(v)),
-            Value::ParameterUid(v) => Ok(NumericValue::ParameterUid(v)),
-            _ => Err("Value is not numeric"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Copy)]
-pub enum RealValue {
-    Float(f64),
-    Int(i64),
-    ParameterUid(ParameterUid),
-}
-
-impl TryFrom<Value> for RealValue {
-    type Error = &'static str;
-
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        match value {
-            Value::Float(v) => Ok(RealValue::Float(v)),
-            Value::Int(v) => Ok(RealValue::Int(v)),
-            Value::ParameterUid(v) => Ok(RealValue::ParameterUid(v)),
-            Value::Complex(v) => {
-                if v.im == 0.0 {
-                    Ok(RealValue::Float(v.re))
-                } else {
-                    Err("Value is not real numeric")
-                }
-            }
-            _ => Err("Value is not real numeric"),
+impl PartialEq for NumericLiteral {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (NumericLiteral::Float(a), NumericLiteral::Float(b)) => a == b,
+            (NumericLiteral::Int(a), NumericLiteral::Int(b)) => a == b,
+            (NumericLiteral::Complex(a), NumericLiteral::Complex(b)) => a == b,
+            (NumericLiteral::Float(a), NumericLiteral::Int(b)) => *a == *b as f64,
+            (NumericLiteral::Int(a), NumericLiteral::Float(b)) => *a as f64 == *b,
+            _ => false,
         }
     }
 }
@@ -195,7 +190,7 @@ impl TryFrom<Value> for RealValue {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PulseLength {
-    Seconds(Duration<Seconds, f64>),
+    Seconds(Duration<Second, f64>),
     Samples(usize),
 }
 
@@ -214,8 +209,20 @@ pub enum OscillatorKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Oscillator {
     pub uid: OscillatorUid, // NOTE: Needed for legacy reasons, should be removed in future
-    pub frequency: RealValue,
+    pub frequency: ValueOrParameter<f64>,
     pub kind: OscillatorKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AmplifierPump {
+    pub device: DeviceUid,
+    pub channel: u16,
+    pub pump_power: Option<ValueOrParameter<f64>>,
+    pub pump_frequency: Option<ValueOrParameter<f64>>,
+    pub probe_power: Option<ValueOrParameter<f64>>,
+    pub probe_frequency: Option<ValueOrParameter<f64>>,
+    pub cancellation_phase: Option<ValueOrParameter<f64>>,
+    pub cancellation_attenuation: Option<ValueOrParameter<f64>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -264,15 +271,15 @@ pub enum MarkerSelector {
 pub struct Marker {
     pub marker_selector: MarkerSelector,
     pub enable: bool,
-    pub start: Option<Duration<Seconds, f64>>,
-    pub length: Option<Duration<Seconds, f64>>,
+    pub start: Option<Duration<Second, f64>>,
+    pub length: Option<Duration<Second, f64>>,
     pub pulse_id: Option<PulseUid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Delay {
     pub signal: SignalUid,
-    pub time: RealValue,
+    pub time: ValueOrParameter<f64>,
     pub precompensation_clear: bool,
 }
 
@@ -290,11 +297,11 @@ pub struct PlayPulse {
     pub signal: SignalUid,
     pub pulse: Option<PulseUid>,
     pub precompensation_clear: bool,
-    pub amplitude: NumericValue,
-    pub phase: Option<RealValue>,
-    pub increment_oscillator_phase: Option<RealValue>,
-    pub set_oscillator_phase: Option<RealValue>,
-    pub length: Option<RealValue>,
+    pub amplitude: ValueOrParameter<Complex64>,
+    pub phase: Option<ValueOrParameter<f64>>,
+    pub increment_oscillator_phase: Option<ValueOrParameter<f64>>,
+    pub set_oscillator_phase: Option<ValueOrParameter<f64>>,
+    pub length: Option<ValueOrParameter<f64>>,
     pub parameters: HashMap<Arc<String>, PulseParameterValue>,
     pub pulse_parameters: HashMap<Arc<String>, PulseParameterValue>,
     pub markers: Vec<Marker>,
@@ -304,7 +311,7 @@ pub struct PlayPulse {
 pub struct Acquire {
     pub signal: SignalUid,
     pub handle: HandleUid,
-    pub length: Option<Duration<Seconds, f64>>,
+    pub length: Option<Duration<Second, f64>>,
     pub kernel: Vec<PulseUid>,
     pub parameters: Vec<HashMap<Arc<String>, PulseParameterValue>>,
     pub pulse_parameters: Vec<HashMap<Arc<String>, PulseParameterValue>>,
@@ -314,7 +321,7 @@ pub struct Acquire {
 pub struct Section {
     pub uid: SectionUid,
     pub alignment: SectionAlignment,
-    pub length: Option<Duration<Seconds, f64>>,
+    pub length: Option<Duration<Second, f64>>,
     pub play_after: Vec<SectionUid>,
     pub triggers: Vec<Trigger>,
     pub on_system_grid: bool,
@@ -338,10 +345,10 @@ pub struct Reserve {
     pub signal: SignalUid,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ResetOscillatorPhase {
-    /// If None, reset all oscillators within a Section
-    pub signal: Option<SignalUid>,
+    /// If empty, will reset all oscillators within a Section
+    pub signals: Vec<SignalUid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -373,6 +380,17 @@ pub enum MatchTarget {
     /// PRNG Loop UID
     PrngSample(SectionUid),
     SweepParameter(ParameterUid),
+}
+
+impl MatchTarget {
+    pub fn description(&self) -> &'static str {
+        match self {
+            MatchTarget::Handle(_) => "acquisition handle",
+            MatchTarget::UserRegister(_) => "user register",
+            MatchTarget::PrngSample(_) => "PRNG sample",
+            MatchTarget::SweepParameter(_) => "sweep parameter",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -430,9 +448,22 @@ pub struct LoopInfo<'a> {
     pub uid: &'a SectionUid,
     pub count: u32,
     pub parameters: &'a [ParameterUid],
+    pub reset_oscillator_phase: bool,
 }
 
 impl Operation {
+    pub fn signals(&self) -> Vec<SignalUid> {
+        match self {
+            Operation::PlayPulse(p) => vec![p.signal],
+            Operation::Acquire(a) => vec![a.signal],
+            Operation::Delay(d) => vec![d.signal],
+            Operation::ResetOscillatorPhase(r) => r.signals.to_vec(),
+            Operation::Reserve(r) => vec![r.signal],
+            Operation::Section(obj) => obj.triggers.iter().map(|t| t.signal).collect(),
+            _ => vec![],
+        }
+    }
+
     pub fn section_info<'a>(self: &'a Operation) -> Option<SectionInfo<'a>> {
         match self {
             Operation::Section(s) => SectionInfo { uid: &s.uid }.into(),
@@ -460,18 +491,21 @@ impl Operation {
                 uid: &s.uid,
                 count: s.count,
                 parameters: &[],
+                reset_oscillator_phase: false,
             }
             .into(),
             Operation::Sweep(s) => LoopInfo {
                 uid: &s.uid,
                 count: s.count,
                 parameters: &s.parameters,
+                reset_oscillator_phase: s.reset_oscillator_phase,
             }
             .into(),
             Operation::AveragingLoop(s) => LoopInfo {
                 uid: &s.uid,
                 count: s.count,
                 parameters: &[],
+                reset_oscillator_phase: s.reset_oscillator_phase,
             }
             .into(),
             Operation::Root

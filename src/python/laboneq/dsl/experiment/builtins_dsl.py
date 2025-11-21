@@ -7,7 +7,7 @@ This is intended to be the equivalent of `laboneq.simple` for the LabOne Q
 builtins, `laboneq.dsl.experiment.builtins`.
 """
 
-__all__ = [
+__all__ = [  # noqa: RUF022
     # builtins:
     "acquire",
     "acquire_loop_rt",
@@ -33,6 +33,7 @@ __all__ = [
     "pulse_library",
     # build experiments
     "add_quantum_elements",
+    "add_signal",
     "qubit_experiment",
     # formatter:
     "handles",
@@ -42,6 +43,12 @@ __all__ = [
     "quantum_operation",
 ]
 
+from laboneq.dsl.experiment import pulse_library
+from laboneq.dsl.experiment.build_experiment import (
+    add_quantum_elements,
+    add_signal,
+    qubit_experiment,
+)
 from laboneq.dsl.experiment.builtins import (
     acquire,
     acquire_loop_rt,
@@ -64,14 +71,9 @@ from laboneq.dsl.experiment.builtins import (
     sweep_range,
     uid,
 )
-from laboneq.dsl.experiment import pulse_library
-from laboneq.workflow import handles
-from laboneq.dsl.experiment.build_experiment import (
-    add_quantum_elements,
-    qubit_experiment,
-)
 from laboneq.dsl.quantum.quantum_operations import (
     QuantumOperations,
     create_pulse,
     quantum_operation,
 )
+from laboneq.workflow import handles

@@ -8,14 +8,16 @@ import warnings
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Callable, Dict, NoReturn, Union
 
-from laboneq.data.experiment_results import ExperimentResults
 from numpy import typing as npt
 
+from laboneq import laboneq_logging
+from laboneq.controller import Controller
 from laboneq.controller.toolkit_adapter import ToolkitDevices
 from laboneq.core.exceptions import AbortExecution, LabOneQException
 from laboneq.core.types import CompiledExperiment
 from laboneq.core.utilities.environment import is_testing
 from laboneq.core.utilities.laboneq_compile import laboneq_compile
+from laboneq.data.experiment_results import ExperimentResults
 from laboneq.dsl.device import DeviceSetup
 from laboneq.dsl.device.io_units.logical_signal import (
     LogicalSignalRef,
@@ -26,9 +28,6 @@ from laboneq.dsl.result import Results
 from laboneq.implementation.legacy_adapters.converters_target_setup import (
     convert_dsl_to_target_setup,
 )
-from laboneq import laboneq_logging
-
-from laboneq.controller import Controller
 
 if TYPE_CHECKING:
     from laboneq.dsl.experiment.pulse import Pulse

@@ -3,12 +3,12 @@
 
 from __future__ import annotations
 
-import logging
 from collections import defaultdict
 from itertools import groupby
 from typing import Any, Literal
 
 import numpy as np
+import orjson
 
 from laboneq._rust import codegenerator as codegen_rs
 from laboneq._rust.codegenerator import SampledWaveform
@@ -38,10 +38,8 @@ from laboneq.data.scheduled_experiment import (
     WeightInfo,
 )
 
-from .measurement_calculator import SignalDelay, SignalDelays
+from .types import SignalDelay, SignalDelays
 from .waveform_sampler import WaveformSampler
-
-_logger = logging.getLogger(__name__)
 
 _SEQUENCER_TYPES = {DeviceType.SHFQA: "qa", DeviceType.SHFSG: "sg"}
 
@@ -94,6 +92,7 @@ class CodeGenerator(ICodeGenerator):
         self._feedback_connections: dict[str, FeedbackConnection] = {}
         self._shfppc_sweep_configs: dict[AwgKey, dict[str, object]] = {}
         self._total_execution_time: float | None = None
+        self._measurements: list[codegen_rs.Measurement] = []
 
     def get_output(self):
         return SeqCGenOutput(
@@ -112,6 +111,7 @@ class CodeGenerator(ICodeGenerator):
             parameter_phase_increment_map=self.parameter_phase_increment_map(),
             feedback_register_configurations=self.feedback_register_config(),
             shfppc_sweep_configurations=self.shfppc_sweep_configs(),
+            measurements=self._measurements,
         )
 
     @staticmethod
@@ -376,6 +376,7 @@ class CodeGenerator(ICodeGenerator):
         )
         self._total_execution_time = codegen_result.total_execution_time
         self._simultaneous_acquires = codegen_result.simultaneous_acquires
+        self._measurements = codegen_result.measurements
         res_usage_collector: ResourceUsageCollector = ResourceUsageCollector()
         for idx, awg in enumerate(awgs_sorted):
             awg_key = awg.key
@@ -399,28 +400,23 @@ class CodeGenerator(ICodeGenerator):
                 for k, (filename, wavetype) in awg_code_output.wave_indices
             }
             if awg_code_output.command_table:
-                self._command_tables[awg_key] = {"ct": awg_code_output.command_table}
-                command_table_length = len(awg_code_output.command_table["table"])
+                ct = orjson.loads(awg_code_output.command_table)
+                self._command_tables[awg_key] = {"ct": ct}
+                number_of_entries = len(ct["table"])
                 self._parameter_phase_increment_map[awg_key] = {
                     k: [i if i >= 0 else COMPLEX_USAGE for i in v]
                     for k, v in awg_code_output.parameter_phase_increment_map.items()
                 }
-                if command_table_length > 0 and awg.device_type.max_ct_entries:
+                if number_of_entries > 0 and awg.device_type.max_ct_entries:
                     res_usage_collector.add(
                         ResourceUsage(
                             f"Command table of device '{awg.device_id}', AWG({awg.awg_id})",
-                            command_table_length / awg.device_type.max_ct_entries,
+                            number_of_entries / awg.device_type.max_ct_entries,
                         )
                     )
-
             if awg_code_output.shf_sweeper_config is not None:
                 self._shfppc_sweep_configs[awg_key] = awg_code_output.shf_sweeper_config
-                self._shfppc_sweep_configs[awg_key]["ppc_device"] = (
-                    awg_code_output.shf_sweeper_config["ppc_device"]
-                )
-                self._shfppc_sweep_configs[awg_key]["ppc_channel"] = (
-                    awg_code_output.shf_sweeper_config["ppc_channel"]
-                )
+
         res_usage_collector.raise_or_pass(compiler_settings=self._settings)
 
         for awg_key, seqc_program in self._src.items():

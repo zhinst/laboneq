@@ -7,15 +7,15 @@ The file is meant to be executed by the Rust library,
 but written in Python for readability.
 """
 
+from typing import cast
+
+import laboneq._rust.scheduler as scheduler
+import laboneq._rust.test_scheduler as scheduler_rs
 from laboneq import simple
 from laboneq.core.utilities.laboneq_compile import laboneq_compile
 from laboneq.implementation.legacy_adapters.converters_experiment_description import (
     convert_Experiment,
 )
-from typing import cast
-
-from laboneq._rust import scheduler
-import laboneq._rust.test_scheduler as scheduler_rs
 
 scheduler_rs = cast(scheduler, scheduler_rs)
 
@@ -111,5 +111,7 @@ connections:
         ),
         lo_frequency=None,
         voltage_offset=None,
+        amplifier_pump=None,
+        kind="IQ",
     )
     return convert_Experiment(exp), [signal]

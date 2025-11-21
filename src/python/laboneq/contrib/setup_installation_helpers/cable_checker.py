@@ -157,6 +157,18 @@ DEVICE_PROPERTIES = {
         qa_prefix="",
         qa_suffix="",
     ),
+    "SHFSG2": DeviceProperties(
+        number_of_sg_ports=2,
+        number_of_channels_per_sg_port=1,
+        number_of_qa_ports=0,
+        number_of_channels_per_qa_port=0,
+        sg_signal_type=SignalType.IQ,
+        channel_per_pulse=False,
+        sg_prefix="SGCHANNELS/",
+        sg_suffix="/OUTPUT",
+        qa_prefix="",
+        qa_suffix="",
+    ),
     "SHFSG4": DeviceProperties(
         number_of_sg_ports=4,
         number_of_channels_per_sg_port=1,

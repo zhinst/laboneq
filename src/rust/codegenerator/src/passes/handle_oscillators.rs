@@ -7,13 +7,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use laboneq_log::warn;
+use laboneq_units::tinysample::{tiny_samples, tinysamples_to_seconds};
 
 use crate::ir::compilation_job::{self as cjob, AwgCore, DeviceKind};
 use crate::ir::{
     FrequencySweepParameterInfo, IrNode, LinearParameterInfo, NodeKind, NonLinearParameterInfo,
     OscillatorFrequencySweepStep, Samples, SetOscillatorFrequencySweep,
 };
-use crate::tinysample::TINYSAMPLE;
 use crate::{Error, Result};
 
 struct SignalPhaseTracker {
@@ -77,7 +77,7 @@ impl PhaseTracker {
 
     pub fn calculate_phase_at(&self, signal: &cjob::Signal, freq: f64, ts: Samples) -> f64 {
         let (ref_time, phase_now) = self.phase_now(signal);
-        let t = (ts as f64 - ref_time as f64) * TINYSAMPLE;
+        let t: f64 = tinysamples_to_seconds(tiny_samples(ts - ref_time)).into();
         t * 2.0 * std::f64::consts::PI * freq + phase_now
     }
 }
@@ -224,9 +224,7 @@ fn collect_osc_parameters(
             Ok(())
         }
         NodeKind::PhaseReset(ob) => {
-            if ob.reset_sw_oscillators
-                && let Some(tracker) = phase_tracker
-            {
+            if let Some(tracker) = phase_tracker {
                 tracker.global_reset(&ob.signals, node_offset);
             }
             Ok(())
@@ -555,11 +553,8 @@ mod tests {
         Arc::new(sig)
     }
 
-    fn make_reset(reset_sw_oscillators: bool) -> NodeKind {
-        NodeKind::PhaseReset(PhaseReset {
-            reset_sw_oscillators,
-            signals: vec![],
-        })
+    fn make_reset() -> NodeKind {
+        NodeKind::PhaseReset(PhaseReset { signals: vec![] })
     }
 
     fn make_pulse(
@@ -589,11 +584,11 @@ mod tests {
     fn test_phase_increment() {
         let signal = make_signal("test", cjob::OscillatorKind::SOFTWARE);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
-        root.add_child(0, make_reset(true));
+        root.add_child(0, make_reset());
         root.add_child(1, make_pulse(Arc::clone(&signal), None, Some(0.5)));
         root.add_child(3, make_pulse(Arc::clone(&signal), None, Some(0.5)));
         let mut nested_section = IrNode::new(NodeKind::Nop { length: 0 }, 5);
-        nested_section.add_child(5, make_reset(true));
+        nested_section.add_child(5, make_reset());
         nested_section.add_child(7, make_pulse(Arc::clone(&signal), None, Some(0.5)));
         root.add_child_node(nested_section);
         root.add_child(11, make_pulse(Arc::clone(&signal), None, Some(0.5)));
@@ -616,7 +611,6 @@ mod tests {
         let signal = make_signal("test", cjob::OscillatorKind::SOFTWARE);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
         root.add_child(0, make_pulse(Arc::clone(&signal), None, Some(0.5)));
-        root.add_child(1, make_reset(false));
         root.add_child(3, make_pulse(Arc::clone(&signal), None, Some(0.5)));
 
         let params = handle_oscillator_parameters(
@@ -654,7 +648,7 @@ mod tests {
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
         root.add_child(0, make_pulse(Arc::clone(&signal), Some(1.0), Some(0.5)));
         root.add_child(1, make_pulse(Arc::clone(&signal), None, Some(0.5)));
-        root.add_child(3, make_reset(true));
+        root.add_child(3, make_reset());
         root.add_child(5, make_pulse(Arc::clone(&signal), Some(1.0), None));
 
         let params = handle_oscillator_parameters(
@@ -686,7 +680,7 @@ mod tests {
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
         root.add_child(0, make_pulse(Arc::clone(&signal), Some(1.0), Some(0.5)));
         root.add_child(1, make_pulse(Arc::clone(&signal), None, Some(0.5)));
-        root.add_child(3, make_reset(true));
+        root.add_child(3, make_reset());
         root.add_child(5, make_pulse(Arc::clone(&signal), Some(1.0), None));
 
         let params = handle_oscillator_parameters(

@@ -49,7 +49,6 @@ where
 ///
 /// ```
 /// use laboneq_scheduler::node_structure;
-/// use laboneq_scheduler::experiment::node::Node;
 /// let tree = node_structure!(
 ///     "root",
 ///     [
@@ -63,10 +62,10 @@ where
 #[macro_export]
 macro_rules! node_structure {
     ($value:expr, []) => {
-        Node::new($value.clone())
+        $crate::experiment::node::Node::new($value.clone())
     };
     ($value:expr, [ $( ($child:expr, $subtree:tt) ),* $(,)? ]) => {{
-        let mut node = Node::new($value.clone());
+        let mut node = $crate::experiment::node::Node::new($value.clone());
         $(
             let child = node_structure!($child, $subtree);
             node.children.push(child.into());
@@ -77,8 +76,6 @@ macro_rules! node_structure {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_node_structure_macro() {
         let root = node_structure!(0, [(1, []), (2, [(3, []),])]);

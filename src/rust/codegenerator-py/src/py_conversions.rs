@@ -37,7 +37,7 @@ use codegenerator::ir::experiment::SectionInfo;
 use codegenerator::ir::experiment::SweepCommand;
 use codegenerator::ir::experiment::{AcquisitionType, Handle, PulseParametersId, UserRegister};
 use codegenerator::node::Node;
-use codegenerator::tinysample::length_to_samples;
+use codegenerator::utils::length_to_samples;
 
 use crate::error::Error;
 use crate::pulse_parameters::{PulseParameters, create_pulse_parameters};
@@ -130,7 +130,7 @@ fn py_to_nodekind(ob: &Bound<PyAny>, dedup: &mut Deduplicator) -> Result<ir::Nod
     match ob
         .getattr(intern!(py, "__class__"))?
         .getattr(intern!(py, "__name__"))?
-        .downcast::<PyString>()?
+        .cast::<PyString>()?
         .to_cow()?
         .as_ref()
     {
@@ -218,7 +218,7 @@ fn signals_set_to_signals(
         .try_iter()?
         .try_for_each(|item| -> Result<(), PyErr> {
             let item = item?;
-            let sig_ref: Cow<'_, str> = item.downcast::<PyString>()?.to_cow()?;
+            let sig_ref: Cow<'_, str> = item.cast::<PyString>()?.to_cow()?;
             let out = dedup
                 .get_signal(sig_ref.as_ref())
                 .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", sig_ref.as_ref()));
@@ -341,14 +341,8 @@ fn extract_reset_oscillator_phase(
 ) -> Result<ir::PhaseReset, PyErr> {
     // ir.PhaseResetIR
     let py = ob.py();
-    let reset_sw_oscillators = ob
-        .getattr(intern!(py, "reset_sw_oscillators"))?
-        .extract::<bool>()?;
     let signals = signals_set_to_signals(&ob.getattr(intern!(py, "signals"))?, dedup)?;
-    let out = ir::PhaseReset {
-        reset_sw_oscillators,
-        signals,
-    };
+    let out = ir::PhaseReset { signals };
     Ok(out)
 }
 
@@ -360,7 +354,7 @@ fn extract_pulse(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::
     let py_signal = py_section_signal_pulse.getattr(intern!(py, "signal"))?;
     let signal_uid = py_signal.getattr(intern!(py, "uid"))?;
     let signal = dedup
-        .get_signal(signal_uid.downcast::<PyString>()?.to_cow()?.as_ref())
+        .get_signal(signal_uid.cast::<PyString>()?.to_cow()?.as_ref())
         .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", &signal_uid));
     // TODO: PulseDef should be taken via deduplicator
     let py_pulse_def =
@@ -379,8 +373,8 @@ fn extract_pulse(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::
     // Index pulse parameters
     let pulse_pulse_params = ob.getattr(intern!(py, "pulse_pulse_params"))?;
     let play_pulse_params = ob.getattr(intern!(py, "play_pulse_params"))?;
-    let pulse_parameters = pulse_pulse_params.downcast::<PyDict>().ok();
-    let play_parameters = play_pulse_params.downcast::<PyDict>().ok();
+    let pulse_parameters = pulse_pulse_params.cast::<PyDict>().ok();
+    let play_parameters = play_pulse_params.cast::<PyDict>().ok();
     let id_pulse_params = dedup.register_pulse_parameters(py, pulse_parameters, play_parameters)?;
 
     let amp_param_name = ob
@@ -422,7 +416,7 @@ fn extract_acquire_pulse(
         .extract::<i64>()?;
     let signal_uid = py_signal.getattr(intern!(py, "uid"))?;
     let signal = dedup
-        .get_signal(signal_uid.downcast::<PyString>()?.to_cow()?.as_ref())
+        .get_signal(signal_uid.cast::<PyString>()?.to_cow()?.as_ref())
         .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", &signal_uid));
 
     let pulse_def = if let Some(pulse_def_py) =
@@ -436,8 +430,8 @@ fn extract_acquire_pulse(
     // Index pulse parameters
     let pulse_pulse_params = ob.getattr(intern!(py, "pulse_pulse_params"))?;
     let play_pulse_params = ob.getattr(intern!(py, "play_pulse_params"))?;
-    let pulse_parameters = pulse_pulse_params.downcast::<PyDict>().ok();
-    let play_parameters = play_pulse_params.downcast::<PyDict>().ok();
+    let pulse_parameters = pulse_pulse_params.cast::<PyDict>().ok();
+    let play_parameters = play_pulse_params.cast::<PyDict>().ok();
     let id_pulse_params = dedup.register_pulse_parameters(py, pulse_parameters, play_parameters)?;
 
     let acq_params = py_section_signal_pulse.getattr(intern!(py, "acquire_params"))?;
@@ -464,12 +458,12 @@ fn extract_acquire_pulse_group(
     // Acquire group can have multiple pulses, which share identical parameters,
     // except for pulse parameters ID.
     let pulses_bound = ob.getattr(intern!(py, "pulses"))?;
-    let pulses_py = pulses_bound.downcast::<PyList>()?;
+    let pulses_py = pulses_bound.cast::<PyList>()?;
     let py_section_signal_pulse_base = pulses_py.get_item(0)?;
     let py_signal = py_section_signal_pulse_base.getattr(intern!(py, "signal"))?;
     let signal_uid = py_signal.getattr(intern!(py, "uid"))?;
     let signal = dedup
-        .get_signal(signal_uid.downcast::<PyString>()?.to_cow()?.as_ref())
+        .get_signal(signal_uid.cast::<PyString>()?.to_cow()?.as_ref())
         .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", &signal_uid));
 
     // Single acquire group can consist of multiple individual pulses
@@ -492,8 +486,8 @@ fn extract_acquire_pulse_group(
     {
         let pulse_parameters_py = pulse?;
         let play_parameters_py = play?;
-        let pulse = pulse_parameters_py.downcast::<PyDict>().ok();
-        let play = play_parameters_py.downcast::<PyDict>().ok();
+        let pulse = pulse_parameters_py.cast::<PyDict>().ok();
+        let play = play_parameters_py.cast::<PyDict>().ok();
         let parameters_id = dedup.register_pulse_parameters(py, pulse, play)?;
         id_pulse_params.push(parameters_id);
     }
@@ -521,7 +515,7 @@ fn extract_maybe_complex(ob: &Bound<'_, PyAny>) -> Result<Option<Complex<f64>>, 
         .import(intern!(py, "builtins"))?
         .getattr(intern!(py, "complex"))?;
     let value = complex_func.call1((ob.into_pyobject(py)?,))?;
-    let py_complex = value.downcast::<PyComplex>()?;
+    let py_complex = value.cast::<PyComplex>()?;
     let out = Complex {
         re: py_complex.real(),
         im: py_complex.imag(),
@@ -749,7 +743,7 @@ pub fn extract_mixer_type(ob: &Bound<'_, PyAny>) -> Result<Option<cjob::MixerTyp
     }
     let py = ob.py();
     let py_name = ob.getattr(intern!(py, "name"))?;
-    let kind = match py_name.downcast::<PyString>()?.to_cow()?.as_ref() {
+    let kind = match py_name.cast::<PyString>()?.to_cow()?.as_ref() {
         "IQ" => cjob::MixerType::IQ,
         "UHFQA_ENVELOPE" => cjob::MixerType::UhfqaEnvelope,
         _ => {
@@ -764,7 +758,7 @@ fn extract_awg_signal(ob: &Bound<'_, PyAny>, sampling_rate: f64) -> Result<Signa
     let py = ob.py();
     let signal_type = match ob
         .getattr(intern!(py, "signal_type"))?
-        .downcast_into::<PyString>()?
+        .cast_into::<PyString>()?
         .to_cow()?
         .as_ref()
     {
@@ -801,7 +795,7 @@ pub fn extract_device_kind(ob: &Bound<'_, PyAny>) -> Result<cjob::DeviceKind, Py
     // device_type.DeviceType
     let py = ob.py();
     let py_name = ob.getattr(intern!(py, "name"))?;
-    let kind = match py_name.downcast::<PyString>()?.to_cow()?.as_ref() {
+    let kind = match py_name.cast::<PyString>()?.to_cow()?.as_ref() {
         "HDAWG" => cjob::DeviceKind::HDAWG,
         "SHFQA" => cjob::DeviceKind::SHFQA,
         "SHFSG" => cjob::DeviceKind::SHFSG,
@@ -835,7 +829,7 @@ fn extract_awg_kind(ob: &Bound<'_, PyAny>) -> Result<cjob::AwgKind, PyErr> {
     let py = ob.py();
     let out = match ob
         .getattr(intern!(py, "name"))?
-        .downcast_into::<PyString>()?
+        .cast_into::<PyString>()?
         .to_cow()?
         .as_ref()
     {
@@ -861,7 +855,7 @@ fn extract_trigger_mode(ob: &Bound<'_, PyAny>) -> Result<cjob::TriggerMode, PyEr
     // compilation_job.TriggerMode
     let py = ob.py();
     let py_name = ob.getattr(intern!(py, "name"))?;
-    let mode = match py_name.downcast::<PyString>()?.to_cow()?.as_ref() {
+    let mode = match py_name.cast::<PyString>()?.to_cow()?.as_ref() {
         "NONE" => cjob::TriggerMode::ZSync,
         "DIO_TRIGGER" => cjob::TriggerMode::DioTrigger,
         "DIO_WAIT" => cjob::TriggerMode::DioWait,
@@ -965,7 +959,7 @@ fn extract_parameter(
 pub fn extract_acquisition_type(ob: &Bound<'_, PyAny>) -> Result<AcquisitionType, PyErr> {
     // compilation_job.AcquisitionType
     let value = ob.getattr(intern!(ob.py(), "value"))?;
-    match value.downcast::<PyString>()?.to_cow()?.as_ref() {
+    match value.cast::<PyString>()?.to_cow()?.as_ref() {
         "integration_trigger" => Ok(AcquisitionType::INTEGRATION),
         "spectroscopy" => Ok(AcquisitionType::SPECTROSCOPY_IQ),
         "spectroscopy_psd" => Ok(AcquisitionType::SPECTROSCOPY_PSD),
@@ -1005,12 +999,12 @@ pub fn extract_feedback_register_layout(
     for (k, v) in ob.iter() {
         let k = if let Ok(device) = k.getattr(intern!(k.py(), "device")) {
             FeedbackRegister::Local {
-                device: device.downcast_into::<PyString>()?.to_cow()?.into_owned(),
+                device: device.extract::<&str>()?.into(),
             }
         } else if let Ok(source) = k.getattr(intern!(k.py(), "source")) {
             let device = source.getattr(intern!(k.py(), "device_id"))?;
             let awg_key = AwgKey::new(
-                Arc::new(device.downcast_into::<PyString>()?.to_cow()?.into_owned()),
+                device.extract::<&str>()?.into(),
                 source
                     .getattr(intern!(k.py(), "awg_id"))?
                     .extract::<u16>()?,
@@ -1022,8 +1016,8 @@ pub fn extract_feedback_register_layout(
             );
         };
         let mut register_list_out = Vec::new();
-        for item in v.downcast::<PyList>()?.iter() {
-            let item = item.downcast::<PyTuple>()?;
+        for item in v.cast::<PyList>()?.iter() {
+            let item = item.cast::<PyTuple>()?;
             if item.len() != 2 {
                 return Err(PyValueError::new_err(format!(
                     "Internal error: Expected tuple of length 2, got: {}",

@@ -14,8 +14,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from laboneq.workflow.timestamps import utc_now
 from laboneq.workflow.logbook import Logbook, LogbookStore, format_time
+from laboneq.workflow.timestamps import utc_now
 
 if TYPE_CHECKING:
     from datetime import datetime

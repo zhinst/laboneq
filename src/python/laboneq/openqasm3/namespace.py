@@ -7,6 +7,7 @@ import abc
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable
+
 from laboneq.dsl.experiment.pulse import Pulse, PulseSampled
 from laboneq.openqasm3.openqasm_error import OpenQasmException
 

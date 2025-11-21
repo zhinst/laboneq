@@ -3,20 +3,18 @@
 
 from __future__ import annotations
 
-from laboneq.dsl.quantum.quantum_operations import QuantumOperations
-from laboneq.openqasm3.openqasm_error import OpenQasmException
-import openqasm3.visitor
-from openqasm3.ast import QASMNode
-
 import copy
 import math
 import operator
 import re
-from typing import Any, Callable, Union, TYPE_CHECKING
-from laboneq.openqasm3 import namespace
+from typing import TYPE_CHECKING, Any, Callable, Union
+
+import openqasm3.visitor
 from openpulse import ast
+from openqasm3.ast import QASMNode
+
 from laboneq._utils import id_generator
-from laboneq.dsl import LinearSweepParameter, Parameter, SweepParameter
+from laboneq.dsl import LinearSweepParameter, Parameter, SweepParameter, quantum
 from laboneq.dsl.calibration import Calibration, Oscillator, SignalCalibration
 from laboneq.dsl.enums import (
     AcquisitionType,
@@ -25,6 +23,8 @@ from laboneq.dsl.enums import (
 )
 from laboneq.dsl.experiment import Section, Sweep
 from laboneq.dsl.quantum.quantum_element import QuantumElement
+from laboneq.dsl.quantum.quantum_operations import QuantumOperations
+from laboneq.openqasm3 import namespace
 from laboneq.openqasm3.expression import eval_expression, eval_lvalue
 from laboneq.openqasm3.namespace import (
     Array,
@@ -34,13 +34,12 @@ from laboneq.openqasm3.namespace import (
     QubitRef,
     Waveform,
 )
+from laboneq.openqasm3.openqasm_error import OpenQasmException
 from laboneq.openqasm3.results import (
     ExternResult,
     MeasurementResult,
     TranspileResult,
 )
-from laboneq.dsl import quantum
-
 
 if TYPE_CHECKING:
     from laboneq.dsl.experiment.pulse import Pulse

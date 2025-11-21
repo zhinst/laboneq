@@ -7,6 +7,6 @@ from .utilities.exception import LabOneQControllerException
 
 __all__ = [
     "Controller",
-    "ToolkitDevices",
     "LabOneQControllerException",
+    "ToolkitDevices",
 ]

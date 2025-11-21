@@ -14,11 +14,11 @@ from laboneq.data.experiment_description import (
     Experiment,
     Operation,
     PlayPulse,
+    PrngLoop,
     Reserve,
     Section,
     SetNode,
     Sweep,
-    PrngLoop,
 )
 from laboneq.data.parameter import LinearSweepParameter, SweepParameter
 from laboneq.data.prng import PRNGSample

@@ -8,11 +8,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 from laboneq.workflow.timestamps import utc_now
-from laboneq.workflow import executor
 
 if TYPE_CHECKING:
-    from laboneq.workflow.typing import SimpleDict
     from laboneq.workflow.result import TaskResult, WorkflowResult
+    from laboneq.workflow.typing import SimpleDict
 
 
 class Artifact:
@@ -222,71 +221,3 @@ class ExecutionRecorderManager(ExecutionRecorder):
         """
         for recorder in self._recorders:
             recorder.save(artifact)
-
-
-def comment(message: str) -> None:
-    """Add a comment to the current workflow logbook.
-
-    Arguments:
-        message:
-            The comment to record.
-    """
-    ctx = executor.ExecutorStateContext.get_active()
-    if ctx is not None:
-        ctx.recorder.comment(message)
-    else:
-        raise RuntimeError(
-            "Workflow comments are currently not supported outside of tasks.",
-        )
-
-
-def log(level: int, message: str, *args: object) -> None:
-    """Add a log message to the current workflow logbook.
-
-    Arguments:
-        message:
-            The log message to record.
-        level:
-            The logging level of the message (optional). See the `logging`
-            module for the list of default levels.
-        args:
-            Additional arguments to format the message.
-    """
-    ctx = executor.ExecutorStateContext.get_active()
-    if ctx is not None:
-        ctx.recorder.log(level, message, *args)
-    else:
-        raise RuntimeError(
-            "Workflow log messages are currently not supported outside of tasks.",
-        )
-
-
-def save_artifact(
-    name: str,
-    artifact: object,
-    *,
-    metadata: SimpleDict | None = None,
-    options: SimpleDict | None = None,
-) -> None:
-    """Save an artifact to the current workflow logbook.
-
-    Arguments:
-        name:
-            A name hint for the artifact. Logbooks may use this to generate
-            meaningful filenames for artifacts when they are saved to disk,
-            for example.
-        artifact:
-            The object to be recorded.
-        metadata:
-            Additional metadata for the artifact (optional).
-        options:
-            Serialization options for the artifact (optional).
-    """
-    ctx = executor.ExecutorStateContext.get_active()
-    if ctx is not None:
-        artifact = Artifact(name, artifact, metadata=metadata, options=options)
-        ctx.recorder.save(artifact)
-    else:
-        raise RuntimeError(
-            "Workflow artifact saving is currently not supported outside of tasks.",
-        )

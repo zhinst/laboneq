@@ -4,13 +4,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
 import logging
-from typing import TYPE_CHECKING, Any, NoReturn
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, NoReturn
 
-from laboneq.controller.devices.channel_base import ChannelBase
-from laboneq.controller.devices.uhfqa_awg import UHFQAAwg
-from laboneq.controller.utilities.for_each import for_each
 import numpy as np
 
 from laboneq.controller.attribute_value_tracker import (
@@ -18,18 +15,20 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttributesView,
 )
 from laboneq.controller.devices.async_support import _gather
+from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import (
     DeviceBase,
-    delay_to_rounded_samples,
     RawReadoutData,
+    delay_to_rounded_samples,
 )
 from laboneq.controller.devices.node_control import (
     Command,
+    NodeControlBase,
     Response,
     Setting,
-    NodeControlBase,
 )
+from laboneq.controller.devices.uhfqa_awg import UHFQAAwg
 from laboneq.controller.recipe_processor import (
     RecipeData,
     RtExecutionInfo,
@@ -37,6 +36,7 @@ from laboneq.controller.recipe_processor import (
     get_initialization_by_device_uid,
 )
 from laboneq.controller.utilities.exception import LabOneQControllerException
+from laboneq.controller.utilities.for_each import for_each
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import IO
@@ -69,21 +69,20 @@ class DeviceUHFQA(DeviceBase):
         self._integrators = 10
         self._use_internal_clock = True
 
-    def all_channels(self) -> Iterator[ChannelBase]:
-        """Iterable over all awg cores of the device."""
+    def all_cores(self) -> Iterator[CoreBase]:
         return iter(self._awg_cores)
 
-    def allocated_channels(self, recipe_data: RecipeData) -> Iterator[ChannelBase]:
+    def allocated_cores(self, recipe_data: RecipeData) -> Iterator[CoreBase]:
         for ch in recipe_data.allocated_awgs(self.uid):
             yield self._awg_cores[ch]
 
     def _process_dev_opts(self):
         self._awg_cores = [
             UHFQAAwg(
-                self._api,
-                self._subscriber,
-                self.uid,
-                self.serial,
+                api=self._api,
+                subscriber=self._subscriber,
+                device_uid=self.uid,
+                serial=self.serial,
                 repr_base=self.dev_repr,
             )
         ]
@@ -254,32 +253,10 @@ class DeviceUHFQA(DeviceBase):
             nc.add(f"awgs/{awg_index}/enable", 1, cache=False)
         await self.set_async(nc)
 
-    def conditions_for_execution_ready(
-        self, recipe_data: RecipeData
-    ) -> dict[str, tuple[Any, str]]:
-        conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in recipe_data.allocated_awgs(self.uid):
-            conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
-                1,
-                f"AWG {awg_index} didn't start.",
-            )
-        return conditions
-
-    def conditions_for_execution_done(
-        self, recipe_data: RecipeData
-    ) -> dict[str, tuple[Any, str]]:
-        conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in recipe_data.allocated_awgs(self.uid):
-            conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
-                0,
-                f"AWG {awg_index} didn't stop. Missing start trigger? Check DIO.",
-            )
-        return conditions
-
     async def apply_initialization(self, recipe_data: RecipeData):
         uhfqa_recipe_data = recipe_data.device_settings[self.uid].uhfqacore
         await for_each(
-            self.all_channels(),
+            self.all_cores(),
             UHFQAAwg.apply_initialization,
             uhfqa_recipe_data=uhfqa_recipe_data,
         )
@@ -316,123 +293,6 @@ class DeviceUHFQA(DeviceBase):
         # To make the phase correct on the UHFQA (q leading i channel by 90 degrees)
         # we need to flip the sign of the oscillator frequency
         return freq * -1.0
-
-    def _configure_standard_mode_nodes(
-        self,
-        acquisition_type: AcquisitionType,
-        device_uid: str,
-        recipe_data: RecipeData,
-    ) -> NodeCollector:
-        _logger.debug("%s: Setting measurement mode to 'Standard'.", self.dev_repr)
-
-        nc = NodeCollector(base=f"/{self.serial}/")
-
-        nc.add("qas/0/integration/mode", 0)
-        for integrator_allocation in recipe_data.recipe.integrator_allocations:
-            if integrator_allocation.device_id != device_uid:
-                continue
-
-            # TODO(2K): RAW was treated same as integration, as once was considered for use in
-            # parallel, but actually this is not the case, and integration settings are not needed
-            # for RAW.
-            if acquisition_type in [AcquisitionType.INTEGRATION, AcquisitionType.RAW]:
-                if len(integrator_allocation.channels) != 2:
-                    raise LabOneQControllerException(
-                        f"{self.dev_repr}: Internal error - expected 2 integrators for signal "
-                        f"'{integrator_allocation.signal_id}' in integration mode, "
-                        f"got {len(integrator_allocation.channels)}"
-                    )
-
-                # 0: 1 -> Real, 2 -> Imag
-                # 1: 2 -> Real, 1 -> Imag
-                inputs_mapping = [0, 1]
-                rotations = [1 + 1j, 1 - 1j]
-            else:
-                if len(integrator_allocation.channels) != 1:
-                    raise LabOneQControllerException(
-                        f"{self.dev_repr}: Internal error - expected 1 integrator for signal "
-                        f"'{integrator_allocation.signal_id}', "
-                        f"got {len(integrator_allocation.channels)}"
-                    )
-                # 0: 1 -> Real, 2 -> Imag
-                inputs_mapping = [0]
-                rotations = [1 + 1j]
-
-            for integrator, integration_unit_index in enumerate(
-                integrator_allocation.channels
-            ):
-                nc.add(
-                    f"qas/0/integration/sources/{integration_unit_index}",
-                    inputs_mapping[integrator],
-                )
-                nc.add(
-                    f"qas/0/rotations/{integration_unit_index}", rotations[integrator]
-                )
-                if acquisition_type in [
-                    AcquisitionType.INTEGRATION,
-                    AcquisitionType.DISCRIMINATION,
-                ]:
-                    nc.add(
-                        f"qas/0/thresholds/{integration_unit_index}/correlation/enable",
-                        0,
-                    )
-                    nc.add(
-                        f"qas/0/thresholds/{integration_unit_index}/level",
-                        integrator_allocation.thresholds[0] or 0.0,
-                    )
-
-        return nc
-
-    def _configure_spectroscopy_mode_nodes(self) -> NodeCollector:
-        _logger.debug("%s: Setting measurement mode to 'Spectroscopy'.", self.dev_repr)
-
-        nc = NodeCollector(base=f"/{self.serial}/")
-        nc.add("qas/0/integration/mode", 1)
-        nc.add("qas/0/integration/sources/0", 1)
-        nc.add("qas/0/integration/sources/1", 0)
-
-        # The rotation coefficients in spectroscopy mode have to take into account that I and Q are
-        # swapped between in- and outputs, i.e. the AWG outputs are I = AWG_wave_I * cos,
-        # Q = AWG_wave_Q * sin, while the weights are I = sin and Q = cos. For more details,
-        # see "Complex multiplication in UHFQA":
-        # https://zhinst.atlassian.net/wiki/spaces/~andreac/pages/787742991/Complex+multiplication+in+UHFQA
-        # https://oldwiki.zhinst.com/wiki/display/~andreac/Complex+multiplication+in+UHFQA)
-        nc.add("qas/0/rotations/0", 1 - 1j)
-        nc.add("qas/0/rotations/1", -1 - 1j)
-        return nc
-
-    async def set_before_awg_upload(self, recipe_data: RecipeData):
-        acquisition_type = recipe_data.rt_execution_info.acquisition_type
-        if acquisition_type == AcquisitionType.SPECTROSCOPY_IQ:
-            nc = self._configure_spectroscopy_mode_nodes()
-        else:
-            nc = self._configure_standard_mode_nodes(
-                acquisition_type, self.uid, recipe_data
-            )
-        await self.set_async(nc)
-
-    async def set_after_awg_upload(self, recipe_data: RecipeData):
-        nc = NodeCollector(base=f"/{self.serial}/")
-        initialization = recipe_data.get_initialization(self.uid)
-        inputs = initialization.inputs
-        if len(initialization.measurements) > 0:
-            [measurement] = initialization.measurements
-
-            _logger.debug(
-                "%s: Setting measurement sample length to %d",
-                self.dev_repr,
-                measurement.length,
-            )
-            nc.add("qas/0/integration/length", measurement.length)
-
-            nc.add("qas/0/integration/trigger/channel", 7)
-
-        for dev_input in inputs or []:
-            if dev_input.range is None:
-                continue
-            nc.add(f"sigins/{dev_input.channel}/range", dev_input.range)
-
-        await self.set_async(nc)
 
     async def configure_trigger(self, recipe_data: RecipeData):
         device_recipe_data = recipe_data.device_settings[self.uid]

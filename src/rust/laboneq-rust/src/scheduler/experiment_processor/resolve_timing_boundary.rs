@@ -57,7 +57,6 @@ fn validate_real_time_boundary_nodes(node: &ExperimentNode) -> Result<()> {
 mod tests {
     use super::*;
     use laboneq_common::named_id::NamedIdStore;
-    use laboneq_scheduler::experiment::node::Node;
     use laboneq_scheduler::experiment::types::{
         AcquisitionType, AveragingLoop, AveragingMode, Operation, RepetitionMode, SectionAlignment,
         SectionUid,

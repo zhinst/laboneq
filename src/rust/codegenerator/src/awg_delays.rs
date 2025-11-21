@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::ir::Samples;
 use crate::ir::compilation_job::{AwgCore, AwgKind, DeviceKind, SignalKind};
-use crate::tinysample::samples_to_grid;
+use crate::utils::samples_to_grid;
 use crate::{Error, Result};
 
 #[derive(Default)]

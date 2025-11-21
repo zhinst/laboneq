@@ -115,6 +115,14 @@ fn compress_hashes<T: CostFunction>(
     )
 }
 
+// Idea of the compression algorithm:
+//
+// Find possible compression 'words' by looking for equal tokens (the first token has to agree)
+// foreach input_token:
+//   if compression is possbly a repeating word
+//     compute max repeat of this word as current best
+//     check until the end of the current best if there is an overlapping even better possibility
+//     when reachin the end of the current best, compress away
 fn compress_hashes_recursive<T: CostFunction>(
     hashes: Vec<HashOrRun>,
     cost_function: &T,
@@ -152,8 +160,9 @@ fn compress_hashes_recursive<T: CostFunction>(
         for (index, offset) in offsets.iter().enumerate() {
             match best_run_end {
                 None => {}
-                Some(end) if index > end => {
-                    // the remainder of the list will be handled in the next iteration
+                Some(end) if index >= end => {
+                    // We have found no overlapping better run. Therefore let's compress away the current best_run now and remove it from hashes.
+                    // The remainder of the list will be handled in the next iteration
                     // of the outer loop
                     break;
                 }
@@ -180,7 +189,8 @@ fn compress_hashes_recursive<T: CostFunction>(
             }
             let mut run_length = 1;
             while index + (run_length + 1) * offset <= hashes.len()
-                && word == &hashes[index + run_length * offset..index + (run_length + 1) * offset]
+                && word
+                    == &hashes[(index + run_length * offset)..(index + (run_length + 1) * offset)]
             {
                 run_length += 1;
             }
@@ -387,7 +397,8 @@ mod tests {
     }
 
     #[test]
-    fn test_compress_hashes() {
+    fn test_compress_hashes_cost_functions() {
+        // Verifies that different cost functions lead to different compression results
         let hashes = vec![1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2];
         let compressed = compress_hashes(&hashes, &TestCostFunctionDefault {}, false);
         assert!(compressed.is_ok());
@@ -416,7 +427,11 @@ mod tests {
             }
         );
         assert_eq!(compressed[2], HashOrRun::Hash(2));
+    }
 
+    #[test]
+    fn test_compress_hashes_long_list() {
+        // Checks that repeated long list are compressed away
         let mut hashes = Vec::new();
         for _ in 0..10 {
             hashes.extend_from_slice(&[1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]);
@@ -424,7 +439,7 @@ mod tests {
         let compressed = compress_hashes(&hashes, &TestCostFunctionDefault {}, false);
         assert!(compressed.is_ok());
         let compressed = compressed.unwrap();
-        assert_eq!(compressed.len(), 10 * 3);
+        assert_eq!(compressed.len(), 10 * 3); // each slice has three runs, and there are 10 slices
         for (i, h) in compressed.iter().enumerate() {
             match h {
                 HashOrRun::Run {
@@ -440,6 +455,11 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_compress_recursion() {
+        // Verifies that the 'recurse' flag to compress_hashes() works as expected
         let mut hashes = Vec::new();
         for _ in 0..3 {
             hashes.extend_from_slice(&[1, 2, 2, 2, 2, 2]);
@@ -478,6 +498,29 @@ mod tests {
                     }
                 ]
             }
+        );
+    }
+
+    #[test]
+    fn test_compress_hashes_hbar_2384() {
+        // Demonstrates that https://zhinst.atlassian.net/browse/HBAR-2384 is fixed.
+        let hashes = vec![42, 42, 42, 42, 13, 13, 13, 13, 13];
+        let compressed = compress_hashes(&hashes, &TestCostFunctionDefault {}, false);
+        assert!(compressed.is_ok());
+        let compressed = compressed.unwrap();
+        assert_eq!(compressed.len(), 2);
+        assert_eq!(
+            compressed,
+            vec![
+                HashOrRun::Run {
+                    count: 4,
+                    statements_hashes: vec![HashOrRun::Hash(42)]
+                },
+                HashOrRun::Run {
+                    count: 5,
+                    statements_hashes: vec![HashOrRun::Hash(13)]
+                },
+            ]
         );
     }
 }

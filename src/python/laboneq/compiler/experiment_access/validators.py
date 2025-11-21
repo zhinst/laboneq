@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import typing
 
 import numpy as np
@@ -12,10 +13,7 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import ExecutionType
 from laboneq.core.types.enums.acquisition_type import is_spectroscopy
 from laboneq.data.calibration import PortMode
-from laboneq.data.compilation_job import SignalInfoType, DeviceInfoType, ParameterInfo
-
-import logging
-
+from laboneq.data.compilation_job import DeviceInfoType, ParameterInfo, SignalInfoType
 
 _logger = logging.getLogger(__name__)
 

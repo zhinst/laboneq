@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
+
 from typing import Any
+
+import numpy as np
 
 from laboneq.controller.attribute_value_tracker import DeviceAttributesView
 from laboneq.controller.devices.async_support import (
@@ -11,7 +14,7 @@ from laboneq.controller.devices.async_support import (
     ResponseWaiterAsync,
     _gather,
 )
-from laboneq.controller.devices.channel_base import ChannelBase
+from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.recipe_processor import (
     AwgConfig,
@@ -30,7 +33,6 @@ from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import IntegratorAllocation, NtStepKey
 from laboneq.data.scheduled_experiment import ArtifactsCodegen
-import numpy as np
 
 
 class QAOutput:
@@ -75,7 +77,7 @@ class QAOutput:
         await self._api.set_parallel(nc)
 
 
-class UHFQAAwg(ChannelBase):
+class UHFQAAwg(CoreBase):
     def __init__(
         self,
         api: InstrumentConnection,
@@ -84,7 +86,13 @@ class UHFQAAwg(ChannelBase):
         serial: str,
         repr_base: str,
     ):
-        super().__init__(api, subscriber, device_uid, serial, 0)
+        super().__init__(
+            api=api,
+            subscriber=subscriber,
+            device_uid=device_uid,
+            serial=serial,
+            core_index=0,
+        )
         self._node_base = f"/{serial}/"
         self._unit_repr = repr_base
         self._outputs: list[QAOutput] = [
@@ -117,7 +125,111 @@ class UHFQAAwg(ChannelBase):
             self._outputs[1].configure(uhfqa_recipe_data=uhfqa_recipe_data),
         )
 
+    def _configure_standard_mode_nodes(
+        self,
+        acquisition_type: AcquisitionType,
+        device_uid: str,
+        recipe_data: RecipeData,
+    ) -> NodeCollector:
+        nc = NodeCollector(base=f"/{self._serial}/")
+
+        nc.add("qas/0/integration/mode", 0)
+        for integrator_allocation in recipe_data.recipe.integrator_allocations:
+            if integrator_allocation.device_id != device_uid:
+                continue
+
+            # TODO(2K): RAW was treated same as integration, as once was considered for use in
+            # parallel, but actually this is not the case, and integration settings are not needed
+            # for RAW.
+            if acquisition_type in [AcquisitionType.INTEGRATION, AcquisitionType.RAW]:
+                if len(integrator_allocation.channels) != 2:
+                    raise LabOneQControllerException(
+                        f"{self._unit_repr}: Internal error - expected 2 integrators for signal "
+                        f"'{integrator_allocation.signal_id}' in integration mode, "
+                        f"got {len(integrator_allocation.channels)}"
+                    )
+
+                # 0: 1 -> Real, 2 -> Imag
+                # 1: 2 -> Real, 1 -> Imag
+                inputs_mapping = [0, 1]
+                rotations = [1 + 1j, 1 - 1j]
+            else:
+                if len(integrator_allocation.channels) != 1:
+                    raise LabOneQControllerException(
+                        f"{self._unit_repr}: Internal error - expected 1 integrator for signal "
+                        f"'{integrator_allocation.signal_id}', "
+                        f"got {len(integrator_allocation.channels)}"
+                    )
+                # 0: 1 -> Real, 2 -> Imag
+                inputs_mapping = [0]
+                rotations = [1 + 1j]
+
+            for integrator, integration_unit_index in enumerate(
+                integrator_allocation.channels
+            ):
+                nc.add(
+                    f"qas/0/integration/sources/{integration_unit_index}",
+                    inputs_mapping[integrator],
+                )
+                nc.add(
+                    f"qas/0/rotations/{integration_unit_index}", rotations[integrator]
+                )
+                if acquisition_type in [
+                    AcquisitionType.INTEGRATION,
+                    AcquisitionType.DISCRIMINATION,
+                ]:
+                    nc.add(
+                        f"qas/0/thresholds/{integration_unit_index}/correlation/enable",
+                        0,
+                    )
+                    nc.add(
+                        f"qas/0/thresholds/{integration_unit_index}/level",
+                        integrator_allocation.thresholds[0] or 0.0,
+                    )
+
+        return nc
+
+    def _configure_spectroscopy_mode_nodes(self) -> NodeCollector:
+        nc = NodeCollector(base=f"/{self._serial}/")
+        nc.add("qas/0/integration/mode", 1)
+        nc.add("qas/0/integration/sources/0", 1)
+        nc.add("qas/0/integration/sources/1", 0)
+
+        # The rotation coefficients in spectroscopy mode have to take into account that I and Q are
+        # swapped between in- and outputs, i.e. the AWG outputs are I = AWG_wave_I * cos,
+        # Q = AWG_wave_Q * sin, while the weights are I = sin and Q = cos. For more details,
+        # see "Complex multiplication in UHFQA":
+        # https://zhinst.atlassian.net/wiki/spaces/~andreac/pages/787742991/Complex+multiplication+in+UHFQA
+        # https://oldwiki.zhinst.com/wiki/display/~andreac/Complex+multiplication+in+UHFQA)
+        nc.add("qas/0/rotations/0", 1 - 1j)
+        nc.add("qas/0/rotations/1", -1 - 1j)
+        return nc
+
+    async def _set_before_awg_upload(self, recipe_data: RecipeData):
+        acquisition_type = recipe_data.rt_execution_info.acquisition_type
+        if acquisition_type == AcquisitionType.SPECTROSCOPY_IQ:
+            nc = self._configure_spectroscopy_mode_nodes()
+        else:
+            nc = self._configure_standard_mode_nodes(
+                acquisition_type, self._device_uid, recipe_data
+            )
+
+        initialization = recipe_data.get_initialization(self._device_uid)
+        inputs = initialization.inputs
+        if len(initialization.measurements) > 0:
+            [measurement] = initialization.measurements
+            nc.add("qas/0/integration/length", measurement.length)
+            nc.add("qas/0/integration/trigger/channel", 7)
+
+        for dev_input in inputs or []:
+            if dev_input.range is None:
+                continue
+            nc.add(f"sigins/{dev_input.channel}/range", dev_input.range)
+
+        await self._api.set_parallel(nc)
+
     async def load_awg_program(self, recipe_data: RecipeData, nt_step: NtStepKey):
+        await self._set_before_awg_upload(recipe_data)
         artifacts = recipe_data.get_artifacts(ArtifactsCodegen)
 
         elf_nodes = NodeCollector()
@@ -287,5 +399,25 @@ class UHFQAAwg(ChannelBase):
     def collect_warning_nodes(self) -> list[tuple[str, str]]:
         raise NotImplementedError
 
+    def conditions_for_execution_ready(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        return {
+            f"/{self._serial}/awgs/{self._core_index}/enable": (
+                1,
+                f"AWG {self._core_index} didn't start.",
+            )
+        }
+
     async def start_execution(self, with_pipeliner: bool):
         raise NotImplementedError
+
+    def conditions_for_execution_done(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        return {
+            f"/{self._serial}/awgs/{self._core_index}/enable": (
+                0,
+                f"AWG {self._core_index} didn't stop. Missing start trigger? Check DIO.",
+            )
+        }
