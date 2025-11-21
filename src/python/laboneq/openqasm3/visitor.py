@@ -74,7 +74,7 @@ def _convert_openpulse_span(base_span, relative_span, prefix_length):
     When parsing `cal` and `defcal` blocks the spans returned
     by the OpenPulse parser are relative to the block, rather
     than to the start of the OpenQASM program. This functions
-    adds the relative span to the base on.
+    adds the relative span to the base span.
 
     The prefix length specifies how many characters from the
     start of the base_span (i.e. start to the relevant statement)
