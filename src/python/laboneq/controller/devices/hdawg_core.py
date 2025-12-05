@@ -74,6 +74,15 @@ class HDOutput:
         self._has_precompensation = has_precompensation
         self._awg_core = channel // 2
         self._rel_channel = channel % 2
+        self.nodes = HDOutputNodes(
+            output_on=f"/{serial}/sigouts/{channel}/on",
+        )
+
+    async def disable_output(self, outputs: set[int], invert: bool):
+        if (self._channel in outputs) != invert:
+            await self._api.set_parallel(
+                NodeCollector.one(self.nodes.output_on, 0, cache=False)
+            )
 
     async def configure(self, awg_core_recipe_data: HDAWGRecipeData):
         ch_recipe_data = awg_core_recipe_data.outputs[self._rel_channel]
@@ -184,6 +193,7 @@ class HDAwgCoreNodes:
     awg_elf_progress: str
     awg_enable: str
     awg_ready: str
+    awg_sequencer_status: str
     awg_command_table: str
     osc_freq: list[str]
     busy: str
@@ -222,6 +232,7 @@ class HDAwgCore(CoreBase):
             awg_elf_progress=f"{self._node_base}/elf/progress",
             awg_enable=f"{self._node_base}/enable",
             awg_ready=f"{self._node_base}/ready",
+            awg_sequencer_status=f"{self._node_base}/sequencer/status",
             awg_command_table=f"{self._node_base}/commandtable",
             osc_freq=[f"{self._node_base}/oscs/{i}/freq" for i in range(8)],
             busy=f"{self._node_base}/busy",
@@ -243,11 +254,13 @@ class HDAwgCore(CoreBase):
     def pipeliner(self) -> AwgPipeliner:
         return self._pipeliner
 
-    def _disable_output(self) -> NodeCollector:
-        return NodeCollector()
-
     def allocate_resources(self):
         self._pipeliner._reload_tracker.reset()
+
+    async def disable_output(self, outputs: set[int], invert: bool):
+        await _gather(
+            *[output.disable_output(outputs, invert) for output in self._outputs]
+        )
 
     async def apply_initialization(self, device_recipe_data: DeviceRecipeData):
         awg_core_recipe_data = device_recipe_data.hdawgcores.get(self._core_index)
@@ -410,8 +423,8 @@ class HDAwgCore(CoreBase):
         if with_pipeliner:
             return self._pipeliner.conditions_for_execution_ready()
         return {
-            f"/{self._serial}/awgs/{self._core_index}/enable": (
-                1,
+            self.nodes.awg_sequencer_status: (
+                4,
                 f"AWG {self._core_index} didn't start.",
             )
         }
@@ -428,13 +441,13 @@ class HDAwgCore(CoreBase):
             )
         if self._is_standalone:
             return {
-                f"/{self._serial}/awgs/{self._core_index}/enable": (
+                self.nodes.awg_enable: (
                     [1, 0],
                     f"AWG {self._core_index} failed to transition to exec and back to stop.",
                 )
             }
         return {
-            f"/{self._serial}/awgs/{self._core_index}/enable": (
+            self.nodes.awg_enable: (
                 0,
                 f"AWG {self._core_index} didn't stop. Missing start trigger? Check ZSync.",
             )

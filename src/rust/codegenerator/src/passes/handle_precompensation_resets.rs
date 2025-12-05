@@ -8,7 +8,7 @@ use std::collections::HashSet;
 const PRECOMP_RESET_LENGTH: i64 = 32;
 
 /// Transform precompensation reset nodes from IR to AWG commands
-pub fn handle_precompensation_resets(
+pub(crate) fn handle_precompensation_resets(
     node: &mut ir::IrNode,
     cut_points: &mut HashSet<ir::Samples>,
 ) -> Result<()> {

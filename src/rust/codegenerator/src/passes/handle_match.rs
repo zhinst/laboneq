@@ -28,6 +28,6 @@ fn handle_match(node: &IrNode, state: Option<u16>) -> Result<()> {
     Ok(())
 }
 
-pub fn handle_match_nodes(node: &IrNode) -> Result<()> {
+pub(crate) fn handle_match_nodes(node: &IrNode) -> Result<()> {
     handle_match(node, None)
 }

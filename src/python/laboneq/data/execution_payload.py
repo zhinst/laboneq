@@ -97,9 +97,5 @@ class TargetSetup:
 
 @dataclass
 class ExecutionPayload:
-    uid: str = None
     target_setup: TargetSetup = None
-    compiled_experiment_hash: str = None
-    experiment_hash: str = None
-    device_setup_hash: str = None
     scheduled_experiment: ScheduledExperiment | None = None

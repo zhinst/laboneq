@@ -702,11 +702,7 @@ def experiment(
     *,
     uid: str | None = None,
     name: str | None = None,
-    signals: dict[str, ExperimentSignal]
-    | list[ExperimentSignal]
-    | list[str]
-    | list[ExperimentSignal | str]
-    | None = None,
+    signals: dict[str, ExperimentSignal] | list[ExperimentSignal | str] | None = None,
 ) -> ExperimentContextManager:
     """Returns an experiment context manager.
 
@@ -718,7 +714,7 @@ def experiment(
     experiment.
 
     The experiment context manager may also be used as a decorator. The function being decorated will be
-    executed withint the experiment context and the resulting experiment will be returned.
+    executed within the experiment context and the resulting experiment will be returned.
 
     Arguments:
         uid:

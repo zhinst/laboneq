@@ -28,14 +28,14 @@ fn ceil(value: i64, grid: u16) -> Samples {
 /// * duration_min: Minimum duration for mute to be fully engaged.
 ///   Therefore the minimum mute duration is: engage time + `duration_min` + disengage time
 ///
-pub struct OutputMute {
+pub(super) struct OutputMute {
     pub samples_min: Samples,
     pub delay_engage: Samples,
     pub delay_disengage: Samples,
 }
 
 impl OutputMute {
-    pub fn new(device_traits: &'static DeviceTraits, duration_min: f64) -> Result<Self> {
+    pub(super) fn new(device_traits: &'static DeviceTraits, duration_min: f64) -> Result<Self> {
         if !device_traits.supports_output_mute {
             return Err(anyhow!(
                 "Unsupported device type: {0}. Supported types are: SHFQA, SHFSG and SHFQC.",

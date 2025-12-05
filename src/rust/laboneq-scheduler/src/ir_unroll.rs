@@ -16,7 +16,7 @@ use crate::{ParameterStore, ScheduledNode};
 ///
 /// - All the loops will be unrolled according to their iteration count
 /// - [IrKind::Match] and [IrKind::Case] acting on sweep parameters will be resolved to [IrKind::Section]s
-pub fn unroll_loops(
+pub(crate) fn unroll_loops(
     node: &mut ScheduledNode,
     parameters: &HashMap<ParameterUid, SweepParameter>,
     nt_parameters: &ParameterStore,
@@ -28,26 +28,27 @@ pub fn unroll_loops(
 fn unroll_loops_impl(node: &mut ScheduledNode, resolver: &ParameterResolver) -> Result<()> {
     match &node.kind {
         IrKind::Loop(obj) => {
-            let mut resolver = resolver.child_scope();
+            let mut resolver = resolver.child_scope(&obj.parameters)?;
             if obj.parameters.is_empty() || obj.iterations == node.children.len() {
                 // Loop is already unrolled
                 for (iteration, child) in node.children.iter_mut().enumerate() {
                     for param in obj.parameters.iter() {
-                        resolver.set_iteration(*param, iteration);
+                        resolver.set_iteration(*param, iteration)?;
                     }
                     unroll_loops_impl(child.node.make_mut(), &resolver)?;
                 }
                 return Ok(());
             }
-            assert!(
-                node.children.len() == 1,
+            assert_eq!(
+                node.children.len(),
+                1,
                 "Loop must have exactly one child to unroll."
             );
             let prototype = node.children.pop().unwrap();
             node.children = Vec::with_capacity(obj.iterations);
             for iteration in 0..obj.iterations {
                 for param in obj.parameters.iter() {
-                    resolver.set_iteration(*param, iteration);
+                    resolver.set_iteration(*param, iteration)?;
                 }
                 let mut proto = prototype.clone();
                 unroll_loops_impl(proto.node.make_mut(), &resolver)?;

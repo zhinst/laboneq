@@ -30,7 +30,7 @@ fn transform_phase_reset_nodes(node: &mut IrNode, cut_points: &mut HashSet<Sampl
 ///
 /// This function inserts an initial reset phase node at the start of the program
 /// and transforms all phase reset nodes in the IR tree to hardware reset nodes.
-pub fn handle_hw_phase_resets(
+pub(crate) fn handle_hw_phase_resets(
     program: &mut IrNode,
     cut_points: &mut HashSet<Samples>,
 ) -> Result<()> {

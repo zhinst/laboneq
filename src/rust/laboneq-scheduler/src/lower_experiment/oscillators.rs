@@ -14,7 +14,7 @@ use crate::schedule_info::ScheduleInfoBuilder;
 use crate::utils::ceil_to_grid;
 use crate::{ParameterStore, ScheduledNode, SignalInfo};
 
-pub fn handle_initial_oscillator_frequency<T: SignalInfo + Sized>(
+pub(super) fn handle_initial_oscillator_frequency<T: SignalInfo + Sized>(
     signals: &[&T],
     parameters: &ParameterStore,
     system_grid: TinySamples,
@@ -52,7 +52,7 @@ pub fn handle_initial_oscillator_frequency<T: SignalInfo + Sized>(
     Ok(node)
 }
 
-pub fn handle_initial_local_oscillator_frequency<T: SignalInfo + Sized>(
+pub(super) fn handle_initial_local_oscillator_frequency<T: SignalInfo + Sized>(
     signals: &[&T],
     parameters: &ParameterStore,
     system_grid: TinySamples,
@@ -94,7 +94,7 @@ pub fn handle_initial_local_oscillator_frequency<T: SignalInfo + Sized>(
 
 /// Creates IR node to set oscillator frequencies for `signals` that have their oscillator frequency
 /// controlled by one of the given `parameters`.
-pub fn handle_set_oscillator_frequency<T: SignalInfo + Sized>(
+pub(super) fn handle_set_oscillator_frequency<T: SignalInfo + Sized>(
     signals: &[&T],
     parameters: HashSet<&ParameterUid>,
     system_grid: TinySamples,

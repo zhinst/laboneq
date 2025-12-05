@@ -19,6 +19,7 @@ from laboneq.controller.devices.async_support import (
     AsyncSubscriber,
     InstrumentConnection,
     ResponseWaiterAsync,
+    _gather,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.core_base import CoreBase
@@ -36,7 +37,7 @@ from laboneq.controller.recipe_processor import (
     WaveformItem,
     Waveforms,
     get_elf,
-    get_execution_time,
+    get_readout_time,
     get_wave,
     get_weights_info,
     prepare_waves,
@@ -127,9 +128,11 @@ class QAChannelNodes:
     generator_elf_progress: str
     generator_enable: str
     generator_ready: str
+    generator_sequencer_status: str
     osc_freq: list[str]
     readout_result_wave: list[str]
     spectroscopy_result_wave: str
+    scope_result_wave: str
     busy: str
 
 
@@ -165,12 +168,15 @@ class QAChannel(CoreBase):
             generator_elf_progress=f"{self._node_base}/generator/elf/progress",
             generator_enable=f"{self._node_base}/generator/enable",
             generator_ready=f"{self._node_base}/generator/ready",
+            generator_sequencer_status=f"{self._node_base}/generator/sequencer/status",
             osc_freq=[f"{self._node_base}/oscs/{i}/freq" for i in range(6)],
             readout_result_wave=[
                 f"{self._node_base}/readout/result/data/{i}/wave"
                 for i in range(integrators)
             ],
             spectroscopy_result_wave=f"{self._node_base}/spectroscopy/result/data/wave",
+            # TODO(2K): Avoid mapping scope channels to QA channels 1:1 - separate triggering isn't possible anyway
+            scope_result_wave=f"/{self._serial}/scopes/0/channels/{core_index}/wave",
             busy=f"{self._node_base}/busy",
         )
 
@@ -178,11 +184,21 @@ class QAChannel(CoreBase):
     def pipeliner(self) -> AwgPipeliner:
         return self._pipeliner
 
-    def _disable_output(self) -> NodeCollector:
-        return NodeCollector.one(self.nodes.output_on, 0, cache=False)
+    async def disable_output(self, outputs: set[int], invert: bool):
+        if (self._core_index in outputs) != invert:
+            await self._api.set_parallel(
+                NodeCollector.one(self.nodes.output_on, 0, cache=False)
+            )
 
     def allocate_resources(self):
         self._pipeliner._reload_tracker.reset()
+
+    def subscribe_nodes(self) -> list[str]:
+        return [
+            *self.nodes.readout_result_wave,
+            self.nodes.spectroscopy_result_wave,
+            self.nodes.scope_result_wave,
+        ]
 
     async def apply_initialization(self, device_recipe_data: DeviceRecipeData):
         qa_ch_recipe_data = device_recipe_data.qachannels.get(self._core_index)
@@ -844,21 +860,14 @@ class QAChannel(CoreBase):
 
         return nc
 
-    def subscribe_nodes(self) -> NodeCollector:
-        nc = NodeCollector()
-        for path in self.nodes.readout_result_wave:
-            nc.add_path(path)
-        nc.add_path(self.nodes.spectroscopy_result_wave)
-        return nc
-
     def conditions_for_execution_ready(
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         if with_pipeliner:
             return self.pipeliner.conditions_for_execution_ready()
         return {
-            self.nodes.generator_enable: (
-                1,
+            self.nodes.generator_sequencer_status: (
+                4,
                 f"Readout pulse generator {self._core_index} didn't start.",
             )
         }
@@ -886,38 +895,41 @@ class QAChannel(CoreBase):
 
     async def get_measurement_data(
         self,
+        *,
         recipe_data: RecipeData,
-        result_indices: list[int],
         num_results: int,
-    ) -> RawReadoutData:
-        # In the async execution model, result waiting starts as soon as execution begins,
-        # so the execution time must be included when calculating the result retrieval timeout.
-        _, guarded_wait_time = get_execution_time(recipe_data)
-        # TODO(2K): set timeout based on timeout_s from connect
-        timeout_s = 5 + guarded_wait_time
+    ) -> list[RawReadoutData]:
+        # TODO(2K): adjust timeout based on timeout_s from connect
+        guarded_wait_time, max_result_wait_time = get_readout_time(recipe_data)
 
         rt_execution_info = recipe_data.rt_execution_info
         if is_spectroscopy(rt_execution_info.acquisition_type):
-            return await self._read_all_jobs_result(
-                result_path=self.nodes.spectroscopy_result_wave,
-                ch_repr=f"{self._unit_repr}:spectroscopy",
-                pipeliner_jobs=rt_execution_info.pipeliner_jobs,
-                num_results=num_results,
-                timeout_s=timeout_s,
-            )
+            timeout_s = guarded_wait_time + max_result_wait_time
+            return [
+                await self._read_all_jobs_result(
+                    result_path=self.nodes.spectroscopy_result_wave,
+                    ch_repr=f"{self._unit_repr}:spectroscopy",
+                    pipeliner_jobs=rt_execution_info.pipeliner_jobs,
+                    num_results=num_results,
+                    timeout_s=timeout_s,
+                )
+            ]
 
-        assert len(result_indices) == 1
-        integrator = result_indices[0]
-        rt_result = await self._read_all_jobs_result(
-            result_path=self.nodes.readout_result_wave[integrator],
-            ch_repr=f"{self._unit_repr}:readout{integrator}",
-            pipeliner_jobs=rt_execution_info.pipeliner_jobs,
-            num_results=num_results,
-            timeout_s=timeout_s,
+        integrators = len(self.nodes.readout_result_wave)
+        # Results transferred in sequence, so scale timeout accordingly
+        timeout_s = guarded_wait_time + max_result_wait_time * integrators
+        return await _gather(
+            *[
+                self._read_all_jobs_result(
+                    result_path=self.nodes.readout_result_wave[integrator],
+                    ch_repr=f"{self._unit_repr}:readout{integrator}",
+                    pipeliner_jobs=rt_execution_info.pipeliner_jobs,
+                    num_results=num_results,
+                    timeout_s=timeout_s,
+                )
+                for integrator in range(integrators)
+            ]
         )
-        if rt_execution_info.acquisition_type == AcquisitionType.DISCRIMINATION:
-            rt_result.vector = rt_result.vector.real
-        return rt_result
 
     async def _read_all_jobs_result(
         self,
@@ -928,7 +940,7 @@ class QAChannel(CoreBase):
         timeout_s: float,
     ) -> RawReadoutData:
         rt_result = RawReadoutData(
-            np.full(pipeliner_jobs * num_results, np.nan, dtype=np.complex128)
+            vector=np.full(pipeliner_jobs * num_results, np.nan, dtype=np.complex128)
         )
         jobs_processed: set[int] = set()
 

@@ -36,7 +36,7 @@ impl PulseParameters {
     }
 }
 
-pub fn create_pulse_parameters<'a>(
+pub(crate) fn create_pulse_parameters<'a>(
     py: Python,
     pulse_parameters: Option<&Bound<'a, PyDict>>,
     play_parameters: Option<&Bound<'a, PyDict>>,

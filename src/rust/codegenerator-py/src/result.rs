@@ -81,7 +81,7 @@ impl SampledWaveformPy {
 
 #[pyclass(name = "IntegrationWeight")]
 #[derive(Debug)]
-pub struct IntegrationWeightPy {
+pub(crate) struct IntegrationWeightPy {
     #[pyo3(get)]
     pub signals: HashSet<String>,
     #[pyo3(get)]
@@ -96,7 +96,7 @@ pub struct IntegrationWeightPy {
 
 #[pyclass(name = "SignalIntegrationInfo")]
 #[derive(Debug)]
-pub struct SignalIntegrationInfoPy {
+pub(crate) struct SignalIntegrationInfoPy {
     #[pyo3(get)]
     pub is_play: bool,
     #[pyo3(get)]

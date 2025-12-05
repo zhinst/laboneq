@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import attrs
 
+from laboneq.core.utilities.attrs_helpers import validated_field
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.data.calibration import CancellationSource
 from laboneq.dsl.parameter import Parameter
@@ -63,21 +64,29 @@ class AmplifierPump:
 
     Notes:
         If an attribute is set to `None`, the corresponding node is not set.
+
+    !!! version-changed "Changed in version 26.1.0"
+
+        The types of the attributes are now validated when an `AmplifierPump` instance is
+        created or when an attribute is set. A `TypeError` is raised if the type of the
+        supplied value is incorrect.
     """
 
     #: Unique identifier. If left blank, a new unique ID will be generated.
-    uid: str = attrs.field(factory=amplifier_pump_id_generator)
+    uid: str = validated_field(factory=amplifier_pump_id_generator)
 
-    pump_frequency: float | Parameter | None = None
-    pump_power: float | Parameter | None = None
-    pump_on: bool = True
-    pump_filter_on: bool = True
-    cancellation_on: bool = True
-    cancellation_phase: float | Parameter | None = None
-    cancellation_attenuation: float | Parameter | None = None
-    cancellation_source: CancellationSource = CancellationSource.INTERNAL
-    cancellation_source_frequency: float | None = None
-    alc_on: bool = True
-    probe_on: bool = False
-    probe_frequency: float | Parameter | None = None
-    probe_power: float | Parameter | None = None
+    pump_frequency: float | Parameter | None = validated_field(default=None)
+    pump_power: float | Parameter | None = validated_field(default=None)
+    pump_on: bool = validated_field(default=True)
+    pump_filter_on: bool = validated_field(default=True)
+    cancellation_on: bool = validated_field(default=True)
+    cancellation_phase: float | Parameter | None = validated_field(default=None)
+    cancellation_attenuation: float | Parameter | None = validated_field(default=None)
+    cancellation_source: CancellationSource = validated_field(
+        default=CancellationSource.INTERNAL
+    )
+    cancellation_source_frequency: float | None = validated_field(default=None)
+    alc_on: bool = validated_field(default=True)
+    probe_on: bool = validated_field(default=False)
+    probe_frequency: float | Parameter | None = validated_field(default=None)
+    probe_power: float | Parameter | None = validated_field(default=None)

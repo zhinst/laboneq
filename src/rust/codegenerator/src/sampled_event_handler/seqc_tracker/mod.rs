@@ -1,13 +1,13 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-pub mod awg;
-pub mod compressor;
+pub(crate) mod awg;
+pub(crate) mod compressor;
 mod output_mute;
-pub mod prng_tracker;
-pub mod seqc_generator;
-pub mod seqc_statements;
-pub mod tracker;
-pub mod wave_index_tracker;
+pub(crate) mod prng_tracker;
+pub(crate) mod seqc_generator;
+pub(crate) mod seqc_statements;
+pub(crate) mod tracker;
+pub(crate) mod wave_index_tracker;
 
-pub type FeedbackRegisterIndex = u32;
+pub(crate) type FeedbackRegisterIndex = u32;

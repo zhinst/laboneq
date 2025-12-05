@@ -142,7 +142,7 @@ impl AmplifierPumpPy {
 ///
 /// The used parameters within the Signal must be register in the `ExperimentBuilder` as they might use
 /// parameters that are not yet known to the experiment (e.g. swept calibration fields, derived parameters).
-pub fn py_signal_to_signal(
+pub(super) fn py_signal_to_signal(
     py: Python,
     signal_py: &SignalPy,
     builder: &mut ExperimentBuilder,
@@ -251,7 +251,7 @@ fn extract_value_or_parameter<'py, T: FromPyObjectOwned<'py, Error = PyErr>>(
     Ok(Some(value))
 }
 
-pub fn extract_amplifier_pump(
+pub(super) fn extract_amplifier_pump(
     py: Python,
     signal_py: &SignalPy,
     builder: &mut ExperimentBuilder,

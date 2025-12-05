@@ -9,7 +9,7 @@ use crate::schedule_info::ScheduleInfoBuilder;
 use crate::{ParameterStore, ScheduledNode, SignalInfo};
 use laboneq_units::tinysample::TinySamples;
 
-pub fn handle_initial_voltage_offset<T: SignalInfo + Sized>(
+pub(super) fn handle_initial_voltage_offset<T: SignalInfo + Sized>(
     signals: &[&T],
     parameters: &ParameterStore,
     system_grid: TinySamples,

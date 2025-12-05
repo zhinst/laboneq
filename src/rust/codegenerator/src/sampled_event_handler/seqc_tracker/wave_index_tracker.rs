@@ -12,7 +12,7 @@ pub enum SignalType {
     COMPLEX,
     SIGNAL(AwgKind),
 }
-pub struct WaveIndexTracker {
+pub(crate) struct WaveIndexTracker {
     pub wave_indices: IndexMap<StaticWaveformSignature, (WaveIndex, SignalType)>,
     next_wave_index: WaveIndex,
 }
@@ -24,19 +24,22 @@ impl Default for WaveIndexTracker {
 }
 
 impl WaveIndexTracker {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             wave_indices: IndexMap::new(),
             next_wave_index: 0,
         }
     }
 
-    pub fn lookup_index_by_wave_id(&self, wave_id: &StaticWaveformSignature) -> Option<WaveIndex> {
+    pub(crate) fn lookup_index_by_wave_id(
+        &self,
+        wave_id: &StaticWaveformSignature,
+    ) -> Option<WaveIndex> {
         let entry = self.wave_indices.get(wave_id);
         entry.map(|entry| entry.0)
     }
 
-    pub fn create_index_for_wave(
+    pub(crate) fn create_index_for_wave(
         &mut self,
         wave_id: &StaticWaveformSignature,
         signal_type: SignalType,
@@ -51,7 +54,7 @@ impl WaveIndexTracker {
         Ok(index)
     }
 
-    pub fn add_numbered_wave(
+    pub(crate) fn add_numbered_wave(
         &mut self,
         wave_id: &StaticWaveformSignature,
         signal_type: SignalType,
@@ -63,7 +66,7 @@ impl WaveIndexTracker {
         }
     }
 
-    pub fn finish(self) -> IndexMap<String, (WaveIndex, SignalType)> {
+    pub(crate) fn finish(self) -> IndexMap<String, (WaveIndex, SignalType)> {
         self.wave_indices
             .into_iter()
             .map(|(key, (index, signal_type))| {

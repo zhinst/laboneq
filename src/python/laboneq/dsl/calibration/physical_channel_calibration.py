@@ -8,6 +8,7 @@ from typing import TypeVar
 import attrs
 
 from laboneq.core.types.enums import PortMode
+from laboneq.core.utilities.attrs_helpers import validated_field
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
@@ -19,10 +20,16 @@ from laboneq.dsl.parameter import Parameter
 T = TypeVar("T")
 
 
+def _on_setattr_callback(self, attr, value):
+    return self.__on_setattr_callback__(attr.name, value)
+
+
 @classformatter
 @attrs.define(
     kw_only=True,
-    on_setattr=lambda self, attr, value: self.__on_setattr_callback__(attr.name, value),
+    on_setattr=attrs.setters.pipe(
+        attrs.setters.convert, attrs.setters.validate, _on_setattr_callback
+    ),
     slots=False,  # Needed for users to bypass __setattr__
 )
 class PhysicalChannelCalibration:
@@ -59,7 +66,7 @@ class PhysicalChannelCalibration:
         voltage_offset (float | Parameter | None):
             On the HDAWG lines, the voltage offset may be used to set a
             constant voltage offset on individual RF line.
-        range (int | float | None):
+        range (float | None):
             The output or input range setting for the signal.
         amplitude (float | Parameter | None):
             Amplitude multiplying all waveforms played on the signal line.
@@ -70,18 +77,24 @@ class PhysicalChannelCalibration:
             Added outputs to the signal line's physical channel port.
             Only available for SHFSG/SHFQC devices with Output Router and Adder (RTR) option enabled.
             Only viable for signals which point to 'SGCHANNELS/N/OUTPUT' physical ports.
+
+    !!! version-changed "Changed in version 26.1.0"
+
+        The types of the attributes are now validated when a `PhysicalChannelCalibration` instance is
+        created or when an attribute is set. A `TypeError` is raised if the type of the
+        supplied value is incorrect.
     """
 
-    local_oscillator: Oscillator | None = None
-    mixer_calibration: MixerCalibration | None = None
-    precompensation: Precompensation | None = None
-    port_delay: float | Parameter | None = None
-    port_mode: PortMode | None = None
-    voltage_offset: float | Parameter | None = None
-    range: int | float | None = None
-    amplitude: float | Parameter | None = None
-    amplifier_pump: AmplifierPump | None = None
-    added_outputs: list[OutputRoute] | None = None
+    local_oscillator: Oscillator | None = validated_field(default=None)
+    mixer_calibration: MixerCalibration | None = validated_field(default=None)
+    precompensation: Precompensation | None = validated_field(default=None)
+    port_delay: float | Parameter | None = validated_field(default=None)
+    port_mode: PortMode | None = validated_field(default=None)
+    voltage_offset: float | Parameter | None = validated_field(default=None)
+    range: float | None = validated_field(default=None)
+    amplitude: float | Parameter | None = validated_field(default=None)
+    amplifier_pump: AmplifierPump | None = validated_field(default=None)
+    added_outputs: list[OutputRoute] | None = validated_field(default=None)
 
     def __on_setattr_callback__(self, attr: attrs.Attribute, value: T) -> T:
         return value

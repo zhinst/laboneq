@@ -40,7 +40,7 @@ pub struct DeviceTraits {
     pub ct_schema_version: Option<&'static str>,
 }
 
-pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
+pub(crate) const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "HDAWG",
     sample_multiple: device_traits_common::HDAWG_TRAITS.sample_multiple,
     sampling_rate: device_traits_common::HDAWG_TRAITS.sampling_rate,
@@ -64,7 +64,7 @@ pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     ct_schema_version: Some("hd_1.1.0"),
 };
 
-pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
+pub(crate) const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "UHFQA",
     sample_multiple: device_traits_common::UHFQA_TRAITS.sample_multiple,
     sampling_rate: device_traits_common::UHFQA_TRAITS.sampling_rate,
@@ -88,7 +88,7 @@ pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     ct_schema_version: None,
 };
 
-pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
+pub(crate) const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "SHFSG",
     sample_multiple: device_traits_common::SHFSG_TRAITS.sample_multiple,
     sampling_rate: device_traits_common::SHFSG_TRAITS.sampling_rate,
@@ -116,7 +116,7 @@ pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     ct_schema_version: Some("sg_1.2.0"),
 };
 
-pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
+pub(crate) const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "SHFQA",
     sample_multiple: device_traits_common::SHFQA_TRAITS.sample_multiple,
     sampling_rate: device_traits_common::SHFQA_TRAITS.sampling_rate,

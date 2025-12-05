@@ -352,7 +352,7 @@ where
 
 /// Transform play wave nodes into waveforms.
 #[allow(clippy::too_many_arguments)]
-pub fn handle_plays(
+pub(crate) fn handle_plays(
     program: &mut ir::IrNode,
     awg: &cjob::AwgCore,
     virtual_signals: &VirtualSignals,

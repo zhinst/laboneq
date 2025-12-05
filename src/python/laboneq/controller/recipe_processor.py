@@ -127,6 +127,17 @@ class AwgConfig:
 class AwgConfigs:
     def __init__(self):
         self._configs: dict[AwgKey, AwgConfig] = {}
+        # Used to estimate timeouts due to possible slowdowns on
+        # the network when fetching large results.
+        self._max_result_length: int = 0
+
+    @property
+    def max_result_length(self) -> int:
+        return self._max_result_length
+
+    def update_max_result_length(self, result_length: int):
+        if result_length > self._max_result_length:
+            self._max_result_length = result_length
 
     def __getitem__(self, key: AwgKey) -> AwgConfig:
         return self._configs[key]
@@ -1028,6 +1039,7 @@ def _calculate_awg_configs(
                     )
 
             awg_config.result_length = result_length
+            awg_configs.update_max_result_length(result_length)
 
     return awg_configs
 
@@ -1140,6 +1152,14 @@ def pre_process_compiled(
     return recipe_data
 
 
+def calc_result_transfer_base_time(recipe_data: RecipeData) -> float:
+    # The maximum result block size is figured out by taking the maximum result length
+    # and multiplying it by 16 bytes per sample (complex128). We assume a default transfer
+    # speed of 1MB/s (conservative). The final timeout is then scaled based on the timeout the user
+    # sets during connect, compared to the default 10-second connect timeout.
+    return recipe_data.awg_configs.max_result_length * 16 / (2**20)
+
+
 def get_execution_time(recipe_data: RecipeData) -> tuple[float, float]:
     rt_execution_info = recipe_data.rt_execution_info
     min_wait_time = recipe_data.max_step_execution_time
@@ -1149,9 +1169,23 @@ def get_execution_time(recipe_data: RecipeData) -> tuple[float, float]:
             min_wait_time + pipeliner_reload_worst_case
         ) * rt_execution_info.pipeliner_jobs
 
-    guarded_wait_time = round(min_wait_time * 1.1 + 1)  # +10% and fixed 1sec guard time
+    # Add extra guard time for potential state node update delayed by the
+    # large result transfer from a previous measurement. Assume up to two result blocks
+    # of maximum size may need to be delivered before the state update.
+    extra_guard_for_results = calc_result_transfer_base_time(recipe_data) * 2
+
+    # +10% and fixed 1sec guard time rounded up to next full second
+    guarded_wait_time = round((min_wait_time + extra_guard_for_results) * 1.1 + 1.5)
 
     return min_wait_time, guarded_wait_time
+
+
+def get_readout_time(recipe_data: RecipeData) -> tuple[float, float]:
+    # In the async execution model, result waiting starts as soon as execution begins,
+    # so the execution time must be included when calculating the result retrieval timeout.
+    _, guarded_wait_time = get_execution_time(recipe_data)
+    max_result_wait_time = calc_result_transfer_base_time(recipe_data)
+    return guarded_wait_time, max_result_wait_time
 
 
 def get_weights_info(

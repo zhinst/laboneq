@@ -10,6 +10,7 @@ from typing import Any
 
 import attrs
 
+from laboneq.core.utilities.attrs_helpers import validated_field
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration.signal_calibration import SignalCalibration
 
@@ -26,7 +27,9 @@ def _sanitize_key(key: Any) -> str:
 def _calibration_items_converter(
     value: dict[str, SignalCalibration],
 ) -> dict[str, SignalCalibration]:
-    return {_sanitize_key(k): v for k, v in value.items()}
+    if isinstance(value, dict):
+        return {_sanitize_key(k): v for k, v in value.items()}
+    return value  # allow the type validation to raise an exception
 
 
 @classformatter
@@ -41,9 +44,15 @@ class Calibration:
             [Calibratable][laboneq.dsl.calibration.Calibratable] to
             the actual
             [SignalCalibration][laboneq.dsl.calibration.SignalCalibration].
+
+    !!! version-changed "Changed in version 26.1.0"
+
+        The types of the attributes are now validated when a `Calibration` instance is
+        created or when an attribute is set. A `TypeError` is raised if the type of the
+        supplied value is incorrect.
     """
 
-    calibration_items: dict[str, SignalCalibration] = attrs.field(
+    calibration_items: dict[str, SignalCalibration] = validated_field(
         factory=dict, converter=_calibration_items_converter
     )
 

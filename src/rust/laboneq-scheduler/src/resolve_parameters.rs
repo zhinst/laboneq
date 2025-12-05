@@ -4,18 +4,20 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
+use laboneq_units::tinysample::seconds_to_tinysamples;
 
 use crate::error::{Error, Result};
 use crate::experiment::sweep_parameter::SweepParameter;
-use crate::experiment::types::{ParameterUid, ValueOrParameter};
+use crate::experiment::types::{ParameterUid, PulseParameterValue, ValueOrParameter};
 use crate::ir::IrKind;
 use crate::parameter_resolver::ParameterResolver;
+use crate::utils::round_to_grid;
 use crate::{ParameterStore, ScheduledNode};
 
 /// This function modifies the IR in place to resolve all real-time parameter references to their concrete values.
 ///
 /// This function assumes that all loops have been fully unrolled prior to calling it.
-pub fn resolve_parameters(
+pub(crate) fn resolve_parameters(
     ir: &mut ScheduledNode,
     parameters: &HashMap<ParameterUid, SweepParameter>,
     nt_parameters: &ParameterStore,
@@ -27,7 +29,7 @@ pub fn resolve_parameters(
 fn resolve_parameters_impl(ir: &mut ScheduledNode, resolver: &ParameterResolver) -> Result<()> {
     match &mut ir.kind {
         IrKind::Loop(obj) => {
-            let mut resolver = resolver.child_scope();
+            let mut resolver = resolver.child_scope(obj.parameters.as_slice())?;
             // Check whether the loops are fully unrolled. Currently partial unrolling is not supported.
             if !obj.parameters.is_empty() && ir.children.len() != obj.iterations {
                 return Err(Error::new(format!(
@@ -38,14 +40,14 @@ fn resolve_parameters_impl(ir: &mut ScheduledNode, resolver: &ParameterResolver)
             }
             for (iteration, child) in ir.children.iter_mut().enumerate() {
                 for param in obj.parameters.iter() {
-                    resolver.set_iteration(*param, iteration);
+                    resolver.set_iteration(*param, iteration)?;
                 }
                 resolve_parameters_impl(child.node.make_mut(), &resolver)?;
             }
             Ok(())
         }
         _ => {
-            resolve_parameter_fields(&mut ir.kind, resolver)?;
+            resolve_parameter_fields(ir, resolver)?;
             for child in ir.children.iter_mut() {
                 resolve_parameters_impl(child.node.make_mut(), resolver)?;
             }
@@ -55,8 +57,8 @@ fn resolve_parameters_impl(ir: &mut ScheduledNode, resolver: &ParameterResolver)
 }
 
 /// Resolves parameters of a node in-place.
-fn resolve_parameter_fields(ir: &mut IrKind, resolver: &ParameterResolver) -> Result<()> {
-    match ir {
+fn resolve_parameter_fields(node: &mut ScheduledNode, resolver: &ParameterResolver) -> Result<()> {
+    match &mut node.kind {
         IrKind::SetOscillatorFrequency(obj) => {
             for (_, value) in &mut obj.values {
                 if let ValueOrParameter::Parameter(param_uid) = value {
@@ -134,6 +136,44 @@ fn resolve_parameter_fields(ir: &mut IrKind, resolver: &ParameterResolver) -> Re
                         || "PPC cancellation attenuation must be a real number (integer or float).",
                     )?,
                 ));
+            }
+        }
+        IrKind::Acquire(obj) => {
+            for p in &mut obj.pulse_parameters {
+                for value in p.values_mut() {
+                    if let PulseParameterValue::ValueOrParameter(ValueOrParameter::Parameter(
+                        param_uid,
+                    )) = value
+                    {
+                        *value = PulseParameterValue::ValueOrParameter(ValueOrParameter::Value(
+                            resolver.get_value(param_uid)?,
+                        ));
+                    }
+                }
+            }
+            for p in &mut obj.parameters {
+                for value in p.values_mut() {
+                    if let PulseParameterValue::ValueOrParameter(ValueOrParameter::Parameter(
+                        param_uid,
+                    )) = value
+                    {
+                        *value = PulseParameterValue::ValueOrParameter(ValueOrParameter::Value(
+                            resolver.get_value(param_uid)?,
+                        ));
+                    }
+                }
+            }
+        }
+        IrKind::Delay { .. } => {
+            if let Some(param_uid) = node.schedule.length_param {
+                let length_step_seconds: f64 = resolver
+                    .get_value(&param_uid)?
+                    .try_into()
+                    .map_err(Error::new)
+                    .with_context(|| "Delay must be a real number (integer or float).")?;
+                let length_tinysample = seconds_to_tinysamples(length_step_seconds.into());
+                node.schedule.length =
+                    round_to_grid(length_tinysample.value(), node.schedule.grid.value()).into();
             }
         }
         _ => {}

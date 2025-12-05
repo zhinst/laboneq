@@ -5,21 +5,21 @@ use crate::ir::{IrNode, NodeKind, PpcDevice, experiment::Handle};
 use std::sync::Arc;
 
 #[derive(Default)]
-pub struct AwgCompilationInfo {
+pub(crate) struct AwgCompilationInfo {
     ppc_device: Option<Arc<PpcDevice>>,
     feedback_handles: Vec<Handle>,
 }
 
 impl AwgCompilationInfo {
-    pub fn has_readout_feedback(&self) -> bool {
+    pub(crate) fn has_readout_feedback(&self) -> bool {
         !self.feedback_handles.is_empty()
     }
 
-    pub fn ppc_device(&self) -> Option<&Arc<PpcDevice>> {
+    pub(crate) fn ppc_device(&self) -> Option<&Arc<PpcDevice>> {
         self.ppc_device.as_ref()
     }
 
-    pub fn feedback_handles(&self) -> &Vec<Handle> {
+    pub(crate) fn feedback_handles(&self) -> &Vec<Handle> {
         &self.feedback_handles
     }
 
@@ -53,7 +53,7 @@ fn traverse_awg_ir(node: &IrNode, info: &mut AwgCompilationInfo) {
     }
 }
 
-pub fn analyze_awg_ir(node: &IrNode) -> AwgCompilationInfo {
+pub(crate) fn analyze_awg_ir(node: &IrNode) -> AwgCompilationInfo {
     let mut info = AwgCompilationInfo::default();
     traverse_awg_ir(node, &mut info);
     info

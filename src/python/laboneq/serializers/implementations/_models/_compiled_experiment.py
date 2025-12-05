@@ -224,11 +224,8 @@ class RecipeModel:
 
 @attrs.define
 class ScheduledExperimentModel:
-    uid: str | None = None
     device_setup_fingerprint: str | None = None
     recipe: RecipeModel | None = None
-    compilation_job_hash: str | None = None
-    experiment_hash: str | None = None
 
     # NOTE! The data structure for the following fields is not completely
     # defined in the original code.
@@ -244,11 +241,8 @@ class ScheduledExperimentModel:
     @classmethod
     def _unstructure(cls, obj):
         return {
-            "uid": obj.uid,
             "device_setup_fingerprint": obj.device_setup_fingerprint,
             "recipe": _converter.unstructure(obj.recipe, RecipeModel),
-            "compilation_job_hash": obj.compilation_job_hash,
-            "experiment_hash": obj.experiment_hash,
             "artifacts": Serializer.to_dict(obj.artifacts),
             "schedule": Serializer.to_dict(obj.schedule),
             "execution": Serializer.to_dict(obj.execution),
@@ -257,11 +251,8 @@ class ScheduledExperimentModel:
     @classmethod
     def _structure(cls, obj, _):
         return cls._target_class(
-            uid=obj["uid"],
             device_setup_fingerprint=obj["device_setup_fingerprint"],
             recipe=_converter.structure(obj["recipe"], RecipeModel),
-            compilation_job_hash=obj["compilation_job_hash"],
-            experiment_hash=obj["experiment_hash"],
             artifacts=Serializer.load(obj["artifacts"], ArtifactsCodegen),
             schedule=Serializer.load(obj["schedule"], dict),
             execution=Serializer.load(obj["execution"], Statement),

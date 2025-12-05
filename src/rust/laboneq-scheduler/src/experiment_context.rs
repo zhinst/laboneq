@@ -5,10 +5,9 @@ use std::collections::HashMap;
 
 use crate::error::{Error, Result};
 use crate::experiment::sweep_parameter::SweepParameter;
-use crate::experiment::types::SectionUid;
-use crate::experiment::types::{ParameterUid, PulseRef, PulseUid, SignalUid};
+use crate::experiment::types::{ParameterUid, SignalUid};
 use crate::signal_info::SignalInfo;
-use laboneq_common::named_id::NamedIdStore;
+use laboneq_common::named_id::{NamedId, NamedIdStore};
 
 /// Experiment context.
 ///
@@ -17,7 +16,6 @@ use laboneq_common::named_id::NamedIdStore;
 pub struct ExperimentContext<'a, T: SignalInfo> {
     pub id_store: &'a NamedIdStore,
     pub parameters: HashMap<ParameterUid, SweepParameter>,
-    pub pulses: &'a HashMap<PulseUid, PulseRef>,
     pub signals: &'a HashMap<SignalUid, T>,
 }
 
@@ -35,9 +33,9 @@ impl<T: SignalInfo> ExperimentContext<'_, T> {
         })
     }
 
-    pub fn resolve_uid(&self, uid: &SectionUid) -> Result<&str> {
+    pub fn resolve_uid<K: Into<NamedId> + std::fmt::Debug + Copy>(&self, uid: K) -> Result<&str> {
         self.id_store
-            .resolve(*uid)
+            .resolve(uid.into())
             .ok_or_else(|| Error::new(format!("Failed to resolve section ID {:?}", uid)))
     }
 

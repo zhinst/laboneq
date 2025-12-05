@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use crate::error::{Error, Result, create_error_message};
 use crate::scheduler::experiment::Experiment;
 use crate::scheduler::experiment_processor::process_experiment;
+use crate::scheduler::experiment_validation::validate_experiment;
 use crate::scheduler::parameter_store::create_parameter_store;
 use crate::scheduler::py_conversion::ExperimentBuilder;
 use crate::scheduler::py_schedules::PyScheduleCompat;
@@ -16,9 +17,9 @@ use crate::scheduler::signal::AmplifierPumpPy;
 use crate::scheduler::signal::SweepParameterPy;
 use crate::scheduler::signal::{OscillatorPy, py_signal_to_signal};
 use laboneq_common::named_id::{NamedIdStore, resolve_ids};
-use laboneq_scheduler::ChunkingInfo;
+use laboneq_scheduler::experiment::types::PulseUid;
 use laboneq_scheduler::experiment::types::RepetitionMode;
-use laboneq_scheduler::{ExperimentContext, schedule_experiment};
+use laboneq_scheduler::{ChunkingInfo, ExperimentContext, schedule_experiment};
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
@@ -29,14 +30,50 @@ mod py_conversion;
 use py_conversion::build_experiment;
 mod signal;
 use signal::SignalPy;
-pub mod experiment;
+pub(crate) mod experiment;
 mod experiment_processor;
+mod experiment_validation;
 mod parameter_store;
+mod pulse;
+mod py_export;
+mod py_object_interner;
+mod py_pulse_defs;
+mod py_pulse_parameters;
 mod py_schedules;
 
 #[pyclass(name = "Experiment", frozen)]
 struct ExperimentPy {
     pub inner: Experiment,
+}
+
+impl ExperimentPy {
+    pub(crate) fn pulse_defs_py(&self, py: Python) -> HashMap<PulseUid, Py<PyAny>> {
+        self.inner
+            .pulses
+            .iter()
+            .map(|(k, v)| {
+                let py_pulse_def =
+                    py_pulse_defs::pulse_def_to_py(py, &self.inner.id_store, v).unwrap();
+                (*k, py_pulse_def)
+            })
+            .collect()
+    }
+}
+
+#[pymethods]
+impl ExperimentPy {
+    #[getter]
+    fn pulse_defs(&self, py: Python) -> HashMap<String, Py<PyAny>> {
+        self.pulse_defs_py(py)
+            .iter()
+            .map(|(k, v)| {
+                (
+                    self.inner.id_store.resolve(*k).unwrap().to_string(),
+                    v.clone_ref(py),
+                )
+            })
+            .collect()
+    }
 }
 
 pub(crate) fn experiment_py_to_experiment(
@@ -59,7 +96,7 @@ pub(crate) fn experiment_py_to_experiment(
         pulses: builder.pulses,
         experiment_signals: builder.signals,
         signals,
-        external_parameters: builder.external_parameters,
+        py_object_store: builder.py_object_store,
     })
 }
 
@@ -74,6 +111,10 @@ fn build_experiment_py(
         let msg = create_error_message(e);
         Error::new(msg)
     })?;
+    validate_experiment(&experiment).map_err(|e| {
+        let msg = create_error_message(e);
+        Error::new(resolve_ids(&msg, &experiment.id_store))
+    })?;
     process_experiment(&mut experiment).map_err(|e| {
         let msg = create_error_message(e);
         Error::new(resolve_ids(&msg, &experiment.id_store))
@@ -81,12 +122,8 @@ fn build_experiment_py(
     Ok(ExperimentPy { inner: experiment })
 }
 
-type AwgKeyPy = i64;
-
 #[pyclass(name = "ScheduleResult", frozen)]
 struct ScheduleResult {
-    #[pyo3(get)]
-    max_acquisition_time_per_awg: HashMap<AwgKeyPy, f64>,
     #[pyo3(get)]
     repetition_info: Option<RepetitionInfoPy>,
     #[pyo3(get)]
@@ -125,7 +162,6 @@ fn schedule_experiment_py(
         ExperimentContext {
             id_store: &experiment.id_store,
             parameters: experiment.parameters.clone(),
-            pulses: &experiment.pulses,
             signals: &experiment.signals,
         },
         &parameter_store,
@@ -135,13 +171,8 @@ fn schedule_experiment_py(
         let msg = create_error_message(e);
         Error::new(resolve_ids(&msg, &experiment.id_store))
     })?;
-    let py_schedules = generate_py_schedules(py, &result.root.unwrap(), &experiment.id_store)?;
+    let py_schedules = generate_py_schedules(py, &result.root.unwrap(), experiment)?;
     let out = ScheduleResult {
-        max_acquisition_time_per_awg: result
-            .max_acquisition_time
-            .into_iter()
-            .map(|(k, v)| (k.0 as AwgKeyPy, v.into()))
-            .collect(),
         repetition_info: result.repetition_info.map(|info| {
             let (mode, time) = match info.mode {
                 RepetitionMode::Fastest => ("fastest", None),
@@ -169,7 +200,7 @@ fn schedule_experiment_py(
     Ok(out)
 }
 
-pub fn create_py_module<'py>(py: Python<'py>, name: &str) -> Result<Bound<'py, PyModule>> {
+pub(crate) fn create_py_module<'py>(py: Python<'py>, name: &str) -> Result<Bound<'py, PyModule>> {
     let m = PyModule::new(py, name)?;
     m.add_function(wrap_pyfunction!(schedule_experiment_py, &m)?)?;
     m.add_function(wrap_pyfunction!(build_experiment_py, &m)?)?;

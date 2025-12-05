@@ -257,7 +257,7 @@ fn extract_pulse_def(ob: &Bound<'_, PyAny>) -> Result<Option<cjob::PulseDef>, Py
     Ok(Some(pdef))
 }
 
-pub fn extract_markers(ob: &Bound<'_, PyAny>) -> Result<Vec<cjob::Marker>, PyErr> {
+pub(crate) fn extract_markers(ob: &Bound<'_, PyAny>) -> Result<Vec<cjob::Marker>, PyErr> {
     // compilation_job.Marker
     if ob.is_none() {
         return Ok(vec![]);
@@ -350,15 +350,10 @@ fn extract_pulse(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::
     // ir.PulseIR
     let py = ob.py();
     let length = ob.getattr(intern!(py, "length"))?.extract::<i64>()?;
-    let py_section_signal_pulse = ob.getattr(intern!(py, "pulse"))?;
-    let py_signal = py_section_signal_pulse.getattr(intern!(py, "signal"))?;
-    let signal_uid = py_signal.getattr(intern!(py, "uid"))?;
-    let signal = dedup
-        .get_signal(signal_uid.cast::<PyString>()?.to_cow()?.as_ref())
-        .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", &signal_uid));
+    let signal =
+        Arc::clone(&signals_set_to_signals(&ob.getattr(intern!(py, "signals"))?, dedup)?[0]);
     // TODO: PulseDef should be taken via deduplicator
-    let py_pulse_def =
-        extract_pulse_def(&py_section_signal_pulse.getattr(intern!(py, "pulse"))?)?.map(Arc::new);
+    let py_pulse_def = extract_pulse_def(&ob.getattr(intern!(py, "pulse"))?)?.map(Arc::new);
     let phase = ob.getattr(intern!(py, "phase"))?.extract::<Option<f64>>()?;
     let increment_oscillator_phase = ob
         .getattr(intern!(py, "increment_oscillator_phase"))?
@@ -402,11 +397,11 @@ fn extract_acquire_pulse(
 ) -> Result<Option<ir::AcquirePulse>, PyErr> {
     // ir.PulseIR(is_acquire=True)
     let py = ob.py();
-    let py_section_signal_pulse = ob.getattr(intern!(py, "pulse"))?;
-    let py_signal = py_section_signal_pulse.getattr(intern!(py, "signal"))?;
-    let maybe_pulse_def = &py_section_signal_pulse.getattr(intern!(py, "pulse"))?;
-    let pulse_def = extract_pulse_def(maybe_pulse_def)?.map(Arc::new);
-    // Acquires without pulse are not yet needed. Used for measurement calculator!
+    let signal =
+        Arc::clone(&signals_set_to_signals(&ob.getattr(intern!(py, "signals"))?, dedup)?[0]);
+    let maybe_pulse_def = ob.getattr(intern!(py, "pulse"))?;
+    let pulse_def = extract_pulse_def(&maybe_pulse_def)?.map(Arc::new);
+    // Ignore delays on acquire lines
     // If PulseDef = None: No `integration_length`
     if pulse_def.is_none() {
         return Ok(None);
@@ -414,14 +409,7 @@ fn extract_acquire_pulse(
     let length = ob
         .getattr(intern!(py, "integration_length"))?
         .extract::<i64>()?;
-    let signal_uid = py_signal.getattr(intern!(py, "uid"))?;
-    let signal = dedup
-        .get_signal(signal_uid.cast::<PyString>()?.to_cow()?.as_ref())
-        .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", &signal_uid));
-
-    let pulse_def = if let Some(pulse_def_py) =
-        extract_pulse_def(&py_section_signal_pulse.getattr(intern!(py, "pulse"))?)?.map(Arc::new)
-    {
+    let pulse_def = if let Some(pulse_def_py) = pulse_def {
         vec![pulse_def_py]
     } else {
         vec![]
@@ -434,10 +422,7 @@ fn extract_acquire_pulse(
     let play_parameters = play_pulse_params.cast::<PyDict>().ok();
     let id_pulse_params = dedup.register_pulse_parameters(py, pulse_parameters, play_parameters)?;
 
-    let acq_params = py_section_signal_pulse.getattr(intern!(py, "acquire_params"))?;
-    let handle = acq_params
-        .getattr(intern!(py, "handle"))?
-        .extract::<String>()?;
+    let handle = ob.getattr(intern!(py, "handle"))?.extract::<String>()?;
     let acquire_pulse = ir::AcquirePulse {
         length,
         signal,
@@ -455,22 +440,11 @@ fn extract_acquire_pulse_group(
     // ir.AcquireGroupIR
     let py = ob.py();
     let mut pulse_defs = vec![];
-    // Acquire group can have multiple pulses, which share identical parameters,
-    // except for pulse parameters ID.
-    let pulses_bound = ob.getattr(intern!(py, "pulses"))?;
-    let pulses_py = pulses_bound.cast::<PyList>()?;
-    let py_section_signal_pulse_base = pulses_py.get_item(0)?;
-    let py_signal = py_section_signal_pulse_base.getattr(intern!(py, "signal"))?;
-    let signal_uid = py_signal.getattr(intern!(py, "uid"))?;
-    let signal = dedup
-        .get_signal(signal_uid.cast::<PyString>()?.to_cow()?.as_ref())
-        .unwrap_or_else(|| panic!("Internal error: Missing signal: {}", &signal_uid));
-
+    let signals = signals_set_to_signals(&ob.getattr(intern!(py, "signals"))?, dedup)?;
     // Single acquire group can consist of multiple individual pulses
     // Length of pulse defs must match pulse params ID
-    for py_section_signal_pulse in pulses_py.try_iter()? {
-        let maybe_pulse_def = &py_section_signal_pulse?.getattr(intern!(py, "pulse"))?;
-        let pulse_def = extract_pulse_def(maybe_pulse_def)?
+    for pulse_def_py in ob.getattr(intern!(py, "pulses"))?.try_iter()? {
+        let pulse_def = extract_pulse_def(&pulse_def_py?)?
             .expect("Internal error: Acquire group pulse def is None");
         pulse_defs.push(Arc::new(pulse_def));
     }
@@ -492,13 +466,10 @@ fn extract_acquire_pulse_group(
         id_pulse_params.push(parameters_id);
     }
 
-    let acq_params = py_section_signal_pulse_base.getattr(intern!(py, "acquire_params"))?;
-    let handle = acq_params
-        .getattr(intern!(py, "handle"))?
-        .extract::<String>()?;
+    let handle = ob.getattr(intern!(py, "handle"))?.extract::<String>()?;
     let acquire_pulse = ir::AcquirePulse {
         length,
-        signal,
+        signal: Arc::clone(&signals[0]),
         pulse_defs,
         id_pulse_params,
         handle: handle.into(),
@@ -736,7 +707,7 @@ fn extract_oscillator(ob: &Bound<'_, PyAny>) -> Result<Option<cjob::Oscillator>,
     Ok(osc)
 }
 
-pub fn extract_mixer_type(ob: &Bound<'_, PyAny>) -> Result<Option<cjob::MixerType>, PyErr> {
+pub(crate) fn extract_mixer_type(ob: &Bound<'_, PyAny>) -> Result<Option<cjob::MixerType>, PyErr> {
     // schedued_experiment.MixerType
     if ob.is_none() {
         return Ok(None);
@@ -791,7 +762,7 @@ fn extract_awg_signal(ob: &Bound<'_, PyAny>, sampling_rate: f64) -> Result<Signa
     Ok(signal)
 }
 
-pub fn extract_device_kind(ob: &Bound<'_, PyAny>) -> Result<cjob::DeviceKind, PyErr> {
+pub(crate) fn extract_device_kind(ob: &Bound<'_, PyAny>) -> Result<cjob::DeviceKind, PyErr> {
     // device_type.DeviceType
     let py = ob.py();
     let py_name = ob.getattr(intern!(py, "name"))?;
@@ -809,7 +780,7 @@ pub fn extract_device_kind(ob: &Bound<'_, PyAny>) -> Result<cjob::DeviceKind, Py
     Ok(kind)
 }
 
-pub fn extract_oscillator_from_ir_signal(
+pub(crate) fn extract_oscillator_from_ir_signal(
     ob: &Bound<'_, PyAny>,
 ) -> Result<HashMap<String, Option<cjob::Oscillator>>, PyErr> {
     // ir.SignalIR
@@ -870,7 +841,7 @@ fn extract_trigger_mode(ob: &Bound<'_, PyAny>) -> Result<cjob::TriggerMode, PyEr
     Ok(mode)
 }
 
-pub fn extract_awg<'py>(
+pub(crate) fn extract_awg<'py>(
     ob: &Bound<'py, PyAny>,
     ir_signals: &Bound<'py, PyAny>,
 ) -> Result<AwgCore, PyErr> {
@@ -956,7 +927,7 @@ fn extract_parameter(
     Ok(obj)
 }
 
-pub fn extract_acquisition_type(ob: &Bound<'_, PyAny>) -> Result<AcquisitionType, PyErr> {
+pub(crate) fn extract_acquisition_type(ob: &Bound<'_, PyAny>) -> Result<AcquisitionType, PyErr> {
     // compilation_job.AcquisitionType
     let value = ob.getattr(intern!(ob.py(), "value"))?;
     match value.cast::<PyString>()?.to_cow()?.as_ref() {
@@ -976,7 +947,7 @@ pub fn extract_acquisition_type(ob: &Bound<'_, PyAny>) -> Result<AcquisitionType
 /// While the main purpose of this function is to translate Python IR
 /// structs into Rust, it also lowers the source IR into code IR as we
 /// do not (yet) have Rust models for the original IR.
-pub fn transform_py_ir(
+pub(crate) fn transform_py_ir(
     ob: &Bound<'_, PyAny>,
     awgs: &[AwgCore],
 ) -> Result<(ir::IrNode, HashMap<PulseParametersId, PulseParameters>), PyErr> {
@@ -992,7 +963,7 @@ pub fn transform_py_ir(
     Ok((root, deduplicator.take_pulse_parameters()))
 }
 
-pub fn extract_feedback_register_layout(
+pub(crate) fn extract_feedback_register_layout(
     ob: &Bound<'_, PyDict>,
 ) -> Result<FeedbackRegisterLayout, PyErr> {
     let mut out = FeedbackRegisterLayout::new();

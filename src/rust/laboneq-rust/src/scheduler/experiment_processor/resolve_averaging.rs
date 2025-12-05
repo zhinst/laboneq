@@ -25,7 +25,7 @@ use laboneq_scheduler::experiment::{
 /// * `Ok(true)` if the IR was modified.
 /// * `Ok(false)` if no modifications were made.
 /// * `Err` if the experiment structure is invalid.
-pub fn resolve_averaging(node: &mut ExperimentNode) -> Result<bool> {
+pub(super) fn resolve_averaging(node: &mut ExperimentNode) -> Result<bool> {
     if let Some(acq_index) = find_sequential_acquire_position(node) {
         let innermost_sweep = find_innermost_sweep(&node.children[acq_index]);
         if innermost_sweep.is_none() {

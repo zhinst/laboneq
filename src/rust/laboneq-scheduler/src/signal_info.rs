@@ -20,6 +20,7 @@ pub trait SignalInfo {
     fn voltage_offset(&self) -> Option<&ValueOrParameter<f64>>;
     fn supports_initial_voltage_offset(&self) -> bool;
     fn amplifier_pump(&self) -> Option<&AmplifierPump>;
+    fn supports_multiple_acquisition_lengths(&self) -> bool;
 }
 
 impl<T: SignalInfo> SignalGridInfo for T {

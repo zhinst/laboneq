@@ -173,13 +173,13 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
                 end_nodes.push(prng_drop);
             }
             // Trigger is always set whether or not the Section contains AWG related nodes.
-            for (signal, bit) in &ob.trigger_output {
+            for (signal, bits) in &ob.trigger_output {
                 if !contains_signal(ctx, &signal.uid) {
                     continue;
                 }
                 let set_data = TriggerBitData {
                     signal: Arc::clone(signal),
-                    bit: *bit,
+                    bits: *bits,
                     set: true,
                     section_info: Arc::clone(&ob.section_info),
                 };
@@ -190,7 +190,7 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
                 start_nodes.push(new_node);
                 let unset_data = TriggerBitData {
                     signal: Arc::clone(signal),
-                    bit: *bit,
+                    bits: *bits,
                     set: false,
                     section_info: Arc::clone(&ob.section_info),
                 };
@@ -239,7 +239,7 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
 ///
 /// A new [`IrNode`] that contains the filtered nodes for the AWG.
 /// If no relevant nodes are found, a Nop node is returned with the length of the original node.
-pub fn fanout_for_awg(node: &IrNode, awg: &AwgCore) -> IrNode {
+pub(crate) fn fanout_for_awg(node: &IrNode, awg: &AwgCore) -> IrNode {
     let ctx = Context {
         signals: awg.signals.iter().map(|s| s.uid.as_str()).collect(),
         inline_sections: !matches!(awg.device_kind(), &DeviceKind::SHFQA | &DeviceKind::UHFQA),
@@ -271,7 +271,7 @@ mod tests {
             }
         }
 
-        pub fn with<F>(&mut self, f: F)
+        pub(crate) fn with<F>(&mut self, f: F)
         where
             F: FnOnce(&mut Self),
         {
@@ -290,7 +290,7 @@ mod tests {
             }
         }
 
-        pub fn section<F>(&mut self, uid: &str, length: Samples, offset: Samples, f: F)
+        pub(crate) fn section<F>(&mut self, uid: &str, length: Samples, offset: Samples, f: F)
         where
             F: FnOnce(&mut Self),
         {
@@ -306,7 +306,7 @@ mod tests {
             self.enter_stack(IrNode::new(section, offset), f);
         }
 
-        pub fn sweep<F>(&mut self, length: Samples, f: F)
+        pub(crate) fn sweep<F>(&mut self, length: Samples, f: F)
         where
             F: FnOnce(&mut Self),
         {
@@ -324,7 +324,7 @@ mod tests {
             self.enter_stack(IrNode::new(root, 0), f);
         }
 
-        pub fn reset_precompensation(&mut self, offset: Samples, signal: Arc<Signal>) {
+        pub(crate) fn reset_precompensation(&mut self, offset: Samples, signal: Arc<Signal>) {
             let node = NodeKind::PrecompensationFilterReset { signal };
             let ir_node = IrNode::new(node, offset);
             self.node_stack.last_mut().unwrap().add_child_node(ir_node);

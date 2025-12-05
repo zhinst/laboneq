@@ -10,6 +10,7 @@ import attrs
 from laboneq.core.types.enums import PortMode
 from laboneq.core.types.enums.modulation_type import ModulationType
 from laboneq.core.types.units import Quantity
+from laboneq.core.utilities.attrs_helpers import validated_field
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
@@ -30,9 +31,15 @@ def _check_local_oscillator_does_not_use_sw_modulation(
         )
 
 
+def _on_setattr_callback(self, attr, value):
+    return self.__on_setattr_callback__(attr.name, value)
+
+
 @classformatter
 @attrs.define(  # TODO: add kw_only=True
-    on_setattr=lambda self, attr, value: self.__on_setattr_callback__(attr.name, value),
+    on_setattr=attrs.setters.pipe(
+        attrs.setters.convert, attrs.setters.validate, _on_setattr_callback
+    ),
     slots=False,  # Needed for users to bypass __setattr__
 )
 class SignalCalibration:
@@ -79,7 +86,7 @@ class SignalCalibration:
         voltage_offset (float | Parameter | None):
             On the HDAWG lines, the voltage offset may be used to set a
             constant voltage offset on individual RF line.
-        range (int | float | Quantity | None):
+        range (float | Quantity | None):
             The output or input range setting for the signal.
         threshold (float | list[float] | None):
             Specify the state discrimination threshold.
@@ -97,24 +104,31 @@ class SignalCalibration:
         automute (bool):
             Mute output channel when no waveform is played on it i.e for the duration of delays.
             Only available on SHF+ output channels.
+
+    !!! version-changed "Changed in version 26.1.0"
+
+        The types of the attributes are now validated when a `SignalCalibration` instance is
+        created or when an attribute is set. A `TypeError` is raised if the type of the
+        supplied value is incorrect.
     """
 
-    amplitude: float | Parameter | None = None
-    delay_signal: float | None = None
-    local_oscillator: Oscillator | None = attrs.field(
-        validator=_check_local_oscillator_does_not_use_sw_modulation, default=None
+    amplitude: float | Parameter | None = validated_field(default=None)
+    delay_signal: float | None = validated_field(default=None)
+    local_oscillator: Oscillator | None = validated_field(
+        default=None,
+        validator=_check_local_oscillator_does_not_use_sw_modulation,
     )
-    voltage_offset: float | Parameter | None = None
-    mixer_calibration: MixerCalibration | None = None
-    precompensation: Precompensation | None = None
-    oscillator: Oscillator | None = None
-    port_delay: float | Parameter | None = None
-    port_mode: PortMode | None = None
-    range: int | float | Quantity | None = None
-    threshold: float | list[float] | None = None
-    amplifier_pump: AmplifierPump | None = None
-    added_outputs: list[OutputRoute] | None = None
-    automute: bool = False
+    voltage_offset: float | Parameter | None = validated_field(default=None)
+    mixer_calibration: MixerCalibration | None = validated_field(default=None)
+    precompensation: Precompensation | None = validated_field(default=None)
+    oscillator: Oscillator | None = validated_field(default=None)
+    port_delay: float | Parameter | None = validated_field(default=None)
+    port_mode: PortMode | None = validated_field(default=None)
+    range: float | Quantity | None = validated_field(default=None)
+    threshold: float | list[float] | None = validated_field(default=None)
+    amplifier_pump: AmplifierPump | None = validated_field(default=None)
+    added_outputs: list[OutputRoute] | None = validated_field(default=None)
+    automute: bool = validated_field(default=False)
 
     def __on_setattr_callback__(self, attr: attrs.Attribute, value: T) -> T:
         return value

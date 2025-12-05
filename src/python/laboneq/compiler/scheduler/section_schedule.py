@@ -9,7 +9,10 @@ from attrs import define, field
 
 from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
-from laboneq.compiler.scheduler.pulse_schedule import PrecompClearSchedule
+from laboneq.compiler.scheduler.pulse_schedule import (
+    PrecompClearSchedule,
+    PulseSchedule,
+)
 from laboneq.compiler.scheduler.utils import ceil_to_grid, floor_to_grid
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.data.compilation_job import PRNGInfo
@@ -97,11 +100,15 @@ class SectionSchedule(IntervalSchedule):
 
             elif isinstance(c, PrecompClearSchedule):
                 # find the referenced pulse
+                # It is the nearest preceding PulseSchedule
                 try:
                     start = next(
-                        self.children_start[j]
-                        for j, other_child in enumerate(self.children[:i])
-                        if other_child is c.pulse
+                        start
+                        for start, other_child in zip(
+                            reversed(self.children_start[:i]),
+                            reversed(self.children[:i]),
+                        )
+                        if isinstance(other_child, PulseSchedule)
                     )
                 except StopIteration:
                     raise RuntimeError(

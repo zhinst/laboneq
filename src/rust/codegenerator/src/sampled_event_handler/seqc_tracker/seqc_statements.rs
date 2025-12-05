@@ -14,8 +14,8 @@ type ConditionInternal = String;
 type VariableInternal = String;
 
 // an enum to represent strings, integers, and floats
-#[derive(Debug, Clone, PartialEq)]
-pub enum SeqCVariant {
+#[derive(Debug, Clone, PartialEq, derive_more::From)]
+pub(crate) enum SeqCVariant {
     String(String),
     Integer(i64),
     Float(f64),
@@ -45,7 +45,7 @@ impl fmt::Display for SeqCVariant {
 }
 
 #[derive(Debug, Clone, Hash, PartialEq)]
-pub enum SeqCStatement {
+pub(crate) enum SeqCStatement {
     Comment {
         text: String,
     },
@@ -116,7 +116,7 @@ pub enum SeqCStatement {
 }
 
 impl SeqCStatement {
-    pub fn complexity(&self) -> u64 {
+    pub(crate) fn complexity(&self) -> u64 {
         match self {
             SeqCStatement::DoIf { complexity, .. } => *complexity,
             SeqCStatement::Repeat { complexity, .. } => *complexity,
@@ -125,7 +125,7 @@ impl SeqCStatement {
         }
     }
 
-    pub fn to_hash(&self) -> u64 {
+    pub(crate) fn to_hash(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         self.hash(&mut hasher);
         hasher.finish()

@@ -566,6 +566,7 @@ class DevEmuHDAWG(DevEmuHW):
 
     def _awg_stop(self, awg_idx):
         self._set_val(f"awgs/{awg_idx}/enable", 0)
+        self._set_val(f"awgs/{awg_idx}/sequencer/status", 0)
 
     def _awg_enable(self, node: NodeBase, awg_idx):
         if node.value != 0:
@@ -583,8 +584,10 @@ class DevEmuHDAWG(DevEmuHW):
                     self._emulator_state.send_trigger()
             else:
                 self._armed_awgs.add(awg_idx)
+                self._set_val(f"awgs/{awg_idx}/sequencer/status", 4)
         elif awg_idx in self._armed_awgs:
             self._armed_awgs.remove(awg_idx)
+            self._set_val(f"awgs/{awg_idx}/sequencer/status", 0)
 
     def _sample_clock_switched(self):
         self._set_val("system/clocks/sampleclock/status", 0)
@@ -642,6 +645,10 @@ class DevEmuHDAWG(DevEmuHW):
                 default=0,
                 handler=partial(self._awg_enable, awg_idx=awg_idx),
             )
+            nd[f"awgs/{awg_idx}/sequencer/status"] = NodeInfo(
+                type=NodeType.INT,
+                default=0,
+            )
         return nd
 
 
@@ -675,6 +682,7 @@ class DevEmuUHFQA(DevEmuHW):
 
     def _awg_stop(self):
         self._set_val("awgs/0/enable", 0)
+        self._set_val("awgs/0/sequencer/status", 0)
         result_enable = self._get_node("qas/0/result/enable").value
         monitor_enable = self._get_node("qas/0/monitor/enable").value
         if result_enable != 0:
@@ -711,6 +719,7 @@ class DevEmuUHFQA(DevEmuHW):
 
     def _awg_enable(self, node: NodeBase):
         self._armed_awg = node.value != 0
+        self._set_val("awgs/0/sequencer/status", 4 if self._armed_awg else 0)
 
     def _awg_ready(self):
         self._set_val("awgs/0/ready", 1)
@@ -733,6 +742,7 @@ class DevEmuUHFQA(DevEmuHW):
             "awgs/0/enable": NodeInfo(
                 type=NodeType.INT, default=0, handler=self._awg_enable
             ),
+            "awgs/0/sequencer/status": NodeInfo(type=NodeType.INT, default=0),
             "awgs/0/elf/data": NodeInfo(
                 type=NodeType.VECTOR_INT, default=([], {}), handler=self._elf_upload
             ),
@@ -1076,14 +1086,17 @@ class DevEmuSHFQABase(DevEmuSHFBase):
     def _awg_stop_qa(self, channel: int):
         self._side_effects_qa(channel)
         self._set_val(f"qachannels/{channel}/generator/enable", 0)
+        self._set_val(f"qachannels/{channel}/generator/sequencer/status", 0)
         self._measurement_done(channel)
 
     def _awg_enable_qa(self, node: NodeBase, channel: int):
         if node.value != 0:
             if not self._qa_pipeliner.is_active(channel):
                 self._armed_qa_awgs.add(channel)
+                self._set_val(f"qachannels/{channel}/generator/sequencer/status", 4)
         elif channel in self._armed_qa_awgs:
             self._armed_qa_awgs.remove(channel)
+            self._set_val(f"qachannels/{channel}/generator/sequencer/status", 0)
 
     def _enable_result_logger(self, node: NodeBase, channel: int, spectroscopy: bool):
         if node.value:
@@ -1128,6 +1141,9 @@ class DevEmuSHFQABase(DevEmuSHFBase):
                 type=NodeType.INT,
                 default=0,
                 handler=partial(self._awg_enable_qa, channel=channel),
+            )
+            nd[f"qachannels/{channel}/generator/sequencer/status"] = NodeInfo(
+                type=NodeType.INT, default=0
             )
             for path_part in [
                 "readout/result/length",
@@ -1298,12 +1314,15 @@ class DevEmuSHFSGBase(DevEmuSHFBase):
     def _awg_stop_sg(self, channel: int):
         self._side_effects_sg(channel)
         self._set_val(f"sgchannels/{channel}/awg/enable", 0)
+        self._set_val(f"sgchannels/{channel}/awg/sequencer/status", 0)
 
     def _awg_enable_sg(self, node: NodeBase, channel: int):
         if node.value != 0:
             self._armed_sg_awgs.add(channel)
+            self._set_val(f"sgchannels/{channel}/awg/sequencer/status", 4)
         elif channel in self._armed_sg_awgs:
             self._armed_sg_awgs.remove(channel)
+            self._set_val(f"sgchannels/{channel}/awg/sequencer/status", 0)
 
     def _node_def_sg(self) -> dict[str, NodeInfo]:
         nd = self._sg_pipeliner._node_def_pipeliner()
@@ -1312,6 +1331,9 @@ class DevEmuSHFSGBase(DevEmuSHFBase):
                 type=NodeType.INT,
                 default=0,
                 handler=partial(self._awg_enable_sg, channel=channel),
+            )
+            nd[f"sgchannels/{channel}/awg/sequencer/status"] = NodeInfo(
+                type=NodeType.INT, default=0
             )
             nd[f"sgchannels/{channel}/output/overrangecount"] = NodeInfo(
                 type=NodeType.INT, default=0

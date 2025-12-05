@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use crate::{ir::IrKind, schedule_info::ScheduleInfo};
 
-pub type NodeRef = Rc<Node>;
+pub(crate) type NodeRef = Rc<Node>;
 
 /// A node that hold the scheduling information of an IR node and its children.
 #[derive(Debug, Clone, PartialEq)]

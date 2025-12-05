@@ -28,7 +28,6 @@ from laboneq.compiler.feedback_router.feedback_router import (
     calculate_feedback_register_layout,
 )
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
-from laboneq.compiler.scheduler.scheduler import Scheduler
 from laboneq.compiler.workflow import on_device_delays
 from laboneq.compiler.workflow.compiler_hooks import (
     GenerateRecipeArgs,
@@ -381,7 +380,6 @@ class Compiler:
         self._final_chunk_count: int | None = None
         self._settings = compiler_settings.from_dict(settings)
         self._sampling_rate_tracker: SamplingRateTracker = None
-        self._scheduler: Scheduler = None
         self._combined_compiler_output: CombinedRTCompilerOutputContainer = None
 
         self._leader_properties = LeaderProperties()
@@ -412,7 +410,7 @@ class Compiler:
                     f"TINYSAMPLE is not commensurable with sampling rate of {t}, has {num_tinysamples_per_sample} tinysamples per sample, which is not an integer"
                 )
 
-    def use_experiment(self, experiment):
+    def use_experiment(self, experiment: CompilationJob):
         if isinstance(experiment, CompilationJob):
             self._experiment_dao = ExperimentDAO(experiment.experiment_info)
             self._execution = experiment.execution
@@ -872,7 +870,7 @@ class Compiler:
         else:
             _logger.debug("END %s", src["filename"])
 
-    def run(self, data) -> CompiledExperiment:
+    def run(self, data: CompilationJob) -> CompiledExperiment:
         _logger.debug("ES Compiler run")
 
         self.use_experiment(data)

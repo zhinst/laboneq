@@ -1,14 +1,14 @@
 # Copyright 2025 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+# Qiskit
+from qiskit import qasm3, transpile
+from qiskit_experiments.library import randomized_benchmarking
+
 # LabOne Q
 from laboneq import openqasm3
 from laboneq.dsl.device import DeviceSetup
 from laboneq.dsl.quantum import QPU
-
-# Qiskit
-from qiskit import qasm3, transpile
-from qiskit_experiments.library import randomized_benchmarking
 
 
 def two_qubit_RB(

@@ -7,22 +7,28 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Display;
-use std::sync::Arc;
 
 use crate::error::{Error, Result};
+use crate::scheduler::pulse::PulseDef;
+use crate::scheduler::pulse::PulseFunction;
+use crate::scheduler::pulse::PulseFunctional;
+use crate::scheduler::pulse::PulseKind;
+use crate::scheduler::pulse::PulseSampled;
+use crate::scheduler::py_object_interner::PyObjectInterner;
 use anyhow::Context;
 use laboneq_common::named_id::{NamedId, NamedIdStore};
 use laboneq_scheduler::experiment::ExperimentNode;
 use laboneq_scheduler::experiment::sweep_parameter::SweepParameter;
 use laboneq_scheduler::experiment::types::Chunking;
+use laboneq_scheduler::experiment::types::ComplexOrFloat;
 use laboneq_scheduler::experiment::types::NumericLiteral;
+use laboneq_scheduler::experiment::types::PulseParameterUid;
 use laboneq_scheduler::experiment::types::ValueOrParameter;
 use laboneq_scheduler::experiment::types::{
     Acquire, AcquisitionType, AveragingLoop, AveragingMode, Case, Delay, ExternalParameterUid,
     HandleUid, Marker, MarkerSelector, Match, MatchTarget, Operation, ParameterUid, PlayPulse,
-    PrngLoop, PrngSetup, PulseLength, PulseParameterValue, PulseRef, PulseUid, RepetitionMode,
-    Reserve, ResetOscillatorPhase, Section, SectionAlignment, SectionUid, SignalUid, Sweep,
-    Trigger,
+    PrngLoop, PrngSetup, PulseParameterValue, PulseUid, RepetitionMode, Reserve,
+    ResetOscillatorPhase, Section, SectionAlignment, SectionUid, SignalUid, Sweep, Trigger,
 };
 use laboneq_units::duration::seconds;
 use num_complex::Complex64;
@@ -32,28 +38,28 @@ use pyo3::prelude::*;
 use pyo3::types::PyComplex;
 use pyo3::types::{PyDict, PyList, PyString};
 
-pub struct ExperimentBuilder<'py> {
+pub(super) struct ExperimentBuilder<'py> {
     // List of root sections
     pub sections: Vec<ExperimentNode>,
     pub id_store: NamedIdStore,
     pub parameters: HashMap<ParameterUid, SweepParameter>,
-    pub pulses: HashMap<PulseUid, PulseRef>,
+    pub pulses: HashMap<PulseUid, PulseDef>,
     pub signals: HashSet<SignalUid>,
-    pub external_parameters: HashMap<ExternalParameterUid, Py<PyAny>>,
+    pub py_object_store: PyObjectInterner<ExternalParameterUid>,
     // Parameters that drive other parameters
     pub driving_parameters: HashMap<ParameterUid, HashSet<ParameterUid>>,
     pub dsl_types: DslTypes<'py>,
 }
 
 impl<'py> ExperimentBuilder<'py> {
-    pub fn new(py: Python<'py>) -> Self {
+    pub(super) fn new(py: Python<'py>) -> Self {
         Self {
             sections: Vec::new(),
             id_store: NamedIdStore::new(),
             parameters: HashMap::new(),
             pulses: HashMap::new(),
             signals: HashSet::new(),
-            external_parameters: HashMap::new(),
+            py_object_store: PyObjectInterner::new(),
             dsl_types: DslTypes::new(py).unwrap(),
             driving_parameters: HashMap::new(),
         }
@@ -75,7 +81,7 @@ impl<'py> ExperimentBuilder<'py> {
         self.signals.insert(uid);
     }
 
-    fn register_pulse(&mut self, pulse: PulseRef) -> PulseUid {
+    fn register_pulse(&mut self, pulse: PulseDef) -> PulseUid {
         let uid = pulse.uid;
         self.pulses.entry(uid).or_insert(pulse);
         uid
@@ -83,21 +89,11 @@ impl<'py> ExperimentBuilder<'py> {
 
     fn register_external_parameter(
         &mut self,
-        key: &str,
         value: Bound<'_, PyAny>,
     ) -> Result<ExternalParameterUid> {
-        let py = value.py();
-        let func_create_pulse_parameters_id = py
-            .import(intern!(py, "laboneq.compiler.common.pulse_parameters"))?
-            .getattr(intern!(py, "create_pulse_parameters_id"))?;
-        let py_dict = PyDict::new(py);
-        py_dict.set_item(key, &value)?;
-        let uid = func_create_pulse_parameters_id
-            .call1((py_dict, py.None()))?
-            .extract::<u64>()?;
-        self.external_parameters
-            .insert(ExternalParameterUid(uid), value.unbind());
-        Ok(ExternalParameterUid(uid))
+        Ok(ExternalParameterUid(
+            self.py_object_store.get_or_intern(&value)?.0,
+        ))
     }
 }
 
@@ -234,7 +230,7 @@ fn is_complex(obj: &Bound<'_, PyAny>) -> bool {
     obj.is_instance_of::<PyComplex>()
 }
 
-pub fn extract_value_or_parameter<T: TryFrom<NumericLiteral>>(
+pub(super) fn extract_value_or_parameter<T: TryFrom<NumericLiteral>>(
     obj: &Bound<'_, PyAny>,
     builder: &mut ExperimentBuilder,
 ) -> Result<Option<ValueOrParameter<T>>>
@@ -244,15 +240,13 @@ where
     if obj.is_none() {
         return Ok(None);
     }
-    let py: Python<'_> = obj.py();
     if let Ok(value) = extract_numeric_value(obj) {
         let value = ValueOrParameter::<T>::Value(value.try_into().map_err(Error::new)?);
         return Ok(Some(value));
     }
     if obj.is_instance(builder.dsl_types.laboneq_type(DslType::Parameter))? {
-        let py_value = obj.getattr(intern!(py, "uid"))?;
-        let parameter = builder.register_uid(py_value.extract::<&str>()?);
-        return Ok(Some(ValueOrParameter::Parameter(parameter.into())));
+        let parameter_uid = extract_parameter(obj, builder)?;
+        return Ok(Some(ValueOrParameter::Parameter(parameter_uid)));
     }
     Err(Error::new(
         "Expected a numeric literal, string, bool or a parameter",
@@ -280,6 +274,14 @@ fn extract_section_alignment(obj: &Bound<'_, PyAny>) -> Result<SectionAlignment>
     Ok(out)
 }
 
+/// Convert `Parameter` and its subclasses.
+///
+/// The 2 supported subclasses are `LinearSweepParameter` and `SweepParameter`.
+/// When a parameter is registered, it is added to the builder's parameter map.
+/// If the parameter already exists, its UID is returned directly.
+///
+/// This function also handles registering driving parameters for `SweepParameter`s and
+/// updates the builder's `driving_parameters` map accordingly.
 fn extract_parameter(
     obj: &Bound<'_, PyAny>,
     builder: &mut ExperimentBuilder,
@@ -290,7 +292,6 @@ fn extract_parameter(
     if builder.parameters.contains_key(&uid) {
         return Ok(uid);
     }
-
     let linear_sweep_parameter_py = builder
         .dsl_types
         .laboneq_type(DslType::LinearSweepParameter);
@@ -333,26 +334,59 @@ fn extract_parameter(
             values: values.into(),
         };
         builder.parameters.insert(parameter.uid, parameter);
-        for driving_param in obj.getattr(intern!(py, "driven_by"))?.try_iter()? {
-            let driving_param = driving_param?;
-            let p_uid = ParameterUid(
-                builder.register_uid(
-                    driving_param
-                        .getattr(intern!(py, "uid"))?
-                        .extract::<&str>()?,
-                ),
-            );
-            builder
-                .driving_parameters
-                .entry(p_uid)
-                .or_default()
-                .insert(uid);
-        }
+        register_driving_parameters(uid, obj, builder)?;
         return Ok(uid);
     }
-    Err(Error::new(
-        "Expected 'LinearSweepParameter' or 'SweepParameter'",
-    ))
+    Err(Error::new(format!(
+        "Expected 'LinearSweepParameter' or 'SweepParameter', found: {obj}"
+    )))
+}
+
+/// Traverse a `SweepParameter`'s `driven_by` recursively and register all driving parameters.
+///
+/// This allows to resolve derived parameters when registering sweeps, as they may not exist
+/// in the sweep definition by default, but only in the field they are assigned to.
+fn register_driving_parameters(
+    uid: ParameterUid,
+    obj: &Bound<'_, PyAny>,
+    builder: &mut ExperimentBuilder,
+) -> Result<()> {
+    let sweep_parameter_py = builder.dsl_types.laboneq_type(DslType::SweepParameter);
+    if !obj.is_instance(sweep_parameter_py)? {
+        return Ok(());
+    }
+    let py = obj.py();
+    for driving_param in obj.getattr(intern!(py, "driven_by"))?.try_iter()? {
+        let driving_param = driving_param?;
+        let p_uid = ParameterUid(
+            builder.register_uid(
+                driving_param
+                    .getattr(intern!(py, "uid"))?
+                    .extract::<&str>()?,
+            ),
+        );
+        builder
+            .driving_parameters
+            .entry(p_uid)
+            .or_default()
+            .insert(uid);
+        register_driving_parameters(uid, &driving_param, builder)?;
+    }
+    Ok(())
+}
+
+/// Recursively collect all derived parameters driven by the given parameter.
+fn collect_derived_parameters(
+    parameter_uid: ParameterUid,
+    driving_parameters: &HashMap<ParameterUid, HashSet<ParameterUid>>,
+    collected: &mut HashSet<ParameterUid>,
+) {
+    if let Some(drivers) = driving_parameters.get(&parameter_uid) {
+        for child in drivers {
+            collected.insert(*child);
+            collect_derived_parameters(*child, driving_parameters, collected);
+        }
+    }
 }
 
 fn extract_sweep(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Result<Sweep> {
@@ -361,13 +395,9 @@ fn extract_sweep(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Res
         let param = param?;
         let parameter_uid = extract_parameter(&param, builder)?;
         parameters.insert(parameter_uid);
-        // Resolve derived parameters. The derived parameters are registered
-        // to the loop, as they may not exist there by default.
-        if let Some(driving_parameters) = builder.driving_parameters.get(&parameter_uid) {
-            for child in driving_parameters {
-                parameters.insert(*child);
-            }
-        }
+        // Resolve derived parameters that this parameter drives. The derived parameters may not
+        // be explicitly listed in the sweep's parameter list, but need to be included.
+        collect_derived_parameters(parameter_uid, &builder.driving_parameters, &mut parameters);
     }
     let uid_py_binding = obj.getattr(intern!(obj.py(), "uid"))?;
     let uid_py = uid_py_binding.extract::<&str>()?;
@@ -412,17 +442,20 @@ fn extract_sweep(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Res
 
 fn extract_delay(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Result<Delay> {
     let py = obj.py();
-    let signal_name = obj.getattr(intern!(py, "signal"))?.extract::<String>()?;
-    let signal_uid = builder.register_uid(&signal_name);
-    let time = extract_value_or_parameter::<f64>(&obj.getattr(intern!(py, "time"))?, builder)?;
-
+    let signal_uid = builder.register_uid(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?);
+    let time = extract_value_or_parameter::<f64>(&obj.getattr(intern!(py, "time"))?, builder)?
+        .ok_or_else(|| Error::new("Delay time must be specified"))?;
     let precompensation_clear = obj
         .getattr(intern!(obj.py(), "precompensation_clear"))?
         .extract::<Option<bool>>()?
         .unwrap_or(false);
     let out = Delay {
-        signal: SignalUid(signal_uid),
-        time: time.ok_or_else(|| Error::new("Delay time must be specified"))?,
+        signal: signal_uid.into(),
+        time: match time {
+            ValueOrParameter::Value(v) => ValueOrParameter::Value(v.into()),
+            ValueOrParameter::Parameter(p) => ValueOrParameter::Parameter(p),
+            _ => unreachable!(),
+        },
         precompensation_clear,
     };
     Ok(out)
@@ -440,28 +473,26 @@ fn extract_reserve(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> P
 fn extract_pulse_parameters(
     obj: &Bound<'_, PyAny>,
     builder: &mut ExperimentBuilder,
-) -> Result<HashMap<Arc<String>, PulseParameterValue>> {
+) -> Result<HashMap<PulseParameterUid, PulseParameterValue>> {
     if obj.is_none() {
         return Ok(HashMap::new());
     }
     let obj = obj.cast::<PyDict>().map_err(PyErr::from)?;
     let mut out = HashMap::new();
     for (key, value) in obj.iter() {
-        let key = Arc::new(key.extract::<String>()?);
-        if value.is_instance(builder.dsl_types.laboneq_type(DslType::Parameter))? {
-            let param_uid = &value
-                .getattr(intern!(obj.py(), "uid"))?
-                .extract::<String>()?;
+        let key_str = key.extract::<&str>()?;
+        let key = builder.id_store.get_or_insert(key_str);
+        if let Ok(Some(value_or_param)) =
+            extract_value_or_parameter::<NumericLiteral>(&value, builder)
+        {
             out.insert(
-                Arc::clone(&key),
-                PulseParameterValue::Parameter(ParameterUid(builder.register_uid(param_uid))),
+                key.into(),
+                PulseParameterValue::ValueOrParameter(value_or_param),
             );
         } else {
             out.insert(
-                Arc::clone(&key),
-                PulseParameterValue::ExternalParameter(
-                    builder.register_external_parameter(&key, value)?,
-                ),
+                key.into(),
+                PulseParameterValue::ExternalParameter(builder.register_external_parameter(value)?),
             );
         }
     }
@@ -472,26 +503,57 @@ fn extract_pulse_parameters(
 fn extract_pulse(
     obj: &Bound<'_, PyAny>,
     builder: &mut ExperimentBuilder,
-) -> Result<(PulseUid, HashMap<Arc<String>, PulseParameterValue>)> {
+) -> Result<(PulseUid, HashMap<PulseParameterUid, PulseParameterValue>)> {
     let py = obj.py();
     let uid = PulseUid(builder.register_uid(obj.getattr(intern!(py, "uid"))?.extract::<&str>()?));
-    let length = if obj.is_instance(builder.dsl_types.laboneq_type(DslType::PulseFunctional))? {
-        PulseLength::Seconds(seconds(
-            obj.getattr(intern!(py, "length"))?.extract::<f64>()?,
-        ))
-    } else {
-        // PulseSampled
-        let samples_py_arr = obj.getattr(intern!(py, "samples"))?;
-        PulseLength::Samples(samples_py_arr.len()?)
-    };
-    let pulse = PulseRef { uid, length };
     let pulse_parameters =
         if obj.is_instance(builder.dsl_types.laboneq_type(DslType::PulseFunctional))? {
             extract_pulse_parameters(&obj.getattr(intern!(py, "pulse_parameters"))?, builder)?
         } else {
             HashMap::new()
         };
+    if builder.pulses.contains_key(&uid) {
+        return Ok((uid, pulse_parameters));
+    }
+    let pulse = if obj.is_instance(builder.dsl_types.laboneq_type(DslType::PulseFunctional))? {
+        PulseDef {
+            uid,
+            kind: PulseKind::Functional(PulseFunctional {
+                length: seconds(obj.getattr(intern!(py, "length"))?.extract::<f64>()?),
+                function: PulseFunction::Custom {
+                    function: obj.getattr(intern!(py, "function"))?.extract::<String>()?,
+                },
+            }),
+            amplitude: extract_amplitude(&obj.getattr(intern!(py, "amplitude"))?)?
+                .unwrap_or(1.0.into()),
+            can_compress: obj
+                .getattr(intern!(py, "can_compress"))?
+                .extract::<bool>()?,
+        }
+    } else {
+        let samples_py_arr = obj.getattr(intern!(py, "samples"))?;
+        let length = samples_py_arr.len()?;
+        PulseDef {
+            uid,
+            kind: PulseKind::Sampled(PulseSampled {
+                samples: samples_py_arr.into(),
+                length,
+            }),
+            amplitude: 1.0.into(),
+            can_compress: obj
+                .getattr(intern!(py, "can_compress"))?
+                .extract::<bool>()?,
+        }
+    };
     Ok((builder.register_pulse(pulse), pulse_parameters))
+}
+
+fn extract_amplitude(value: &Bound<'_, PyAny>) -> Result<Option<NumericLiteral>> {
+    if value.is_none() {
+        return Ok(None);
+    }
+    let amplitude = extract_numeric_value(value)?;
+    Ok(Some(amplitude))
 }
 
 fn extract_acquire(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Result<Acquire> {
@@ -524,9 +586,12 @@ fn extract_acquire(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> R
             let pulse_param = extract_pulse_parameters(&param, builder)?;
             parameters.push(pulse_param);
         }
-    } else {
+    } else if !play_parameters.is_none() {
         let pulse_param = extract_pulse_parameters(&play_parameters, builder)?;
         parameters.push(pulse_param);
+    } else {
+        // Pad kernels to match the kernel count
+        parameters.resize_with(kernels.len(), HashMap::new);
     }
     let out = Acquire {
         signal: SignalUid(
@@ -606,19 +671,14 @@ fn extract_play_pulse(
     } else {
         None
     };
-    let amplitude =
-        extract_value_or_parameter::<Complex64>(&obj.getattr(intern!(py, "amplitude"))?, builder)
-            .map_err(|e| {
-                Error::new(format!(
-                    "PlayPulse amplitude must be a numeric value or parameter: {}",
-                    e
-                ))
-            })
-            .unwrap();
-    let precompensation_clear = obj
-        .getattr(intern!(py, "precompensation_clear"))?
-        .extract::<Option<bool>>()?
-        .unwrap_or(false);
+    let py_amplitude = &obj.getattr(intern!(py, "amplitude"))?;
+    let amplitude = extract_value_or_parameter::<ComplexOrFloat>(py_amplitude, builder)
+        .with_context(|| {
+            Error::new(format!(
+                "Play operation amplitude must be a float or complex value: {}",
+                py_amplitude
+            ))
+        })?;
     let phase = extract_value_or_parameter::<f64>(&obj.getattr(intern!(py, "phase"))?, builder)?;
 
     let increment_oscillator_phase = extract_value_or_parameter::<f64>(
@@ -639,12 +699,11 @@ fn extract_play_pulse(
             builder.register_uid(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?),
         ),
         pulse: pulse.as_ref().map(|x| x.0),
-        amplitude: amplitude.unwrap_or(ValueOrParameter::Value(Complex64::new(1.0, 0.0))),
+        amplitude: amplitude.unwrap_or(ValueOrParameter::Value(ComplexOrFloat::Float(1.0))),
         phase,
         increment_oscillator_phase,
         set_oscillator_phase,
         length,
-        precompensation_clear,
         parameters,
         pulse_parameters: pulse.map(|x| x.1).unwrap_or_default(),
         markers,
@@ -685,12 +744,8 @@ fn extract_match(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Res
             .extract::<u16>()?;
         MatchTarget::UserRegister(value)
     } else if !sweep_parameter.is_none() {
-        let parameter_uid = builder.register_uid(
-            sweep_parameter
-                .getattr(intern!(py, "uid"))?
-                .extract::<&str>()?,
-        );
-        MatchTarget::SweepParameter(ParameterUid(parameter_uid))
+        let parameter_uid = extract_parameter(&sweep_parameter, builder)?;
+        MatchTarget::SweepParameter(parameter_uid)
     } else if !prng_sample.is_none() {
         let parameter_uid =
             builder.register_uid(prng_sample.getattr(intern!(py, "uid"))?.extract::<&str>()?);
@@ -762,9 +817,9 @@ fn extract_section(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> R
     let mut triggers = vec![];
     for (signal_uid, trigger) in trigger_map.iter() {
         let trigger_signal = signal_uid.extract::<&str>()?;
-        let trigger_state = trigger.get_item("state")?.extract::<u16>()?;
+        let trigger_state = trigger.get_item("state")?.extract::<u8>()?;
         let trigger = Trigger {
-            signal: SignalUid(builder.register_uid(trigger_signal)),
+            signal: builder.register_uid(trigger_signal).into(),
             state: trigger_state,
         };
         triggers.push(trigger)
@@ -855,7 +910,8 @@ fn extract_averaging_loop(
     let reset_oscillator_phase = obj
         .getattr(intern!(obj.py(), "reset_oscillator_phase"))?
         .extract::<bool>()?;
-    let acquisition_type = AcquisitionType::Integration;
+    let acquisition_type =
+        extract_acquisition_type(&obj.getattr(intern!(obj.py(), "acquisition_type"))?)?;
     let averaging_mode =
         extract_averaging_mode(&obj.getattr(intern!(obj.py(), "averaging_mode"))?)?;
     let repetition_time = obj
@@ -866,17 +922,35 @@ fn extract_averaging_loop(
         repetition_time,
     )?;
     let obj = AveragingLoop {
-        uid: SectionUid(
-            builder.register_uid(obj.getattr(intern!(obj.py(), "uid"))?.extract::<&str>()?),
-        ),
+        uid: builder
+            .register_uid(obj.getattr(intern!(obj.py(), "uid"))?.extract::<&str>()?)
+            .into(),
         count,
         reset_oscillator_phase,
-        acquisition_type,
+        acquisition_type: acquisition_type.unwrap_or(AcquisitionType::Integration),
         averaging_mode,
         repetition_mode,
         alignment: SectionAlignment::Left, // Averaging loops are always left aligned by default
     };
     Ok(obj)
+}
+
+/// Convert `AcquisitionType` enum
+pub(super) fn extract_acquisition_type(obj: &Bound<'_, PyAny>) -> Result<Option<AcquisitionType>> {
+    if obj.is_none() {
+        return Ok(None);
+    }
+    let enum_name = obj.getattr(intern!(obj.py(), "name"))?;
+    let acq_type = match enum_name.extract::<&str>()? {
+        "INTEGRATION" => Ok(AcquisitionType::Integration),
+        "SPECTROSCOPY" => Ok(AcquisitionType::Spectroscopy),
+        "SPECTROSCOPY_IQ" => Ok(AcquisitionType::Spectroscopy),
+        "SPECTROSCOPY_PSD" => Ok(AcquisitionType::SpectroscopyPsd),
+        "DISCRIMINATION" => Ok(AcquisitionType::Discrimination),
+        "RAW" => Ok(AcquisitionType::Raw),
+        _ => Err(Error::new(format!("Unknown acquisition type: {enum_name}"))),
+    }?;
+    Ok(Some(acq_type))
 }
 
 fn extract_prng_setup(
@@ -1004,6 +1078,8 @@ fn traverse_experiment(
     obj: &Bound<'_, PyAny>,
     builder: &mut ExperimentBuilder,
 ) -> Result<ExperimentNode> {
+    // Post-order traversal to build children first to collect e.g. sweep parameters
+    // before building the parent node.
     let mut children_nodes = vec![];
     if let Some(children) = obj.getattr_opt(intern!(obj.py(), "children"))? {
         children_nodes.reserve(children.len()?);
@@ -1031,7 +1107,7 @@ fn extract_experiment_signal(
 }
 
 /// Convert `Experiment` into Rust Scheduler IR.
-pub fn build_experiment<'py>(
+pub(super) fn build_experiment<'py>(
     experiment: &Bound<'py, PyAny>,
     builder: &mut ExperimentBuilder<'py>,
 ) -> Result<()> {

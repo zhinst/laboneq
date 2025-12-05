@@ -9,6 +9,12 @@ import math
 import random
 from itertools import takewhile
 
+from laboneq_applications.qpu_types.tunable_transmon import (
+    TunableTransmonOperations,
+    TunableTransmonQubit,
+    TunableTransmonQubitParameters,
+)
+
 from laboneq import __version__ as laboneq_version
 from laboneq.contrib.example_helpers.example_notebook_helper import (
     create_dummy_transmon,
@@ -19,11 +25,6 @@ from laboneq.contrib.example_helpers.generate_device_setup import (
 )
 from laboneq.dsl.quantum import QPU
 from laboneq.simple import DeviceSetup, dsl
-from laboneq_applications.qpu_types.tunable_transmon import (
-    TunableTransmonOperations,
-    TunableTransmonQubit,
-    TunableTransmonQubitParameters,
-)
 
 
 # to compare version from string versions

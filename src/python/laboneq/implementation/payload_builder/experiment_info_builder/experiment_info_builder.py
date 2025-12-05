@@ -110,6 +110,9 @@ class ExperimentInfoBuilder:
         self._parameter_parents: dict[str, list[str]] = {}
         self._sweep_params_min_maxes: dict[str, tuple[float, float]] = {}
         self._acquisition_type = None
+        # Rust migration helper fields:
+        # Parameters defined in the experiment.
+        self._dsl_parameters: dict[str, Parameter] = {}
 
     def load_experiment(self) -> ExperimentInfo:
         self._check_physical_channel_calibration_conflict()
@@ -140,7 +143,7 @@ class ExperimentInfoBuilder:
             pulse_defs=sorted(self._pulse_defs.values(), key=lambda s: s.uid),
             chunking=self._chunking_info,
             src=self._experiment,
-            parameter_parents=self._parameter_parents,
+            dsl_parameters=list(self._dsl_parameters.values()),
         )
         self._resolve_seq_averaging(experiment_info)
         self._resolve_oscillator_modulation_type(experiment_info)
@@ -525,7 +528,7 @@ class ExperimentInfoBuilder:
             )
         if nt_only:
             self._nt_only_params.add(param_info.uid)
-
+        self._dsl_parameters[value.uid] = value
         return param_info
 
     def opt_param(self, value: T | Parameter, nt_only=False) -> T | ParameterInfo:
@@ -881,7 +884,9 @@ class ExperimentInfoBuilder:
         visit_count: dict[str, int],
     ) -> SectionInfo:
         vc = visit_count[section.uid]
-        instance_id = section.uid + (f"_{vc}" if vc > 0 else "")
+        is_re_used = vc > 0
+        original_uid = section.uid
+        instance_id = section.uid + (f"_{vc}" if is_re_used else "")
         visit_count[section.uid] += 1
 
         count = None
@@ -1005,6 +1010,8 @@ class ExperimentInfoBuilder:
             parameters=section_parameters,
             prng=prng_setup_info,
             prng_sample=prng_sample,
+            is_reused=is_re_used,
+            original_uid=original_uid,
         )
 
         return section_info
@@ -1290,7 +1297,7 @@ class ExperimentInfoBuilder:
             is_qa_device = DeviceType.from_device_info_type(
                 signal.device.device_type
             ).is_qa_device
-            if is_qa_device:
+            if is_qa_device and "LRT" not in signal.device.dev_opts:
                 osc.is_hardware = acq_type.is_spectroscopy(self._acquisition_type)
             elif (
                 signal.type is SignalInfoType.RF
@@ -1300,7 +1307,6 @@ class ExperimentInfoBuilder:
                 osc.is_hardware = False
             else:
                 osc.is_hardware = True
-
             _logger.info(
                 f"Resolved modulation type of oscillator '{osc.uid}' on signal"
                 f" '{signal.uid}' to {'HARDWARE' if osc.is_hardware else 'SOFTWARE'}"

@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         PortMode,
     )
     from laboneq.data.experiment_description import Experiment
+    from laboneq.dsl.parameter import Parameter
     from laboneq.executor.executor import Statement
 
 
@@ -239,6 +240,10 @@ class SectionInfo:
     sections_and_operations: list[SectionInfo | SectionSignalPulse] = field(
         default_factory=list
     )
+    # Whether this section is reused many times in the experiment.
+    is_reused: bool = False
+    # Original UID
+    original_uid: str = None
 
 
 @dataclass
@@ -381,9 +386,8 @@ class ExperimentInfo:
     chunking: ChunkingInfo | None
     # Scheduler Rust integration fields
     src: Experiment | None = field(default=None)
-    # A mapping from parameter UIDs to their parent UIDs in case they are derived
-    # and not directly defined in a experiment.
-    parameter_parents: dict[str, list[str]] = field(default_factory=dict)
+    # All DSL parameters used in the experiment.
+    dsl_parameters: list[Parameter] = field(default_factory=list)
 
 
 @dataclass
@@ -395,8 +399,6 @@ class ChunkingInfo:
 
 @dataclass
 class CompilationJob:
-    uid: str = None
-    experiment_hash: str = None
     experiment_info: ExperimentInfo = None
     execution: Statement = None
     compiler_settings: dict = None

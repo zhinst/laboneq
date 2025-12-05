@@ -1,5 +1,5 @@
 [workspace.package]
-version = "26.1.0-b1"
+version = "26.1.0-b2"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
 edition = "2024"
 publish = false
@@ -21,7 +21,7 @@ approx = "0.5.1"
 askama = "0.14.0"
 bitvec = "1.0"
 clap = "4.5.38"
-criterion = "0.7"
+criterion = "0.8"
 derive_more = "2.0.1"
 indexmap = "2.9"
 log = "0.4.27"
@@ -54,6 +54,7 @@ unused_qualifications = "deny"
 explicit-outlives-requirements = "warn"
 redundant_lifetimes = "warn"
 single-use-lifetimes = "warn"
+unreachable_pub = "warn"
 
 [workspace.lints.clippy]
 cargo = { level = "warn", priority = -1 }

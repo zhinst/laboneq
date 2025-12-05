@@ -14,7 +14,7 @@ use laboneq_scheduler::experiment::types::Operation;
 ///
 /// * `Ok(())` if the experiment has exactly one real-time averaging loop.
 /// * `Err(Error)` if there are zero or multiple real-time averaging loops.
-pub fn resolve_timing_boundary(node: &mut ExperimentNode) -> Result<()> {
+pub(super) fn resolve_timing_boundary(node: &mut ExperimentNode) -> Result<()> {
     let averaging_loop_count = resolve_timing_boundary_impl(node)?;
     if averaging_loop_count != 1 {
         Err(Error::new(format!(

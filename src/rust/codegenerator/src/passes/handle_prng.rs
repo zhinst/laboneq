@@ -87,7 +87,7 @@ fn handle_prng_recursive(
     Ok(())
 }
 
-pub fn handle_prng(node: &ir::IrNode, cut_points: &mut HashSet<ir::Samples>) -> Result<()> {
+pub(crate) fn handle_prng(node: &ir::IrNode, cut_points: &mut HashSet<ir::Samples>) -> Result<()> {
     let mut active_prng_sample = Option::<String>::None;
     handle_prng_recursive(node, cut_points, None, &mut active_prng_sample)
 }

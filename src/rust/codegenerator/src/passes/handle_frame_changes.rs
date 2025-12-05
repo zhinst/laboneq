@@ -28,7 +28,7 @@ fn try_convert_pulse_to_frame_change(pulse: &ir::PlayPulse) -> Option<ir::FrameC
 }
 
 /// Transform hardware oscillator phase increment pulses into frame changes
-pub fn handle_frame_changes(node: &mut ir::IrNode) {
+pub(crate) fn handle_frame_changes(node: &mut ir::IrNode) {
     match node.data_mut() {
         ir::NodeKind::PlayPulse(x) => {
             if let Some(fc) = try_convert_pulse_to_frame_change(x) {
@@ -182,7 +182,7 @@ fn sort_nodes(nodes: &mut Vec<(Option<u16>, &mut ir::IrNode)>) {
 /// Error if one of the following happens:
 ///     * Frame change overlaps a waveform with different hardware oscillator
 ///     * Frame change does not overlap with any of the waveforms within a case block
-pub fn insert_frame_changes(mut nodes: Vec<(Option<u16>, &mut ir::IrNode)>) -> Result<()> {
+pub(crate) fn insert_frame_changes(mut nodes: Vec<(Option<u16>, &mut ir::IrNode)>) -> Result<()> {
     // Sort so that the waveforms are always before frame change if they happen at the same time.
     // This is due to the fact that a frame change which start at the same time a waveform with length 0, can potentially be
     // after the waveform in the source tree.

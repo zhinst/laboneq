@@ -11,7 +11,6 @@ from laboneq.controller.devices.async_support import (
     AsyncSubscriber,
     InstrumentConnection,
 )
-from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.recipe_processor import RecipeData
 from laboneq.data.recipe import NtStepKey
 
@@ -32,19 +31,14 @@ class CoreBase(ABC):
         self._serial = serial
         self._core_index = core_index
 
-    async def disable_output(self, outputs: set[int], invert: bool):
-        """Disable the output of the channel if it matches the criteria."""
-        if (self._core_index in outputs) != invert:
-            await self._api.set_parallel(self._disable_output())
-
     @abstractmethod
-    def _disable_output(self) -> NodeCollector:
-        """Return node(s) to disable the output of the channel."""
+    async def disable_output(self, outputs: set[int], invert: bool):
+        """Disable the output(s) of the core if it matches the criteria."""
         raise NotImplementedError("This method should be implemented by subclasses.")
 
     @abstractmethod
     def allocate_resources(self):
-        """Initialize or reset channel resources in preparation for execution."""
+        """Initialize or reset core resources in preparation for execution."""
         raise NotImplementedError("This method should be implemented by subclasses.")
 
     @abstractmethod
@@ -53,7 +47,7 @@ class CoreBase(ABC):
         recipe_data: RecipeData,
         nt_step: NtStepKey,
     ):
-        """Load an AWG program into the channel's AWG."""
+        """Load an AWG program into the core."""
         raise NotImplementedError("This method should be implemented by subclasses.")
 
     @abstractmethod
@@ -65,7 +59,7 @@ class CoreBase(ABC):
 
     @abstractmethod
     def collect_warning_nodes(self) -> list[tuple[str, str]]:
-        """Collect warning nodes from the channel."""
+        """Collect warning nodes from the core."""
         raise NotImplementedError("This method should be implemented by subclasses.")
 
     @abstractmethod
@@ -77,7 +71,7 @@ class CoreBase(ABC):
 
     @abstractmethod
     async def start_execution(self, with_pipeliner: bool):
-        """Start the execution of the channel's sequencer program."""
+        """Start the execution of the core's sequencer program."""
         raise NotImplementedError("This method should be implemented by subclasses.")
 
     @abstractmethod

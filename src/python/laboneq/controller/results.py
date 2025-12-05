@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 import numpy as np
 
@@ -53,7 +53,7 @@ def build_partial_result(
     result: AcquiredResult,
     nt_step: NtStepKey,
     raw_result: Any,
-    mapping: list[str | None],
+    mapping: Sequence[str | None | list[str]],
     handle: str,
     pipeline_job_count: int | None,
     chunked_axis_index: int | None,
@@ -69,7 +69,10 @@ def build_partial_result(
     if len(np.shape(result.data)) == len(nt_step.indices):
         # No loops in RT, just a single value produced
         for raw_result_idx in range(len(raw_result)):
-            if mapping[raw_result_idx % len(mapping)] == handle:
+            this_handle = mapping[raw_result_idx % len(mapping)]
+            if this_handle == handle or (
+                isinstance(this_handle, list) and handle in this_handle
+            ):
                 if len(nt_step.indices) == 0:
                     result.data = raw_result[raw_result_idx]
                 else:
@@ -77,11 +80,15 @@ def build_partial_result(
                 break
     else:
         raw_result_len = len(raw_result)
-        mask = np.fromiter(
-            (mapping[i % len(mapping)] == handle for i in range(raw_result_len)),
-            dtype=np.bool,
-            count=raw_result_len,
-        )
+
+        def filter_handle():
+            for raw_result_idx in range(raw_result_len):
+                this_handle = mapping[raw_result_idx % len(mapping)]
+                yield this_handle == handle or (
+                    isinstance(this_handle, list) and handle in this_handle
+                )
+
+        mask = np.fromiter(filter_handle(), dtype=np.bool, count=raw_result_len)
         raw_result_for_handle = raw_result[mask]
 
         if pipeline_job_count:

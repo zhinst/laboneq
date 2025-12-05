@@ -3,15 +3,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import attrs
 
+from laboneq.core.utilities.attrs_helpers import validated_field
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
-
-if TYPE_CHECKING:
-    from laboneq.dsl.parameter import Parameter
-
+from laboneq.dsl.parameter import Parameter
 
 mixer_calib_id = 0
 
@@ -48,8 +44,16 @@ class MixerCalibration:
                 voltage_offsets=[0.02, 0.01],
                 correction_matrix=[[1.0, 0.0], [0.0, 1.0]],
             )
+
+    !!! version-changed "Changed in version 26.1.0"
+
+        The types of the attributes are now validated when a `MixerCalibration` instance is
+        created or when an attribute is set. A `TypeError` is raised if the type of the
+        supplied value is incorrect.
     """
 
-    uid: str = attrs.field(factory=mixer_calib_id_generator)
-    voltage_offsets: list[float | Parameter] | None = None
-    correction_matrix: list[list[float | Parameter]] | None = None
+    uid: str = validated_field(factory=mixer_calib_id_generator)
+    voltage_offsets: list[float | Parameter] | None = validated_field(default=None)
+    correction_matrix: list[list[float | Parameter]] | None = validated_field(
+        default=None
+    )

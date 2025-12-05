@@ -144,8 +144,6 @@ class ArtifactsCodegen(CompilerArtifact):
 
 @dataclass
 class ScheduledExperiment:
-    uid: str | None = None
-
     device_setup_fingerprint: str | None = None
 
     #: Instructions to the controller for running the experiment.
@@ -162,22 +160,16 @@ class ScheduledExperiment:
 
     chunk_count: int | None = None
 
-    compilation_job_hash: str | None = None
-    experiment_hash: str | None = None
-
     def __getattr__(self, attr):
         return getattr(self.artifacts, attr)  # @IgnoreException
 
     def __copy__(self):
         new_artifacts = copy.copy(self.artifacts)
         new_scheduled_experiment = ScheduledExperiment(
-            uid=self.uid,
             device_setup_fingerprint=self.device_setup_fingerprint,
             artifacts=new_artifacts,
             schedule=self.schedule,
             execution=self.execution,
-            compilation_job_hash=self.compilation_job_hash,
-            experiment_hash=self.experiment_hash,
         )
         return new_scheduled_experiment
 
@@ -192,17 +184,11 @@ class ScheduledExperiment:
             return False
 
         return (
-            other.uid,
             other.device_setup_fingerprint,
             other.artifacts,
-            other.compilation_job_hash,
-            other.experiment_hash,
         ) == (
-            self.uid,
             self.device_setup_fingerprint,
             self.artifacts,
-            self.compilation_job_hash,
-            self.experiment_hash,
         ) and dicts_equal(
             {n: w.samples for n, w in other.waves.items()},
             {n: w.samples for n, w in self.waves.items()},

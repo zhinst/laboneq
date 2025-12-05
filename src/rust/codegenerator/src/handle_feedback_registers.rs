@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
-pub enum FeedbackRegisterAllocation {
+pub(crate) enum FeedbackRegisterAllocation {
     Local,
     Global { register: u16 },
 }
@@ -174,7 +174,7 @@ fn evaluate_simultaneous_acquires(
     Ok(sim_acquires.into_values().collect())
 }
 
-pub struct FeedbackSource<'a> {
+pub(crate) struct FeedbackSource<'a> {
     pub signal: &'a Signal,
     pub awg_key: AwgKey,
 }
@@ -184,7 +184,7 @@ pub struct Acquisition {
     pub signal: String,
 }
 
-pub struct FeedbackConfig<'a> {
+pub(crate) struct FeedbackConfig<'a> {
     target_feedback_registers: HashMap<AwgKey, FeedbackRegisterAllocation>,
     feedback_sources: HashMap<Handle, FeedbackSource<'a>>,
     acquisitions: Vec<Vec<Acquisition>>,
@@ -204,7 +204,7 @@ impl<'a> FeedbackConfig<'a> {
     }
 
     /// Feedback register allocated for the given AWG.
-    pub fn target_feedback_register(
+    pub(crate) fn target_feedback_register(
         &self,
         awg_key: &AwgKey,
     ) -> Option<&FeedbackRegisterAllocation> {
@@ -212,16 +212,16 @@ impl<'a> FeedbackConfig<'a> {
     }
 
     /// Feedback source information for the given handle (QA signal information).
-    pub fn feedback_source(&self, handle: &Handle) -> Option<&FeedbackSource<'a>> {
+    pub(crate) fn feedback_source(&self, handle: &Handle) -> Option<&FeedbackSource<'a>> {
         self.feedback_sources.get(handle)
     }
 
     /// Iterator over all handles that are configured for feedback.
-    pub fn handles(&self) -> impl Iterator<Item = &Handle> {
+    pub(crate) fn handles(&self) -> impl Iterator<Item = &Handle> {
         self.feedback_sources.keys()
     }
 
-    pub fn into_acquisitions(self) -> Vec<Vec<Acquisition>> {
+    pub(crate) fn into_acquisitions(self) -> Vec<Vec<Acquisition>> {
         self.acquisitions
     }
 }
@@ -230,7 +230,7 @@ impl<'a> FeedbackConfig<'a> {
 ///
 /// The function assigns feedback registers to the AWGs, where the assignment is based on the
 /// order of the AWGs. It will also collect the signal information associated with each measurement handle.
-pub fn collect_feedback_config<'a>(
+pub(crate) fn collect_feedback_config<'a>(
     node: &IrNode,
     awgs: &[&'a AwgCore],
 ) -> Result<FeedbackConfig<'a>> {

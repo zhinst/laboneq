@@ -8,6 +8,8 @@ from typing import Any
 class EventType:
     SECTION_START = "SECTION_START"
     SECTION_END = "SECTION_END"
+    # Active trigger events. Required by Pulse Sheet Viewer.
+    DIGITAL_SIGNAL_STATE_CHANGE = "DIGITAL_SIGNAL_STATE_CHANGE"
     PLAY_START = "PLAY_START"
     PLAY_END = "PLAY_END"
     ACQUIRE_START = "ACQUIRE_START"

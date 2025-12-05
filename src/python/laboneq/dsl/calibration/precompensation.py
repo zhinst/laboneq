@@ -3,12 +3,13 @@
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 import attrs
 import numpy as np
 from numpy.typing import ArrayLike
 
+from laboneq.core.utilities.attrs_helpers import validated_field
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 precompensation_id = 0
@@ -42,12 +43,18 @@ class ExponentialCompensation:
         Only supported on the HDAWG with the
         [precompensation option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
         Ignored on other devices.
+
+    !!! version-changed "Changed in version 26.1.0"
+
+        The types of the attributes are now validated when an `ExponentialCompensation` instance is
+        created or when an attribute is set. A `TypeError` is raised if the type of the
+        supplied value is incorrect.
     """
 
     # Exponential filter timeconstant
-    timeconstant: float = 1e-6
+    timeconstant: float = validated_field(default=1e-6)
     # Exponential filter amplitude
-    amplitude: float = 0.0
+    amplitude: float = validated_field(default=0.0)
 
 
 @classformatter
@@ -70,13 +77,19 @@ class HighPassCompensation:
         [precompensation option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
         Ignored on other devices.
 
+    !!! version-changed "Changed in version 26.1.0"
+
+        The types of the attributes are now validated when a `HighPassCompensation` instance is
+        created or when an attribute is set. A `TypeError` is raised if the type of the
+        supplied value is incorrect.
+
     !!! version-removed "Removed in version 2.57.0"
         Removed the `.clearing` attribute that was deprecated in version 2.8.0.
         It had no effect.
     """
 
     # high-pass filter time constant
-    timeconstant: float = 1e-6
+    timeconstant: float = validated_field(default=1e-6)
 
 
 @classformatter
@@ -104,10 +117,16 @@ class FIRCompensation:
         Only supported on the HDAWG with the
         [precompensation option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
         Ignored on other devices.
+
+    !!! version-changed "Changed in version 26.1.0"
+
+        The types of the attributes are now validated when a `FIRCompensation` instance is
+        created or when an attribute is set. A `TypeError` is raised if the type of the
+        supplied value is incorrect.
     """
 
     # FIR filter coefficients
-    coefficients: ArrayLike = attrs.field(factory=lambda: np.zeros(40))
+    coefficients: ArrayLike = validated_field(factory=lambda: np.zeros(40))
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, FIRCompensation):
@@ -144,12 +163,18 @@ class BounceCompensation:
         Only supported on the HDAWG with the
         [precompensation option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
         Ignored on other devices.
+
+    !!! version-changed "Changed in version 26.1.0"
+
+        The types of the attributes are now validated when a `BounceCompensation` instance is
+        created or when an attribute is set. A `TypeError` is raised if the type of the
+        supplied value is incorrect.
     """
 
     # Delay time to compensate
-    delay: float = 0.0
+    delay: float = validated_field(default=0.0)
     # bounce compensation amplitude
-    amplitude: float = 0.0
+    amplitude: float = validated_field(default=0.0)
 
 
 @classformatter
@@ -163,7 +188,7 @@ class Precompensation:
         exponential:
             List of exponential precompensation filters. Default: `None`.
         high_pass:
-            A high pass precompenstation filter. Default: `None`.
+            A high pass precompensation filter. Default: `None`.
         bounce:
             A bounce precompensation filter. Default: `None`.
         FIR:
@@ -185,22 +210,28 @@ class Precompensation:
         Only supported on the HDAWG with the
         [precompensation option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
         Ignored on other devices.
+
+    !!! version-changed "Changed in version 26.1.0"
+
+        The types of the attributes are now validated when a `Precompensation` instance is
+        created or when an attribute is set. A `TypeError` is raised if the type of the
+        supplied value is incorrect.
     """
 
     # Unique identifier. If left blank, a new unique ID will be generated.
-    uid: str = attrs.field(factory=precompensation_id_generator)
+    uid: str = validated_field(factory=precompensation_id_generator)
 
     # Exponential precompensation filter
-    exponential: Optional[List[ExponentialCompensation]] = attrs.field(default=None)
+    exponential: List[ExponentialCompensation] | None = validated_field(default=None)
 
     # High-pass compensation
-    high_pass: Optional[HighPassCompensation] = attrs.field(default=None)
+    high_pass: HighPassCompensation | None = validated_field(default=None)
 
     # Bounce compensation
-    bounce: Optional[BounceCompensation] = attrs.field(default=None)
+    bounce: BounceCompensation | None = validated_field(default=None)
 
     # FIR filter coefficients
-    FIR: Optional[FIRCompensation] = attrs.field(default=None)
+    FIR: FIRCompensation | None = validated_field(default=None)
 
     def is_nonzero(self) -> bool:
         """Returns True if any filters are set.

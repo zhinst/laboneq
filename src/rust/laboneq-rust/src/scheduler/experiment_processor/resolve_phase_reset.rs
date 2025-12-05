@@ -12,7 +12,7 @@ use laboneq_scheduler::experiment::types::{Operation, OscillatorKind, SignalUid}
 /// to the signals present in their scope: Signals in the same section.
 ///
 /// Errors if a phase reset is assigned to an RF signal with hardware oscillator.
-pub fn resolve_phase_reset(
+pub(super) fn resolve_phase_reset(
     node: &mut ExperimentNode,
     signals: &HashMap<SignalUid, Signal>,
 ) -> Result<()> {

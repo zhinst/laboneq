@@ -8,7 +8,7 @@ use std::hash::Hash;
 
 #[pyclass]
 #[derive(Debug, Clone)]
-pub struct HwOscillator {
+pub(crate) struct HwOscillator {
     #[pyo3(get, set)]
     pub uid: String,
     #[pyo3(get, set)]

@@ -22,13 +22,11 @@ class PhysicalChannelGroup:
 
     def get_calibration(self):
         """Retrieve the calibration of the physical channel group."""
-        calibration = dict()
-        for channel in self.channels.values():
-            calibration[channel.path] = (
-                channel.calibration if channel.is_calibrated() else None
-            )
-
-        return calibration
+        return {
+            channel.path: channel.calibration
+            for channel in self.channels.values()
+            if channel.is_calibrated()
+        }
 
     def reset_calibration(self):
         """Reset the calibration on all the logical signals of the group."""

@@ -16,6 +16,6 @@ fn handle_loops_recursive(node: &ir::IrNode, cut_points: &mut HashSet<ir::Sample
     Ok(())
 }
 
-pub fn handle_loops(node: &ir::IrNode, cut_points: &mut HashSet<ir::Samples>) -> Result<()> {
+pub(crate) fn handle_loops(node: &ir::IrNode, cut_points: &mut HashSet<ir::Samples>) -> Result<()> {
     handle_loops_recursive(node, cut_points)
 }

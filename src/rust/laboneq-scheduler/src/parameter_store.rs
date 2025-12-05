@@ -32,6 +32,10 @@ impl ParameterStore {
     pub fn empty_queries(&mut self) -> HashSet<ParameterUid> {
         std::mem::take(&mut self.queries.borrow_mut())
     }
+
+    pub fn available_parameters(&self) -> HashSet<ParameterUid> {
+        self.parameters.keys().cloned().collect()
+    }
 }
 
 #[derive(Default)]

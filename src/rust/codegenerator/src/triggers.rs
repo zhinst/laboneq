@@ -85,7 +85,7 @@ fn resample_states<
 
 /// Consolidate trigger output events happening at the same time and
 /// track the state of the trigger output.
-pub fn generate_trigger_states(events: &mut Vec<AwgEvent>) {
+pub(crate) fn generate_trigger_states(events: &mut Vec<AwgEvent>) {
     if events.is_empty() {
         return;
     }
@@ -105,11 +105,10 @@ pub fn generate_trigger_states(events: &mut Vec<AwgEvent>) {
                 events_at_this_timestamp.push(match event.kind {
                     EventType::TriggerOutputBit(data) => {
                         timestamp_had_trigger_bits = true;
-                        let mask = 1 << data.bit;
                         if data.set {
-                            current_trigger_state |= mask;
+                            current_trigger_state |= data.bits as u16;
                         } else {
-                            current_trigger_state &= !mask;
+                            current_trigger_state &= !data.bits as u16;
                         }
                         AwgEvent {
                             start: event.start,

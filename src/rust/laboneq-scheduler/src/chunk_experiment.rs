@@ -37,7 +37,7 @@ impl ChunkingInfo {
 
 /// This function modifies the experiment in place to only include the specified chunk of a sweep loop.
 /// When chunking happens, the `parameters` are updated accordingly to match the chunked iterations.
-pub fn chunk_experiment(
+pub(crate) fn chunk_experiment(
     ir: &mut ExperimentNode,
     parameters: &mut HashMap<ParameterUid, SweepParameter>,
     chunking_info: &ChunkingInfo,

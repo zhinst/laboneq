@@ -16,19 +16,19 @@ use crate::{
 };
 
 #[derive(Clone, Debug)]
-pub struct StaticWaveformSignature {
+pub(crate) struct StaticWaveformSignature {
     uid: u64,
     waveform: WaveformSignature,
     signature_string: String,
 }
 
-pub enum PulseSource {
+pub(crate) enum PulseSource {
     Pulses,
     Samples,
 }
 
 impl StaticWaveformSignature {
-    pub fn new(uid: u64, waveform: WaveformSignature, signature_string: String) -> Self {
+    pub(crate) fn new(uid: u64, waveform: WaveformSignature, signature_string: String) -> Self {
         Self {
             uid,
             waveform,
@@ -36,26 +36,26 @@ impl StaticWaveformSignature {
         }
     }
 
-    pub fn kind(&self) -> PulseSource {
+    pub(crate) fn kind(&self) -> PulseSource {
         match self.waveform {
             WaveformSignature::Pulses { .. } => PulseSource::Pulses,
             WaveformSignature::Samples { .. } => PulseSource::Samples,
         }
     }
 
-    pub fn length(&self) -> Samples {
+    pub(crate) fn length(&self) -> Samples {
         self.waveform.length()
     }
 
-    pub fn signature_string(&self) -> &str {
+    pub(crate) fn signature_string(&self) -> &str {
         &self.signature_string
     }
 
-    pub fn is_playzero(&self) -> bool {
+    pub(crate) fn is_playzero(&self) -> bool {
         self.waveform.is_playzero()
     }
 
-    pub fn uid(&self) -> u64 {
+    pub(crate) fn uid(&self) -> u64 {
         self.uid
     }
 }
@@ -73,7 +73,7 @@ impl Hash for StaticWaveformSignature {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct PlayWaveEvent {
+pub(crate) struct PlayWaveEvent {
     pub waveform: Rc<StaticWaveformSignature>,
     pub state: Option<u16>,
     pub hw_oscillator: Option<HwOscillator>,
@@ -99,19 +99,19 @@ impl Hash for PlayWaveEvent {
 }
 
 #[derive(Debug)]
-pub struct AcquireEvent {
+pub(crate) struct AcquireEvent {
     pub channels: Vec<u8>,
 }
 
 impl AcquireEvent {
-    pub fn from_ir(event: PlayAcquire) -> Self {
+    pub(crate) fn from_ir(event: PlayAcquire) -> Self {
         let channels = event.signal().channels.to_vec();
         AcquireEvent { channels }
     }
 }
 
 #[derive(Debug)]
-pub struct MatchEvent {
+pub(crate) struct MatchEvent {
     pub handle: Option<Handle>,
     pub local: bool,
     pub user_register: Option<u16>,
@@ -120,7 +120,7 @@ pub struct MatchEvent {
 }
 
 impl MatchEvent {
-    pub fn from_ir(event: Match) -> Self {
+    pub(crate) fn from_ir(event: Match) -> Self {
         MatchEvent {
             handle: event.handle,
             local: event.local,
@@ -132,46 +132,46 @@ impl MatchEvent {
 }
 
 #[derive(Debug)]
-pub struct ChangeHwOscPhase {
+pub(crate) struct ChangeHwOscPhase {
     pub signature: PlayWaveEvent,
 }
 
 #[derive(Debug)]
-pub struct PushLoop {
+pub(crate) struct PushLoop {
     pub num_repeats: u64,
     pub compressed: bool,
 }
 
 #[derive(Debug)]
-pub struct Iterate {
+pub(crate) struct Iterate {
     pub num_repeats: u64,
 }
 
 #[derive(Debug)]
-pub struct PrngSetup {
+pub(crate) struct PrngSetup {
     pub range: u32,
     pub seed: u32,
 }
 
 #[derive(Debug)]
-pub struct TriggerOutput {
+pub(crate) struct TriggerOutput {
     pub state: u16,
 }
 
 #[derive(Debug)]
-pub struct TriggerOutputBit {
-    pub bit: u8,
+pub(crate) struct TriggerOutputBit {
+    pub bits: u8,
     pub set: bool,
 }
 
 #[derive(Debug)]
-pub struct QaEvent {
+pub(crate) struct QaEvent {
     pub acquire_events: Vec<AcquireEvent>,
     pub play_wave_events: Vec<PlayWaveEvent>,
 }
 
 #[derive(Debug)]
-pub enum EventType {
+pub(crate) enum EventType {
     PlayWave(PlayWaveEvent),
     PlayHold(),
     Match(MatchEvent),
@@ -207,7 +207,7 @@ impl Default for EventType {
 }
 
 #[derive(Debug, Default)]
-pub struct AwgEvent {
+pub(crate) struct AwgEvent {
     pub start: Samples,
     pub end: Samples,
     pub kind: EventType,

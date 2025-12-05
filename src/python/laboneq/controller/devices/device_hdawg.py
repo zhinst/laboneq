@@ -135,13 +135,6 @@ class DeviceHDAWG(DeviceBase):
             busy_nodes.append(f"/{self.serial}/sigouts/{awg * 2 + 1}/busy")
         return busy_nodes
 
-    async def disable_outputs(self, outputs: set[int], invert: bool):
-        nc = NodeCollector(base=f"/{self.serial}/")
-        for ch in range(self._channels):
-            if (ch in outputs) != invert:
-                nc.add(f"sigouts/{ch}/on", 0, cache=False)
-        await self.set_async(nc)
-
     def update_clock_source(self, force_internal: bool | None):
         if force_internal or force_internal is None and self.is_standalone():
             # Internal specified explicitly or

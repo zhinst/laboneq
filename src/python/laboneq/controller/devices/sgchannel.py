@@ -44,6 +44,7 @@ class SGChannelNodes:
     awg_elf_progress: str
     awg_enable: str
     awg_ready: str
+    awg_sequencer_status: str
     awg_command_table: str
     osc_freq: list[str]
     busy: str
@@ -85,6 +86,7 @@ class SGChannel(CoreBase):
             awg_elf_progress=f"{self._node_base}/awg/elf/progress",
             awg_enable=f"{self._node_base}/awg/enable",
             awg_ready=f"{self._node_base}/awg/ready",
+            awg_sequencer_status=f"{self._node_base}/awg/sequencer/status",
             awg_command_table=f"{self._node_base}/awg/commandtable",
             osc_freq=[f"{self._node_base}/oscs/{i}/freq" for i in range(8)],
             busy=f"{self._node_base}/busy",
@@ -98,8 +100,11 @@ class SGChannel(CoreBase):
     def pipeliner(self) -> AwgPipeliner:
         return self._pipeliner
 
-    def _disable_output(self) -> NodeCollector:
-        return NodeCollector.one(self.nodes.output_on, 0, cache=False)
+    async def disable_output(self, outputs: set[int], invert: bool):
+        if (self._core_index in outputs) != invert:
+            await self._api.set_parallel(
+                NodeCollector.one(self.nodes.output_on, 0, cache=False)
+            )
 
     def allocate_resources(self):
         self._pipeliner._reload_tracker.reset()
@@ -371,8 +376,8 @@ class SGChannel(CoreBase):
         if with_pipeliner:
             return self._pipeliner.conditions_for_execution_ready()
         return {
-            self.nodes.awg_enable: (
-                1,
+            self.nodes.awg_sequencer_status: (
+                4,
                 f"AWG {self._core_index} didn't start.",
             )
         }

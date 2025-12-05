@@ -23,13 +23,13 @@ class LogicalSignalGroup:
 
     def get_calibration(self):
         """Retrieve the calibration of the logical signal group."""
-        calibration = dict()
-        for logical_signal in self.logical_signals.values():
-            calibration[self.path + qct_path.Separator + logical_signal.name] = (
-                logical_signal.calibration if logical_signal.is_calibrated() else None
-            )
-
-        return calibration
+        return {
+            self.path
+            + qct_path.Separator
+            + logical_signal.name: logical_signal.calibration
+            for logical_signal in self.logical_signals.values()
+            if logical_signal.is_calibrated()
+        }
 
     def reset_calibration(self):
         """Reset the calibration on all the logical signals of the group."""

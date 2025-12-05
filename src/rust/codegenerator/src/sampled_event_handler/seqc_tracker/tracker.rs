@@ -5,7 +5,7 @@ use super::FeedbackRegisterIndex;
 use super::awg::Awg;
 use super::output_mute::OutputMute;
 use super::prng_tracker::PRNGTracker;
-use super::seqc_generator::seqc_generator_from_device_traits;
+use super::seqc_generator::{PlayEmissionError, seqc_generator_from_device_traits};
 use super::{
     compressor::compress_generator, seqc_generator::SeqCGenerator, seqc_statements::SeqCVariant,
 };
@@ -16,10 +16,10 @@ use std::cell::RefCell;
 use std::ops::DerefMut;
 use std::rc::Rc;
 
-pub type SeqCGeneratorRef = Rc<RefCell<SeqCGenerator>>;
-pub type PrngTrackerRef = Rc<RefCell<PRNGTracker>>;
+pub(crate) type SeqCGeneratorRef = Rc<RefCell<SeqCGenerator>>;
+pub(crate) type PrngTrackerRef = Rc<RefCell<PRNGTracker>>;
 
-pub struct SeqCTracker {
+pub(crate) struct SeqCTracker {
     deferred_function_calls: SeqCGenerator,
     deferred_phase_changes: SeqCGenerator,
     loop_stack_generators: Vec<Vec<SeqCGeneratorRef>>,
@@ -36,7 +36,7 @@ pub struct SeqCTracker {
 
 impl SeqCTracker {
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
+    pub(crate) fn new(
         init_generator: SeqCGenerator,
         deferred_function_calls: SeqCGenerator,
         awg: &Awg,
@@ -76,11 +76,11 @@ impl SeqCTracker {
         Ok(tracker)
     }
 
-    pub fn automute_playzeros(&self) -> bool {
+    pub(crate) fn automute_playzeros(&self) -> bool {
         self.automute.is_some()
     }
 
-    pub fn current_loop_stack_generator(&self) -> SeqCGeneratorRef {
+    pub(crate) fn current_loop_stack_generator(&self) -> SeqCGeneratorRef {
         Rc::clone(
             self.loop_stack_generators
                 .last()
@@ -94,18 +94,17 @@ impl SeqCTracker {
     /// If muting is enabled, the emitted playZeros are muted if possible.
     /// Also clears deferred function calls within the context of the new playZero.
     /// Returns the updated current time.
-    pub fn add_required_playzeros(&mut self, start: Samples) -> Result<Samples> {
+    pub(crate) fn add_required_playzeros(
+        &mut self,
+        start: Samples,
+    ) -> Result<Samples, PlayEmissionError> {
         if start > self.current_time {
             let play_zero_samples = (start - self.current_time) as Samples;
 
             if !self.mute_samples(play_zero_samples)? {
                 self.add_timing_comment(self.current_time + play_zero_samples);
-                self.current_loop_stack_generator()
-                    .borrow_mut()
-                    .add_play_zero_statement(
-                        play_zero_samples,
-                        &mut Some(&mut self.deferred_function_calls),
-                    )?;
+
+                self.add_play_zero_statement(play_zero_samples, false)?;
             }
             self.current_time += play_zero_samples;
         }
@@ -117,7 +116,7 @@ impl SeqCTracker {
     /// If the length of samples exceeds `samples_min`, muting is applied,
     /// otherwise no action is done.
     ///
-    fn mute_samples(&mut self, samples: Samples) -> Result<bool> {
+    fn mute_samples(&mut self, samples: Samples) -> Result<bool, PlayEmissionError> {
         let automute = match &mut self.automute {
             Some(automute) => {
                 if samples < automute.samples_min {
@@ -161,7 +160,7 @@ impl SeqCTracker {
     ///
     /// This function should not be needed anywhere but at the end of the sequence.
     /// In the future, maybe at the end of a loop iteration?)
-    pub fn force_deferred_function_calls(&mut self) -> Result<()> {
+    pub(crate) fn force_deferred_function_calls(&mut self) -> Result<()> {
         if !self.has_deferred_function_calls() {
             return Ok(());
         }
@@ -176,7 +175,7 @@ impl SeqCTracker {
     }
 
     /// Emit the deferred function calls *now*.
-    pub fn flush_deferred_function_calls(&mut self) {
+    pub(crate) fn flush_deferred_function_calls(&mut self) {
         if self.has_deferred_function_calls() {
             self.current_loop_stack_generator()
                 .borrow_mut()
@@ -191,7 +190,7 @@ impl SeqCTracker {
     /// as late as possible, for example, we exchange it with a playZero that comes
     /// immediately after. This allows the sequencer to add more work to the wave player,
     /// and avoid gaps in the playback more effectively.
-    pub fn flush_deferred_phase_changes(&mut self) {
+    pub(crate) fn flush_deferred_phase_changes(&mut self) {
         if self.has_deferred_phase_changes() {
             self.current_loop_stack_generator()
                 .borrow_mut()
@@ -207,22 +206,22 @@ impl SeqCTracker {
     ///
     /// For example, when we've accumulated deferred phase increments, but then
     /// encounter a phase reset, the phase changes are nullified anyway.
-    pub fn discard_deferred_phase_changes(&mut self) {
+    pub(crate) fn discard_deferred_phase_changes(&mut self) {
         self.deferred_phase_changes.clear();
     }
 
     /// Check if there are any pending deferred function calls.
-    pub fn has_deferred_function_calls(&self) -> bool {
+    pub(crate) fn has_deferred_function_calls(&self) -> bool {
         self.deferred_function_calls.num_statements() > 0
     }
 
     /// Check if there are any pending deferred phase changes.
-    pub fn has_deferred_phase_changes(&self) -> bool {
+    pub(crate) fn has_deferred_phase_changes(&self) -> bool {
         self.deferred_phase_changes.num_statements() > 0
     }
 
     /// Add a timing comment to the current generator if enabled.
-    pub fn add_timing_comment(&mut self, end_samples: Samples) {
+    pub(crate) fn add_timing_comment(&mut self, end_samples: Samples) {
         if !self.emit_timing_comments {
             return;
         }
@@ -239,14 +238,14 @@ impl SeqCTracker {
     }
 
     /// Add a comment string to the current generator.
-    pub fn add_comment<S: Into<String>>(&mut self, comment: S) {
+    pub(crate) fn add_comment<S: Into<String>>(&mut self, comment: S) {
         self.current_loop_stack_generator()
             .borrow_mut()
             .add_comment(comment);
     }
 
     /// Add a function call statement to the appropriate generator.
-    pub fn add_function_call_statement<S1: Into<String>, S2: Into<String>>(
+    pub(crate) fn add_function_call_statement<S1: Into<String>, S2: Into<String>>(
         &mut self,
         name: S1,
         args: Vec<SeqCVariant>, // default: Empty
@@ -269,11 +268,11 @@ impl SeqCTracker {
     ///
     /// * `num_samples`: Number of samples to play.
     /// * `increment_counter`: If true, increment the current time by `num_samples`.
-    pub fn add_play_zero_statement(
+    pub(crate) fn add_play_zero_statement(
         &mut self,
         num_samples: Samples,
         increment_counter: bool, // default: false
-    ) -> Result<()> {
+    ) -> Result<(), PlayEmissionError> {
         if increment_counter {
             self.current_time += num_samples;
         }
@@ -283,14 +282,17 @@ impl SeqCTracker {
     }
 
     /// Add playHold statement.
-    pub fn add_play_hold_statement(&mut self, num_samples: Samples) -> Result<()> {
+    pub(crate) fn add_play_hold_statement(
+        &mut self,
+        num_samples: Samples,
+    ) -> Result<(), PlayEmissionError> {
         self.current_loop_stack_generator()
             .borrow_mut()
             .add_play_hold_statement(num_samples, &mut Some(&mut self.deferred_function_calls))
     }
 
     /// Add playWave statement.
-    pub fn add_play_wave_statement<S: Into<String>>(
+    pub(crate) fn add_play_wave_statement<S: Into<String>>(
         &mut self,
         wave_id: S,
         channel: Option<ChannelIndex>,
@@ -301,9 +303,9 @@ impl SeqCTracker {
     }
 
     /// Add command table execution statement.
-    pub fn add_command_table_execution<S: Into<String>>(
+    pub(crate) fn add_command_table_execution<S: Into<String>>(
         &mut self,
-        ct_index: SeqCVariant,
+        ct_index: impl Into<SeqCVariant>,
         latency: Option<SeqCVariant>, // default: None
         comment: Option<S>,           // default: ""
     ) -> Result<()> {
@@ -314,18 +316,22 @@ impl SeqCTracker {
         }
         self.current_loop_stack_generator()
             .borrow_mut()
-            .add_command_table_execution(ct_index, latency, comment);
+            .add_command_table_execution(ct_index.into(), latency, comment);
         Ok(())
     }
 
     /// Add a deferred phase change (zero-time command table execution).
-    pub fn add_phase_change<S: Into<String>>(&mut self, ct_index: SeqCVariant, comment: Option<S>) {
+    pub(crate) fn add_phase_change<S: Into<String>>(
+        &mut self,
+        ct_index: SeqCVariant,
+        comment: Option<S>,
+    ) {
         self.deferred_phase_changes
             .add_command_table_execution(ct_index, None, comment);
     }
 
     /// Add variable assignment statement.
-    pub fn add_variable_assignment<S: Into<String>>(
+    pub(crate) fn add_variable_assignment<S: Into<String>>(
         &mut self,
         variable_name: S,
         value: SeqCVariant,
@@ -336,7 +342,7 @@ impl SeqCTracker {
     }
 
     /// Add variable increment statement.
-    pub fn add_variable_increment<S: Into<String>>(
+    pub(crate) fn add_variable_increment<S: Into<String>>(
         &mut self,
         variable_name: S,
         value: SeqCVariant,
@@ -346,7 +352,7 @@ impl SeqCTracker {
             .add_variable_increment(variable_name, value);
     }
 
-    pub fn append_loop_stack_generator(
+    pub(crate) fn append_loop_stack_generator(
         &mut self,
         generator: Option<SeqCGenerator>, // default: None
         always: bool,                     // default: false
@@ -372,7 +378,10 @@ impl SeqCTracker {
     }
 
     /// Pushes a new level onto the loop stack, optionally with an initial generator.
-    pub fn push_loop_stack_generator(&mut self, generator: Option<SeqCGenerator>) -> Result<()> {
+    pub(crate) fn push_loop_stack_generator(
+        &mut self,
+        generator: Option<SeqCGenerator>,
+    ) -> Result<()> {
         self.loop_stack_generators.push(vec![]);
         self.append_loop_stack_generator(generator, false)
             .map(|_| ())
@@ -380,7 +389,7 @@ impl SeqCTracker {
 
     /// Pops the top level of generators from the loop stack, compresses and returns them.
     /// This also removes all other generators from the object, in particular `seqc_gen_prng`.
-    pub fn pop_loop_stack_generators(&mut self) -> Option<Vec<SeqCGenerator>> {
+    pub(crate) fn pop_loop_stack_generators(&mut self) -> Option<Vec<SeqCGenerator>> {
         if self.loop_stack_generators.is_empty() {
             return None;
         }
@@ -400,7 +409,7 @@ impl SeqCTracker {
         })
     }
 
-    pub fn top_loop_stack_generators(&self) -> Option<&Vec<SeqCGeneratorRef>> {
+    pub(crate) fn top_loop_stack_generators(&self) -> Option<&Vec<SeqCGeneratorRef>> {
         self.loop_stack_generators.last()
     }
 
@@ -412,7 +421,7 @@ impl SeqCTracker {
     /// This function returns a reference to a PRNGTracker through which the code
     /// generator can adjust the values and eventually commit them.
     /// Once committed, they values cannot be changed, and the PRNG has to be setup anew.
-    pub fn setup_prng(&mut self, seed: u32, prng_range: u32) -> Result<()> {
+    pub(crate) fn setup_prng(&mut self, seed: u32, prng_range: u32) -> Result<()> {
         self.seqc_gen_prng = Some(self.append_loop_stack_generator(None, false)?);
         let mut prng_tracker = PRNGTracker::new();
         self.append_loop_stack_generator(None, false)?; // Continuation
@@ -424,7 +433,7 @@ impl SeqCTracker {
     }
 
     /// Adds a command table execution statement indexed by the PRNG value plus an offset.
-    pub fn add_prng_match_command_table_execution(&mut self, offset: u32) -> Result<()> {
+    pub(crate) fn add_prng_match_command_table_execution(&mut self, offset: u32) -> Result<()> {
         assert!(
             self.prng_tracker
                 .as_ref()
@@ -442,7 +451,7 @@ impl SeqCTracker {
         Ok(())
     }
 
-    pub fn commit_prng(&mut self, offset: u32) -> u32 {
+    pub(crate) fn commit_prng(&mut self, offset: u32) -> u32 {
         let mut tracker = self
             .prng_tracker
             .as_mut()
@@ -463,7 +472,7 @@ impl SeqCTracker {
     }
 
     /// Adds commands to sample the PRNG value into the 'prng_value' variable.
-    pub fn sample_prng(&mut self, declarations_generator: &mut SeqCGenerator) -> Result<()> {
+    pub(crate) fn sample_prng(&mut self, declarations_generator: &mut SeqCGenerator) -> Result<()> {
         let variable_name = "prng_value";
         if !declarations_generator.is_variable_declared(variable_name) {
             declarations_generator.add_variable_declaration(variable_name, None)?;
@@ -473,7 +482,7 @@ impl SeqCTracker {
     }
 
     /// Add a setTrigger statement.
-    pub fn add_set_trigger_statement(&mut self, value: u16, deferred: bool) {
+    pub(crate) fn add_set_trigger_statement(&mut self, value: u16, deferred: bool) {
         self.add_function_call_statement(
             "setTrigger",
             vec![SeqCVariant::Integer(value as i64)],
@@ -485,7 +494,7 @@ impl SeqCTracker {
 
     /// Add a startQA statement (SHFQA specific).
     /// Handles optional arguments and their dependencies.
-    pub fn add_startqa_shfqa_statement<S1: Into<String>, S2: Into<String>>(
+    pub(crate) fn add_startqa_shfqa_statement<S1: Into<String>, S2: Into<String>>(
         &mut self,
         generator_mask: S1,
         integrator_mask: S2,
@@ -528,22 +537,22 @@ impl SeqCTracker {
     }
 
     /// Get the last set state of the trigger outputs.
-    pub fn trigger_output_state(&self) -> u16 {
+    pub(crate) fn trigger_output_state(&self) -> u16 {
         self.active_trigger_outputs
     }
 
     /// Get the current time in samples.
-    pub fn current_time(&self) -> Samples {
+    pub(crate) fn current_time(&self) -> Samples {
         self.current_time
     }
 
     /// Set the current time in samples.
-    pub fn set_current_time(&mut self, time: Samples) {
+    pub(crate) fn set_current_time(&mut self, time: Samples) {
         self.current_time = time;
     }
 }
 
-pub fn top_loop_stack_generators_have_statements(seqc_tracker: &SeqCTracker) -> bool {
+pub(crate) fn top_loop_stack_generators_have_statements(seqc_tracker: &SeqCTracker) -> bool {
     let has_statements = if let Some(generators) = seqc_tracker.top_loop_stack_generators() {
         generators
             .iter()

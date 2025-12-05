@@ -37,7 +37,7 @@ macro_rules! quantity {
             }
         }
 
-        impl<T: num_traits::Zero + std::cmp::PartialEq, U> PartialEq for $ident<U, T> {
+        impl<T: num_traits::Zero + std::cmp::PartialEq, U> std::cmp::PartialEq for $ident<U, T> {
             fn eq(&self, other: &Self) -> bool {
                 let a = &self.value;
                 let b = &other.value;
@@ -51,13 +51,13 @@ macro_rules! quantity {
 
         impl<T: num_traits::Zero + std::cmp::PartialEq, U> Eq for $ident<U, T> {}
 
-        impl<U: num_traits::Zero + std::cmp::PartialOrd, T> PartialOrd for $ident<T, U> {
+        impl<U: num_traits::Zero + std::cmp::PartialOrd, T> std::cmp::PartialOrd for $ident<T, U> {
             fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
                 Some(self.cmp(other))
             }
         }
 
-        impl<T: std::cmp::PartialOrd + num_traits::Zero, U> Ord for $ident<U, T> {
+        impl<T: std::cmp::PartialOrd + num_traits::Zero, U> std::cmp::Ord for $ident<U, T> {
             fn cmp(&self, other: &Self) -> std::cmp::Ordering {
                 if self.value < other.value {
                     std::cmp::Ordering::Less

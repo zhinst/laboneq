@@ -9,7 +9,7 @@ use crate::ir::{IrKind, MatchTarget};
 ///
 /// * Checks that no acquisitions are present within match statements
 ///   when matching against targets other than sweep parameters.
-pub fn validate_ir(node: &ScheduledNode) -> Result<()> {
+pub(crate) fn validate_ir(node: &ScheduledNode) -> Result<()> {
     let mut ctx = ValidationContext::new();
     validate_ir_impl(node, &mut ctx)?;
     Ok(())

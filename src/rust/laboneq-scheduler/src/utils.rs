@@ -5,7 +5,7 @@ use crate::experiment::types::SignalUid;
 use laboneq_units::tinysample::{TINYSAMPLE_DURATION, TinySamples, tiny_samples};
 use num_integer::{Integer, div_ceil};
 // Re-export for convenience
-pub use num_integer::lcm;
+pub(crate) use num_integer::lcm;
 
 fn is_valid_sampling_rate(rate: f64) -> bool {
     rate.is_finite() && rate > 0.0 && !rate.is_subnormal()
@@ -23,8 +23,10 @@ pub(crate) trait SignalGridInfo {
 /// The sequencer grid is the LCM of the sequencer rates (sampling rate / sample multiple).
 ///
 /// This function will panic if any signal has an invalid sampling rate (non-finite or non-positive).
-pub fn compute_grid<T: SignalGridInfo + Sized>(signals: &[&T]) -> (TinySamples, TinySamples) {
-    let mut signal_grid = 1;
+pub(crate) fn compute_grid<T: SignalGridInfo + Sized>(
+    signals: &[&T],
+) -> (TinySamples, TinySamples) {
+    let mut signals_grid = 1;
     let mut sequencer_grid = 1;
 
     for signal in signals {
@@ -35,41 +37,78 @@ pub fn compute_grid<T: SignalGridInfo + Sized>(signals: &[&T]) -> (TinySamples, 
                 signal.uid()
             );
         }
-        signal_grid = lcm(
-            signal_grid,
-            (1.0 / (TINYSAMPLE_DURATION * signal.sampling_rate())).round() as i64,
-        );
+        signals_grid = lcm(signals_grid, signal_grid(*signal).value());
         let sequencer_rate = signal.sampling_rate() / signal.sample_multiple() as f64;
         sequencer_grid = lcm(
             sequencer_grid,
             (1.0 / (TINYSAMPLE_DURATION * sequencer_rate)).round() as i64,
         );
     }
-    (tiny_samples(signal_grid), tiny_samples(sequencer_grid))
+    (tiny_samples(signals_grid), tiny_samples(sequencer_grid))
+}
+
+pub(crate) fn signal_grid(signal: &impl SignalGridInfo) -> TinySamples {
+    let grid = (1.0 / (TINYSAMPLE_DURATION * signal.sampling_rate())).round();
+    tiny_samples(grid as i64)
 }
 
 /// Ceil the given value to the nearest multiple of the grid.
 ///
 /// This function panics if `grid` is not positive.
 #[inline]
-pub fn ceil_to_grid<T: Integer + Copy>(value: T, grid: T) -> T {
+pub(crate) fn ceil_to_grid<T: Integer + Copy>(value: T, grid: T) -> T {
     assert!(grid > T::zero(), "Grid must be positive for rounding.");
     div_ceil(value, grid) * grid
 }
 
 /// Round the given value to the nearest multiple of the grid.
 ///
-/// If the value is exactly halfway between two multiples, it rounds away from zero.
+/// The rounding follows the "round half to even" strategy.
+///
+/// - When the value is exactly halfway between two grid multiples, it rounds to the
+///   nearest even multiple
+/// - For all other cases, it rounds to the nearest multiple
+///
 /// This function panics if `grid` is not positive.
-#[inline]
-pub fn round_to_grid<T: Integer + Copy>(value: T, grid: T) -> T {
+pub(crate) fn round_to_grid<T>(value: T, grid: T) -> T
+where
+    T: Integer + Copy + std::ops::Neg<Output = T>,
+{
     assert!(grid > T::zero(), "Grid must be positive for rounding.");
-    let two = T::one() + T::one();
-    let half_grid = grid / two;
-    if value >= T::zero() {
-        ((value + half_grid) / grid) * grid
+    let abs_value = if value >= T::zero() {
+        value
     } else {
-        ((value - half_grid) / grid) * grid
+        value * T::one().neg()
+    };
+    let remainder = abs_value % grid;
+    if remainder == T::zero() {
+        // Already on grid
+        return value;
+    }
+    let quotient = value / grid;
+    let double_remainder = remainder + remainder;
+    if double_remainder < grid {
+        // Less than half - round toward zero
+        quotient * grid
+    } else if double_remainder > grid {
+        // More than half - round away from zero
+        if value >= T::zero() {
+            (quotient + T::one()) * grid
+        } else {
+            (quotient - T::one()) * grid
+        }
+    } else {
+        // Exactly half - round to even quotient
+        if quotient % (T::one() + T::one()) == T::zero() {
+            quotient * grid // Even quotient - keep it
+        } else {
+            // Odd quotient - make it even
+            if value >= T::zero() {
+                (quotient + T::one()) * grid
+            } else {
+                (quotient - T::one()) * grid
+            }
+        }
     }
 }
 
@@ -89,7 +128,7 @@ mod tests {
     }
 
     impl MySignal {
-        pub fn new(sampling_rate: f64, sample_multiple: u16) -> Self {
+        pub(crate) fn new(sampling_rate: f64, sample_multiple: u16) -> Self {
             Self {
                 sampling_rate,
                 sample_multiple,
@@ -185,6 +224,14 @@ mod tests {
         // Realistic cases where the rounding did not work as expected
         assert_eq!(round_to_grid(457200, 2000), 458000);
         assert_eq!(round_to_grid(314676, 2000), 314000);
+        assert_eq!(round_to_grid(45054900, 1800), 45054000);
+        assert_eq!(round_to_grid(75041100, 1800), 75042000);
+        assert_eq!(
+            round_to_grid(71099.99999999999_f64.round() as i64, 1800),
+            72000
+        );
+        assert_eq!(round_to_grid(71099.99999999999 as i64, 1800), 70200);
+        assert_eq!(round_to_grid(71100, 1800), 72000);
         // Basic cases
         assert_eq!(round_to_grid(0, 4), 0);
         assert_eq!(round_to_grid(13, 4), 12);
@@ -196,5 +243,21 @@ mod tests {
         assert_eq!(round_to_grid(-15, 4), -16);
         assert_eq!(round_to_grid(-16, 4), -16);
         assert_eq!(round_to_grid(-17, 4), -16);
+        // Halfway cases
+        assert_eq!(round_to_grid(2, 4), 0); // down to even
+        assert_eq!(round_to_grid(6, 4), 8); // up to even
+        assert_eq!(round_to_grid(-2, 4), 0); // up to even
+        assert_eq!(round_to_grid(-6, 4), -8); // down to even
+        // Odd multiples
+        assert_eq!(round_to_grid(3, 4), 4); // up to even
+        assert_eq!(round_to_grid(7, 4), 8); // up to even
+        assert_eq!(round_to_grid(-3, 4), -4); // down to even
+        assert_eq!(round_to_grid(-7, 4), -8); // down to even
+        // Odd quotient
+        assert_eq!(round_to_grid(14, 4), 16);
+        assert_eq!(round_to_grid(-14, 4), -16);
+        // Odd grid (should not happen often in practice)
+        assert_eq!(round_to_grid(5, 3), 6);
+        assert_eq!(round_to_grid(4, 3), 3);
     }
 }

@@ -6,6 +6,7 @@ pub mod experiment;
 pub mod ir;
 pub mod parameter_store;
 
+mod adjust_acquire_lengths;
 mod analysis;
 mod chunk_experiment;
 mod experiment_context;

@@ -166,7 +166,7 @@ fn collect_section_measurements<'a>(
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct SignalDelay {
+pub(crate) struct SignalDelay {
     /// The delay in samples that the signal should be delayed in the AWG by code.
     delay_sequencer: Samples,
     /// The additional delay that the instrument should apply (via node setting).
@@ -181,11 +181,11 @@ impl SignalDelay {
         }
     }
 
-    pub fn delay_sequencer(&self) -> Samples {
+    pub(crate) fn delay_sequencer(&self) -> Samples {
         self.delay_sequencer
     }
 
-    pub fn delay_port(&self) -> Duration<Second> {
+    pub(crate) fn delay_port(&self) -> Duration<Second> {
         self.delay_port
     }
 }
@@ -498,22 +498,22 @@ fn create_measurements<'a>(
     Ok(infos)
 }
 
-pub struct IntegrationLength {
+pub(crate) struct IntegrationLength {
     signal: String,
     duration: Samples,
     is_play: bool,
 }
 
 impl IntegrationLength {
-    pub fn signal(&self) -> &str {
+    pub(crate) fn signal(&self) -> &str {
         &self.signal
     }
 
-    pub fn duration(&self) -> Samples {
+    pub(crate) fn duration(&self) -> Samples {
         self.duration
     }
 
-    pub fn is_play(&self) -> bool {
+    pub(crate) fn is_play(&self) -> bool {
         self.is_play
     }
 }
@@ -576,7 +576,7 @@ fn calculate_integration_times(
 }
 
 #[derive(Default)]
-pub struct MeasurementAnalysis {
+pub(crate) struct MeasurementAnalysis {
     /// A map of signal names to their respective delays, which include both the sequencer
     /// delay and the port delay
     pub delays: HashMap<String, SignalDelay>,
@@ -592,7 +592,7 @@ pub struct MeasurementAnalysis {
 /// # Returns
 ///
 /// Analysis result of the measurements.
-pub fn analyze_measurements(
+pub(crate) fn analyze_measurements(
     node: &IrNode,
     device: &DeviceKind,
     sampling_rate: f64,
@@ -635,7 +635,7 @@ mod tests {
             }
         }
 
-        pub fn with<F>(&mut self, f: F)
+        pub(crate) fn with<F>(&mut self, f: F)
         where
             F: FnOnce(&mut Self),
         {
@@ -654,7 +654,7 @@ mod tests {
             }
         }
 
-        pub fn section<F>(&mut self, uid: &str, length: Samples, offset: Samples, f: F)
+        pub(crate) fn section<F>(&mut self, uid: &str, length: Samples, offset: Samples, f: F)
         where
             F: FnOnce(&mut Self),
         {
@@ -676,7 +676,7 @@ mod tests {
             self.enter_stack(IrNode::new(section, offset), f);
         }
 
-        pub fn play(&mut self, offset: Samples, signal: &Signal, length: Samples) {
+        pub(crate) fn play(&mut self, offset: Samples, signal: &Signal, length: Samples) {
             let play = NodeKind::PlayPulse(PlayPulse {
                 signal: Arc::new(signal.clone()),
                 set_oscillator_phase: None,
@@ -694,7 +694,7 @@ mod tests {
             self.node_stack.last_mut().unwrap().add_child_node(ir_node);
         }
 
-        pub fn acquire(&mut self, offset: Samples, signal: &Signal, length: Samples) {
+        pub(crate) fn acquire(&mut self, offset: Samples, signal: &Signal, length: Samples) {
             let play = NodeKind::AcquirePulse(AcquirePulse {
                 signal: Arc::new(signal.clone()),
                 length,

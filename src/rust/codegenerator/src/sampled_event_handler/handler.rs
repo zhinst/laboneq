@@ -10,7 +10,9 @@ use super::feedback_register_config::FeedbackRegisterConfig;
 use super::feedback_register_layout::{FeedbackRegister, FeedbackRegisterLayout};
 use super::seqc_tracker::awg::Awg;
 use super::seqc_tracker::compressor::{compress_generator, merge_generators};
-use super::seqc_tracker::seqc_generator::{SeqCGenerator, seqc_generator_from_device_traits};
+use super::seqc_tracker::seqc_generator::{
+    PlayEmissionError, SeqCGenerator, ViolationType, seqc_generator_from_device_traits,
+};
 use super::seqc_tracker::seqc_statements::SeqCVariant;
 use super::seqc_tracker::tracker::{SeqCTracker, top_loop_stack_generators_have_statements};
 use super::seqc_tracker::wave_index_tracker::{SignalType, WaveIndexTracker};
@@ -358,7 +360,7 @@ struct SampledEventHandler<'a> {
 }
 
 impl<'a> SampledEventHandler<'a> {
-    pub fn new(
+    pub(crate) fn new(
         awg: &'a Awg,
         qa_signals_by_handle: &'a HashMap<Handle, (String, AwgKey)>,
         feedback_register: Option<FeedbackRegisterIndex>,
@@ -441,6 +443,38 @@ impl<'a> SampledEventHandler<'a> {
             return Err(anyhow::anyhow!("Internal error: {msg}"));
         }
         Ok(())
+    }
+
+    /// Wrapper around SeqCTracker::add_required_playzeros, but attempts a fallback to the command
+    /// table for short (16 sample) delays. See HBAR-2249.
+    fn add_required_delay(&mut self, start: Samples) -> Result<crate::ir::Samples> {
+        let result = self.seqc_tracker.add_required_playzeros(start);
+        match result {
+            Ok(ok) => Ok(ok),
+            Err(
+                err @ PlayEmissionError {
+                    violation_type: ViolationType::Minimum(_),
+                    length,
+                    ..
+                },
+            ) => {
+                let DeviceKind::SHFSG = self.awg.device_kind else {
+                    return Err(err.into());
+                };
+                let index = self
+                    .command_table_tracker
+                    .create_short_playzero_entry(length);
+                self.seqc_tracker.add_command_table_execution(
+                    index as i64,
+                    None,
+                    None::<String>,
+                )?;
+                self.seqc_tracker.flush_deferred_function_calls();
+                self.seqc_tracker.set_current_time(start);
+                Ok(start)
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     fn handle_playwave(
@@ -587,7 +621,7 @@ impl<'a> SampledEventHandler<'a> {
         play_wave_channel: Option<ChannelIndex>,
     ) -> Result<()> {
         // Playzeros were already added for match event, so only needed for the non-match case.
-        self.seqc_tracker.add_required_playzeros(start)?;
+        self.add_required_delay(start)?;
         self.seqc_tracker.flush_deferred_phase_changes();
         self.seqc_tracker.add_timing_comment(end);
 
@@ -627,7 +661,7 @@ impl<'a> SampledEventHandler<'a> {
         signature: &PlayWaveEvent,
     ) -> Result<()> {
         self.assert_command_table("Amplitude register init on unsupported device.")?;
-        self.seqc_tracker.add_required_playzeros(start)?;
+        self.add_required_delay(start)?;
         self.seqc_tracker.flush_deferred_phase_changes();
         let ct_index = self
             .command_table_tracker
@@ -692,7 +726,7 @@ impl<'a> SampledEventHandler<'a> {
         end: Samples,
         signature: &PlayWaveEvent,
     ) -> Result<()> {
-        self.seqc_tracker.add_required_playzeros(start)?;
+        self.add_required_delay(start)?;
         if self.awg.device_kind.traits().supports_command_table {
             let signature_string = signature.waveform.signature_string();
             let ct_index = self.precomp_reset_ct_index(signature)?;
@@ -730,7 +764,7 @@ impl<'a> SampledEventHandler<'a> {
             },
         ];
         if start > self.seqc_tracker.current_time() as Samples {
-            self.seqc_tracker.add_required_playzeros(start)?;
+            self.add_required_delay(start)?;
             self.seqc_tracker.add_function_call_statement(
                 String::from("startQA"),
                 args,
@@ -761,7 +795,7 @@ impl<'a> SampledEventHandler<'a> {
 
     fn handle_ppc_step_start(&mut self, start: Samples, data: &SweepCommand) -> Result<()> {
         // todo: Do we even need this here? Could be expressed via trigger commands
-        self.seqc_tracker.add_required_playzeros(start)?;
+        self.add_required_delay(start)?;
         self.seqc_tracker.add_function_call_statement(
             "setTrigger",
             vec![SeqCVariant::Integer(1)],
@@ -773,7 +807,7 @@ impl<'a> SampledEventHandler<'a> {
     }
 
     fn handle_ppc_step_end(&mut self, start: Samples) -> Result<()> {
-        self.seqc_tracker.add_required_playzeros(start)?;
+        self.add_required_delay(start)?;
         self.seqc_tracker.add_function_call_statement(
             "setTrigger",
             vec![SeqCVariant::Integer(0)],
@@ -788,7 +822,7 @@ impl<'a> SampledEventHandler<'a> {
         start: Samples,
         data: &OscillatorFrequencySweepStep,
     ) -> Result<()> {
-        self.seqc_tracker.add_required_playzeros(start)?;
+        self.add_required_delay(start)?;
 
         if matches!(self.awg.device_kind, DeviceKind::HDAWG) {
             self._handle_set_oscillator_frequency_hdawg(data)
@@ -907,7 +941,7 @@ impl<'a> SampledEventHandler<'a> {
             }
         }
 
-        self.seqc_tracker.add_required_playzeros(start)?;
+        self.add_required_delay(start)?;
         Ok(())
     }
 
@@ -915,10 +949,10 @@ impl<'a> SampledEventHandler<'a> {
         self.seqc_tracker.discard_deferred_phase_changes();
         if initial {
             if start > self.seqc_tracker.current_time() as Samples {
-                self.seqc_tracker.add_required_playzeros(start)?;
+                self.add_required_delay(start)?;
             }
         } else {
-            self.seqc_tracker.add_required_playzeros(start)?;
+            self.add_required_delay(start)?;
         }
         self.seqc_tracker.add_function_call_statement(
             "resetOscPhase",
@@ -943,19 +977,19 @@ impl<'a> SampledEventHandler<'a> {
     }
 
     fn handle_loop_step_start(&mut self, start: Samples) -> Result<()> {
-        self.seqc_tracker.add_required_playzeros(start)?;
+        self.add_required_delay(start)?;
         self.seqc_tracker.append_loop_stack_generator(None, false)?;
         Ok(())
     }
 
     fn handle_loop_step_end(&mut self, start: Samples) -> Result<()> {
-        self.seqc_tracker.add_required_playzeros(start)?;
+        self.add_required_delay(start)?;
         self.increment_sequencer_step();
         Ok(())
     }
 
     fn handle_push_loop(&mut self, start: Samples, data: &PushLoop) -> Result<()> {
-        self.seqc_tracker.add_required_playzeros(start)?;
+        self.add_required_delay(start)?;
         self.seqc_tracker.flush_deferred_phase_changes();
         if self.current_sequencer_step.is_some() {
             assert!(self.seqc_tracker.current_time() % self.sequencer_step == 0);
@@ -983,7 +1017,7 @@ impl<'a> SampledEventHandler<'a> {
                 self.seqc_tracker
                     .add_comment(format!("ITERATE  {data:?}, current time = {current_time}",));
             }
-            self.seqc_tracker.add_required_playzeros(start)?;
+            self.add_required_delay(start)?;
             self.seqc_tracker.flush_deferred_phase_changes();
             self.increment_sequencer_step();
 
@@ -1051,7 +1085,7 @@ impl<'a> SampledEventHandler<'a> {
     }
 
     fn handle_trigger_output(&mut self, start: Samples, data: &TriggerOutput) -> Result<()> {
-        self.seqc_tracker.add_required_playzeros(start)?;
+        self.add_required_delay(start)?;
         self.seqc_tracker
             .add_set_trigger_statement(data.state, true);
         Ok(())
@@ -1103,7 +1137,7 @@ impl<'a> SampledEventHandler<'a> {
                 .collect::<Vec<String>>()
                 .join("|")
         };
-        self.seqc_tracker.add_required_playzeros(start)?;
+        self.add_required_delay(start)?;
         self.seqc_tracker.flush_deferred_phase_changes();
         if end > self.seqc_tracker.current_time() {
             self.seqc_tracker.add_timing_comment(end);
@@ -1573,7 +1607,7 @@ impl<'a> SampledEventHandler<'a> {
         Ok(())
     }
 
-    pub fn handle_sampled_events(&mut self, awg_events: &'a AwgEventList) -> Result<()> {
+    pub(crate) fn handle_sampled_events(&mut self, awg_events: &'a AwgEventList) -> Result<()> {
         for (_, awg_event_list) in awg_events.iter() {
             self.last_phase_reset = find_last_phase_reset(awg_event_list);
             for awg_event in awg_event_list.iter() {
@@ -1585,7 +1619,10 @@ impl<'a> SampledEventHandler<'a> {
         Ok(())
     }
 
-    pub fn handle_declarations(&mut self, wave_declarations: &[WaveDeclaration]) -> Result<()> {
+    pub(crate) fn handle_declarations(
+        &mut self,
+        wave_declarations: &[WaveDeclaration],
+    ) -> Result<()> {
         if self.emit_timing_comments {
             self.declarations_generator.add_comment(format!(
                 "{:?}/{} sampling rate: {} Sa/s",
@@ -1640,7 +1677,7 @@ impl<'a> SampledEventHandler<'a> {
         Ok(seq_c_generator.generate_seq_c())
     }
 
-    pub fn finish(mut self) -> Result<SeqcResults> {
+    pub(crate) fn finish(mut self) -> Result<SeqcResults> {
         let seqc = self.assemble_seqc()?;
         let command_table = self.command_table_tracker.finish();
         let (command_table, parameter_phase_increment_map) = match command_table {
@@ -1665,7 +1702,7 @@ impl<'a> SampledEventHandler<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn handle_sampled_events(
+pub(crate) fn handle_sampled_events(
     awg_events: AwgEventList,
     awg: &Awg,
     qa_signals_by_handle: &HashMap<Handle, (String, AwgKey)>,

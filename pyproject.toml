@@ -36,7 +36,7 @@ dependencies = [
   "flask >= 3.0.2",
   "jsonschema >= 4.21.1",
   "matplotlib >= 3.8.3",
-  "multimethod == 2.0.0",
+  "multimethod ~= 2.0.2",
   "networkx >= 3.4.2",
   "numpy >= 2",
   "openpulse ~= 1.0.1",
@@ -53,6 +53,7 @@ dependencies = [
   "sortedcollections >= 2.1.0",
   "sortedcontainers >= 2.4.0",
   "sqlitedict >= 2.1.0",
+  "typeguard >= 4.4.4",
   "typing_extensions >= 4.10.0",
   "zhinst-comms >= 3.2",
   "zhinst-comms-schemas==0.0.1",
@@ -107,13 +108,14 @@ dev = [
 tools = [
   "rust-just >= 1.43",
   "maturin >= 1.6, < 2.0",
-  "mypy >=1.18.1, <1.19",
+  "mypy >=1.19, <1.20",
   "types-PyYAML >= 6.0.12",
   "mypy-gitlab-code-quality >= 1.3.0",
   "pip >= 25.0.1",                     # used by PyCharm for scanning the venv
   "pre-commit >= 4.1.0",
-  "ruff ==0.14.5",
+  "ruff ==0.14.7",
   "taplo >= 0.9.3",
+  "towncrier >= 25.8.0",
 ]
 
 [tool.uv]
@@ -158,6 +160,12 @@ exclude = [
   "venv",
 ]
 
+# Source directories
+src = [
+  "src/python",
+
+]
+
 [tool.ruff.lint]
 select = [
   "B",      # flake8-bugbear
@@ -188,6 +196,20 @@ fixable = ["ALL"]
 unfixable = []
 
 mccabe.max-complexity = 10
+
+[tool.ruff.lint.isort]
+section-order = [
+  "future",
+  "standard-library",
+  "third-party",
+  "first-party",
+  "tests",
+  "local-folder",
+]
+known-first-party = ["laboneq._rust", "laboneq_benchmark"]
+
+[tool.ruff.lint.isort.sections]
+tests = ["tests"]
 
 [tool.ruff.lint.per-file-ignores]
 # F401: Imported but unused
@@ -230,3 +252,28 @@ module = [
   "cycler",
 ]
 ignore_missing_imports = true
+
+[tool.towncrier]
+filename = "CHANGELOG.md"
+directory = "newsfragments"
+
+[[tool.towncrier.type]]
+directory = "feature"
+name = "Features"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "bugfix"
+name = "Bug Fixes"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "doc"
+name = "Documentation"
+showcontent = true
+
+# system tests, tooling, infrastructure, ...
+[[tool.towncrier.type]]
+directory = "misc"
+name = "Miscellaneous"
+showcontent = false

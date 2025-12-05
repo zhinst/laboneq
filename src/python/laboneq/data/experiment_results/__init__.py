@@ -225,6 +225,4 @@ class ExperimentResults:
     # Pipeline job timestamps, by device channel id, then job id
     pipeline_jobs_timestamps: dict[str, list[float]] = field(default_factory=dict)
 
-    experiment_hash: str = None
-    compiled_experiment_hash: str = None
     execution_payload_hash: str = None

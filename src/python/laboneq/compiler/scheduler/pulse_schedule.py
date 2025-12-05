@@ -8,12 +8,11 @@ from typing import Any, Dict, Optional
 from attrs import define
 
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
-from laboneq.data.compilation_job import SectionSignalPulse
 
 
 @define(kw_only=True, slots=True)
 class PulseSchedule(IntervalSchedule):
-    pulse: SectionSignalPulse
+    pulse: str
     amplitude: float
     amp_param_name: str | None = None
     phase: float
@@ -27,6 +26,7 @@ class PulseSchedule(IntervalSchedule):
     markers: Any = None
     # integration length originally specified by the user in case of acquire
     integration_length: int | None
+    handle: str | None = None
 
     def _calculate_timing(
         self,
@@ -36,23 +36,14 @@ class PulseSchedule(IntervalSchedule):
     ) -> int:
         # Length must be set via parameter, so nothing to do here
         assert self.length is not None
-
-        if (
-            self.is_acquire
-            and self.pulse is not None
-            and self.pulse.acquire_params is not None
-            and self.pulse.acquire_params.handle
-        ):
-            schedule_data.acquire_pulses.setdefault(
-                self.pulse.acquire_params.handle, []
-            ).append(self)
-
+        if self.handle:
+            schedule_data.acquire_pulses.setdefault(self.handle, []).append(self)
         return start
 
 
 @define(kw_only=True, slots=True)
 class PrecompClearSchedule(IntervalSchedule):
-    pulse: PulseSchedule
+    signal: str
 
     def _calculate_timing(self, _schedule_data, start: int, *__, **___) -> int:
         self.length = 0

@@ -8,17 +8,11 @@ import logging
 import math
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import TYPE_CHECKING, Any, Iterator
-from weakref import ReferenceType, ref
+from typing import TYPE_CHECKING
+from weakref import ref
 
-from laboneq.controller.attribute_value_tracker import (  # pylint: disable=E0401
-    AttributeName,
-    DeviceAttribute,
-    DeviceAttributesView,
-)
+from laboneq.controller.attribute_value_tracker import AttributeName, DeviceAttribute
 from laboneq.controller.devices.async_support import (
     AsyncSubscriber,
     ConditionsCheckerAsync,
@@ -27,56 +21,55 @@ from laboneq.controller.devices.async_support import (
     _gather,
 )
 from laboneq.controller.devices.core_base import CoreBase
-from laboneq.controller.devices.device_setup_dao import (
-    DeviceOptions,
-    DeviceQualifier,
-    DeviceSetupDAO,
-    ServerQualifier,
-)
+from laboneq.controller.devices.device_setup_dao import DeviceSetupDAO
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.node_control import (
-    NodeControlBase,
     filter_commands,
     filter_responses,
     filter_settings,
     filter_states,
     filter_wait_conditions,
 )
-from laboneq.controller.devices.zi_emulator import EmulatorState
-from laboneq.controller.recipe_processor import (
-    AwgConfig,
-    AwgConfigs,
-    AwgKey,
-    RecipeData,
-    RtExecutionInfo,
-    WaveformItem,
-    get_execution_time,
-)
+from laboneq.controller.recipe_processor import get_execution_time
 from laboneq.controller.results import build_partial_result, build_raw_partial_result
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.for_each import for_each, for_each_sync
-from laboneq.controller.versioning import SetupCaps
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.data.experiment_results import ExperimentResults
-from laboneq.data.recipe import Initialization, NtStepKey
-from laboneq.data.scheduled_experiment import ScheduledExperiment
 
 if TYPE_CHECKING:
-    import numpy as np
+    from collections.abc import Iterable
+    from typing import Any, Iterator
+    from weakref import ReferenceType
+
+    from laboneq.controller.attribute_value_tracker import DeviceAttributesView
+    from laboneq.controller.devices.device_setup_dao import (
+        DeviceOptions,
+        DeviceQualifier,
+        ServerQualifier,
+    )
+    from laboneq.controller.devices.node_control import NodeControlBase
+    from laboneq.controller.devices.zi_emulator import EmulatorState
+    from laboneq.controller.recipe_processor import (
+        AwgConfig,
+        AwgConfigs,
+        AwgKey,
+        RecipeData,
+        RtExecutionInfo,
+        WaveformItem,
+    )
+    from laboneq.controller.versioning import SetupCaps
+    from laboneq.core.types.numpy_support import NumPyArray
+    from laboneq.data.experiment_results import ExperimentResults
+    from laboneq.data.recipe import Initialization, NtStepKey
+    from laboneq.data.scheduled_experiment import ScheduledExperiment
 
 
 _logger = logging.getLogger(__name__)
 
 
-class AwgCompilerStatus(Enum):
-    SUCCESS = 0
-    ERROR = 1
-    WARNING = 2
-
-
 @dataclass
 class RawReadoutData:
-    vector: np.ndarray
+    vector: NumPyArray
 
     # metadata by job_id
     metadata: dict[int, dict[str, Any]] = field(default_factory=dict)
@@ -308,6 +301,7 @@ class DeviceBase(DeviceZI):
 
         self._api = InstrumentConnection()
         self._subscriber = AsyncSubscriber()
+        self._ctrl_subscriber = AsyncSubscriber(use_control_connection=True)
         self.dev_type: str = "UNKNOWN"
         self.dev_opts: list[str] = []
         self._connected = False
@@ -514,6 +508,14 @@ class DeviceBase(DeviceZI):
         self._api = InstrumentConnection()  # TODO(2K): Proper disconnect?
         self._connected = False
 
+    async def disable_outputs(self, outputs: set[int], invert: bool):
+        await for_each(
+            self.all_cores(),
+            CoreBase.disable_output,
+            outputs=outputs,
+            invert=invert,
+        )
+
     def _make_osc_path(self, channel: int, index: int) -> str:
         return f"/{self.serial}/oscs/{index}/freq"
 
@@ -527,17 +529,18 @@ class DeviceBase(DeviceZI):
     async def on_experiment_begin(self, recipe_data: RecipeData):
         await _gather(
             *(
-                self._subscriber.subscribe(self._api, path)
+                self._ctrl_subscriber.subscribe(self._api, path)
                 for path, _ in self._collect_warning_nodes()
             ),
             *(
-                self._subscriber.subscribe(self._api, path, get_initial=True)
+                self._ctrl_subscriber.subscribe(self._api, path, get_initial=True)
                 for path in self._busy_nodes(recipe_data=recipe_data)
             ),
         )
 
     async def on_experiment_end(self):
         self._subscriber.unsubscribe_all()
+        self._ctrl_subscriber.unsubscribe_all()
 
     async def init_warning_nodes(self):
         nodes = [node for node, _ in self._collect_warning_nodes()]
@@ -548,7 +551,7 @@ class DeviceBase(DeviceZI):
 
     async def update_warning_nodes(self):
         for node, msg in self._collect_warning_nodes():
-            updates = self._subscriber.get_updates(node)
+            updates = self._ctrl_subscriber.get_updates(node)
             value = updates[-1].value if len(updates) > 0 else None
             if not isinstance(value, int):
                 continue
@@ -775,7 +778,7 @@ class DeviceBase(DeviceZI):
     async def wait_for_channels_ready(self, recipe_data: RecipeData, timeout_s: float):
         await _gather(
             *(
-                self._subscriber.wait_for(path, expected=0, timeout_s=timeout_s)
+                self._ctrl_subscriber.wait_for(path, expected=0, timeout_s=timeout_s)
                 for path in self._busy_nodes(recipe_data=recipe_data)
             )
         )
@@ -916,23 +919,17 @@ class DeviceBase(DeviceZI):
                         handle=handle,
                     )
         else:
-            await _gather(
-                *(
-                    self._read_one_signal_result(
-                        recipe_data,
-                        nt_step,
-                        rt_execution_info,
-                        results,
-                        awg_key,
-                        awg_config,
-                        signal,
-                        rt_execution_info.effective_averages,
-                    )
-                    for signal in awg_config.acquire_signals
-                )
+            await self._read_result_logger(
+                recipe_data,
+                nt_step,
+                rt_execution_info,
+                results,
+                awg_key,
+                awg_config,
+                rt_execution_info.effective_averages,
             )
 
-    async def _read_one_signal_result(
+    async def _read_result_logger(
         self,
         recipe_data: RecipeData,
         nt_step: NtStepKey,
@@ -940,51 +937,56 @@ class DeviceBase(DeviceZI):
         results: ExperimentResults,
         awg_key: AwgKey,
         awg_config: AwgConfig,
-        signal: str,
         effective_averages: int,
     ):
-        integrator_allocation = next(
-            (
-                i
-                for i in recipe_data.recipe.integrator_allocations
-                if i.signal_id == signal
-            ),
-            None,
-        )
-        if integrator_allocation is None:
-            return
-        assert integrator_allocation.device_id == awg_key.device_uid
-        assert integrator_allocation.awg == awg_key.awg_index
         assert awg_config.result_length is not None, "AWG not producing results"
-        raw_readout = await self.get_measurement_data(
-            awg_key.awg_index,
-            recipe_data,
-            integrator_allocation.channels,
-            awg_config.result_length,
-            effective_averages,
+        all_raw_readouts = await self.get_measurement_data(
+            core_index=awg_key.awg_index,
+            recipe_data=recipe_data,
+            num_results=awg_config.result_length,
+            hw_averages=effective_averages,
         )
-        mapping = awg_config.signal_result_map.get(signal, [])
-        unique_handles = set(mapping)
-        for handle in unique_handles:
-            if handle is None:
-                continue  # unused entries in sparse result vector map to None handle
-            result = results.acquired_results[handle]
-            build_partial_result(
-                result,
-                nt_step,
-                raw_readout.vector,
-                mapping,
-                handle,
-                rt_execution_info.pipeliner_job_count,
-                recipe_data.result_shapes[handle].chunked_axis_index,
+
+        for signal in awg_config.acquire_signals:
+            integrator_allocation = next(
+                (
+                    i
+                    for i in recipe_data.recipe.integrator_allocations
+                    if i.signal_id == signal
+                ),
+                None,
             )
+            if integrator_allocation is None:
+                continue
+            assert integrator_allocation.device_id == awg_key.device_uid
+            assert integrator_allocation.awg == awg_key.awg_index
+            raw_readout = self.extract_raw_readout(
+                all_raw_readouts=all_raw_readouts,
+                integrators=integrator_allocation.channels,
+                rt_execution_info=rt_execution_info,
+            )
+            mapping = awg_config.signal_result_map.get(signal, [])
+            unique_handles = set(mapping)
+            for handle in unique_handles:
+                if handle is None:
+                    continue  # unused entries in sparse result vector map to None handle
+                result = results.acquired_results[handle]
+                build_partial_result(
+                    result,
+                    nt_step,
+                    raw_readout.vector,
+                    mapping,
+                    handle,
+                    rt_execution_info.pipeliner_job_count,
+                    recipe_data.result_shapes[handle].chunked_axis_index,
+                )
 
-        timestamps = results.pipeline_jobs_timestamps.setdefault(signal, [])
+            timestamps = results.pipeline_jobs_timestamps.setdefault(signal, [])
 
-        for job_id, v in raw_readout.metadata.items():
-            # make sure the list is long enough for this job id
-            timestamps.extend([float("nan")] * (job_id - len(timestamps) + 1))
-            timestamps[job_id] = v["timestamp"]
+            for job_id, v in raw_readout.metadata.items():
+                # make sure the list is long enough for this job id
+                timestamps.extend([float("nan")] * (job_id - len(timestamps) + 1))
+                timestamps[job_id] = v["timestamp"]
 
     async def get_raw_data(
         self, channel: int, acquire_length: int, acquires: int | None, timeout_s: float
@@ -995,11 +997,22 @@ class DeviceBase(DeviceZI):
 
     async def get_measurement_data(
         self,
-        channel: int,
+        *,
+        core_index: int,
         recipe_data: RecipeData,
-        result_indices: list[int],
         num_results: int,
         hw_averages: int,
+    ) -> list[RawReadoutData]:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not support result retrieval"
+        )
+
+    def extract_raw_readout(
+        self,
+        *,
+        all_raw_readouts: list[RawReadoutData],
+        integrators: list[int],
+        rt_execution_info: RtExecutionInfo,
     ) -> RawReadoutData:
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support result retrieval"

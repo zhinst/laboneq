@@ -80,6 +80,9 @@ class PulseFunctional(Pulse):
     pulse_parameters: dict[str, Any] | None = attrs.field(default=None)
 
     def __attrs_post_init__(self):
+        if isinstance(self.amplitude, int):
+            self.amplitude = float(self.amplitude)
+
         if not isinstance(self.uid, str):
             raise LabOneQException(f"{PulseFunctional.__name__} must have a string uid")
 

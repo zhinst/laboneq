@@ -7,6 +7,7 @@ import warnings
 
 import attrs
 
+from laboneq.core.utilities.attrs_helpers import validated_field
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.enums import CarrierType, ModulationType
 from laboneq.dsl.parameter import Parameter
@@ -50,8 +51,8 @@ class Oscillator:
             while the choice SOFTWARE will lead to waveform being modulated in software
             before upload to the instruments.
             The default, `ModulationType.AUTO`, resolves to `HARDWARE` in most situations,
-            except for QA instruments in integration mode, where it resolves to
-            `SOFTWARE`.
+            except for i) QA instruments in integration mode without LRT support
+            or ii) RF channels on HDAWGs, where it resolves to `SOFTWARE`.
         carrier_type (CarrierType):
             Deprecated. The carrier type is no longer used. Default: `CarrierType.RF`.
 
@@ -61,11 +62,17 @@ class Oscillator:
             !!! version-changed "Changed in 2.16"
                 `ModulationType.AUTO` now is more sensibly resolved. Previously it would
                  always fall back to `SOFTWARE`.
+
+    !!! version-changed "Changed in version 26.1.0"
+
+        The types of the attributes are now validated when an `Oscillator` instance is
+        created or when an attribute is set. A `TypeError` is raised if the type of the
+        supplied value is incorrect.
     """
 
-    uid: str = attrs.field(factory=oscillator_uid_generator)
-    frequency: float | Parameter | None = attrs.field(default=None)
-    modulation_type: ModulationType = attrs.field(default=ModulationType.AUTO)
-    carrier_type: CarrierType | None = attrs.field(
+    uid: str = validated_field(factory=oscillator_uid_generator)
+    frequency: float | Parameter | None = validated_field(default=None)
+    modulation_type: ModulationType = validated_field(default=ModulationType.AUTO)
+    carrier_type: CarrierType | None = validated_field(
         default=None, validator=_carrier_type_validator
     )

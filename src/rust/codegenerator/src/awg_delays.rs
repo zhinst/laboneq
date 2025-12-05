@@ -9,19 +9,19 @@ use crate::utils::samples_to_grid;
 use crate::{Error, Result};
 
 #[derive(Default)]
-pub struct AwgTiming {
+pub(crate) struct AwgTiming {
     delay: Samples,
     signal_delays: HashMap<String, Samples>,
 }
 
 impl AwgTiming {
     /// Total delay for the AWG.
-    pub fn delay(&self) -> Samples {
+    pub(crate) fn delay(&self) -> Samples {
         self.delay
     }
 
     /// Delay for a specific signal identified by its UID.
-    pub fn signal_delay(&self, uid: &str) -> Samples {
+    pub(crate) fn signal_delay(&self, uid: &str) -> Samples {
         self.signal_delays.get(uid).cloned().unwrap_or(0)
     }
 }
@@ -60,7 +60,10 @@ fn validate_signal_delays(awg: &AwgCore) -> Result<()> {
 ///
 /// * `awg`: The AWG core object containing the signals and their properties.
 /// * `delays`: A map of signal UIDs to additional delays.
-pub fn calculate_awg_delays(awg: &AwgCore, delays: &HashMap<&str, Samples>) -> Result<AwgTiming> {
+pub(crate) fn calculate_awg_delays(
+    awg: &AwgCore,
+    delays: &HashMap<&str, Samples>,
+) -> Result<AwgTiming> {
     validate_signal_delays(awg)?;
     let mut signal_delays: HashMap<String, Samples> = HashMap::new();
     let mut awg_delay: Option<Samples> = None;

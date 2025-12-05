@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import numpy.typing as npt
+
 from laboneq.compiler.common.awg_info import AWGInfo
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir import IRTree

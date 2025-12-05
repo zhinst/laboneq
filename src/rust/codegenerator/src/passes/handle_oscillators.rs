@@ -65,7 +65,7 @@ impl PhaseTracker {
         }
     }
 
-    pub fn phase_now(&self, signal: &cjob::Signal) -> (Samples, f64) {
+    pub(crate) fn phase_now(&self, signal: &cjob::Signal) -> (Samples, f64) {
         let tracker = self.trackers.get(&signal.uid).expect("Unknown signal");
         let time_ref = max(
             tracker.reference_time,
@@ -75,14 +75,14 @@ impl PhaseTracker {
         (time_ref, phase)
     }
 
-    pub fn calculate_phase_at(&self, signal: &cjob::Signal, freq: f64, ts: Samples) -> f64 {
+    pub(crate) fn calculate_phase_at(&self, signal: &cjob::Signal, freq: f64, ts: Samples) -> f64 {
         let (ref_time, phase_now) = self.phase_now(signal);
         let t: f64 = tinysamples_to_seconds(tiny_samples(ts - ref_time)).into();
         t * 2.0 * std::f64::consts::PI * freq + phase_now
     }
 }
 
-pub struct SoftwareOscillatorParameters {
+pub(crate) struct SoftwareOscillatorParameters {
     active_osc_freq: HashMap<String, Vec<f64>>,
     pulse_osc_freq: HashMap<(String, Samples), f64>,
     sw_osc_phases: HashMap<(String, Samples), f64>,
@@ -106,14 +106,14 @@ impl SoftwareOscillatorParameters {
     }
 
     /// Frequency for selected signal at given timestamp
-    pub fn freq_at(&self, signal: &cjob::Signal, ts: Samples) -> Option<f64> {
+    pub(crate) fn freq_at(&self, signal: &cjob::Signal, ts: Samples) -> Option<f64> {
         self.pulse_osc_freq
             .get(&(signal.uid.to_owned(), ts))
             .copied()
     }
 
     /// Phase for selected signal at given timestamp
-    pub fn phase_at(&self, signal: &cjob::Signal, ts: Samples) -> Option<f64> {
+    pub(crate) fn phase_at(&self, signal: &cjob::Signal, ts: Samples) -> Option<f64> {
         self.sw_osc_phases
             .get(&(signal.uid.to_owned(), ts))
             .copied()
@@ -253,7 +253,7 @@ fn collect_osc_parameters(
 ///
 /// Calculated oscillator frequency and phase values for each signal and pulse at given time in target device unit samples,
 /// which is calculated by the `timestamp_shifting_function`.
-pub fn handle_oscillator_parameters(
+pub(crate) fn handle_oscillator_parameters(
     node: &mut IrNode,
     signals: &[Arc<cjob::Signal>],
     device_kind: &DeviceKind,
@@ -504,7 +504,7 @@ fn check_device_compatibility(device: &DeviceKind, sweep_info: &SweepInfo) -> Re
 /// 3. Replaces the collected nodes with a [`SetOscillatorFrequencySweep`] node
 ///    that contains the frequency sweep information for each oscillator.
 /// 4. Applies a global delay to the offset of the nodes and updates cut points accordingly.
-pub fn handle_oscillator_sweeps(
+pub(crate) fn handle_oscillator_sweeps(
     node: &mut IrNode,
     awg: &AwgCore,
     cut_points: &mut HashSet<Samples>,

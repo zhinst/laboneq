@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+import asyncio
+import logging
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -16,6 +19,7 @@ from laboneq.controller.devices.async_support import (
 )
 from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_utils import NodeCollector
+from laboneq.controller.devices.device_zi import RawReadoutData
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgKey,
@@ -24,6 +28,7 @@ from laboneq.controller.recipe_processor import (
     RtExecutionInfo,
     UHFQARecipeData,
     get_elf,
+    get_execution_time,
     get_wave,
     get_weights_info,
     prepare_waves,
@@ -33,6 +38,16 @@ from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import IntegratorAllocation, NtStepKey
 from laboneq.data.scheduled_experiment import ArtifactsCodegen
+
+if TYPE_CHECKING:
+    from laboneq.core.types.numpy_support import NumPyArray
+
+_logger = logging.getLogger(__name__)
+
+
+@dataclass
+class QAOutputNodes:
+    output_on: str
 
 
 class QAOutput:
@@ -51,6 +66,15 @@ class QAOutput:
         self._serial = serial
         self._channel = channel
         self._unit_repr = f"{repr_base}:ch{channel}"
+        self.nodes = QAOutputNodes(
+            output_on=f"/{serial}/sigouts/{channel}/on",
+        )
+
+    async def disable_output(self, outputs: set[int], invert: bool):
+        if (self._channel in outputs) != invert:
+            await self._api.set_parallel(
+                NodeCollector.one(self.nodes.output_on, 0, cache=False)
+            )
 
     async def configure(self, uhfqa_recipe_data: UHFQARecipeData):
         ch_recipe_data = uhfqa_recipe_data.outputs[self._channel]
@@ -77,14 +101,35 @@ class QAOutput:
         await self._api.set_parallel(nc)
 
 
+@dataclass
+class UHFQAAwgNodes:
+    awg_enable: str
+    awg_sequencer_status: str
+    readout_result_wave: list[str]
+    monitor_result_wave: list[str]
+
+
+def _check_result(node_val: NumPyArray, num_results: int, ch_repr: str):
+    num_samples = len(node_val)
+    if num_samples != num_results:
+        _logger.error(
+            f"{ch_repr}: The number of measurements acquired ({num_samples}) "
+            f"does not match the number of measurements defined ({num_results}). "
+            "Possibly the time between measurements within a loop is too short, "
+            "or the measurement was not started."
+        )
+
+
 class UHFQAAwg(CoreBase):
     def __init__(
         self,
+        *,
         api: InstrumentConnection,
         subscriber: AsyncSubscriber,
         device_uid: str,
         serial: str,
         repr_base: str,
+        integrators: int,
     ):
         super().__init__(
             api=api,
@@ -95,6 +140,7 @@ class UHFQAAwg(CoreBase):
         )
         self._node_base = f"/{serial}/"
         self._unit_repr = repr_base
+        self._integrators = integrators
         self._outputs: list[QAOutput] = [
             QAOutput(
                 api,
@@ -106,9 +152,23 @@ class UHFQAAwg(CoreBase):
             )
             for ch in range(2)
         ]
+        self.nodes = UHFQAAwgNodes(
+            awg_enable=f"/{self._serial}/awgs/0/enable",
+            awg_sequencer_status=f"/{self._serial}/awgs/0/sequencer/status",
+            readout_result_wave=[
+                f"/{self._serial}/qas/0/result/data/{i}/wave"
+                for i in range(integrators)
+            ],
+            monitor_result_wave=[
+                f"/{self._serial}/qas/0/monitor/inputs/{0}/wave",
+                f"/{self._serial}/qas/0/monitor/inputs/{1}/wave",
+            ],
+        )
 
-    def _disable_output(self) -> NodeCollector:
-        raise NotImplementedError
+    async def disable_output(self, outputs: set[int], invert: bool):
+        await _gather(
+            *[output.disable_output(outputs, invert) for output in self._outputs]
+        )
 
     def allocate_resources(self):
         pass
@@ -117,6 +177,12 @@ class UHFQAAwg(CoreBase):
         await self._api.set_parallel(
             NodeCollector.one(f"/{self._serial}/awgs/0/single", 1)
         )
+
+    def subscribe_nodes(self) -> list[str]:
+        return [
+            *self.nodes.readout_result_wave,
+            *self.nodes.monitor_result_wave,
+        ]
 
     async def apply_initialization(self, uhfqa_recipe_data: UHFQARecipeData):
         await _gather(
@@ -403,8 +469,8 @@ class UHFQAAwg(CoreBase):
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         return {
-            f"/{self._serial}/awgs/{self._core_index}/enable": (
-                1,
+            self.nodes.awg_sequencer_status: (
+                4,
                 f"AWG {self._core_index} didn't start.",
             )
         }
@@ -416,8 +482,59 @@ class UHFQAAwg(CoreBase):
         self, with_pipeliner: bool
     ) -> dict[str, tuple[Any, str]]:
         return {
-            f"/{self._serial}/awgs/{self._core_index}/enable": (
+            self.nodes.awg_enable: (
                 0,
                 f"AWG {self._core_index} didn't stop. Missing start trigger? Check DIO.",
             )
         }
+
+    async def get_measurement_data(
+        self,
+        *,
+        recipe_data: RecipeData,
+        num_results: int,
+        hw_averages: int,
+    ) -> list[RawReadoutData]:
+        # In the async execution model, result waiting starts as soon as execution begins,
+        # so the execution time must be included when calculating the result retrieval timeout.
+        _, guarded_wait_time = get_execution_time(recipe_data)
+        # TODO(2K): set timeout based on timeout_s from connect
+        timeout_s = 5 + guarded_wait_time
+
+        rt_execution_info = recipe_data.rt_execution_info
+        averages_divider = (
+            1
+            if rt_execution_info.acquisition_type == AcquisitionType.DISCRIMINATION
+            else hw_averages
+        )
+        all_data = await _gather(
+            *[
+                self._get_integrator_measurement_data(
+                    integrator, num_results, averages_divider, timeout_s
+                )
+                for integrator in range(self._integrators)
+            ]
+        )
+        return [RawReadoutData(data) for data in all_data]
+
+    async def _get_integrator_measurement_data(
+        self, result_index, num_results, averages_divider: int, timeout_s: float
+    ):
+        result_path = self.nodes.readout_result_wave[result_index]
+        ch_repr_readout = f"{self._unit_repr}:readout{result_index}"
+        try:
+            integrator_result = await self._subscriber.get_result(
+                result_path, timeout_s=timeout_s
+            )
+            _check_result(
+                node_val=integrator_result.vector,
+                num_results=num_results,
+                ch_repr=ch_repr_readout,
+            )
+            # Not dividing by averages_divider - it appears poll data is already divided.
+            return integrator_result.vector[0:num_results]
+        except (TimeoutError, asyncio.TimeoutError):
+            _logger.error(
+                f"{ch_repr_readout}: Failed to receive a result from {result_path} within {timeout_s} seconds."
+            )
+            return np.array([], dtype=np.complex128)

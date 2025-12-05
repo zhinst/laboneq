@@ -4,7 +4,8 @@
 use laboneq_common::named_id::NamedId;
 use laboneq_units::duration::{Duration, Second};
 use num_complex::Complex64;
-use std::{collections::HashMap, sync::Arc};
+use num_traits::ToPrimitive;
+use std::collections::HashMap;
 
 use crate::error;
 
@@ -28,6 +29,9 @@ pub struct DeviceUid(pub NamedId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct SignalUid(pub NamedId);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PulseParameterUid(pub NamedId);
 
 #[macro_export]
 macro_rules! impl_from_named_id {
@@ -53,6 +57,7 @@ impl_from_named_id!(HandleUid);
 impl_from_named_id!(DeviceUid);
 impl_from_named_id!(PulseUid);
 impl_from_named_id!(SectionUid);
+impl_from_named_id!(PulseParameterUid);
 
 pub type UserRegister = u16;
 
@@ -62,6 +67,12 @@ pub type UserRegister = u16;
 /// The parameter the UID refers to is not accessed by the compiler itself.
 #[derive(Debug, Hash, Eq, PartialEq, Clone, Copy)]
 pub struct ExternalParameterUid(pub u64);
+
+impl From<u64> for ExternalParameterUid {
+    fn from(value: u64) -> Self {
+        ExternalParameterUid(value)
+    }
+}
 
 // Common type definitions
 
@@ -128,10 +139,12 @@ impl std::fmt::Display for NumericLiteral {
 
 impl TryFrom<NumericLiteral> for f64 {
     type Error = &'static str;
-    fn try_from(value: NumericLiteral) -> Result<f64, Self::Error> {
+    fn try_from(value: NumericLiteral) -> Result<Self, Self::Error> {
         match value {
             NumericLiteral::Float(v) => Ok(v),
-            NumericLiteral::Int(v) => Ok(v as f64),
+            NumericLiteral::Int(v) => v
+                .to_f64()
+                .ok_or("Integer value is too large to convert to f64"),
             NumericLiteral::Complex(v) => {
                 if v.im == 0.0 {
                     Ok(v.re)
@@ -140,6 +153,12 @@ impl TryFrom<NumericLiteral> for f64 {
                 }
             }
         }
+    }
+}
+
+impl From<f64> for NumericLiteral {
+    fn from(value: f64) -> Self {
+        NumericLiteral::Float(value)
     }
 }
 
@@ -186,19 +205,45 @@ impl PartialEq for NumericLiteral {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ComplexOrFloat {
+    Float(f64),
+    Complex(Complex64),
+}
+
+impl Eq for ComplexOrFloat {}
+
+impl std::fmt::Display for ComplexOrFloat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ComplexOrFloat::Float(v) => write!(f, "{}", v),
+            ComplexOrFloat::Complex(v) => write!(f, "{} + {}j", v.re, v.im),
+        }
+    }
+}
+
+impl PartialEq for ComplexOrFloat {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ComplexOrFloat::Float(a), ComplexOrFloat::Float(b)) => a == b,
+            (ComplexOrFloat::Complex(a), ComplexOrFloat::Complex(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl TryFrom<NumericLiteral> for ComplexOrFloat {
+    type Error = &'static str;
+    fn try_from(value: NumericLiteral) -> Result<ComplexOrFloat, Self::Error> {
+        match value {
+            NumericLiteral::Float(v) => Ok(ComplexOrFloat::Float(v)),
+            NumericLiteral::Complex(v) => Ok(ComplexOrFloat::Complex(v)),
+            NumericLiteral::Int(_) => Err("Cannot convert integer to complex or float value"),
+        }
+    }
+}
+
 // Information living outside the tree
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PulseLength {
-    Seconds(Duration<Second, f64>),
-    Samples(usize),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PulseRef {
-    pub uid: PulseUid,
-    pub length: PulseLength,
-}
 
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum OscillatorKind {
@@ -255,10 +300,10 @@ pub enum AcquisitionType {
     Raw,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Trigger {
     pub signal: SignalUid,
-    pub state: u16,
+    pub state: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -279,7 +324,7 @@ pub struct Marker {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Delay {
     pub signal: SignalUid,
-    pub time: ValueOrParameter<f64>,
+    pub time: ValueOrParameter<Duration<Second>>,
     pub precompensation_clear: bool,
 }
 
@@ -289,21 +334,20 @@ pub enum PulseParameterValue {
     // resolved at sampling time, in case of the pulse being played
     // is a Python function.
     ExternalParameter(ExternalParameterUid),
-    Parameter(ParameterUid),
+    ValueOrParameter(ValueOrParameter<NumericLiteral>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayPulse {
     pub signal: SignalUid,
     pub pulse: Option<PulseUid>,
-    pub precompensation_clear: bool,
-    pub amplitude: ValueOrParameter<Complex64>,
+    pub amplitude: ValueOrParameter<ComplexOrFloat>,
     pub phase: Option<ValueOrParameter<f64>>,
     pub increment_oscillator_phase: Option<ValueOrParameter<f64>>,
     pub set_oscillator_phase: Option<ValueOrParameter<f64>>,
     pub length: Option<ValueOrParameter<f64>>,
-    pub parameters: HashMap<Arc<String>, PulseParameterValue>,
-    pub pulse_parameters: HashMap<Arc<String>, PulseParameterValue>,
+    pub parameters: HashMap<PulseParameterUid, PulseParameterValue>,
+    pub pulse_parameters: HashMap<PulseParameterUid, PulseParameterValue>,
     pub markers: Vec<Marker>,
 }
 
@@ -313,8 +357,8 @@ pub struct Acquire {
     pub handle: HandleUid,
     pub length: Option<Duration<Second, f64>>,
     pub kernel: Vec<PulseUid>,
-    pub parameters: Vec<HashMap<Arc<String>, PulseParameterValue>>,
-    pub pulse_parameters: Vec<HashMap<Arc<String>, PulseParameterValue>>,
+    pub parameters: Vec<HashMap<PulseParameterUid, PulseParameterValue>>,
+    pub pulse_parameters: Vec<HashMap<PulseParameterUid, PulseParameterValue>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

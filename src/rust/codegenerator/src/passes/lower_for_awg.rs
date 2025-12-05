@@ -8,7 +8,7 @@ use crate::ir::{self, NodeKind};
 use laboneq_units::tinysample::{tiny_samples, tinysamples_to_samples};
 
 /// Transformation pass to convert tiny samples to unit samples on target AWG.
-pub fn convert_to_samples(node: &mut ir::IrNode, awg: &cjob::AwgCore) {
+pub(crate) fn convert_to_samples(node: &mut ir::IrNode, awg: &cjob::AwgCore) {
     *node.offset_mut() = tinysamples_to_samples(tiny_samples(*node.offset()), awg.sampling_rate);
     let len_ts = tiny_samples(node.data().length());
     node.data_mut()
@@ -19,7 +19,7 @@ pub fn convert_to_samples(node: &mut ir::IrNode, awg: &cjob::AwgCore) {
 }
 
 /// Transformation pass to convert relative node offsets to absolute values starting from the root.
-pub fn offset_to_absolute(node: &mut ir::IrNode, offset: ir::Samples) {
+pub(crate) fn offset_to_absolute(node: &mut ir::IrNode, offset: ir::Samples) {
     *node.offset_mut() += offset;
     let parent_offset = *node.offset();
     for child in node.iter_children_mut() {
@@ -64,7 +64,7 @@ fn apply_delays(node: &mut ir::IrNode, delays: &AwgTiming) {
 ///
 /// This pass adjusts the offsets of the root node and its children based on the given delays.
 /// It also extends the root node length to account for the AWG delay and waveform size hints.
-pub fn apply_delay_information(
+pub(crate) fn apply_delay_information(
     node: &mut ir::IrNode,
     awg: &cjob::AwgCore,
     delays: &AwgTiming,

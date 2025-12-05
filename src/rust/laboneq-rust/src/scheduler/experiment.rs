@@ -4,16 +4,16 @@
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
-use pyo3::prelude::*;
-
 use crate::scheduler::NamedIdStore;
+use crate::scheduler::pulse::PulseDef;
+use crate::scheduler::py_object_interner::PyObjectInterner;
 use laboneq_common::device_traits::DeviceTraits;
 use laboneq_common::types::{AwgKey, DeviceKind};
 use laboneq_scheduler::SignalInfo;
 use laboneq_scheduler::experiment::ExperimentNode;
 use laboneq_scheduler::experiment::sweep_parameter::SweepParameter;
 use laboneq_scheduler::experiment::types::{
-    AmplifierPump, ExternalParameterUid, Oscillator, ParameterUid, PulseRef, PulseUid, SignalUid,
+    AmplifierPump, ExternalParameterUid, Oscillator, ParameterUid, PulseUid, SignalUid,
     ValueOrParameter,
 };
 
@@ -21,18 +21,17 @@ pub(crate) struct Experiment {
     pub sections: Vec<ExperimentNode>,
     pub id_store: NamedIdStore,
     pub parameters: HashMap<ParameterUid, SweepParameter>,
-    pub pulses: HashMap<PulseUid, PulseRef>,
+    pub pulses: HashMap<PulseUid, PulseDef>,
     #[allow(dead_code)]
     // Signal defined in the experiment
     pub experiment_signals: HashSet<SignalUid>, // Not yet used except in tests
     // Resolved signals with full info.
     pub signals: HashMap<SignalUid, Signal>,
-    #[allow(dead_code)] // Not yet used except in tests
-    pub external_parameters: HashMap<ExternalParameterUid, Py<PyAny>>,
+    pub py_object_store: PyObjectInterner<ExternalParameterUid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Signal {
+pub(crate) struct Signal {
     pub uid: SignalUid,
     pub sampling_rate: f64,
     pub awg_key: AwgKey,
@@ -84,6 +83,10 @@ impl SignalInfo for Signal {
     fn amplifier_pump(&self) -> Option<&AmplifierPump> {
         self.amplifier_pump.as_ref()
     }
+
+    fn supports_multiple_acquisition_lengths(&self) -> bool {
+        matches!(self.device_type, DeviceKind::PrettyPrinterDevice)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -107,19 +110,19 @@ impl FromStr for SignalKind {
 }
 
 #[cfg(test)]
-pub mod builders {
+pub(crate) mod builders {
     use super::{Signal, SignalKind};
     use laboneq_common::types::{AwgKey, DeviceKind};
     use laboneq_scheduler::experiment::types::{
         AmplifierPump, Oscillator, SignalUid, ValueOrParameter,
     };
 
-    pub struct SignalBuilder {
+    pub(crate) struct SignalBuilder {
         inner: Signal,
     }
 
     impl SignalBuilder {
-        pub fn new(
+        pub(crate) fn new(
             uid: SignalUid,
             sampling_rate: f64,
             awg_key: AwgKey,
@@ -141,30 +144,30 @@ pub mod builders {
             }
         }
 
-        pub fn oscillator(mut self, oscillator: Oscillator) -> Self {
+        pub(crate) fn oscillator(mut self, oscillator: Oscillator) -> Self {
             self.inner.oscillator = Some(oscillator);
             self
         }
 
         #[expect(dead_code)]
-        pub fn lo_frequency(mut self, lo_frequency: ValueOrParameter<f64>) -> Self {
+        pub(crate) fn lo_frequency(mut self, lo_frequency: ValueOrParameter<f64>) -> Self {
             self.inner.lo_frequency = Some(lo_frequency);
             self
         }
 
         #[expect(dead_code)]
-        pub fn voltage_offset(mut self, voltage_offset: ValueOrParameter<f64>) -> Self {
+        pub(crate) fn voltage_offset(mut self, voltage_offset: ValueOrParameter<f64>) -> Self {
             self.inner.voltage_offset = Some(voltage_offset);
             self
         }
 
         #[expect(dead_code)]
-        pub fn amplifier_pump(mut self, amplifier_pump: AmplifierPump) -> Self {
+        pub(crate) fn amplifier_pump(mut self, amplifier_pump: AmplifierPump) -> Self {
             self.inner.amplifier_pump = Some(amplifier_pump);
             self
         }
 
-        pub fn build(self) -> Signal {
+        pub(crate) fn build(self) -> Signal {
             self.inner
         }
     }

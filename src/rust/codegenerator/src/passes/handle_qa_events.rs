@@ -95,7 +95,7 @@ fn create_qa_event(nodes: &mut Vec<&mut IrNode>, disallow_standalone_play: bool)
 /// `Ok(())`: Processing is successful.
 /// `Error`: There are acquire events, but one or more play events have no corresponding acquire events
 ///         happening at the same time.
-pub fn handle_qa_events(node: &mut IrNode, device: &DeviceKind) -> Result<()> {
+pub(crate) fn handle_qa_events(node: &mut IrNode, device: &DeviceKind) -> Result<()> {
     if device != &DeviceKind::SHFQA {
         return Ok(());
     }

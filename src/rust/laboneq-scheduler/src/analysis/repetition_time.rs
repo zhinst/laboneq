@@ -14,7 +14,7 @@ pub struct RepetitionInfo {
 }
 
 /// Locate the loop section which corresponds to the shot boundary.
-pub fn resolve_repetition_time(node: &ExperimentNode) -> Result<Option<RepetitionInfo>> {
+pub(crate) fn resolve_repetition_time(node: &ExperimentNode) -> Result<Option<RepetitionInfo>> {
     if let Operation::AveragingLoop(obj) = &node.kind
         && obj.repetition_mode != RepetitionMode::Fastest
     {

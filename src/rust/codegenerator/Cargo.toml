@@ -15,6 +15,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+derive_more = { workspace = true, features = ["from"] }
 indexmap = { workspace = true }
 log = { workspace = true }
 num-complex = { workspace = true }

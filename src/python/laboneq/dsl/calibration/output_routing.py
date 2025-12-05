@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING
 
 import attrs
 
-from laboneq.dsl.parameter import Parameter
+from laboneq.core.utilities.attrs_helpers import validated_field
+from laboneq.dsl.parameter import LinearSweepParameter, Parameter, SweepParameter
 
 if TYPE_CHECKING:
     from laboneq.dsl.device.io_units.logical_signal import LogicalSignal
     from laboneq.dsl.experiment import ExperimentSignal
-    from laboneq.dsl.parameter import LinearSweepParameter, SweepParameter
 
 
 def _source_converter(
@@ -55,12 +55,22 @@ class OutputRoute:
         phase_shift: Phase shift applied to the source signal in radians.
             Value must be a real value.
             Can be swept in near-time sweeps.
+
+    !!! version-changed "Changed in version 26.1.0"
+
+        The types of the attributes are now validated when an `OutputRoute` instance is
+        created or when an attribute is set. A `TypeError` is raised if the type of the
+        supplied value is incorrect.
     """
 
-    source: str | None = attrs.field(default=None, converter=_source_converter)
-    amplitude_scaling: float | SweepParameter | LinearSweepParameter = attrs.field(
-        default=None, validator=_amplitude_scaling_validator
+    source: str | None = validated_field(default=None, converter=_source_converter)
+    amplitude_scaling: float | SweepParameter | LinearSweepParameter = validated_field(
+        # The default value (None) is not an allowed type, so amplitude scaling must
+        # be specified or a type error will be raised. Setting the default here is required
+        # though because `source` is optional.
+        default=None,
+        validator=_amplitude_scaling_validator,
     )
-    phase_shift: float | SweepParameter | LinearSweepParameter | None = attrs.field(
-        default=None
+    phase_shift: float | SweepParameter | LinearSweepParameter | None = validated_field(
+        default=None,
     )

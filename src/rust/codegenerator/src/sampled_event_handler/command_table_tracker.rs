@@ -7,7 +7,7 @@ use super::awg_events::PlayWaveEvent;
 use super::seqc_tracker::wave_index_tracker::WaveIndex;
 use crate::Result;
 use crate::ir::{
-    ParameterOperation,
+    ParameterOperation, Samples,
     compilation_job::{AwgKind, DeviceKind},
 };
 use crate::sampled_event_handler::awg_events::PulseSource;
@@ -18,21 +18,22 @@ pub enum ParameterPhaseIncrement {
     ComplexUsage,
 }
 
-pub struct CommandTableResults {
+pub(super) struct CommandTableResults {
     pub command_table: Value,
     pub parameter_phase_increment_map: HashMap<String, Vec<ParameterPhaseIncrement>>,
 }
-pub struct CommandTableTracker {
+pub(super) struct CommandTableTracker {
     command_table: Vec<(usize, Value)>,
     table_index_by_signature: HashMap<PlayWaveEvent, usize>,
     device_type: DeviceKind,
     parameter_phase_increment_map: HashMap<String, Vec<ParameterPhaseIncrement>>,
     phase_reset_entry: Option<usize>,
     signal_kind: AwgKind,
+    short_playzero_entry: Option<usize>,
 }
 
 impl CommandTableTracker {
-    pub fn new(device_type: DeviceKind, signal_kind: AwgKind) -> Self {
+    pub(super) fn new(device_type: DeviceKind, signal_kind: AwgKind) -> Self {
         Self {
             command_table: Vec::new(),
             table_index_by_signature: HashMap::new(),
@@ -40,10 +41,11 @@ impl CommandTableTracker {
             parameter_phase_increment_map: HashMap::new(),
             signal_kind,
             phase_reset_entry: None,
+            short_playzero_entry: None,
         }
     }
 
-    pub fn get(&self, index: usize) -> Result<(&PlayWaveEvent, &Value), String> {
+    pub(super) fn get(&self, index: usize) -> Result<(&PlayWaveEvent, &Value), String> {
         if let Some(entry) = self.command_table.get(index) {
             for (signature, &idx) in &self.table_index_by_signature {
                 if idx == entry.0 {
@@ -65,7 +67,7 @@ impl CommandTableTracker {
     /// * `Option<usize>` - The index of the command table entry if found,
     ///   or `None` if the signature is not in the command table.
     ///
-    pub fn lookup_index_by_signature(&self, signature: &PlayWaveEvent) -> Option<usize> {
+    pub(super) fn lookup_index_by_signature(&self, signature: &PlayWaveEvent) -> Option<usize> {
         self.table_index_by_signature.get(signature).copied()
     }
 
@@ -74,7 +76,7 @@ impl CommandTableTracker {
     /// # Returns
     /// * `usize` - The number of entries in the command table.
     #[allow(clippy::len_without_is_empty)]
-    pub fn len(&self) -> usize {
+    pub(super) fn len(&self) -> usize {
         self.command_table.len()
     }
 
@@ -93,7 +95,7 @@ impl CommandTableTracker {
     /// Returns an error if the signature already exists in the table and `ignore_already_in_table` is false
     /// or if the command table exceeds the entry limit.
     ///
-    pub fn create_entry(
+    pub(super) fn create_entry(
         &mut self,
         signature: &PlayWaveEvent,
         wave_index: Option<WaveIndex>,
@@ -150,6 +152,27 @@ impl CommandTableTracker {
         Ok(index)
     }
 
+    pub(crate) fn create_short_playzero_entry(&mut self, length: Samples) -> usize {
+        assert_eq!(
+            length, 16,
+            "currently all instruments have a minimum playZero length \
+                of 2x the system grid, so the only failing length is 16 samples"
+        );
+        let entry = self.short_playzero_entry.get_or_insert_with(|| {
+            let index = self.command_table.len();
+            let json = json!({
+                "index": index,
+                "waveform": {
+                    "playZero": true,
+                    "length": length
+                }
+            });
+            self.command_table.push((index, json));
+            index
+        });
+        *entry
+    }
+
     /// Creates a command table entry for a precompensation clear operation.
     ///
     /// # Arguments
@@ -159,7 +182,7 @@ impl CommandTableTracker {
     /// # Returns
     /// * `usize` - The index of the newly created entry in the command table.
     ///
-    pub fn create_precompensation_clear_entry(
+    pub(super) fn create_precompensation_clear_entry(
         &mut self,
         signature: &PlayWaveEvent,
         wave_index: WaveIndex,
@@ -185,7 +208,7 @@ impl CommandTableTracker {
         index
     }
 
-    pub fn create_phase_reset_entry(&mut self) -> usize {
+    pub(super) fn create_phase_reset_entry(&mut self) -> usize {
         if let Some(entry) = self.phase_reset_entry {
             return entry;
         }
@@ -213,7 +236,7 @@ impl CommandTableTracker {
         index
     }
 
-    pub fn get_or_create_entry(
+    pub(super) fn get_or_create_entry(
         &mut self,
         signature: &PlayWaveEvent,
         wave_index: Option<WaveIndex>,
@@ -270,7 +293,7 @@ impl CommandTableTracker {
     ///
     /// This function may only be called once.
     ///
-    pub fn finish(self) -> Option<CommandTableResults> {
+    pub(super) fn finish(self) -> Option<CommandTableResults> {
         match CommandTableTracker::build_command_table(&self.device_type, self.command_table) {
             Some(ct) => Some(CommandTableResults {
                 command_table: ct,

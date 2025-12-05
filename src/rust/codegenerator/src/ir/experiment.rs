@@ -378,7 +378,7 @@ pub struct PrngSample {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TriggerBitData {
     pub signal: Arc<Signal>,
-    pub bit: u8,
+    pub bits: u8,
     pub set: bool,
     pub section_info: Arc<SectionInfo>,
 }

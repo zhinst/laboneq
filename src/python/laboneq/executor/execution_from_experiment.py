@@ -20,7 +20,7 @@ from laboneq.data.experiment_description import (
     SetNode,
     Sweep,
 )
-from laboneq.data.parameter import LinearSweepParameter, SweepParameter
+from laboneq.data.parameter import LinearSweepParameter, Parameter, SweepParameter
 from laboneq.data.prng import PRNGSample
 from laboneq.executor import executor
 
@@ -29,8 +29,19 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
     def __init__(self):
         super().__init__()
         self._chunk_count: int = 1
+        # A mapping from driver parameter UIDs to the parameters they drive
+        # Not all parameters are mapped to their respective sweeps, therefore we
+        # use this mapping to find driven parameters when handling sweeps and placing them into
+        # correct nt execution statements.
+        self._driver_parameter_map: dict[str, list[Parameter]] = {}
 
-    def make(self, experiment: Experiment, chunk_count: int = 1) -> executor.Statement:
+    def make(
+        self,
+        experiment: Experiment,
+        chunk_count: int = 1,
+        driver_parameter_map: dict[str, list[Parameter]] | None = None,
+    ) -> executor.Statement:
+        self._driver_parameter_map = driver_parameter_map or {}
         self._chunk_count = chunk_count
         self._handle_children(experiment.sections, experiment.uid)
         return self._root_sequence
@@ -81,8 +92,15 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
                 self._append_statement(sub_sequence)
 
     def _handle_sweep(self, sweep: Sweep):
+        seen_params = set()
         for parameter in sweep.parameters:
+            seen_params.add(parameter.uid)
             self._append_statement(self._statement_from_param(parameter))
+            for driven_param in self._driver_parameter_map.get(parameter.uid, []):
+                if driven_param.uid in seen_params:
+                    continue
+                seen_params.add(driven_param.uid)
+                self._append_statement(self._statement_from_param(driven_param))
         self._handle_children(sweep.children, sweep.uid)
 
     def _handle_prng_loop(self, loop: PrngLoop):

@@ -11,7 +11,6 @@ from laboneq.controller.devices.async_support import (
     InstrumentConnection,
 )
 from laboneq.controller.devices.core_base import CoreBase
-from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.recipe_processor import RecipeData
 from laboneq.data.recipe import NtStepKey
 
@@ -34,8 +33,8 @@ class PPChannel(CoreBase):
             core_index=core_index,
         )
 
-    def _disable_output(self) -> NodeCollector:
-        return NodeCollector()
+    async def disable_output(self, outputs: set[int], invert: bool):
+        pass
 
     def allocate_resources(self):
         pass

@@ -1,0 +1,12 @@
+[package]
+name = "rccow"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

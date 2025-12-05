@@ -415,7 +415,7 @@ fn transform_waveforms(node: &mut IrNode, ctx: &mut PassContext) {
 /// * Splits complex amplitudes into a real amplitude and a phase
 /// * Absorbs the pulse amplitude into the command table. Whenever possible, the
 ///   waveforms will be sampled at unit amplitude, making waveform reuse more likely
-pub fn optimize_signatures(
+pub(crate) fn optimize_signatures(
     node: &mut IrNode,
     awg: &AwgCore,
     use_amplitude_increment: bool,

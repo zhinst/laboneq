@@ -20,11 +20,11 @@ use crate::{ScheduleInfo, ScheduledNode, SignalInfo};
 /// The timing properties `length` and `grid` are determined based on the device
 /// traits `oscillator_reset_duration` and `lo_frequency_granularity` of the hardware modulated
 /// signals.
-pub fn handle_reset_oscillator_phase<T: SignalInfo>(
+pub(super) fn handle_reset_oscillator_phase<T: SignalInfo>(
     signals: &[&T],
     ctx: &ExperimentContext<T>,
     system_grid: TinySamples,
-    section_uid: &SectionUid,
+    section_uid: SectionUid,
 ) -> Result<ScheduledNode> {
     let ir = create_ir(signals.iter().map(|s| s.uid()));
     let schedule = create_schedule(signals, ctx, system_grid, section_uid)?;
@@ -42,7 +42,7 @@ fn create_schedule<T: SignalInfo>(
     signals: &[&T],
     ctx: &ExperimentContext<T>,
     system_grid: TinySamples,
-    section_uid: &SectionUid,
+    section_uid: SectionUid,
 ) -> Result<ScheduleInfo> {
     let mut hw_reset_signals = Vec::new();
     for signal in signals {
@@ -72,6 +72,11 @@ fn create_schedule<T: SignalInfo>(
             }
             grid = grid_adjusted;
         }
+        diagnostic!(
+            "An additional delay of {} has been added on signal '{}' to wait for the phase reset.",
+            signal.device_traits().oscillator_reset_duration,
+            ctx.resolve_uid(signal.uid())?,
+        );
     }
     let schedule = ScheduleInfoBuilder::new()
         .grid(grid)

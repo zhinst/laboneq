@@ -28,6 +28,7 @@ from zhinst.comms_schemas.labone.core import (
     AnnotatedValue,
     DataQueue,
     ShfGeneratorWaveformVectorData,
+    ZIContext,
 )
 from zhinst.comms_schemas.labone.core.errors import NotFoundError
 
@@ -250,8 +251,14 @@ class DataServerConnection:
 
         dataserver_version = LabOneVersion.from_version_string(self.fullversion_str)
 
-        if dataserver_version != python_api_version:
-            err_msg = f"Version of LabOne Data Server ({dataserver_version}) and Python API ({python_api_version}) do not match."
+        if python_api_version < dataserver_version:
+            version_spec = f"{dataserver_version.year}.{dataserver_version.month}.{dataserver_version.patch}"
+            err_msg = (
+                f"Version of LabOne Python API ({python_api_version}) is older than "
+                f"LabOne Data Server ({dataserver_version}). "
+                f"You can install a matching or newer version of the LabOne Python API with: "
+                f"pip install --upgrade zhinst-core~={version_spec}"
+            )
             if ignore_version_mismatch:
                 _logger.warning("Ignoring that %s", err_msg)
             else:
@@ -336,8 +343,13 @@ class InstrumentConnection:
     """Encapsulates the API implementation to prevent contaminating
     the rest of the controller with API dependencies."""
 
-    def __init__(self, impl: KernelSession | None = None):
-        self._impl = impl
+    def __init__(
+        self,
+        control_impl: KernelSession | None = None,
+        readout_impl: KernelSession | None = None,
+    ):
+        self._impl = control_impl
+        self._readout_impl = readout_impl
 
     @staticmethod
     async def connect(
@@ -347,17 +359,7 @@ class InstrumentConnection:
         emulator_state: EmulatorState | None,
         timeout_s: float,
     ) -> InstrumentConnection:
-        if emulator_state is None:
-            instrument = await KernelSession.create(
-                kernel_info=KernelInfo.device_connection(
-                    device_id=device_qualifier.options.serial,
-                    interface=device_qualifier.options.interface,
-                ),
-                host=server_qualifier.host,
-                port=server_qualifier.port,
-                timeout=to_l1_timeout(timeout_s),
-            )
-        else:
+        if emulator_state is not None:
             # Fool the type checker that the KernelSessionEmulator is a KernelSession
             instrument = cast(
                 KernelSession,
@@ -366,12 +368,38 @@ class InstrumentConnection:
                     emulator_state=emulator_state,
                 ),
             )
-        return InstrumentConnection(instrument)
+            return InstrumentConnection(instrument, instrument)
+        instrument_control = await KernelSession.create(
+            kernel_info=KernelInfo.device_connection(
+                device_id=device_qualifier.options.serial,
+                interface=device_qualifier.options.interface,
+            ),
+            host=server_qualifier.host,
+            port=server_qualifier.port,
+            context=ZIContext(),
+            timeout=to_l1_timeout(timeout_s),
+        )
+        instrument_readout = await KernelSession.create(
+            kernel_info=KernelInfo.device_connection(
+                device_id=device_qualifier.options.serial,
+                interface=device_qualifier.options.interface,
+            ),
+            host=server_qualifier.host,
+            port=server_qualifier.port,
+            context=ZIContext(),
+            timeout=to_l1_timeout(timeout_s),
+        )
+        return InstrumentConnection(instrument_control, instrument_readout)
 
     @property
     def impl(self) -> KernelSession:
         assert self._impl is not None
         return self._impl
+
+    @property
+    def readout_impl(self) -> KernelSession:
+        assert self._readout_impl is not None
+        return self._readout_impl
 
     def clear_cache(self):
         if isinstance(self._impl, KernelSessionEmulator):
@@ -605,16 +633,18 @@ class ResultData:
 
 
 class AsyncSubscriber:
-    def __init__(self):
+    def __init__(self, use_control_connection: bool = False):
+        self._use_control_connection = use_control_connection
         self._subscriptions: dict[str, DataQueue] = {}
         self._last: dict[str, AnnotatedValue] = {}
 
     async def subscribe(self, api: InstrumentConnection, path: str, get_initial=False):
+        api_impl = api.impl if self._use_control_connection else api.readout_impl
         if path in self._subscriptions:
             return  # Keep existing subscription
-        self._subscriptions[path] = await api.impl.subscribe(path)
+        self._subscriptions[path] = await api_impl.subscribe(path)
         if get_initial:
-            self._last[path] = await api.impl.get(path)
+            self._last[path] = await api_impl.get(path)
 
     async def get(self, path: str, timeout_s: float | None = None) -> AnnotatedValue:
         queue = self._subscriptions.get(path)

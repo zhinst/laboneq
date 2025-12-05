@@ -4,7 +4,7 @@
 use crate::ir::compilation_job::{AwgKey, AwgKind, ChannelIndex, DeviceKind, TriggerMode};
 
 #[derive(Clone)]
-pub struct Awg {
+pub(crate) struct Awg {
     pub signal_kind: AwgKind,
     pub awg_key: AwgKey,
     pub device_kind: DeviceKind,
@@ -16,7 +16,7 @@ pub struct Awg {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct HwOscillator {
+pub(crate) struct HwOscillator {
     pub uid: String,
     pub index: u16,
 }

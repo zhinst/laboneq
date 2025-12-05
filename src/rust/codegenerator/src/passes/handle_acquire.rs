@@ -75,7 +75,7 @@ fn transform_acquires(node: &mut IrNode, ctx: &PassContext) -> Result<()> {
 ///
 /// * Applies delays to the acquisition nodes.
 /// * Oscillator frequency is applied to the acquisition nodes.
-pub fn handle_acquisitions(
+pub(crate) fn handle_acquisitions(
     node: &mut IrNode,
     sample_multiple: u16,
     osc_params: &SoftwareOscillatorParameters,

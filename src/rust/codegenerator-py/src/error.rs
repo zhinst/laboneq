@@ -54,7 +54,7 @@ impl From<PyErr> for Error {
     }
 }
 
-pub type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T> = std::result::Result<T, Error>;
 
 /// Collect the source errors and format them into a string.
 ///

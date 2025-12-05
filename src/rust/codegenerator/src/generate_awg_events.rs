@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 /// This function processes the IR program, applying various transformations and optimizations
 /// to generate a set of AWG events that can be executed on the device.
 #[allow(clippy::too_many_arguments)]
-pub fn transform_ir_to_awg_events(
+pub(crate) fn transform_ir_to_awg_events(
     program: ir::IrNode,
     awg: &AwgCore,
     settings: &crate::CodeGeneratorSettings,

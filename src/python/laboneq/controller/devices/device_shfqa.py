@@ -74,6 +74,8 @@ class DeviceSHFQA(DeviceSHFBase):
         self.dev_opts = []
         self._qachannels: list[QAChannel] = []
         self._channels = 4
+        # TODO(2K): This is the number of available integrators.
+        # Determine the actual number of integrators in use based on device setup.
         self._integrators = 16
         self._long_readout_available = True
         self._wait_for_awgs = True
@@ -215,17 +217,6 @@ class DeviceSHFQA(DeviceSHFBase):
 
     def _make_osc_path(self, channel: int, index: int) -> str:
         return self._qachannels[channel].nodes.osc_freq[index]
-
-    async def disable_outputs(self, outputs: set[int], invert: bool):
-        await for_each(
-            self.all_cores(),
-            CoreBase.disable_output,
-            outputs=outputs,
-            invert=invert,
-        )
-
-    def _result_node_scope(self, ch: int) -> str:
-        return f"/{self.serial}/scopes/0/channels/{ch}/wave"
 
     def _busy_nodes(self, recipe_data: RecipeData) -> list[str]:
         if not self._setup_caps.supports_shf_busy:
@@ -384,18 +375,13 @@ class DeviceSHFQA(DeviceSHFBase):
             await self.set_async(nc)
 
     async def on_experiment_begin(self, recipe_data: RecipeData):
-        subscribe_qa_nodes = [
-            self._qachannels[ch].subscribe_nodes()
-            for ch in recipe_data.allocated_awgs(self.uid)
-        ]
-        subscribe_scope_nodes = NodeCollector()
-        for ch in recipe_data.allocated_awgs(self.uid):
-            subscribe_scope_nodes.add_path(self._result_node_scope(ch))
-
-        nodes = NodeCollector.all([*subscribe_qa_nodes, subscribe_scope_nodes])
         await _gather(
             super().on_experiment_begin(recipe_data=recipe_data),
-            *(self._subscriber.subscribe(self._api, path) for path in nodes.paths()),
+            *(
+                self._subscriber.subscribe(self._api, path)
+                for ch in recipe_data.allocated_awgs(self.uid)
+                for path in self._qachannels[ch].subscribe_nodes()
+            ),
         )
 
     async def on_experiment_end(self):
@@ -407,16 +393,31 @@ class DeviceSHFQA(DeviceSHFBase):
 
     async def get_measurement_data(
         self,
-        channel: int,
+        *,
+        core_index: int,
         recipe_data: RecipeData,
-        result_indices: list[int],
         num_results: int,
         hw_averages: int,
-    ) -> RawReadoutData:
-        return await self._qachannels[channel].get_measurement_data(
+    ) -> list[RawReadoutData]:
+        return await self._qachannels[core_index].get_measurement_data(
             recipe_data=recipe_data,
-            result_indices=result_indices,
             num_results=num_results,
+        )
+
+    def extract_raw_readout(
+        self,
+        *,
+        all_raw_readouts: list[RawReadoutData],
+        integrators: list[int],
+        rt_execution_info: RtExecutionInfo,
+    ) -> RawReadoutData:
+        if len(integrators) == 1:
+            rt_result = all_raw_readouts[integrators[0]]
+            if rt_execution_info.acquisition_type == AcquisitionType.DISCRIMINATION:
+                rt_result.vector = rt_result.vector.real
+            return rt_result
+        raise LabOneQControllerException(
+            f"{self.dev_repr}: Internal error. Readout extraction is only supported for 1 integrator per signal, provided: {integrators}"
         )
 
     def _ch_repr_scope(self, ch: int) -> str:
@@ -425,7 +426,7 @@ class DeviceSHFQA(DeviceSHFBase):
     async def get_raw_data(
         self, channel: int, acquire_length: int, acquires: int | None, timeout_s: float
     ) -> RawReadoutData:
-        result_path = self._result_node_scope(channel)
+        result_path = self._qachannels[channel].nodes.scope_result_wave
         # Segment lengths are always multiples of 16 samples.
         segment_length = (acquire_length + 0xF) & (~0xF)
         if acquires is None:

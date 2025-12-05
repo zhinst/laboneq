@@ -4,7 +4,7 @@
 use super::{seqc_generator::SeqCGenerator, seqc_statements::SeqCVariant};
 
 #[derive(Default)]
-pub struct PRNGTracker {
+pub(crate) struct PRNGTracker {
     range: Option<u32>,
     seed: Option<u32>,
     offset: u32,
@@ -12,7 +12,7 @@ pub struct PRNGTracker {
 }
 
 impl PRNGTracker {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         PRNGTracker {
             range: None,
             seed: None,
@@ -21,30 +21,30 @@ impl PRNGTracker {
         }
     }
 
-    pub fn set_range(&mut self, value: u32) {
+    pub(crate) fn set_range(&mut self, value: u32) {
         assert!(!self.committed);
         self.range = Some(value);
     }
 
-    pub fn set_seed(&mut self, value: u32) {
+    pub(crate) fn set_seed(&mut self, value: u32) {
         assert!(!self.committed);
         self.seed = Some(value);
     }
 
-    pub fn offset(&self) -> u32 {
+    pub(crate) fn offset(&self) -> u32 {
         self.offset
     }
 
-    pub fn set_offset(&mut self, value: u32) {
+    pub(crate) fn set_offset(&mut self, value: u32) {
         assert!(!self.committed);
         self.offset = value;
     }
 
-    pub fn is_committed(&self) -> bool {
+    pub(crate) fn is_committed(&self) -> bool {
         self.committed
     }
 
-    pub fn commit(&mut self, seqc_gen: &mut SeqCGenerator) {
+    pub(crate) fn commit(&mut self, seqc_gen: &mut SeqCGenerator) {
         assert!(!self.committed);
         if let Some(seed) = self.seed {
             seqc_gen.add_function_call_statement(

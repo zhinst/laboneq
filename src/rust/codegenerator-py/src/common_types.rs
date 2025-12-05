@@ -7,14 +7,14 @@ use pyo3::prelude::*;
 #[allow(clippy::upper_case_acronyms)]
 #[pyclass(name = "SignalType", eq)]
 #[derive(PartialEq, Clone)]
-pub enum SignalTypePy {
+pub(crate) enum SignalTypePy {
     IQ,
     SINGLE,
     INTEGRATION,
 }
 
 impl SignalTypePy {
-    pub fn from_signal_kind(signal_kind: &SignalKind) -> Self {
+    pub(crate) fn from_signal_kind(signal_kind: &SignalKind) -> Self {
         match signal_kind {
             SignalKind::IQ => SignalTypePy::IQ,
             SignalKind::SINGLE => SignalTypePy::SINGLE,
@@ -26,7 +26,7 @@ impl SignalTypePy {
 #[allow(clippy::upper_case_acronyms)]
 #[pyclass(name = "DeviceType", eq)]
 #[derive(PartialEq, Clone)]
-pub enum DeviceTypePy {
+pub(crate) enum DeviceTypePy {
     HDAWG,
     SHFQA,
     SHFSG,
@@ -34,7 +34,7 @@ pub enum DeviceTypePy {
 }
 
 impl DeviceTypePy {
-    pub fn from_device_kind(device_kind: &DeviceKind) -> Self {
+    pub(crate) fn from_device_kind(device_kind: &DeviceKind) -> Self {
         match device_kind {
             DeviceKind::HDAWG => DeviceTypePy::HDAWG,
             DeviceKind::SHFQA => DeviceTypePy::SHFQA,
@@ -47,7 +47,7 @@ impl DeviceTypePy {
 #[allow(clippy::upper_case_acronyms)]
 #[pyclass(name = "MixerType", eq)]
 #[derive(PartialEq, Clone)]
-pub enum MixerTypePy {
+pub(crate) enum MixerTypePy {
     /// Mixer performs full complex modulation
     IQ,
     /// Mixer only performs envelope modulation (UHFQA-style)
@@ -55,7 +55,7 @@ pub enum MixerTypePy {
 }
 
 impl MixerTypePy {
-    pub fn from_mixer_type(mixer_type: &MixerType) -> Self {
+    pub(crate) fn from_mixer_type(mixer_type: &MixerType) -> Self {
         match mixer_type {
             MixerType::IQ => MixerTypePy::IQ,
             MixerType::UhfqaEnvelope => MixerTypePy::UhfqaEnvelope,

@@ -231,7 +231,7 @@ class SignalCalibrationModel:
     port_mode: PortModeModel | None
     delay_signal: float | None
     voltage_offset: float | ParameterModel | None
-    range: int | float | QuantityModel | None
+    range: float | QuantityModel | None
     threshold: float | list[float] | None
     amplitude: float | ParameterModel | None
     amplifier_pump: AmplifierPumpModel | None

@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, NoReturn
+from typing import NoReturn
 
 import numpy as np
 
@@ -28,23 +28,17 @@ from laboneq.controller.devices.node_control import (
     Response,
     Setting,
 )
-from laboneq.controller.devices.uhfqa_awg import UHFQAAwg
+from laboneq.controller.devices.uhfqa_awg import UHFQAAwg, _check_result
 from laboneq.controller.recipe_processor import (
     RecipeData,
     RtExecutionInfo,
-    get_execution_time,
     get_initialization_by_device_uid,
 )
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.for_each import for_each
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import IO
 from laboneq.data.scheduled_experiment import ScheduledExperiment
-
-if TYPE_CHECKING:
-    from laboneq.core.types.numpy_support import NumPyArray
-
 
 _logger = logging.getLogger(__name__)
 
@@ -66,6 +60,8 @@ class DeviceUHFQA(DeviceBase):
         self.dev_opts = ["AWG", "DIG", "QA"]
         self._awg_cores: list[UHFQAAwg] = []
         self._channels = 2
+        # TODO(2K): This is the number of available integrators.
+        # Determine the actual number of integrators in use based on device setup.
         self._integrators = 10
         self._use_internal_clock = True
 
@@ -84,6 +80,7 @@ class DeviceUHFQA(DeviceBase):
                 device_uid=self.uid,
                 serial=self.serial,
                 repr_base=self.dev_repr,
+                integrators=self._integrators,
             )
         ]
 
@@ -205,19 +202,6 @@ class DeviceUHFQA(DeviceBase):
                 range_list,
             )
 
-    async def disable_outputs(self, outputs: set[int], invert: bool):
-        nc = NodeCollector(base=f"/{self.serial}/")
-        for ch in range(self._channels):
-            if (ch in outputs) != invert:
-                nc.add(f"sigouts/{ch}/on", 0, cache=False)
-        await self.set_async(nc)
-
-    def _result_node_integrator(self, result_index: int):
-        return f"/{self.serial}/qas/0/result/data/{result_index}/wave"
-
-    def _result_node_monitor(self, ch: int):
-        return f"/{self.serial}/qas/0/monitor/inputs/{ch}/wave"
-
     def _error_ambiguous_upstream(self) -> NoReturn:
         raise LabOneQControllerException(
             f"{self.dev_repr}: Can't determine unambiguously upstream device for UHFQA, ensure "
@@ -326,106 +310,62 @@ class DeviceUHFQA(DeviceBase):
         await self.set_async(nc)
 
     async def on_experiment_begin(self, recipe_data: RecipeData):
-        nodes = [
-            *(
-                self._result_node_integrator(result_index)
-                for result_index in range(self._integrators)
-            ),
-            self._result_node_monitor(0),
-            self._result_node_monitor(1),
-        ]
         await _gather(
             super().on_experiment_begin(recipe_data=recipe_data),
-            *(self._subscriber.subscribe(self._api, node) for node in nodes),
+            *(
+                self._subscriber.subscribe(self._api, node)
+                for core in self._awg_cores
+                for node in core.subscribe_nodes()
+            ),
         )
-
-    def _ch_repr_readout(self, ch: int) -> str:
-        return f"{self.dev_repr}:readout{ch}"
 
     def _ch_repr_monitor(self, ch: int) -> str:
         return f"{self.dev_repr}:monitor{ch}"
 
-    def _check_result(self, node_val: NumPyArray, num_results: int, ch_repr: str):
-        num_samples = len(node_val)
-        if num_samples != num_results:
-            _logger.error(
-                f"{ch_repr}: The number of measurements acquired ({num_samples}) "
-                f"does not match the number of measurements defined ({num_results}). "
-                "Possibly the time between measurements within a loop is too short, "
-                "or the measurement was not started."
-            )
-
-    async def _get_integrator_measurement_data(
-        self, result_index, num_results, averages_divider: int, timeout_s: float
-    ):
-        result_path = self._result_node_integrator(result_index)
-        try:
-            integrator_result = await self._subscriber.get_result(
-                result_path, timeout_s=timeout_s
-            )
-            self._check_result(
-                node_val=integrator_result.vector,
-                num_results=num_results,
-                ch_repr=self._ch_repr_readout(result_index),
-            )
-            # Not dividing by averages_divider - it appears poll data is already divided.
-            return integrator_result.vector[0:num_results]
-        except (TimeoutError, asyncio.TimeoutError):
-            _logger.error(
-                f"{self._ch_repr_readout(result_index)}: Failed to receive a result from {result_path} within {timeout_s} seconds."
-            )
-            return np.array([], dtype=np.complex128)
-
     async def get_measurement_data(
         self,
-        channel: int,
+        *,
+        core_index: int,
         recipe_data: RecipeData,
-        result_indices: list[int],
         num_results: int,
         hw_averages: int,
-    ) -> RawReadoutData:
-        # In the async execution model, result waiting starts as soon as execution begins,
-        # so the execution time must be included when calculating the result retrieval timeout.
-        _, guarded_wait_time = get_execution_time(recipe_data)
-        # TODO(2K): set timeout based on timeout_s from connect
-        timeout_s = 5 + guarded_wait_time
-
-        rt_execution_info = recipe_data.rt_execution_info
-        averages_divider = (
-            1
-            if rt_execution_info.acquisition_type == AcquisitionType.DISCRIMINATION
-            else hw_averages
+    ) -> list[RawReadoutData]:
+        return await self._awg_cores[core_index].get_measurement_data(
+            recipe_data=recipe_data,
+            num_results=num_results,
+            hw_averages=hw_averages,
         )
-        assert len(result_indices) <= 2
-        if len(result_indices) == 1:
-            data = await self._get_integrator_measurement_data(
-                result_indices[0], num_results, averages_divider, timeout_s
-            )
-            return RawReadoutData(data)
-        else:
-            in_phase, quadrature = await _gather(
-                self._get_integrator_measurement_data(
-                    result_indices[0], num_results, averages_divider, timeout_s
-                ),
-                self._get_integrator_measurement_data(
-                    result_indices[1], num_results, averages_divider, timeout_s
-                ),
-            )
+
+    def extract_raw_readout(
+        self,
+        *,
+        all_raw_readouts: list[RawReadoutData],
+        integrators: list[int],
+        rt_execution_info: RtExecutionInfo,
+    ) -> RawReadoutData:
+        if len(integrators) == 1:
+            return all_raw_readouts[integrators[0]]
+        if len(integrators) == 2:
+            in_phase = all_raw_readouts[integrators[0]].vector
+            quadrature = all_raw_readouts[integrators[1]].vector
             return RawReadoutData(
                 np.array(
                     [complex(real, imag) for real, imag in zip(in_phase, quadrature)]
                 )
             )
+        raise LabOneQControllerException(
+            f"{self.dev_repr}: Internal error. Readout extraction is only supported for 1 or 2 integrators per signal, provided: {integrators}"
+        )
 
     async def _get_input_monitor_data(
         self, ch: int, acquire_length: int, timeout_s: float
     ):
-        result_path = self._result_node_monitor(ch)
+        result_path = self._awg_cores[0].nodes.monitor_result_wave[ch]
         try:
             monitor_result = await self._subscriber.get_result(
                 result_path, timeout_s=timeout_s
             )
-            self._check_result(
+            _check_result(
                 node_val=monitor_result.vector,
                 num_results=acquire_length,
                 ch_repr=self._ch_repr_monitor(ch),

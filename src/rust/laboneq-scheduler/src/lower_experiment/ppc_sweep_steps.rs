@@ -23,7 +23,7 @@ const PPC_TRIGGER_DEASSERT_DURATION: Duration<Second> = seconds(0.1e-3);
 ///
 /// The created PPC step nodes are grouped by AWG and the PPC steps
 /// are assigned to a single signal on that AWG.
-pub fn handle_ppc_sweep_steps(
+pub(super) fn handle_ppc_sweep_steps(
     signals: &[&impl SignalInfo],
     parameters: &[ParameterUid],
     grid: TinySamples,

@@ -10,7 +10,6 @@ from laboneq.compiler import ir as ir_mod
 from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.common.play_wave_type import PlayWaveType
 from laboneq.compiler.event_list.event_type import EventList, EventType
-from laboneq.data.compilation_job import ParameterInfo
 
 
 class EventListGenerator:
@@ -72,6 +71,28 @@ class EventListGenerator:
         max_events -= 2
 
         children_events = self.generate_children_events(section_ir, start, max_events)
+        trigger_set_events = []
+        trigger_clear_events = []
+        for trigger_signal, bit in section_ir.trigger_output:
+            for bit_position in _extract_active_bits(bit):
+                if max_events < 2:
+                    break
+                max_events -= 2
+                event = {
+                    "event_type": EventType.DIGITAL_SIGNAL_STATE_CHANGE,
+                    "section_name": section_ir.section,
+                    "bit": bit_position,
+                    "signal": trigger_signal,
+                }
+
+                trigger_set_events.append({**event, "change": "SET", "time": start})
+                trigger_clear_events.append(
+                    {
+                        **event,
+                        "change": "CLEAR",
+                        "time": start + section_ir.length,
+                    }
+                )
 
         start_id = next(self.id_tracker)
         d = {"section_name": section_ir.section, "chain_element_id": start_id}
@@ -82,7 +103,9 @@ class EventListGenerator:
                 "id": start_id,
                 **d,
             },
+            *trigger_set_events,
             *[e for l in children_events for e in l],
+            *trigger_clear_events,
             {
                 "event_type": EventType.SECTION_END,
                 "time": start + section_ir.length,
@@ -98,37 +121,16 @@ class EventListGenerator:
         max_events: int,
     ) -> EventList:
         assert acquire_group_ir.length is not None
-        assert (
-            len(acquire_group_ir.pulses)
-            == len(acquire_group_ir.amplitudes)
-            == len(acquire_group_ir.play_pulse_params)
-            == len(acquire_group_ir.pulse_pulse_params)
-        )
-
-        assert all(
-            acquire_group_ir.pulses[0].acquire_params.handle == p.acquire_params.handle
-            for p in acquire_group_ir.pulses
-        )
+        [signal_id] = acquire_group_ir.signals
         start_id = next(self.id_tracker)
-        signal_id = acquire_group_ir.pulses[0].signal.uid
-        assert all(p.signal.uid == signal_id for p in acquire_group_ir.pulses)
-        assert all(p.pulse is not None for p in acquire_group_ir.pulses)
         d = {
             "signal": signal_id,
             "section_name": self._section_name(),
-            "play_wave_id": ",".join([p.pulse.uid for p in acquire_group_ir.pulses]),
+            "play_wave_id": ",".join([p.uid for p in acquire_group_ir.pulses]),
             "parametrized_with": [],
             "chain_element_id": start_id,
-            "acquire_handle": acquire_group_ir.pulses[0].acquire_params.handle,
+            "acquire_handle": acquire_group_ir.handle,
         }
-        d["id_pulse_params"] = acquire_group_ir.pulse_pulse_params
-        for pulse in acquire_group_ir.pulses:
-            params_list = [
-                getattr(pulse, f).uid
-                for f in ("length", "amplitude", "phase")
-                if isinstance(getattr(pulse, f), ParameterInfo)
-            ]
-            d["parametrized_with"].append(params_list)
         return [
             {
                 "event_type": EventType.ACQUIRE_START,
@@ -358,13 +360,8 @@ class EventListGenerator:
         max_events: int,
     ) -> EventList:
         assert pulse_ir.length is not None
-        params_list = [
-            getattr(pulse_ir.pulse, f).uid
-            for f in ("length", "amplitude", "phase")
-            if isinstance(getattr(pulse_ir.pulse, f), ParameterInfo)
-        ]
-        if pulse_ir.pulse.pulse is not None:
-            play_wave_id = pulse_ir.pulse.pulse.uid
+        if pulse_ir.pulse is not None:
+            play_wave_id = pulse_ir.pulse.uid
         else:
             play_wave_id = "delay"
 
@@ -373,12 +370,16 @@ class EventListGenerator:
             "id": start_id,
         }
         d_end: dict[str, Any] = {"id": next(self.id_tracker)}
+        [signal] = pulse_ir.signals
         d_common = {
             "section_name": self._section_name(),
-            "signal": pulse_ir.pulse.signal.uid,
+            "signal": signal,
             "play_wave_id": play_wave_id,
             "chain_element_id": start_id,
-            "parametrized_with": params_list,
+            # TODO: Remove 'parametrized_with' from event list
+            "parametrized_with": [pulse_ir.amp_param_name]
+            if pulse_ir.amp_param_name
+            else [],
         }
 
         if pulse_ir.amplitude is not None:
@@ -395,13 +396,12 @@ class EventListGenerator:
 
         if pulse_ir.markers is not None and len(pulse_ir.markers) > 0:
             d_start["markers"] = [vars(m) for m in pulse_ir.markers]
-        d_start["id_pulse_params"] = pulse_ir.pulse_pulse_params
         if pulse_ir.increment_oscillator_phase is not None:
             d_start["increment_oscillator_phase"] = pulse_ir.increment_oscillator_phase
         if pulse_ir.set_oscillator_phase is not None:
             d_start["set_oscillator_phase"] = pulse_ir.set_oscillator_phase
 
-        is_delay = pulse_ir.pulse.pulse is None
+        is_delay = pulse_ir.pulse is None
 
         if is_delay:
             return [
@@ -421,11 +421,7 @@ class EventListGenerator:
             ]
 
         if pulse_ir.is_acquire:
-            assert pulse_ir.integration_length is not None
-            if pulse_ir.pulse.acquire_params is not None:
-                d_start["acquire_handle"] = pulse_ir.pulse.acquire_params.handle
-            else:
-                d_start["acquire_handle"] = None
+            d_start["acquire_handle"] = pulse_ir.handle
             return [
                 {
                     "event_type": EventType.ACQUIRE_START,
@@ -532,3 +528,8 @@ def generate_event_list_from_ir(
             event["id"] = next(id_tracker)
         event["time"] = event["time"] * TINYSAMPLE
     return event_list
+
+
+def _extract_active_bits(mask: int) -> list[int]:
+    """Extract bit positions from a bit mask."""
+    return [i for i in range(mask.bit_length()) if mask & (1 << i)]

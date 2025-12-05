@@ -5,9 +5,16 @@ import contextlib
 import inspect
 from collections.abc import Callable
 from types import UnionType
-from typing import Union, get_args, get_origin
+from typing import Union
 
-from multimethod import DispatchError, multimethod, signature, subtype
+from multimethod import (
+    DispatchError,
+    get_args,
+    get_origin,
+    multimethod,
+    signature,
+    subtype,
+)
 
 from laboneq.dsl.quantum.quantum_element import QuantumElement
 
@@ -31,7 +38,7 @@ def _simplify_type_signature(types: tuple) -> tuple:
     for t in types:
         if inspect.isclass(t) and issubclass(t, QuantumElement):
             simplified_types.append(t)
-        elif get_origin(t) is UnionType:  # Handle union types
+        elif get_origin(t) in (Union, UnionType):  # Handle union types
             union_members = get_args(t)
             simplified_members = []
 
@@ -59,7 +66,7 @@ def _is_type_compatible(call_type: type, expected_type: type) -> bool:
         pass
 
     # Handle union types (e.g. Transmon | AlternativeTransmon)
-    if get_origin(expected_type) is UnionType:
+    if get_origin(expected_type) in (Union, UnionType):
         return any(
             _is_type_compatible(call_type, union_member)
             for union_member in get_args(expected_type)

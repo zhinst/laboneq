@@ -228,14 +228,6 @@ class DeviceSHFSG(DeviceSHFBase):
             for ch in recipe_data.allocated_awgs(self.uid)
         ]
 
-    async def disable_outputs(self, outputs: set[int], invert: bool):
-        await for_each(
-            self.all_cores(),
-            CoreBase.disable_output,
-            outputs=outputs,
-            invert=invert,
-        )
-
     def clock_source_control_nodes(self) -> list[NodeControlBase]:
         if self.is_secondary:
             return []  # QA will initialize the nodes

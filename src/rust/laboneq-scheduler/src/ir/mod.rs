@@ -3,11 +3,14 @@
 
 //! Intermediate representation (IR) of the real-time portion of an experiment structure.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use laboneq_units::tinysample::TinySamples;
 
-use crate::experiment::types::{DeviceUid, ParameterUid, SectionUid, SignalUid, ValueOrParameter};
+use crate::experiment::types::{
+    DeviceUid, HandleUid, ParameterUid, PulseParameterUid, PulseParameterValue, PulseUid,
+    SectionUid, SignalUid, ValueOrParameter,
+};
 // Re-export for convenience
 pub use crate::experiment::types::MatchTarget;
 
@@ -34,6 +37,12 @@ pub enum IrKind {
     PpcStep(PpcStep),
     Match(Match),
     Case(Case),
+    Delay {
+        signal: SignalUid,
+    },
+    ClearPrecompensation {
+        signal: SignalUid,
+    },
     // Placeholder for unimplemented variants
     NotYetImplemented,
 }
@@ -61,6 +70,8 @@ impl IrKind {
             IrKind::SetOscillatorFrequency(_) => None,
             IrKind::ResetOscillatorPhase { .. } => None,
             IrKind::PpcStep(_) => None,
+            IrKind::Delay { .. } => None,
+            IrKind::ClearPrecompensation { .. } => None,
             IrKind::NotYetImplemented => None,
         }
     }
@@ -79,6 +90,8 @@ impl IrKind {
             IrKind::SetOscillatorFrequency(obj) => obj.values.iter().map(|(sig, _)| sig).collect(),
             IrKind::ResetOscillatorPhase { signals } => HashSet::from_iter(signals.iter()),
             IrKind::PpcStep(obj) => HashSet::from_iter([&obj.signal]),
+            IrKind::Delay { signal } => HashSet::from_iter([signal]),
+            IrKind::ClearPrecompensation { signal } => HashSet::from_iter([signal]),
             IrKind::Loop(_)
             | IrKind::LoopIterationPreamble
             | IrKind::LoopIteration
@@ -129,12 +142,17 @@ pub struct PlayPulse {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Acquire {
     pub signal: SignalUid,
+    pub handle: HandleUid,
+    pub integration_length: TinySamples,
+    pub kernels: Vec<PulseUid>,
+    pub parameters: Vec<HashMap<PulseParameterUid, PulseParameterValue>>,
+    pub pulse_parameters: Vec<HashMap<PulseParameterUid, PulseParameterValue>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trigger {
     pub signal: SignalUid,
-    pub state: u16,
+    pub state: u8,
 }
 
 #[derive(Debug, Clone, PartialEq)]

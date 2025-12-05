@@ -97,15 +97,14 @@ class EventLoopMixIn:
 class AsyncWorker(Generic[T]):
     """Base class for async workers that process queued items sequentially.
 
-    Override at least the `run_one` method to implement the processing logic.
-    Optionally, override `setup` and `teardown` methods for initialization and cleanup tasks.
+    Pass the `run_one` coroutine that implements the processing logic.
 
     The worker stops automatically when the queue is empty for a specified number of cycles,
     and restarts processing when new items are submitted.
 
     Calling `stop` will block until all items in the queue are processed and the worker is stopped.
 
-    Make sure no exceptions escape from `run_one`, `setup`, or `teardown` methods — they’ll only be
+    Make sure no exceptions escape from `run_one` — they’ll only be
     caught by the worker lifecycle logic as a last resort, and likely at an inappropriate point
     in execution, and also will prevent the worker from processing subsequent items.
     """
@@ -124,20 +123,7 @@ class AsyncWorker(Generic[T]):
         self._task: asyncio.Task | None = None
         self._queue = asyncio.Queue[T]()
 
-    async def setup(self):
-        """Initialize the worker before processing."""
-        pass
-
-    async def teardown(self):
-        """Clean up after processing is done."""
-        pass
-
-    async def run_one(self, item: T):
-        """Process a single item."""
-        pass
-
     async def _worker(self):
-        await self.setup()
         try:
             while True:
                 try:
@@ -155,7 +141,6 @@ class AsyncWorker(Generic[T]):
         except asyncio.CancelledError:
             pass
         finally:
-            await self.teardown()
             self._idle_cycles = 0
 
     async def _start_if_needed(self):

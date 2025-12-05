@@ -7,7 +7,7 @@ use crate::ir::experiment::{
 };
 
 use std::collections::{HashMap, HashSet};
-pub struct AmplitudeRegisterAllocation {
+pub(crate) struct AmplitudeRegisterAllocation {
     allocations: HashMap<String, u16>,
     n_available_registers: u16,
 }
@@ -37,7 +37,7 @@ impl AmplitudeRegisterAllocation {
     /// Get amplitude register allocated for the given parameter.
     ///
     /// Panics if there is no allocation for the given parameter.
-    pub fn get_allocation(&self, param: Option<&str>) -> u16 {
+    pub(crate) fn get_allocation(&self, param: Option<&str>) -> u16 {
         if let Some(param) = param {
             return *self.allocations.get(param).expect(
                 "Internal error: All of the used amplitude parameters should have been collected",
@@ -84,7 +84,10 @@ fn collect_amp_params<'a>(node: &'a IrNode, params: &mut HashSet<&'a str>) {
 /// # Returns
 ///
 /// A container that can be used to query the allocated amplitude registers.
-pub fn assign_amplitude_registers(program: &IrNode, awg: &AwgCore) -> AmplitudeRegisterAllocation {
+pub(crate) fn assign_amplitude_registers(
+    program: &IrNode,
+    awg: &AwgCore,
+) -> AmplitudeRegisterAllocation {
     let amplitude_register_count = match awg.use_command_table_phase_amp() {
         true => awg.device_kind().traits().amplitude_register_count,
         false => 0,
@@ -180,7 +183,7 @@ fn insert_amplitude_set(
 ///
 /// The amplitude register initialization nodes are inserted at the beginning of each loop iteration where
 /// an amplitude is being swept and if the loop iteration contains compressed loops.
-pub fn handle_amplitude_register_events(
+pub(crate) fn handle_amplitude_register_events(
     program: &mut IrNode,
     allocation: &AmplitudeRegisterAllocation,
     device: &DeviceKind,

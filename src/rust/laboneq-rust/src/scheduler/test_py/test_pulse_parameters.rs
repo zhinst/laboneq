@@ -1,6 +1,10 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_scheduler::experiment::{
+    ExperimentNode,
+    types::{NumericLiteral, Operation, PulseParameterValue, ValueOrParameter},
+};
 use pyo3::ffi::c_str;
 
 use super::load_module;
@@ -9,8 +13,16 @@ use pyo3::prelude::*;
 
 use crate::include_py_file;
 
+fn visit_node(node: &ExperimentNode, f: &mut impl FnMut(&ExperimentNode)) {
+    f(node);
+    for child in &node.children {
+        visit_node(child, f);
+    }
+}
+
+/// Test pulse parameter handling in Python to Rust Experiment conversion.
 #[test]
-fn test_pulse_parameters() {
+fn test_pulse_parameters_handling() {
     let py_testfile = include_py_file!("./test_dsl_experiment.py");
     Python::attach(|py| {
         let module = load_module(py, py_testfile);
@@ -23,22 +35,42 @@ fn test_pulse_parameters() {
         // Test sweep parameter collection
         let parameter = experiment.parameters.iter().next().unwrap().1;
         assert_eq!(id_store.resolve(parameter.uid).unwrap(), "sweep_param123");
-        // Test experiment signals
-        let experiment_signals: Vec<&str> = experiment
-            .experiment_signals
-            .iter()
-            .map(|s_uid| id_store.resolve(*s_uid).unwrap())
-            .collect();
-        assert_eq!(experiment_signals[0], "q0/drive");
-        // Test external pulse parameters
-        // Sweep parameter is not external, therefore not stored
-        assert_eq!(experiment.external_parameters.len(), 1);
-        let external_pulse_parameter = experiment.external_parameters.values().next().unwrap();
+
+        // Test pulse parameters
+        let mut asserted_sigma = false;
+        let mut asserted_beta = false;
+
+        visit_node(&experiment.sections[0], &mut |node: &ExperimentNode| {
+            if let Operation::PlayPulse(play) = &node.kind {
+                for (param_uid, param) in &play.parameters {
+                    let param_name = id_store.resolve(*param_uid).unwrap();
+                    match param_name {
+                        "sigma" => {
+                            if let PulseParameterValue::ValueOrParameter(value_or_param) = &param {
+                                assert_eq!(
+                                    *value_or_param,
+                                    ValueOrParameter::Parameter(parameter.uid)
+                                );
+                                asserted_sigma = true;
+                            }
+                        }
+                        "beta" => {
+                            if let PulseParameterValue::ValueOrParameter(value_or_param) = &param {
+                                assert_eq!(
+                                    *value_or_param,
+                                    ValueOrParameter::Value(NumericLiteral::Float(0.5))
+                                );
+                                asserted_beta = true;
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            }
+        });
         assert!(
-            external_pulse_parameter
-                .bind(py)
-                .eq((0.5).into_pyobject(py).unwrap())
-                .unwrap(),
+            asserted_sigma && asserted_beta,
+            "No PlayPulse node found in the experiment"
         );
     });
 }

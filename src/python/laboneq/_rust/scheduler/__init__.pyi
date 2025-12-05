@@ -3,7 +3,9 @@
 
 from typing import Literal
 
-from laboneq.compiler.common.awg_info import AwgKey
+from numpy.typing import ArrayLike
+
+from laboneq.compiler.scheduler.acquire_group_schedule import AcquireGroupSchedule
 from laboneq.compiler.scheduler.oscillator_schedule import (
     InitialLocalOscillatorFrequencySchedule,
     InitialOscillatorFrequencySchedule,
@@ -11,9 +13,13 @@ from laboneq.compiler.scheduler.oscillator_schedule import (
 )
 from laboneq.compiler.scheduler.phase_reset_schedule import PhaseResetSchedule
 from laboneq.compiler.scheduler.ppc_step_schedule import PPCStepSchedule
+from laboneq.compiler.scheduler.pulse_schedule import (
+    PrecompClearSchedule,
+    PulseSchedule,
+)
+from laboneq.compiler.scheduler.section_schedule import SectionSchedule
 from laboneq.compiler.scheduler.voltage_offset import InitialOffsetVoltageSchedule
 from laboneq.data.experiment_description import Experiment
-from numpy.typing import ArrayLike
 
 class ExperimentInfo:
     """Object containing the information about the experiment."""
@@ -78,6 +84,12 @@ class Schedules:
     # PPC step schedules per loop UID, where outermost list item corresponds to global iteration number,
     # and the next list item corresponds to local iteration number and innermost list to the PPC steps.
     ppc_steps: dict[str, list[list[list[PPCStepSchedule]]]]
+    # Section, acquires in the order of depth-first traversal of the experiment tree
+    acquire_schedules: dict[str, list[PulseSchedule | AcquireGroupSchedule]]
+    # Section delays and precomp clears in the order of depth-first traversal of the experiment tree
+    section_delays: dict[str, list[PulseSchedule | PrecompClearSchedule]]
+    # Sections in the order of depth-first traversal of the experiment tree
+    sections: dict[str, list[SectionSchedule]]
 
 class RepetitionInfo:
     mode: str  # "fastest", "constant", "auto"
@@ -88,14 +100,12 @@ class ScheduledExperiment:
     """Result of an experiment scheduling.
 
     Attributes:
-        max_acquisition_time_per_awg: Maximum acquisition time per AWG in seconds.
         repetition_info: Repetition information of the experiment.
         system_grid: System grid in tinysamples.
         used_parameters: Used near-time parameters in the experiment.
         schedules: Schedules object containing various schedules.
     """
 
-    max_acquisition_time_per_awg: dict[AwgKey, float]
     repetition_info: RepetitionInfo | None
     system_grid: int
     used_parameters: set[str]

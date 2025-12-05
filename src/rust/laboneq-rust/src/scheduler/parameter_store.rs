@@ -9,7 +9,7 @@ use laboneq_scheduler::{
     experiment::types::{NumericLiteral, ParameterUid},
 };
 
-pub fn create_parameter_store(
+pub(super) fn create_parameter_store(
     parameters: HashMap<String, f64>,
     id_store: &NamedIdStore,
 ) -> ParameterStore {

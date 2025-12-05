@@ -8,14 +8,14 @@ from typing import Callable
 
 import numpy as np
 import orjson
-from laboneq import __version__ as laboneq_version
-from laboneq import simple
 from opentelemetry import trace
 from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from laboneq import __version__ as laboneq_version
+from laboneq import simple
 from laboneq_benchmark.instrumentation import LabOneQInstrumentor
 
 

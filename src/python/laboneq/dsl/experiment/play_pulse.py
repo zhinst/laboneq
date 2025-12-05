@@ -57,3 +57,7 @@ class PlayPulse(Operation):
     precompensation_clear: Optional[bool] = attrs.field(default=None)
     #: Instructions for playing marker signals while playing the pulse.
     marker: dict | None = attrs.field(default=None, validator=_validate_marker_keys)
+
+    def __attrs_post_init__(self):
+        if isinstance(self.amplitude, int):
+            self.amplitude = float(self.amplitude)

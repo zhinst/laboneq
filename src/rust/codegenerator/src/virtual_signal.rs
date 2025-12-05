@@ -16,7 +16,7 @@ struct Channel {
 }
 
 #[derive(Debug)]
-pub struct VirtualSignal {
+pub(crate) struct VirtualSignal {
     signals: IndexMap<String, Channel>,
     subchannel: Option<u8>,
 }
@@ -30,31 +30,31 @@ impl VirtualSignal {
         }
     }
 
-    pub fn signals(&self) -> impl Iterator<Item = &Arc<Signal>> {
+    pub(crate) fn signals(&self) -> impl Iterator<Item = &Arc<Signal>> {
         self.signals.iter().map(|x| &x.1.signal)
     }
 
-    pub fn subchannel(&self) -> Option<u8> {
+    pub(crate) fn subchannel(&self) -> Option<u8> {
         self.subchannel
     }
 
-    pub fn contains_signal(&self, uid: &str) -> bool {
+    pub(crate) fn contains_signal(&self, uid: &str) -> bool {
         self.signals.contains_key(uid)
     }
 
-    pub fn is_multiplexed(&self) -> bool {
+    pub(crate) fn is_multiplexed(&self) -> bool {
         self.signals.keys().len() > 1
     }
 
-    pub fn get_channel_by_signal(&self, uid: &str) -> Option<u16> {
+    pub(crate) fn get_channel_by_signal(&self, uid: &str) -> Option<u16> {
         self.signals.get(uid).map(|x| x.id)
     }
 }
 
-pub struct VirtualSignals(Vec<VirtualSignal>);
+pub(crate) struct VirtualSignals(Vec<VirtualSignal>);
 
 impl VirtualSignals {
-    pub fn iter(&self) -> impl Iterator<Item = &VirtualSignal> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &VirtualSignal> {
         self.0.iter()
     }
 }
@@ -184,7 +184,7 @@ fn is_multiplexing(awg: &AwgCore) -> Result<bool> {
 /// Creates virtual signals and allocates channels for each signal.
 ///
 /// Virtual signals do not include integration signals.
-pub fn create_virtual_signals(awg: &AwgCore) -> Result<Option<VirtualSignals>> {
+pub(crate) fn create_virtual_signals(awg: &AwgCore) -> Result<Option<VirtualSignals>> {
     let is_multiplexing = is_multiplexing(awg)?;
     let mut virtual_signals: HashMap<Option<u8>, Vec<Channel>> = HashMap::new();
     let mut channel_to_id: HashMap<u8, u16> = HashMap::new();

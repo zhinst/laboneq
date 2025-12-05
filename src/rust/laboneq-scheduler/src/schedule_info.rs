@@ -1,7 +1,7 @@
 // Copyright 2024 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::experiment::types::SignalUid;
+use crate::experiment::types::{ParameterUid, SignalUid};
 use laboneq_units::tinysample::{TinySamples, tiny_samples};
 use std::collections::HashSet;
 
@@ -12,39 +12,48 @@ pub struct ScheduleInfo {
     pub grid: TinySamples,
     /// Length of the node, defaults to 0.
     pub length: TinySamples,
+    pub length_param: Option<ParameterUid>,
     /// Signals involved in this node.
     pub signals: HashSet<SignalUid>,
 }
 
-pub struct ScheduleInfoBuilder {
+pub(crate) struct ScheduleInfoBuilder {
     grid: TinySamples,
     length: TinySamples,
     signals: HashSet<SignalUid>,
+    length_param: Option<ParameterUid>,
 }
 
 impl ScheduleInfoBuilder {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             grid: tiny_samples(1),
             length: tiny_samples(0),
             signals: HashSet::new(),
+            length_param: None,
         }
     }
 
-    pub fn grid(mut self, grid: impl Into<TinySamples>) -> Self {
+    pub(crate) fn grid(mut self, grid: impl Into<TinySamples>) -> Self {
         self.grid = grid.into();
         self
     }
 
-    pub fn length(mut self, length: impl Into<TinySamples>) -> Self {
+    pub(crate) fn length(mut self, length: impl Into<TinySamples>) -> Self {
         self.length = length.into();
         self
     }
 
-    pub fn build(self) -> ScheduleInfo {
+    pub(crate) fn length_param(mut self, length_param: ParameterUid) -> Self {
+        self.length_param = Some(length_param);
+        self
+    }
+
+    pub(crate) fn build(self) -> ScheduleInfo {
         ScheduleInfo {
             grid: self.grid,
             length: self.length,
+            length_param: self.length_param,
             signals: self.signals,
         }
     }

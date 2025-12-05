@@ -29,7 +29,7 @@ pub(crate) struct SHFPPCSweeperConfigTracker {
 }
 
 impl SHFPPCSweeperConfigTracker {
-    pub fn new() -> Self {
+    pub(super) fn new() -> Self {
         let command_tree = Rc::new(RefCell::new(SweepStackFrame {
             count: 1,
             items: Vec::new(),
@@ -47,7 +47,7 @@ impl SHFPPCSweeperConfigTracker {
             .expect("Internal error: No stack frame available")
     }
 
-    pub fn add_step(&mut self, sweep_command: SweepCommand) {
+    pub(super) fn add_step(&mut self, sweep_command: SweepCommand) {
         self.current_frame()
             .borrow_mut()
             .items
@@ -56,7 +56,7 @@ impl SHFPPCSweeperConfigTracker {
             ))));
     }
 
-    pub fn enter_loop(&mut self, count: u64) {
+    pub(super) fn enter_loop(&mut self, count: u64) {
         let new_frame = Rc::new(RefCell::new(SweepStackFrame {
             count,
             items: Vec::new(),
@@ -68,7 +68,7 @@ impl SHFPPCSweeperConfigTracker {
         self.stack.push(new_frame);
     }
 
-    pub fn exit_loop(&mut self) {
+    pub(super) fn exit_loop(&mut self) {
         let closed_frame = self.stack.pop().expect("Internal error: No frame to close");
         // If the frame we are closing is empty, we don't need to keep it
         if closed_frame.borrow().items.is_empty() {
@@ -81,7 +81,7 @@ impl SHFPPCSweeperConfigTracker {
     /// After calling this function, the command tree will be empty.
     /// This function may be called only once at the end of the configuration.
     ///
-    pub fn finish(&mut self) -> Option<SHFPPCSweeperConfig> {
+    pub(super) fn finish(&mut self) -> Option<SHFPPCSweeperConfig> {
         assert!(
             !self.finished,
             "Internal error: finish() called multiple times"

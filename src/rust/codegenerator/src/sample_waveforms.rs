@@ -130,7 +130,7 @@ pub struct SampledWaveform<T: SampledWaveformSignature> {
 
 /// Represents a SeqC declaration of a waveform.
 #[derive(Debug)]
-pub struct WaveDeclaration {
+pub(crate) struct WaveDeclaration {
     pub length: i64,
     pub signature_string: Arc<String>,
     pub has_marker1: bool,
@@ -233,7 +233,7 @@ fn find_waveforms<'a>(
     }
 }
 
-pub fn collect_waveforms_for_sampling<'a>(
+pub(crate) fn collect_waveforms_for_sampling<'a>(
     node: &'a IrNode,
 ) -> Result<Vec<WaveformSamplingCandidate<'a>>> {
     let mut sampling_candidates = HashMap::new();
@@ -241,7 +241,7 @@ pub fn collect_waveforms_for_sampling<'a>(
     Ok(sampling_candidates.into_values().collect())
 }
 
-pub struct AwgWaveforms<T: SampledWaveformSignature> {
+pub(crate) struct AwgWaveforms<T: SampledWaveformSignature> {
     sampled_waveforms: Vec<SampledWaveform<T>>,
     wave_declarations: Vec<WaveDeclaration>,
 }
@@ -256,7 +256,7 @@ impl<T: SampledWaveformSignature> Default for AwgWaveforms<T> {
 }
 
 impl<T: SampledWaveformSignature> AwgWaveforms<T> {
-    pub fn into_inner(self) -> (Vec<SampledWaveform<T>>, Vec<WaveDeclaration>) {
+    pub(crate) fn into_inner(self) -> (Vec<SampledWaveform<T>>, Vec<WaveDeclaration>) {
         (self.sampled_waveforms, self.wave_declarations)
     }
 }
@@ -484,7 +484,7 @@ fn validate_waveforms(waveforms: &[&WaveformSamplingCandidate<'_>], awg: &AwgCor
 ///
 /// A result containing an [`AwgWaveforms`] struct, which includes the sampled waveforms and their declarations that
 /// exists in the IR node after the transformation pass.
-pub fn collect_and_finalize_waveforms<T: SampleWaveforms>(
+pub(crate) fn collect_and_finalize_waveforms<T: SampleWaveforms>(
     node: &mut IrNode,
     waveform_sampler: &T,
     awg: &AwgCore,
@@ -570,7 +570,7 @@ fn collect_integration_weights_properties<'a>(
 /// Collect integration kernels from the IR.
 ///
 /// Integration kernels are deduplicated across all signals on the given AWG.
-pub fn collect_integration_kernels<'a>(
+pub(crate) fn collect_integration_kernels<'a>(
     node: &'a IrNode,
     awg: &AwgCore,
 ) -> Result<Vec<IntegrationKernel<'a>>> {

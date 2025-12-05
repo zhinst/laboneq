@@ -4,18 +4,20 @@
 use std::collections::HashSet;
 
 use crate::error::{Error, Result};
-use crate::experiment::types::{self as experiment_types, NumericLiteral};
+use crate::experiment::types::{self as experiment_types};
 use crate::experiment::types::{Operation, SignalUid};
 use crate::experiment::{ExperimentNode, NodeChild};
 
 use crate::experiment_context::ExperimentContext;
-use crate::ir::{Acquire, Case, IrKind, Loop, Match, PlayPulse, Section, Trigger};
+use crate::ir::{Acquire, IrKind, Loop, PlayPulse, Section, Trigger};
+use crate::lower_experiment::local_context::LocalContext;
 use crate::schedule_info::ScheduleInfoBuilder;
 
-use crate::utils::lcm;
+use crate::utils::{lcm, round_to_grid, signal_grid};
 use crate::{ParameterStore, ScheduledNode, SignalInfo};
-use laboneq_units::tinysample::{TinySamples, tiny_samples};
+use laboneq_units::tinysample::{TinySamples, seconds_to_tinysamples, tiny_samples};
 
+mod local_context;
 mod oscillators;
 use oscillators::{
     handle_initial_local_oscillator_frequency, handle_initial_oscillator_frequency,
@@ -27,11 +29,13 @@ mod reset_phase;
 use reset_phase::handle_reset_oscillator_phase;
 mod ppc_sweep_steps;
 use ppc_sweep_steps::handle_ppc_sweep_steps;
+mod match_case;
+use match_case::lower_match;
 
 /// Lowering of [ExperimentNode] to [ScheduledNode].
 ///
 /// The pass will apply the given near-time parameters where applicable.
-pub fn lower_to_ir<T: SignalInfo + Sized>(
+pub(crate) fn lower_to_ir<T: SignalInfo + Sized>(
     node: &ExperimentNode,
     ctx: &ExperimentContext<T>,
     nt_parameters: &ParameterStore,
@@ -57,7 +61,10 @@ pub fn lower_to_ir<T: SignalInfo + Sized>(
     initial_voltage_offset.into_iter().for_each(|child| {
         root.add_child(tiny_samples(0), child);
     });
-    lower_to_ir_impl(node, ctx, system_grid)?
+
+    let mut local_ctx = LocalContext::new(&ctx.parameters, nt_parameters, system_grid);
+
+    lower_to_ir_impl(node, ctx, &mut local_ctx)?
         .into_iter()
         .for_each(|child| {
             root.add_child(tiny_samples(0), child);
@@ -68,31 +75,50 @@ pub fn lower_to_ir<T: SignalInfo + Sized>(
 fn lower_to_ir_impl<T: SignalInfo + Sized>(
     node: &ExperimentNode,
     ctx: &ExperimentContext<T>,
-    system_grid: TinySamples,
+    local_ctx: &mut LocalContext,
 ) -> Result<Vec<ScheduledNode>> {
     match &node.kind {
         Operation::Section(section) => Ok(vec![lower_section(
             section,
             &node.children,
             ctx,
-            system_grid,
+            local_ctx,
         )?]),
-        Operation::PrngLoop(_) => lower_sweep(node, ctx, system_grid),
-        Operation::Sweep(_) => lower_sweep(node, ctx, system_grid),
-        Operation::AveragingLoop(_) => lower_sweep(node, ctx, system_grid),
+        Operation::PrngLoop(_) => lower_sweep(node, ctx, local_ctx),
+        Operation::Sweep(_) => lower_sweep(node, ctx, local_ctx),
+        Operation::AveragingLoop(_) => lower_sweep(node, ctx, local_ctx),
         Operation::Reserve(reserve) => Ok(vec![lower_reserve(reserve)]),
         Operation::PlayPulse(play_pulse) => Ok(vec![lower_play_pulse(play_pulse)]),
-        Operation::Acquire(acquire) => Ok(vec![lower_acquire(acquire)]),
-        Operation::Delay(delay) => Ok(vec![lower_delay(delay)]),
-        Operation::ResetOscillatorPhase(reset) => Ok(lower_reset_oscillator_phase(reset)
-            .map(|node| vec![node])
-            .unwrap_or_default()),
-        Operation::Case(_) => Err(Error::new("Case must be used within a match block.")),
-        Operation::Match(match_) => {
-            Ok(vec![lower_match(match_, &node.children, ctx, system_grid)?])
+        Operation::Acquire(acquire) => Ok(vec![lower_acquire(acquire, ctx)]),
+        Operation::Delay(delay) => Ok(vec![lower_delay(delay, ctx)]),
+        Operation::ResetOscillatorPhase(reset) => {
+            let signals = reset
+                .signals
+                .iter()
+                .map(|s| ctx.get_signal(s))
+                .collect::<Result<Vec<&T>>>()?;
+            Ok(vec![handle_reset_oscillator_phase(
+                &signals,
+                ctx,
+                local_ctx.system_grid,
+                local_ctx.section_uid.expect("Phase reset not in a section"),
+            )?])
         }
-        Operation::PrngSetup(_) | Operation::Root | Operation::RealTimeBoundary => {
-            let children = lower_children(&node.children, ctx, system_grid)?;
+        Operation::Case(_) => Err(Error::new("Case must be used within a match block.")),
+        Operation::Match(_) => Ok(vec![lower_match(node, ctx, local_ctx)?]),
+        Operation::PrngSetup(obj) => local_ctx.with_section(obj.uid, |local_ctx| {
+            let children = lower_children(&node.children, ctx, local_ctx)?;
+            let mut ir_node = ScheduledNode::new(
+                IrKind::NotYetImplemented,
+                ScheduleInfoBuilder::new().grid(1).build(),
+            );
+            children.into_iter().for_each(|child_node| {
+                ir_node.add_child(tiny_samples(0), child_node);
+            });
+            Ok(vec![ir_node])
+        }),
+        Operation::Root | Operation::RealTimeBoundary => {
+            let children = lower_children(&node.children, ctx, local_ctx)?;
             let mut ir_node = ScheduledNode::new(
                 IrKind::NotYetImplemented,
                 ScheduleInfoBuilder::new().grid(1).build(),
@@ -112,27 +138,32 @@ fn lower_to_ir_impl<T: SignalInfo + Sized>(
 fn lower_children(
     children: &[NodeChild],
     ctx: &ExperimentContext<impl SignalInfo + Sized>,
-    system_grid: TinySamples,
+    local_ctx: &mut LocalContext,
 ) -> Result<Vec<ScheduledNode>> {
     let mut result = Vec::new();
     for child in children {
-        let nodes = lower_to_ir_impl(child, ctx, system_grid)?;
+        let nodes = lower_to_ir_impl(child, ctx, local_ctx)?;
         result.extend(nodes);
     }
     Ok(result)
 }
 
 /// Lower Experiment loop nodes into IR nodes.
-pub fn lower_sweep<T: SignalInfo + Sized>(
+fn lower_sweep<T: SignalInfo + Sized>(
     node: &ExperimentNode,
     ctx: &ExperimentContext<T>,
-    system_grid: TinySamples,
+    local_ctx: &mut LocalContext,
 ) -> Result<Vec<ScheduledNode>> {
     let loop_info = node
         .kind
         .loop_info()
         .ok_or_else(|| Error::new("Expected a loop"))?;
-    let children = lower_children(&node.children, ctx, system_grid)?;
+
+    let children = local_ctx
+        .with_loop(*loop_info.uid, loop_info.parameters, |new_ctx| {
+            lower_children(&node.children, ctx, new_ctx)
+        })
+        .flatten()?;
     let this_signals: HashSet<&SignalUid> = children
         .iter()
         .flat_map(|child| child.schedule.signals.iter())
@@ -150,14 +181,14 @@ pub fn lower_sweep<T: SignalInfo + Sized>(
     if let Some(set_osc_freq) = handle_set_oscillator_frequency(
         &signal_vec,
         loop_info.parameters.iter().collect(),
-        system_grid,
+        local_ctx.system_grid,
     )? {
         preamble.add_child(tiny_samples(0), set_osc_freq);
     }
     let mut grid = 1;
     if loop_info.reset_oscillator_phase && !signal_vec.is_empty() {
         let reset_osc_node =
-            handle_reset_oscillator_phase(&signal_vec, ctx, system_grid, loop_info.uid)?;
+            handle_reset_oscillator_phase(&signal_vec, ctx, local_ctx.system_grid, *loop_info.uid)?;
         if reset_osc_node.schedule.grid.value() != grid {
             // On SHFxx, we align the phase reset with the LO granularity (100 MHz)
             grid = lcm(grid, reset_osc_node.schedule.grid.value());
@@ -167,7 +198,7 @@ pub fn lower_sweep<T: SignalInfo + Sized>(
     for ppc_step in handle_ppc_sweep_steps(
         &ctx.signals().collect::<Vec<_>>(), // Use all the signals present in the experiment
         loop_info.parameters,
-        tiny_samples(lcm(grid, system_grid.value())),
+        tiny_samples(lcm(grid, local_ctx.system_grid.value())),
     )? {
         preamble.add_child(tiny_samples(0), ppc_step);
     }
@@ -199,9 +230,11 @@ fn lower_section(
     section: &experiment_types::Section,
     children: &[NodeChild],
     ctx: &ExperimentContext<impl SignalInfo>,
-    system_grid: TinySamples,
+    local_ctx: &mut LocalContext,
 ) -> Result<ScheduledNode> {
-    let children = lower_children(children, ctx, system_grid)?;
+    let children = local_ctx.with_section(section.uid, |local_ctx| {
+        lower_children(children, ctx, local_ctx)
+    })?;
     let mut root = ScheduledNode::new(
         IrKind::Section(Section {
             uid: section.uid,
@@ -236,123 +269,57 @@ fn lower_play_pulse(obj: &experiment_types::PlayPulse) -> ScheduledNode {
     )
 }
 
-fn lower_acquire(obj: &experiment_types::Acquire) -> ScheduledNode {
-    ScheduledNode::new(
-        IrKind::Acquire(Acquire { signal: obj.signal }),
-        ScheduleInfoBuilder::new().grid(1).build(),
-    )
-}
-
-fn lower_delay(obj: &experiment_types::Delay) -> ScheduledNode {
-    ScheduledNode::new(
-        IrKind::PlayPulse(PlayPulse { signal: obj.signal }),
-        ScheduleInfoBuilder::new().grid(1).build(),
-    )
-}
-
-fn lower_reset_oscillator_phase(
-    obj: &experiment_types::ResetOscillatorPhase,
-) -> Option<ScheduledNode> {
-    if obj.signals.is_empty() {
-        panic!("Expected signals to be defined for ResetOscillatorPhase.");
-    } else {
-        ScheduledNode::new(
-            IrKind::ResetOscillatorPhase {
-                signals: obj.signals.clone(),
-            },
-            ScheduleInfoBuilder::new().grid(1).build(),
-        )
-        .into()
-    }
-}
-
-fn cast_case(kind: &Operation) -> Option<&experiment_types::Case> {
-    if let Operation::Case(case) = kind {
-        Some(case)
-    } else {
-        None
-    }
-}
-
-fn lower_match(
-    section: &experiment_types::Match,
-    children: &[NodeChild],
+fn lower_acquire(
+    obj: &experiment_types::Acquire,
     ctx: &ExperimentContext<impl SignalInfo>,
-    system_grid: TinySamples,
-) -> Result<ScheduledNode> {
-    let mut root = ScheduledNode::new(
-        IrKind::Match(Match {
-            uid: section.uid,
-            target: section.target.clone(),
-            // TODO: Resolve in experiment processor!
-            // At this point the local flag should be resolved to concrete value.
-            local: section.local.unwrap_or(false),
-            play_after: section.play_after.clone(),
+) -> ScheduledNode {
+    let integration_length =
+        seconds_to_tinysamples(obj.length.expect("Expected Acquire to have length"));
+    let grid = signal_grid(ctx.get_signal(&obj.signal).unwrap());
+    let integration_length = round_to_grid(integration_length.value(), grid.value());
+    ScheduledNode::new(
+        IrKind::Acquire(Acquire {
+            signal: obj.signal,
+            handle: obj.handle,
+            integration_length: integration_length.into(),
+            kernels: obj.kernel.clone(),
+            parameters: obj.parameters.clone(),
+            pulse_parameters: obj.pulse_parameters.clone(),
         }),
-        ScheduleInfoBuilder::new().build(),
-    );
-    // Matching a sweep parameter requires special handling as each case
-    // maps to a specific iteration of a loop.
-    if let experiment_types::MatchTarget::SweepParameter(param_uid) = &section.target {
-        let parameter = ctx.sweep_parameter(param_uid)?;
-        // Map the iteration number of a loop to a specific case.
-        for idx in 0..parameter.len() {
-            for child_node in children {
-                let target_value: NumericLiteral = parameter
-                    .value_numeric_at_index(idx)
-                    .unwrap_or_else(|| panic!("Expected value to exist"));
-                let case = cast_case(&child_node.kind)
-                    .ok_or_else(|| Error::new("Expected a case operation."))?;
-                if case.state == target_value {
-                    let kind = IrKind::Case(Case {
-                        uid: case.uid,
-                        state: idx,
-                    });
-                    let mut case_node =
-                        ScheduledNode::new(kind, ScheduleInfoBuilder::new().build());
-                    lower_children(&child_node.children, ctx, system_grid)?
-                        .into_iter()
-                        .for_each(|child| {
-                            case_node.add_child(tiny_samples(0), child);
-                        });
-                    root.add_child(tiny_samples(0), case_node);
-                    break;
-                }
-            }
+        ScheduleInfoBuilder::new()
+            .grid(grid)
+            .length(integration_length)
+            .build(),
+    )
+}
+
+fn lower_delay(
+    obj: &experiment_types::Delay,
+    ctx: &ExperimentContext<impl SignalInfo>,
+) -> ScheduledNode {
+    let ir = IrKind::Delay { signal: obj.signal };
+    let grid = signal_grid(ctx.get_signal(&obj.signal).unwrap());
+    let mut schedule = ScheduleInfoBuilder::new();
+    match obj.time {
+        experiment_types::ValueOrParameter::Value(v) => {
+            let length = seconds_to_tinysamples(v);
+            let length_tinysample = round_to_grid(length.value(), grid.value());
+            schedule = schedule.length(length_tinysample);
         }
-        // All parameters must be covered by a case,
-        // but not all cases need to be used.
-        if parameter.len() > children.len() {
-            let msg = format!(
-                "Using a match statement for sweep parameter must cover all values.
-            Match statement for parameter '{}' has {} cases, but parameter has {} values.",
-                parameter.uid.0,
-                children.len(),
-                parameter.len(),
-            );
-            return Err(Error::new(msg));
+        experiment_types::ValueOrParameter::Parameter(p) => {
+            schedule = schedule.length_param(p);
         }
-    } else {
-        for child in children {
-            let case =
-                cast_case(&child.kind).ok_or_else(|| Error::new("Expected a case operation."))?;
-            let kind = IrKind::Case(Case {
-                uid: case.uid,
-                state: case.state.try_into().map_err(|e| {
-                    Error::new(format!(
-                        "Invalid case state value '{}' for case uid '{}': {}",
-                        case.state, case.uid.0, e
-                    ))
-                })?,
-            });
-            let mut case_node = ScheduledNode::new(kind, ScheduleInfoBuilder::new().build());
-            lower_children(&child.children, ctx, system_grid)?
-                .into_iter()
-                .for_each(|child| {
-                    case_node.add_child(tiny_samples(0), child);
-                });
-            root.add_child(tiny_samples(0), case_node);
-        }
+        _ => {}
     }
-    Ok(root)
+    let mut node = ScheduledNode::new(ir, schedule.grid(grid).build());
+    // Add precompensation clear as the child of the delay to ensure it is scheduled
+    // at the same time as the delay.
+    if obj.precompensation_clear {
+        let precomp_node = ScheduledNode::new(
+            IrKind::ClearPrecompensation { signal: obj.signal },
+            ScheduleInfoBuilder::new().grid(grid).length(0).build(),
+        );
+        node.add_child(tiny_samples(0), precomp_node);
+    }
+    node
 }

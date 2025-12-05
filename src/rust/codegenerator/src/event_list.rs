@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-pub fn generate_event_list(node: IrNode, awg: &AwgCore) -> Result<AwgEventList> {
+pub(crate) fn generate_event_list(node: IrNode, awg: &AwgCore) -> Result<AwgEventList> {
     let mut state = GeneratorState {
         loop_step_starts_added: HashMap::new(),
         loop_step_ends_added: HashMap::new(),
@@ -259,7 +259,7 @@ fn generate_output_recursive(
             start: *node.offset(),
             end: *node.offset(),
             kind: EventType::TriggerOutputBit(TriggerOutputBit {
-                bit: ob.bit,
+                bits: ob.bits,
                 set: ob.set,
             }),
         }]),

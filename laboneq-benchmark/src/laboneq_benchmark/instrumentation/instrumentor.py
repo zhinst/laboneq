@@ -3,17 +3,17 @@
 
 from typing import Callable
 
+import wrapt
+from opentelemetry import trace
+from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
+from opentelemetry.instrumentation.utils import unwrap
+
 import laboneq.compiler
 import laboneq.compiler.scheduler.scheduler
 import laboneq.compiler.seqc.code_generator
 import laboneq.controller.controller
 import laboneq.dsl.session
-import wrapt
 from laboneq import __version__
-from opentelemetry import trace
-from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
-from opentelemetry.instrumentation.utils import unwrap
-
 from laboneq_benchmark.instrumentation import otel
 
 
