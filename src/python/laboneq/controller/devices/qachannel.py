@@ -18,7 +18,7 @@ from laboneq.controller.devices.async_support import (
     ResponseWaiterAsync,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
-from laboneq.controller.devices.channel_base import ChannelBase
+from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_shf_base import check_synth_frequency
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import (
@@ -132,23 +132,30 @@ class QAChannelNodes:
     busy: str
 
 
-class QAChannel(ChannelBase):
+class QAChannel(CoreBase):
     def __init__(
         self,
+        *,
         api: InstrumentConnection,
         subscriber: AsyncSubscriber,
         device_uid: str,
         serial: str,
-        channel: int,
+        core_index: int,
         integrators: int,
         repr_base: str,
         is_plus: bool,
     ):
-        super().__init__(api, subscriber, device_uid, serial, channel)
-        self._node_base = f"/{serial}/qachannels/{channel}"
-        self._unit_repr = f"{repr_base}:qa{channel}"
+        super().__init__(
+            api=api,
+            subscriber=subscriber,
+            device_uid=device_uid,
+            serial=serial,
+            core_index=core_index,
+        )
+        self._node_base = f"/{serial}/qachannels/{core_index}"
+        self._unit_repr = f"{repr_base}:qa{core_index}"
         self._is_plus = is_plus
-        self._pipeliner = AwgPipeliner(self._node_base, f"QA{channel}")
+        self._pipeliner = AwgPipeliner(self._node_base, f"QA{core_index}")
         # TODO(2K): Use actual device config to determine number of oscs.
         # Currently the max possible number is hardcoded
         self.nodes = QAChannelNodes(
@@ -177,7 +184,7 @@ class QAChannel(ChannelBase):
         self._pipeliner._reload_tracker.reset()
 
     async def apply_initialization(self, device_recipe_data: DeviceRecipeData):
-        qa_ch_recipe_data = device_recipe_data.qachannels.get(self._channel)
+        qa_ch_recipe_data = device_recipe_data.qachannels.get(self._core_index)
         if qa_ch_recipe_data is None:
             return
 
@@ -212,8 +219,8 @@ class QAChannel(ChannelBase):
     async def configure_trigger(self, trig_channel: int):
         nc = NodeCollector(base=f"{self._node_base}/")
         # Configure the marker outputs to reflect sequencer trigger outputs 1 and 2
-        nc.add("markers/0/source", 32 + self._channel)
-        nc.add("markers/1/source", 36 + self._channel)
+        nc.add("markers/0/source", 32 + self._core_index)
+        nc.add("markers/1/source", 36 + self._core_index)
         nc.add("generator/auxtriggers/0/channel", trig_channel)
         await self._api.set_parallel(nc)
 
@@ -225,14 +232,14 @@ class QAChannel(ChannelBase):
         acquisition_type = recipe_data.rt_execution_info.acquisition_type
 
         [synth_cf], synth_cf_updated = attributes.resolve(
-            keys=[(AttributeName.QA_CENTER_FREQ, self._channel)]
+            keys=[(AttributeName.QA_CENTER_FREQ, self._core_index)]
         )
         if synth_cf_updated:
-            check_synth_frequency(synth_cf, self._unit_repr, self._channel)
+            check_synth_frequency(synth_cf, self._unit_repr, self._core_index)
             nc.add("centerfreq", synth_cf)
 
         [out_amp], out_amp_updated = attributes.resolve(
-            keys=[(AttributeName.QA_OUT_AMPLITUDE, self._channel)]
+            keys=[(AttributeName.QA_OUT_AMPLITUDE, self._core_index)]
         )
         if out_amp_updated:
             nc.add("oscs/0/gain", out_amp)
@@ -242,8 +249,8 @@ class QAChannel(ChannelBase):
             output_updated,
         ) = attributes.resolve(
             keys=[
-                (AttributeName.OUTPUT_SCHEDULER_PORT_DELAY, self._channel),
-                (AttributeName.OUTPUT_PORT_DELAY, self._channel),
+                (AttributeName.OUTPUT_SCHEDULER_PORT_DELAY, self._core_index),
+                (AttributeName.OUTPUT_PORT_DELAY, self._core_index),
             ]
         )
         output_delay = (
@@ -258,8 +265,8 @@ class QAChannel(ChannelBase):
             input_updated,
         ) = attributes.resolve(
             keys=[
-                (AttributeName.INPUT_SCHEDULER_PORT_DELAY, self._channel),
-                (AttributeName.INPUT_PORT_DELAY, self._channel),
+                (AttributeName.INPUT_SCHEDULER_PORT_DELAY, self._core_index),
+                (AttributeName.INPUT_PORT_DELAY, self._core_index),
             ]
         )
         measurement_delay = (
@@ -326,7 +333,7 @@ class QAChannel(ChannelBase):
 
         await self._api.set_parallel(nc)
 
-    async def set_before_awg_upload(self, recipe_data: RecipeData):
+    async def _set_before_awg_upload(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"{self._node_base}/")
 
         acquisition_type = recipe_data.rt_execution_info.acquisition_type
@@ -338,15 +345,16 @@ class QAChannel(ChannelBase):
 
         initialization = recipe_data.get_initialization(self._device_uid)
         measurement = next(
-            (m for m in initialization.measurements if m.channel == self._channel), None
+            (m for m in initialization.measurements if m.channel == self._core_index),
+            None,
         )
         if measurement is not None:
-            uses_lrt = ch_uses_lrt(self._device_uid, self._channel, recipe_data)
+            uses_lrt = ch_uses_lrt(self._device_uid, self._core_index, recipe_data)
             if uses_lrt:
                 nc.add("modulation/enable", 1)
 
             if is_spectroscopy(acquisition_type):
-                nc.add("spectroscopy/trigger/channel", 36 + self._channel)
+                nc.add("spectroscopy/trigger/channel", 36 + self._core_index)
                 nc.add("spectroscopy/length", measurement.length)
             elif acquisition_type != AcquisitionType.RAW:
                 # Integration and discrimination modes
@@ -359,7 +367,7 @@ class QAChannel(ChannelBase):
                     ) in recipe_data.recipe.integrator_allocations:
                         if (
                             integrator_allocation.device_id != self._device_uid
-                            or integrator_allocation.awg != self._channel
+                            or integrator_allocation.awg != self._core_index
                         ):
                             continue
 
@@ -390,6 +398,7 @@ class QAChannel(ChannelBase):
         recipe_data: RecipeData,
         nt_step: NtStepKey,
     ):
+        await self._set_before_awg_upload(recipe_data)
         artifacts = recipe_data.get_artifacts(ArtifactsCodegen)
         rt_execution_info = recipe_data.rt_execution_info
 
@@ -411,7 +420,7 @@ class QAChannel(ChannelBase):
                     r
                     for r in recipe_data.recipe.realtime_execution_init
                     if r.device_id == self._device_uid
-                    and r.awg_index == self._channel
+                    and r.awg_index == self._core_index
                     and r.nt_step == effective_nt_step
                 ),
                 None,
@@ -474,7 +483,7 @@ class QAChannel(ChannelBase):
         pipeliner_job: int,
     ) -> NodeCollector:
         rt_execution_info = recipe_data.rt_execution_info
-        awg_config = recipe_data.awg_configs[AwgKey(self._device_uid, self._channel)]
+        awg_config = recipe_data.awg_configs[AwgKey(self._device_uid, self._core_index)]
         nc = NodeCollector()
         nc.extend(
             self._configure_readout(
@@ -556,7 +565,7 @@ class QAChannel(ChannelBase):
                 # 1 - sequential
                 0 if averaging_mode == AveragingMode.CYCLIC else 1,
             )
-            uses_lrt = ch_uses_lrt(self._device_uid, self._channel, recipe_data)
+            uses_lrt = ch_uses_lrt(self._device_uid, self._core_index, recipe_data)
             for integrator in integrator_allocations:
                 if (
                     integrator.device_id != self._device_uid
@@ -659,9 +668,9 @@ class QAChannel(ChannelBase):
             nc.add("time", 0)  # 0 -> 2 GSa/s
             nc.add("averaging/enable", 1)
             nc.add("averaging/count", averages)
-            nc.add(f"channels/{self._channel}/enable", 1)
+            nc.add(f"channels/{self._core_index}/enable", 1)
             nc.add(
-                f"channels/{self._channel}/inputselect", self._channel
+                f"channels/{self._core_index}/inputselect", self._core_index
             )  # channelN_signal_input
             if acquires is not None and acquires > 1:
                 nc.add("segments/enable", 1)
@@ -675,7 +684,9 @@ class QAChannel(ChannelBase):
             scope_length = (acquire_length + 0xF) & (~0xF)
             nc.add("length", scope_length)
             # TODO(2K): only one trigger is possible for all channels. Which one to use?
-            nc.add("trigger/channel", 64 + self._channel)  # channelN_sequencer_monitor0
+            nc.add(
+                "trigger/channel", 64 + self._core_index
+            )  # channelN_sequencer_monitor0
             nc.add("trigger/enable", 1)
             nc.add("enable", 0)  # todo: barrier needed?
             nc.add("single", 1, cache=False)
@@ -772,7 +783,7 @@ class QAChannel(ChannelBase):
     ) -> NodeCollector:
         nc = NodeCollector(base=f"{self._node_base}/readout/")
 
-        uses_lrt = ch_uses_lrt(self._device_uid, self._channel, recipe_data)
+        uses_lrt = ch_uses_lrt(self._device_uid, self._core_index, recipe_data)
 
         max_len = MAX_INTEGRATION_WEIGHT_LENGTH
 
@@ -839,6 +850,18 @@ class QAChannel(ChannelBase):
         nc.add_path(self.nodes.spectroscopy_result_wave)
         return nc
 
+    def conditions_for_execution_ready(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        if with_pipeliner:
+            return self.pipeliner.conditions_for_execution_ready()
+        return {
+            self.nodes.generator_enable: (
+                1,
+                f"Readout pulse generator {self._core_index} didn't start.",
+            )
+        }
+
     async def start_execution(self, with_pipeliner: bool):
         nc = NodeCollector(base=f"{self._node_base}/")
         if with_pipeliner:
@@ -846,6 +869,19 @@ class QAChannel(ChannelBase):
         else:
             nc.add("generator/enable", 1, cache=False)
         await self._api.set_parallel(nc)
+
+    def conditions_for_execution_done(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        if with_pipeliner:
+            return self.pipeliner.conditions_for_execution_done()
+        else:
+            return {
+                self.nodes.generator_enable: (
+                    0,
+                    f"Generator {self._core_index} didn't stop. Missing start trigger? Check ZSync.",
+                )
+            }
 
     async def get_measurement_data(
         self,
@@ -971,10 +1007,10 @@ class QAChannel(ChannelBase):
         return [
             (
                 f"{self._node_base}/output/overrangecount",
-                f"Channel {self._channel} Output overrange count",
+                f"Channel {self._core_index} Output overrange count",
             ),
             (
                 f"{self._node_base}/input/overrangecount",
-                f"Channel {self._channel} Input overrange count",
+                f"Channel {self._core_index} Input overrange count",
             ),
         ]

@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import logging
 from enum import IntEnum
-from typing import Any, Iterator
+from typing import Iterator
 
-from laboneq.controller.devices.channel_base import ChannelBase
+from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.hdawg_core import HDAwgCore
 from laboneq.controller.utilities.for_each import for_each
 import numpy as np
@@ -31,7 +31,7 @@ from laboneq.controller.devices.node_control import (
     Setting,
     WaitCondition,
 )
-from laboneq.controller.recipe_processor import AwgSignalType, RecipeData
+from laboneq.controller.recipe_processor import RecipeData
 from laboneq.data.recipe import (
     Initialization,
     NtStepKey,
@@ -85,15 +85,10 @@ class DeviceHDAWG(DeviceBase):
         assert self._sampling_rate is not None
         return self._sampling_rate
 
-    @property
-    def has_pipeliner(self) -> bool:
-        return True
-
-    def all_channels(self) -> Iterator[ChannelBase]:
-        """Iterable over all awg cores of the device."""
+    def all_cores(self) -> Iterator[CoreBase]:
         return iter(self._hd_awg_cores)
 
-    def allocated_channels(self, recipe_data: RecipeData) -> Iterator[ChannelBase]:
+    def allocated_cores(self, recipe_data: RecipeData) -> Iterator[CoreBase]:
         for ch in recipe_data.allocated_awgs(self.uid):
             yield self._hd_awg_cores[ch]
 
@@ -121,13 +116,14 @@ class DeviceHDAWG(DeviceBase):
                 subscriber=self._subscriber,
                 device_uid=self.uid,
                 serial=self.serial,
-                channel=ch,
+                core_index=core_index,
                 repr_base=self.dev_repr,
                 is_follower=self.is_follower(),
                 is_leader=self.is_leader(),
+                is_standalone=self.is_standalone(),
                 has_precompensation="PC" in self.dev_opts,
             )
-            for ch in range(self._cores)
+            for core_index in range(self._cores)
         ]
 
     def _busy_nodes(self, recipe_data: RecipeData) -> list[str]:
@@ -237,24 +233,6 @@ class DeviceHDAWG(DeviceBase):
             )
         return nodes
 
-    async def set_after_awg_upload(self, recipe_data: RecipeData):
-        nc = NodeCollector(base=f"/{self.serial}/")
-
-        device_recipe_data = recipe_data.device_settings[self.uid]
-        for awg_index, awg_config in device_recipe_data.awg_configs.items():
-            _logger.debug(
-                "%s: Configure modulation phase depending on IQ enabling on awg %d.",
-                self.dev_repr,
-                awg_index,
-            )
-            nc.add(
-                f"sines/{awg_index * 2}/phaseshift",
-                90 if (awg_config.signal_type == AwgSignalType.IQ) else 0,
-            )
-            nc.add(f"sines/{awg_index * 2 + 1}/phaseshift", 0)
-
-        await self.set_async(nc)
-
     async def _do_start_execution(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
         for awg_index in recipe_data.allocated_awgs(self.uid):
@@ -274,52 +252,6 @@ class DeviceHDAWG(DeviceBase):
     async def emit_start_trigger(self, recipe_data: RecipeData):
         if self.is_leader() or self.is_standalone():
             await self._do_start_execution(recipe_data=recipe_data)
-
-    def conditions_for_execution_ready(
-        self, recipe_data: RecipeData
-    ) -> dict[str, tuple[Any, str]]:
-        conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in recipe_data.allocated_awgs(self.uid):
-            if (
-                recipe_data.rt_execution_info.with_pipeliner
-                and not self.is_standalone()
-            ):
-                conditions.update(
-                    self._hd_awg_cores[
-                        awg_index
-                    ]._pipeliner.conditions_for_execution_ready()
-                )
-            elif not self.is_standalone():
-                conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
-                    1,
-                    f"AWG {awg_index} didn't start.",
-                )
-        return conditions
-
-    def conditions_for_execution_done(
-        self, recipe_data: RecipeData
-    ) -> dict[str, tuple[Any, str]]:
-        conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in recipe_data.allocated_awgs(self.uid):
-            if recipe_data.rt_execution_info.with_pipeliner:
-                conditions.update(
-                    self._hd_awg_cores[
-                        awg_index
-                    ]._pipeliner.conditions_for_execution_done(
-                        with_execution_start=self.is_standalone()
-                    )
-                )
-            elif self.is_standalone():
-                conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
-                    [1, 0],
-                    f"AWG {awg_index} failed to transition to exec and back to stop.",
-                )
-            else:
-                conditions[f"/{self.serial}/awgs/{awg_index}/enable"] = (
-                    0,
-                    f"AWG {awg_index} didn't stop. Missing start trigger? Check ZSync.",
-                )
-        return conditions
 
     async def setup_one_step_execution(
         self, recipe_data: RecipeData, nt_step: NtStepKey, with_pipeliner: bool
@@ -361,7 +293,7 @@ class DeviceHDAWG(DeviceBase):
             return
 
         await for_each(
-            self.all_channels(),
+            self.all_cores(),
             HDAwgCore.apply_initialization,
             device_recipe_data=device_recipe_data,
         )
@@ -397,6 +329,8 @@ class DeviceHDAWG(DeviceBase):
         }
         for ch, osc_idx in osc_selects.items():
             nc.add(f"sines/{ch}/oscselect", osc_idx)
+
+        nc.add("system/awg/oscillatorcontrol", 1)
 
         await self._api.set_parallel(nc)
 
@@ -541,11 +475,6 @@ class DeviceHDAWG(DeviceBase):
                 awg_iq_pair_set.add(awg_idx)
         await self.set_async(nc)
 
-    async def set_before_awg_upload(self, recipe_data: RecipeData):
-        nc = NodeCollector(base=f"/{self.serial}/")
-        nc.add("system/awg/oscillatorcontrol", 1)
-        await self.set_async(nc)
-
     def command_table_path(self, awg_index: int) -> str:
         return self._hd_awg_cores[awg_index].nodes.awg_command_table + "/"
 
@@ -564,7 +493,7 @@ class DeviceHDAWG(DeviceBase):
             nc.add("raw/system/awg/runtimechecks/enable", 0)
             break
 
-        await self.set_async(nc)
+        await self._api.set_parallel(nc)
 
     async def reset_to_idle(self):
         nc = NodeCollector(base=f"/{self.serial}/")
@@ -575,7 +504,7 @@ class DeviceHDAWG(DeviceBase):
         nc.barrier()
         nc.add("awgs/*/enable", 0, cache=False)
         nc.add("system/synchronization/source", 0, cache=False)  # internal
-        await self.set_async(nc)
+        await self._api.set_parallel(nc)
         # Reset errors must be the last operation, as above sets may cause errors.
         # See https://zhinst.atlassian.net/browse/HULK-1606
         await super().reset_to_idle()

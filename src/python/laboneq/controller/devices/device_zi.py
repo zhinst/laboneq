@@ -14,7 +14,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Iterator
 from weakref import ReferenceType, ref
 
-from laboneq.controller.devices.channel_base import ChannelBase
+from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.results import build_partial_result, build_raw_partial_result
 from laboneq.controller.utilities.for_each import for_each, for_each_sync
 from laboneq.data.experiment_results import ExperimentResults
@@ -73,14 +73,6 @@ class AwgCompilerStatus(Enum):
     SUCCESS = 0
     ERROR = 1
     WARNING = 2
-
-
-@dataclass
-class SequencerPaths:
-    elf: str
-    progress: str
-    enable: str
-    ready: str
 
 
 @dataclass
@@ -337,15 +329,15 @@ class DeviceBase(DeviceZI):
             )
 
     @property
-    def has_pipeliner(self) -> bool:
-        return False
-
-    @property
     def interface(self):
         return self.options.interface.lower()
 
-    def _has_awg_in_use(self, recipe_data: RecipeData):
-        device_recipe_data = recipe_data.device_settings.get(self.uid)
+    def _has_awg_in_use(
+        self, recipe_data: RecipeData, device_uid: str | None = None
+    ) -> bool:
+        if device_uid is None:
+            device_uid = self.uid
+        device_recipe_data = recipe_data.device_settings.get(device_uid)
         if device_recipe_data is None:
             return False
         return len(device_recipe_data.allocated_awgs()) > 0
@@ -353,12 +345,12 @@ class DeviceBase(DeviceZI):
     async def set_async(self, nodes: NodeCollector | Iterable[NodeCollector]):
         await self._api.set_parallel(NodeCollector.all(nodes))
 
-    def all_channels(self) -> Iterator[ChannelBase]:
-        """Iterable over all channels of the device."""
+    def all_cores(self) -> Iterator[CoreBase]:
+        """Iterable over all cores of the device."""
         return iter([])
 
-    def allocated_channels(self, recipe_data: RecipeData) -> Iterator[ChannelBase]:
-        """Iterable over actually allocated channels of the device."""
+    def allocated_cores(self, recipe_data: RecipeData) -> Iterator[CoreBase]:
+        """Iterable over actually allocated cores of the device."""
         return iter([])
 
     def clear_cache(self):
@@ -408,17 +400,6 @@ class DeviceBase(DeviceZI):
 
     def _process_dev_opts(self):
         pass
-
-    def _get_sequencer_type(self) -> str:
-        return "auto"
-
-    def get_sequencer_paths(self, index: int) -> SequencerPaths:
-        return SequencerPaths(
-            elf=f"/{self.serial}/awgs/{index}/elf/data",
-            progress=f"/{self.serial}/awgs/{index}/elf/progress",
-            enable=f"/{self.serial}/awgs/{index}/enable",
-            ready=f"/{self.serial}/awgs/{index}/ready",
-        )
 
     def pre_process_attributes(
         self,
@@ -546,7 +527,7 @@ class DeviceBase(DeviceZI):
 
     def allocate_resources(self):
         self._near_time_artifact_replacement_nodes.clear()
-        for_each_sync(self.all_channels(), ChannelBase.allocate_resources)
+        for_each_sync(self.all_cores(), CoreBase.allocate_resources)
 
     async def on_experiment_begin(self, recipe_data: RecipeData):
         await _gather(
@@ -625,12 +606,6 @@ class DeviceBase(DeviceZI):
     ):
         return
 
-    async def set_before_awg_upload(self, recipe_data: RecipeData):
-        pass
-
-    async def set_after_awg_upload(self, recipe_data: RecipeData):
-        pass
-
     async def configure_feedback(self, recipe_data: RecipeData):
         pass
 
@@ -644,8 +619,8 @@ class DeviceBase(DeviceZI):
         nt_step: NtStepKey,
     ):
         await for_each(
-            self.allocated_channels(recipe_data=recipe_data),
-            ChannelBase.load_awg_program,
+            self.allocated_cores(recipe_data=recipe_data),
+            CoreBase.load_awg_program,
             recipe_data=recipe_data,
             nt_step=nt_step,
         )
@@ -818,16 +793,6 @@ class DeviceBase(DeviceZI):
     async def start_execution(self, recipe_data: RecipeData):
         pass
 
-    def conditions_for_execution_ready(
-        self, recipe_data: RecipeData
-    ) -> dict[str, tuple[Any, str]]:
-        return {}
-
-    def conditions_for_execution_done(
-        self, recipe_data: RecipeData
-    ) -> dict[str, tuple[Any, str]]:
-        return {}
-
     async def teardown_one_step_execution(self, recipe_data: RecipeData):
         pass
 
@@ -839,9 +804,12 @@ class DeviceBase(DeviceZI):
         rw = ResponseWaiterAsync(
             api=self._api, dev_repr=self.dev_repr, timeout_s=timeout_s
         )
-        rw.add_with_msg(
-            nodes=self.conditions_for_execution_ready(recipe_data=recipe_data),
-        )
+        for core in self.allocated_cores(recipe_data=recipe_data):
+            rw.add_with_msg(
+                nodes=core.conditions_for_execution_ready(
+                    with_pipeliner=recipe_data.rt_execution_info.with_pipeliner
+                )
+            )
         await rw.prepare()
         await self.start_execution(recipe_data=recipe_data)
         failed_nodes = await rw.wait()
@@ -860,9 +828,12 @@ class DeviceBase(DeviceZI):
         response_waiter = ResponseWaiterAsync(
             api=self._api, dev_repr=self.dev_repr, timeout_s=timeout_s
         )
-        response_waiter.add_with_msg(
-            nodes=self.conditions_for_execution_done(recipe_data=recipe_data),
-        )
+        for core in self.allocated_cores(recipe_data=recipe_data):
+            response_waiter.add_with_msg(
+                nodes=core.conditions_for_execution_done(
+                    with_pipeliner=recipe_data.rt_execution_info.with_pipeliner
+                )
+            )
         await response_waiter.prepare()
         return response_waiter
 

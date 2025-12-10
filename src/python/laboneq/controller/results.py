@@ -111,7 +111,7 @@ def build_partial_result(
         # Currently we cannot, because of the known issue of mismatch between expected and actual result
         # shapes in case of acquisition being inside match-case blocks. TODO(hs): Fix this once result
         # shaping is overhauled.
-        res_flat[:raw_result_len] = raw_result_for_handle
+        res_flat[: len(raw_result_for_handle)] = raw_result_for_handle
 
 
 def build_raw_partial_result(

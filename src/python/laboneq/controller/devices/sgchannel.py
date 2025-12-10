@@ -16,7 +16,7 @@ from laboneq.controller.devices.async_support import (
     ResponseWaiterAsync,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
-from laboneq.controller.devices.channel_base import ChannelBase
+from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import delay_to_rounded_samples
 from laboneq.controller.recipe_processor import (
@@ -48,26 +48,35 @@ class SGChannelNodes:
     busy: str
 
 
-class SGChannel(ChannelBase):
+class SGChannel(CoreBase):
     def __init__(
         self,
+        *,
         api: InstrumentConnection,
         subscriber: AsyncSubscriber,
         device_uid: str,
         serial: str,
-        channel: int,
+        core_index: int,
         repr_base: str,
         is_plus: bool,
         has_opt_rtr: bool,
         is_full: bool,
+        is_standalone: bool,
     ):
-        super().__init__(api, subscriber, device_uid, serial, channel)
-        self._node_base = f"/{serial}/sgchannels/{channel}"
-        self._unit_repr = f"{repr_base}:sg{channel}"
+        super().__init__(
+            api=api,
+            subscriber=subscriber,
+            device_uid=device_uid,
+            serial=serial,
+            core_index=core_index,
+        )
+        self._node_base = f"/{serial}/sgchannels/{core_index}"
+        self._unit_repr = f"{repr_base}:sg{core_index}"
         self._is_plus = is_plus
         self._has_opt_rtr = has_opt_rtr
         self._is_full = is_full
-        self._pipeliner = AwgPipeliner(self._node_base, f"SG{channel}")
+        self._is_standalone = is_standalone
+        self._pipeliner = AwgPipeliner(self._node_base, f"SG{core_index}")
         # TODO(2K): Do all SG channels always have 8 oscillators?
         self.nodes = SGChannelNodes(
             output_on=f"{self._node_base}/output/on",
@@ -131,7 +140,7 @@ class SGChannel(ChannelBase):
         nc = NodeCollector(base=f"{self._node_base}/")
         if not self.is_full:
             return nc
-        router_config = device_recipe_data.sgchannels[self._channel].router_config
+        router_config = device_recipe_data.sgchannels[self._core_index].router_config
         if router_config is None:
             return nc
         nc.add("outputrouter/enable", 1)
@@ -147,7 +156,7 @@ class SGChannel(ChannelBase):
         return nc
 
     async def apply_initialization(self, device_recipe_data: DeviceRecipeData):
-        sg_ch_recipe_data = device_recipe_data.sgchannels.get(self._channel)
+        sg_ch_recipe_data = device_recipe_data.sgchannels.get(self._core_index)
         if sg_ch_recipe_data is None:
             return
 
@@ -202,14 +211,14 @@ class SGChannel(ChannelBase):
     ):
         nc = NodeCollector(base=f"{self._node_base}/")
         [dig_mixer_cf], dig_mixer_cf_updated = attributes.resolve(
-            keys=[(AttributeName.SG_DIG_MIXER_CENTER_FREQ, self._channel)]
+            keys=[(AttributeName.SG_DIG_MIXER_CENTER_FREQ, self._core_index)]
         )
         if dig_mixer_cf_updated:
             nc.add("digitalmixer/centerfreq", dig_mixer_cf)
         [scheduler_port_delay, port_delay], updated = attributes.resolve(
             keys=[
-                (AttributeName.OUTPUT_SCHEDULER_PORT_DELAY, self._channel),
-                (AttributeName.OUTPUT_PORT_DELAY, self._channel),
+                (AttributeName.OUTPUT_SCHEDULER_PORT_DELAY, self._core_index),
+                (AttributeName.OUTPUT_PORT_DELAY, self._core_index),
             ]
         )
         if updated and scheduler_port_delay is not None:
@@ -237,8 +246,8 @@ class SGChannel(ChannelBase):
             AttributeName.OUTPUT_ROUTE_3_PHASE,
         ]
         for router_idx in range(3):
-            amplitude_key = (route_amplitude_keys[router_idx], self._channel)
-            phase_key = (route_phase_keys[router_idx], self._channel)
+            amplitude_key = (route_amplitude_keys[router_idx], self._core_index)
+            phase_key = (route_phase_keys[router_idx], self._core_index)
             (
                 [route_amplitude, route_phase],
                 route_updated,
@@ -280,7 +289,7 @@ class SGChannel(ChannelBase):
                     r
                     for r in recipe_data.recipe.realtime_execution_init
                     if r.device_id == self._device_uid
-                    and r.awg_index == self._channel
+                    and r.awg_index == self._core_index
                     and r.nt_step == effective_nt_step
                 ),
                 None,
@@ -342,16 +351,30 @@ class SGChannel(ChannelBase):
             warning_nodes.append(
                 (
                     f"{self._node_base}/outputrouter/overflowcount",
-                    f"Channel {self._channel} Output Router overflow count",
+                    f"Channel {self._core_index} Output Router overflow count",
                 )
             )
         warning_nodes.append(
             (
                 f"{self._node_base}/output/overrangecount",
-                f"Channel {self._channel} Output overrange count",
+                f"Channel {self._core_index} Output overrange count",
             )
         )
         return warning_nodes
+
+    def conditions_for_execution_ready(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        if self._is_standalone:
+            return {}
+        if with_pipeliner:
+            return self._pipeliner.conditions_for_execution_ready()
+        return {
+            self.nodes.awg_enable: (
+                1,
+                f"AWG {self._core_index} didn't start.",
+            )
+        }
 
     async def start_execution(self, with_pipeliner: bool):
         nc = NodeCollector(base=f"{self._node_base}/")
@@ -360,3 +383,16 @@ class SGChannel(ChannelBase):
         else:
             nc.add("awg/enable", 1, cache=False)
         await self._api.set_parallel(nc)
+
+    def conditions_for_execution_done(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        if with_pipeliner:
+            return self.pipeliner.conditions_for_execution_done()
+        else:
+            return {
+                self.nodes.awg_enable: (
+                    0,
+                    f"AWG {self._core_index} didn't stop. Missing start trigger? Check ZSync.",
+                )
+            }

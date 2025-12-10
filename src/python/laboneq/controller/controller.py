@@ -161,13 +161,11 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
         await self._devices.for_each(DeviceBase.configure_feedback, recipe_data)
 
         # AWG / pipeliner upload
-        await self._devices.for_each(DeviceBase.set_before_awg_upload, recipe_data)
         await self._devices.for_each(
             DeviceZI.prepare_artifacts,
             recipe_data=recipe_data,
             nt_step=nt_step,
         )
-        await self._devices.for_each(DeviceBase.set_after_awg_upload, recipe_data)
         sweep_params_tracker.clear_for_next_step()
         user_set_nodes.clear()
 

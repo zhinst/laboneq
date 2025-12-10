@@ -65,7 +65,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "codegenerator"
-version = "25.10.2"
+version = "25.10.3"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -86,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-py"
-version = "25.10.2"
+version = "25.10.3"
 dependencies = [
  "anyhow",
  "codegenerator",
@@ -224,7 +224,7 @@ checksum = "f4c7245a08504955605670dbf141fceab975f15ca21570696aebe9d2e71576bd"
 
 [[package]]
 name = "interval-calculator"
-version = "25.10.2"
+version = "25.10.3"
 dependencies = [
  "anyhow",
  "thiserror",
@@ -238,7 +238,7 @@ checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
 
 [[package]]
 name = "laboneq-common"
-version = "25.10.2"
+version = "25.10.3"
 dependencies = [
  "regex",
  "string-interner",
@@ -246,14 +246,14 @@ dependencies = [
 
 [[package]]
 name = "laboneq-log"
-version = "25.10.2"
+version = "25.10.3"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "laboneq-rust"
-version = "25.10.2"
+version = "25.10.3"
 dependencies = [
  "anyhow",
  "codegenerator-py",
@@ -269,7 +269,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-scheduler"
-version = "25.10.2"
+version = "25.10.3"
 dependencies = [
  "anyhow",
  "laboneq-common",
@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-units"
-version = "25.10.2"
+version = "25.10.3"
 dependencies = [
  "num-traits",
 ]
@@ -374,7 +374,7 @@ dependencies = [
 
 [[package]]
 name = "numeric-array"
-version = "25.10.2"
+version = "25.10.3"
 dependencies = [
  "approx",
  "num-complex",

@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Iterator
+from typing import Iterator
 
-from laboneq.controller.devices.channel_base import ChannelBase
+from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.sgchannel import SGChannel
 from laboneq.controller.utilities.for_each import for_each
 from laboneq.data.scheduled_experiment import ScheduledExperiment
@@ -21,7 +21,6 @@ from laboneq.controller.devices.device_shf_base import (
     check_synth_frequency,
 )
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.device_zi import SequencerPaths
 from laboneq.controller.devices.node_control import NodeControlBase, Setting
 from laboneq.controller.recipe_processor import (
     RecipeData,
@@ -54,22 +53,17 @@ class DeviceSHFSG(DeviceSHFBase):
         # Available number of output channels (RTR option can extend these with internal channels on certain devices)
         self._channels = self._outputs
         self._output_to_synth_map = [0, 0, 1, 1, 2, 2, 3, 3]
-        self._wait_for_awgs = True
         self._emit_trigger = False
         self._has_opt_rtr = False
 
-    @property
-    def has_pipeliner(self) -> bool:
-        return True
-
-    def all_channels(self) -> Iterator[ChannelBase]:
+    def all_cores(self) -> Iterator[CoreBase]:
         return iter(self._sgchannels)
 
-    def allocated_channels(self, recipe_data: RecipeData) -> Iterator[ChannelBase]:
+    def allocated_cores(self, recipe_data: RecipeData) -> Iterator[CoreBase]:
         for ch in recipe_data.allocated_awgs(self.uid):
             yield self._sgchannels[ch]
 
-    def full_channels(self) -> Iterator[ChannelBase]:
+    def full_channels(self) -> Iterator[CoreBase]:
         for sgchannel in self._sgchannels:
             if sgchannel.is_full:
                 yield sgchannel
@@ -142,13 +136,14 @@ class DeviceSHFSG(DeviceSHFBase):
                 subscriber=self._subscriber,
                 device_uid=self.uid,
                 serial=self.serial,
-                channel=ch,
+                core_index=core_index,
                 repr_base=self.dev_repr,
                 is_plus=self._is_plus,
                 has_opt_rtr=self._has_opt_rtr,
-                is_full=ch < self._outputs,
+                is_full=core_index < self._outputs,
+                is_standalone=self.is_standalone(),
             )
-            for ch in range(self._channels)
+            for core_index in range(self._channels)
         ]
 
     def _is_full_channel(self, channel: int) -> bool:
@@ -156,18 +151,6 @@ class DeviceSHFSG(DeviceSHFBase):
 
     def _is_internal_channel(self, channel: int) -> bool:
         return self._outputs < channel < self._channels
-
-    def _get_sequencer_type(self) -> str:
-        return "sg"
-
-    def get_sequencer_paths(self, index: int) -> SequencerPaths:
-        sgchannel = self._sgchannels[index]
-        return SequencerPaths(
-            elf=sgchannel.nodes.awg_elf_data,
-            progress=sgchannel.nodes.awg_elf_progress,
-            enable=sgchannel.nodes.awg_enable,
-            ready=sgchannel.nodes.awg_ready,
-        )
 
     def _validate_range(self, io: IO):
         if io.range is None:
@@ -241,8 +224,8 @@ class DeviceSHFSG(DeviceSHFBase):
 
     async def disable_outputs(self, outputs: set[int], invert: bool):
         await for_each(
-            self.all_channels(),
-            ChannelBase.disable_output,
+            self.all_cores(),
+            CoreBase.disable_output,
             outputs=outputs,
             invert=invert,
         )
@@ -270,55 +253,16 @@ class DeviceSHFSG(DeviceSHFBase):
 
     async def start_execution(self, recipe_data: RecipeData):
         await for_each(
-            self.allocated_channels(recipe_data=recipe_data),
-            ChannelBase.start_execution,
+            self.allocated_cores(recipe_data=recipe_data),
+            CoreBase.start_execution,
             with_pipeliner=recipe_data.rt_execution_info.with_pipeliner,
         )
-
-    def conditions_for_execution_ready(
-        self, recipe_data: RecipeData
-    ) -> dict[str, tuple[Any, str]]:
-        if not self._wait_for_awgs:
-            return {}
-
-        conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in recipe_data.allocated_awgs(self.uid):
-            if recipe_data.rt_execution_info.with_pipeliner:
-                conditions.update(
-                    self._sgchannels[
-                        awg_index
-                    ].pipeliner.conditions_for_execution_ready()
-                )
-            else:
-                conditions[self.get_sequencer_paths(awg_index).enable] = (
-                    1,
-                    f"AWG {awg_index} didn't start.",
-                )
-        return conditions
 
     async def emit_start_trigger(self, recipe_data: RecipeData):
         if self._emit_trigger:
             nc = NodeCollector(base=f"/{self.serial}/")
             nc.add("system/internaltrigger/enable", 1, cache=False)
             await self.set_async(nc)
-
-    def conditions_for_execution_done(
-        self, recipe_data: RecipeData
-    ) -> dict[str, tuple[Any, str]]:
-        conditions: dict[str, tuple[Any, str]] = {}
-        for awg_index in recipe_data.allocated_awgs(self.uid):
-            if recipe_data.rt_execution_info.with_pipeliner:
-                conditions.update(
-                    self._sgchannels[
-                        awg_index
-                    ].pipeliner.conditions_for_execution_done()
-                )
-            else:
-                conditions[self.get_sequencer_paths(awg_index).enable] = (
-                    0,
-                    f"AWG {awg_index} didn't stop. Missing start trigger? Check ZSync.",
-                )
-        return conditions
 
     async def teardown_one_step_execution(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
@@ -414,7 +358,7 @@ class DeviceSHFSG(DeviceSHFBase):
             return
 
         await for_each(
-            self.all_channels(),
+            self.all_cores(),
             SGChannel.apply_initialization,
             device_recipe_data=device_recipe_data,
         )
@@ -447,7 +391,7 @@ class DeviceSHFSG(DeviceSHFBase):
 
         await for_each(
             self.full_channels(),
-            ChannelBase.set_nt_step_nodes,
+            CoreBase.set_nt_step_nodes,
             recipe_data=recipe_data,
             attributes=attributes,
         )
@@ -472,7 +416,6 @@ class DeviceSHFSG(DeviceSHFBase):
             # Happens for SHFQC/SG when only QA part is configured
             return
 
-        self._wait_for_awgs = True
         self._emit_trigger = False
 
         nc = NodeCollector(base=f"/{self.serial}/")
@@ -497,7 +440,6 @@ class DeviceSHFSG(DeviceSHFBase):
                 nc.add(f"sgchannels/{awg_index}/awg/diozsyncswitch", 1)  # ZSync Trigger
 
         if self.is_standalone():  # standalone SHFSG or SHFQC
-            self._wait_for_awgs = False
             if not self.is_secondary:
                 # otherwise, the QA will initialize the nodes
                 self._emit_trigger = True

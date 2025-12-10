@@ -83,14 +83,12 @@ class EventLoopHolder:
 
 
 class EventLoopMixIn:
-    _thread_local = threading.local()
-
     @property
     def _event_loop(self) -> EventLoopHolder:
-        event_loop = getattr(self._thread_local, "laboneq_event_loop", None)
+        event_loop = getattr(self, "_laboneq_event_loop", None)
         if event_loop is None:
             event_loop = EventLoopHolder()
-            self._thread_local.laboneq_event_loop = event_loop
+            self._laboneq_event_loop = event_loop
         return event_loop
 
 

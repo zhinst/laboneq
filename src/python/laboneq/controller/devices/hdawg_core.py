@@ -17,9 +17,11 @@ from laboneq.controller.devices.async_support import (
     _gather,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
-from laboneq.controller.devices.channel_base import ChannelBase
+from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.recipe_processor import (
+    AwgConfig,
+    AwgSignalType,
     DeviceRecipeData,
     HDAWGRecipeData,
     HWModulation,
@@ -185,25 +187,33 @@ class HDAwgCoreNodes:
     busy: str
 
 
-class HDAwgCore(ChannelBase):
+class HDAwgCore(CoreBase):
     def __init__(
         self,
         api: InstrumentConnection,
         subscriber: AsyncSubscriber,
         device_uid: str,
         serial: str,
-        channel: int,
+        core_index: int,
         repr_base: str,
         is_follower: bool,
         is_leader: bool,
+        is_standalone: bool,
         has_precompensation: bool,
     ):
-        super().__init__(api, subscriber, device_uid, serial, channel)
-        self._node_base = f"/{serial}/awgs/{channel}"
-        self._unit_repr = f"{repr_base}:awg{channel}"
+        super().__init__(
+            api=api,
+            subscriber=subscriber,
+            device_uid=device_uid,
+            serial=serial,
+            core_index=core_index,
+        )
+        self._node_base = f"/{serial}/awgs/{core_index}"
+        self._unit_repr = f"{repr_base}:awg{core_index}"
         self._is_follower = is_follower
         self._is_leader = is_leader
-        self._pipeliner = AwgPipeliner(self._node_base, f"AWG{channel}")
+        self._is_standalone = is_standalone
+        self._pipeliner = AwgPipeliner(self._node_base, f"AWG{core_index}")
         self.nodes = HDAwgCoreNodes(
             output_on=f"{self._node_base}/output/on",
             awg_elf_data=f"{self._node_base}/elf/data",
@@ -224,7 +234,7 @@ class HDAwgCore(ChannelBase):
                 repr_base=self._unit_repr,
                 has_precompensation=has_precompensation,
             )
-            for ch in range(channel * 2, channel * 2 + 2)
+            for ch in range(core_index * 2, core_index * 2 + 2)
         ]
 
     @property
@@ -238,27 +248,32 @@ class HDAwgCore(ChannelBase):
         self._pipeliner._reload_tracker.reset()
 
     async def apply_initialization(self, device_recipe_data: DeviceRecipeData):
-        awg_core_recipe_data = device_recipe_data.hdawgcores.get(self._channel)
+        awg_core_recipe_data = device_recipe_data.hdawgcores.get(self._core_index)
+        awg_config = device_recipe_data.awg_configs.get(self._core_index)
         if awg_core_recipe_data is None:
-            if len(device_recipe_data.hdawgcores) == 0 and self._channel == 0:
+            if len(device_recipe_data.hdawgcores) == 0 and self._core_index == 0:
                 # Ensure configuring at least one AWG instance to cover the case that the instrument
                 # is only used as a communication proxy. Some of the nodes on the AWG branch are
                 # needed to get proper communication between HDAWG and UHFQA.
-                await self._configure_awg_core(None)
+                await self._configure_awg_core(None, None)
             return
 
         await _gather(
             self._outputs[0].configure(awg_core_recipe_data=awg_core_recipe_data),
             self._outputs[1].configure(awg_core_recipe_data=awg_core_recipe_data),
-            self._configure_awg_core(awg_core_recipe_data=awg_core_recipe_data),
+            self._configure_awg_core(
+                awg_core_recipe_data=awg_core_recipe_data, awg_config=awg_config
+            ),
         )
 
-    async def _configure_awg_core(self, awg_core_recipe_data: HDAWGRecipeData | None):
+    async def _configure_awg_core(
+        self, awg_core_recipe_data: HDAWGRecipeData | None, awg_config: AwgConfig | None
+    ):
         # Configure DIO/ZSync at init (previously was after AWG loading).
         # This is a prerequisite for passing AWG checks in FW on the pipeliner commit.
         # Without the pipeliner, these checks are only performed when the AWG is enabled,
         # therefore DIO could be configured after the AWG loading.
-        nc_awg = NodeCollector(base=f"/{self._serial}/awgs/{self._channel}/")
+        nc_awg = NodeCollector(base=f"/{self._serial}/awgs/{self._core_index}/")
 
         if awg_core_recipe_data is not None:
             nc_awg.add("single", 1)
@@ -285,7 +300,14 @@ class HDAwgCore(ChannelBase):
                 # across all cores, while loading a dummy program on cores not used in a given job.
                 nc_awg.add("synchronization/enable", 1)
 
-        await self._api.set_parallel(nc_awg)
+        nc = NodeCollector(base=f"/{self._serial}/")
+        if awg_config is not None:
+            nc.add(
+                f"sines/{self._core_index * 2}/phaseshift",
+                90 if (awg_config.signal_type == AwgSignalType.IQ) else 0,
+            )
+            nc.add(f"sines/{self._core_index * 2 + 1}/phaseshift", 0)
+        await self._api.set_parallel(NodeCollector.all((nc_awg, nc)))
 
     async def set_nt_step_nodes(
         self, recipe_data: RecipeData, attributes: DeviceAttributesView
@@ -319,7 +341,7 @@ class HDAwgCore(ChannelBase):
                     r
                     for r in recipe_data.recipe.realtime_execution_init
                     if r.device_id == self._device_uid
-                    and r.awg_index == self._channel
+                    and r.awg_index == self._core_index
                     and r.nt_step == effective_nt_step
                 ),
                 None,
@@ -378,5 +400,40 @@ class HDAwgCore(ChannelBase):
     def collect_warning_nodes(self) -> list[tuple[str, str]]:
         return []
 
+    def conditions_for_execution_ready(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        if self._is_standalone:
+            return {}
+        if with_pipeliner:
+            return self._pipeliner.conditions_for_execution_ready()
+        return {
+            f"/{self._serial}/awgs/{self._core_index}/enable": (
+                1,
+                f"AWG {self._core_index} didn't start.",
+            )
+        }
+
     async def start_execution(self, with_pipeliner: bool):
         pass
+
+    def conditions_for_execution_done(
+        self, with_pipeliner: bool
+    ) -> dict[str, tuple[Any, str]]:
+        if with_pipeliner:
+            return self.pipeliner.conditions_for_execution_done(
+                with_execution_start=self._is_standalone
+            )
+        if self._is_standalone:
+            return {
+                f"/{self._serial}/awgs/{self._core_index}/enable": (
+                    [1, 0],
+                    f"AWG {self._core_index} failed to transition to exec and back to stop.",
+                )
+            }
+        return {
+            f"/{self._serial}/awgs/{self._core_index}/enable": (
+                0,
+                f"AWG {self._core_index} didn't stop. Missing start trigger? Check ZSync.",
+            )
+        }
