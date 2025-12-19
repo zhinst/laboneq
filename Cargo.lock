@@ -150,7 +150,7 @@ checksum = "a1d728cc89cf3aee9ff92b05e62b19ee65a02b5702cff7d5a377e32c6ae29d8d"
 
 [[package]]
 name = "codegenerator"
-version = "26.1.0-b2"
+version = "26.1.0-b3"
 dependencies = [
  "anyhow",
  "derive_more",
@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-py"
-version = "26.1.0-b2"
+version = "26.1.0-b3"
 dependencies = [
  "anyhow",
  "codegenerator",
@@ -384,7 +384,7 @@ dependencies = [
 
 [[package]]
 name = "interval-calculator"
-version = "26.1.0-b2"
+version = "26.1.0-b3"
 dependencies = [
  "anyhow",
  "thiserror",
@@ -417,7 +417,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-common"
-version = "26.1.0-b2"
+version = "26.1.0-b3"
 dependencies = [
  "laboneq-units",
  "regex",
@@ -426,14 +426,14 @@ dependencies = [
 
 [[package]]
 name = "laboneq-log"
-version = "26.1.0-b2"
+version = "26.1.0-b3"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "laboneq-rust"
-version = "26.1.0-b2"
+version = "26.1.0-b3"
 dependencies = [
  "anyhow",
  "codegenerator-py",
@@ -445,12 +445,13 @@ dependencies = [
  "numeric-array",
  "pyo3",
  "pyo3-log",
+ "smallvec",
  "thiserror",
 ]
 
 [[package]]
 name = "laboneq-scheduler"
-version = "26.1.0-b2"
+version = "26.1.0-b3"
 dependencies = [
  "anyhow",
  "laboneq-common",
@@ -460,12 +461,13 @@ dependencies = [
  "num-integer",
  "num-traits",
  "numeric-array",
+ "smallvec",
  "thiserror",
 ]
 
 [[package]]
 name = "laboneq-units"
-version = "26.1.0-b2"
+version = "26.1.0-b3"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -558,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "numeric-array"
-version = "26.1.0-b2"
+version = "26.1.0-b3"
 dependencies = [
  "approx",
  "num-complex",
@@ -778,7 +780,7 @@ dependencies = [
 
 [[package]]
 name = "rccow"
-version = "26.1.0-b2"
+version = "26.1.0-b3"
 
 [[package]]
 name = "regex"
@@ -898,6 +900,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
+name = "smallvec"
+version = "1.15.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+
+[[package]]
 name = "string-interner"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -974,7 +982,7 @@ checksum = "7264e107f553ccae879d21fbea1d6724ac785e8c3bfc762137959b5802826ef3"
 
 [[package]]
 name = "utils"
-version = "26.1.0-b2"
+version = "26.1.0-b3"
 dependencies = [
  "criterion",
  "indexmap",

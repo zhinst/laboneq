@@ -3,6 +3,7 @@
 
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
+from laboneq.data.compilation_job import SignalInfoType
 
 
 class SamplingRateTracker:
@@ -12,8 +13,8 @@ class SamplingRateTracker:
         self._sampling_rate_cache = {}
         self._sequencer_rate_cache = {}
 
-    def sampling_rate_for_device(self, device_id):
-        if device_id not in self._sampling_rate_cache:
+    def sampling_rate_for_device(self, device_id: str, signal_type: SignalInfoType):
+        if (device_id, signal_type) not in self._sampling_rate_cache:
             device_type = DeviceType.from_device_info_type(
                 self._experiment_dao.device_info(device_id).device_type
             )
@@ -22,11 +23,16 @@ class SamplingRateTracker:
                 and self._clock_settings["use_2GHz_for_HDAWG"]
             ):
                 sampling_rate = DeviceType.HDAWG.sampling_rate_2GHz
+            elif (
+                device_type == DeviceType.PRETTYPRINTERDEVICE
+                and signal_type == SignalInfoType.INTEGRATION
+            ):
+                sampling_rate = 4e9
             else:
                 sampling_rate = device_type.sampling_rate
-            self._sampling_rate_cache[device_id] = sampling_rate
+            self._sampling_rate_cache[(device_id, signal_type)] = sampling_rate
         else:
-            sampling_rate = self._sampling_rate_cache[device_id]
+            sampling_rate = self._sampling_rate_cache[(device_id, signal_type)]
 
         return sampling_rate
 

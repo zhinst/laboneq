@@ -4,12 +4,11 @@
 use std::collections::HashMap;
 
 use laboneq_common::named_id::NamedIdStore;
-use pyo3::{
-    prelude::*,
-    types::{PyComplex, PyDict},
-};
+use pyo3::{prelude::*, types::PyDict};
 
-use crate::{error::Result, scheduler::py_object_interner::PyObjectInterner};
+use crate::error::Result;
+use crate::scheduler::py_export::numeric_literal_to_py;
+use crate::scheduler::py_object_interner::PyObjectInterner;
 use laboneq_scheduler::experiment::types::{
     ExternalParameterUid, NumericLiteral, PulseParameterUid, PulseParameterValue, ValueOrParameter,
 };
@@ -46,16 +45,5 @@ fn value_or_parameter_to_py(
             Ok(id.into_pyobject(py)?.unbind().into())
         }
         ValueOrParameter::ResolvedParameter { value, .. } => numeric_literal_to_py(py, value),
-    }
-}
-
-fn numeric_literal_to_py(py: Python, value: &NumericLiteral) -> PyResult<Py<PyAny>> {
-    match value {
-        NumericLiteral::Int(v) => Ok(v.into_pyobject(py)?.unbind().into()),
-        NumericLiteral::Float(v) => Ok(v.into_pyobject(py)?.unbind().into()),
-        NumericLiteral::Complex(v) => Ok(PyComplex::from_doubles(py, v.re, v.im)
-            .into_pyobject(py)?
-            .unbind()
-            .into()),
     }
 }

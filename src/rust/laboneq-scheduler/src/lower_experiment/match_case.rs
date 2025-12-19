@@ -5,7 +5,9 @@ use core::panic;
 
 use crate::error::{Error, Result};
 use crate::experiment::sweep_parameter::SweepParameter;
-use crate::experiment::types::{self as experiment_types, NumericLiteral, Operation};
+use crate::experiment::types::{
+    self as experiment_types, NumericLiteral, Operation, SectionAlignment,
+};
 use crate::experiment::{ExperimentNode, NodeChild};
 
 use crate::experiment_context::ExperimentContext;
@@ -15,7 +17,13 @@ use crate::lower_experiment::lower_children;
 use crate::schedule_info::ScheduleInfoBuilder;
 
 use crate::{ScheduledNode, SignalInfo};
-use laboneq_units::tinysample::tiny_samples;
+use laboneq_units::tinysample::{seconds_to_tinysamples, tiny_samples};
+
+/// Grid size for local feedback
+const LOCAL_FEEDBACK_GRID_SAMPLES: u8 = 8;
+
+/// Grid size for global feedback
+const GLOBAL_FEEDBACK_GRID_SAMPLES: u8 = 200;
 
 /// Lower a match section from the experiment definition to the scheduled IR.
 ///
@@ -27,17 +35,29 @@ pub(super) fn lower_match(
     local_ctx: &mut LocalContext,
 ) -> Result<ScheduledNode> {
     let section = try_cast_match(&node.kind);
-    let mut root = ScheduledNode::new(
-        IrKind::Match(Match {
-            uid: section.uid,
-            target: section.target.clone(),
-            // TODO: Resolve in experiment processor!
-            // At this point the local flag should be resolved to concrete value.
-            local: section.local.unwrap_or(false),
-            play_after: section.play_after.clone(),
-        }),
-        ScheduleInfoBuilder::new().build(),
-    );
+    let match_ = Match {
+        uid: section.uid,
+        target: section.target.clone(),
+        local: section.local.unwrap_or(false),
+        play_after: section.play_after.clone(),
+    };
+
+    let mut schedule_builder = ScheduleInfoBuilder::new().grid(local_ctx.system_grid);
+    if let experiment_types::MatchTarget::Handle(handle) = &match_.target {
+        // TODO (PW) is this correct? should it not be 100 ns regardless of the sampling rate?
+        let signal = ctx.get_signal(ctx.handle_to_signal.get(handle).unwrap())?;
+        let grid = if match_.local {
+            LOCAL_FEEDBACK_GRID_SAMPLES
+        } else {
+            GLOBAL_FEEDBACK_GRID_SAMPLES
+        };
+        schedule_builder = schedule_builder.compressed_loop_grid(seconds_to_tinysamples(
+            (grid as f64 / signal.sampling_rate()).into(),
+        ));
+    }
+    let schedule = schedule_builder.grid(local_ctx.system_grid).build();
+
+    let mut root = ScheduledNode::new(IrKind::Match(match_), schedule);
     // Matching a sweep parameter requires special handling as each case
     // maps to a specific iteration of a loop.
     if let experiment_types::MatchTarget::SweepParameter(param_uid) = &section.target {
@@ -77,7 +97,12 @@ pub(super) fn lower_match(
                     ))
                 })?,
             });
-            let mut case_node = ScheduledNode::new(kind, ScheduleInfoBuilder::new().build());
+            let mut case_node = ScheduledNode::new(
+                kind,
+                ScheduleInfoBuilder::new()
+                    .grid(local_ctx.system_grid)
+                    .build(),
+            );
             local_ctx
                 .with_section(case.uid, |local_ctx| {
                     lower_children(&child.children, ctx, local_ctx)
@@ -88,8 +113,28 @@ pub(super) fn lower_match(
                 });
             root.add_child(tiny_samples(0), case_node);
         }
+        process_empty_branches(&mut root);
     }
     Ok(root)
+}
+
+/// For each case branch that is empty, assign it a schedule that
+/// has length equal to the parent's grid.
+///
+/// The branch covers all signals of the parent as well.
+fn process_empty_branches(parent: &mut ScheduledNode) {
+    for child in &mut parent.children {
+        if child.node.children.is_empty() {
+            let schedule = ScheduleInfoBuilder::new()
+                .grid(parent.schedule.grid)
+                .length(parent.schedule.grid)
+                .sequencer_grid(parent.schedule.grid)
+                .alignment_mode(SectionAlignment::Left)
+                .signals(parent.schedule.signals.clone())
+                .build();
+            child.node.make_mut().schedule = schedule;
+        }
+    }
 }
 
 /// Find the cases that match the values of a sweep parameter.

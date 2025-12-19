@@ -22,6 +22,7 @@ num-complex = { workspace = true }
 pyo3-log = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+smallvec = { workspace = true }
 
 laboneq-common = { path = "../laboneq-common" }
 codegenerator-py = { path = "../codegenerator-py" }

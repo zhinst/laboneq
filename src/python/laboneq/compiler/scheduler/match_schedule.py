@@ -27,6 +27,7 @@ from laboneq.compiler.scheduler.section_schedule import SectionSchedule
 from laboneq.compiler.scheduler.utils import ceil_to_grid
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.utilities.compressed_formatter import CompressableLogEntry
+from laboneq.data.compilation_job import ParameterInfo
 
 if TYPE_CHECKING:
     from laboneq.compiler.common.signal_obj import SignalObj
@@ -95,9 +96,11 @@ def _compute_start_with_latency(
     qa_base_delay_signal = qa_signal_obj.base_delay_signal or 0.0
     qa_base_port_delay = qa_signal_obj.base_port_delay or 0.0
 
-    if math.isnan(qa_port_delay) or math.isnan(qa_base_port_delay):
+    if isinstance(qa_port_delay, ParameterInfo) or isinstance(
+        qa_base_port_delay, ParameterInfo
+    ):
         raise LabOneQException(
-            "Feedback requires constant 'port_delay', but it is a sweep parameter."
+            "Feedback acquisition and measure lines require a constant 'port_delay', but it is a sweep parameter."
         )
 
     qa_total_port_delay = _get_total_rounded_delay_samples(
@@ -214,32 +217,14 @@ class MatchSchedule(SectionSchedule):
 
     def __attrs_post_init__(self):
         super().__attrs_post_init__()
-        self.cacheable = False
 
     def _calculate_timing(
         self, schedule_data: ScheduleData, start: int, start_may_change
     ) -> int:
         if self.handle is not None:
             assert self.local is not None
-            if start_may_change:
-                raise LabOneQException(
-                    f"Match section '{self.section}' with handle '{self.handle}' may not be"
-                    " a subsection of a right-aligned section or within a loop with"
-                    " repetition mode AUTO."
-                )
             acquire_pulses = schedule_data.acquire_pulses.get(self.handle)
-            if not acquire_pulses or len(acquire_pulses) == 0:
-                raise LabOneQException(
-                    f"No acquire found for Match section '{self.section}' with handle '{self.handle}'."
-                )
             acquire_pulse = acquire_pulses[-1]
-            if acquire_pulse.absolute_start is None:
-                # For safety reasons; this should never happen, i.e., being caught before
-                raise LabOneQException(
-                    f"Match section '{self.section}' with handle '{self.handle}' can not be"
-                    " scheduled because the corresponding acquire is within"
-                    " a right-aligned section or within a loop with repetition mode AUTO."
-                )
             assert acquire_pulse.length is not None
             [acquire_signal] = acquire_pulse.signals
             earliest_execute_table_entry = _compute_start_with_latency(

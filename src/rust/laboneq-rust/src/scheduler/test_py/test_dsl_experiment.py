@@ -94,7 +94,7 @@ def create_derived_param_experiment_calibration():
         uid="q0/drive",
         sampling_rate=2e9,
         awg_key=0,
-        device="HDAWG",
+        device_uid="device_hdawg",
         oscillator=scheduler_rs.Oscillator(
             uid="osc",
             frequency=scheduler_rs.SweepParameter(
@@ -106,8 +106,17 @@ def create_derived_param_experiment_calibration():
         voltage_offset=None,
         amplifier_pump=None,
         kind="IQ",
+        channels=[],
+        port_mode=None,
+        automute=False,
     )
-    return convert_Experiment(exp), [signal]
+    device = scheduler_rs.Device(
+        uid="device_hdawg",
+        physical_device_uid=0,
+        kind="HDAWG",
+        is_shfqc=False,
+    )
+    return convert_Experiment(exp), [signal], [device]
 
 
 def create_derived_param_experiment_operation_field():
@@ -138,11 +147,38 @@ def create_derived_param_experiment_operation_field():
         uid="q0/drive",
         sampling_rate=2e9,
         awg_key=0,
-        device="HDAWG",
+        device_uid="device_hdawg",
         oscillator=None,
         lo_frequency=None,
         voltage_offset=None,
         amplifier_pump=None,
         kind="IQ",
+        channels=[],
+        port_mode=None,
+        automute=False,
     )
-    return convert_Experiment(exp), [signal]
+    device = scheduler_rs.Device(
+        uid="device_hdawg",
+        physical_device_uid=0,
+        kind="HDAWG",
+        is_shfqc=False,
+    )
+    return convert_Experiment(exp), [signal], [device]
+
+
+def create_missing_signal_experiment():
+    setup = simple_hdawg_setup()
+    exp = simple.Experiment(
+        signals=[
+            simple.ExperimentSignal(
+                "q0/drive",
+                map_to=setup.logical_signal_groups["q0"].logical_signals["drive"],
+            ),
+        ],
+    )
+
+    with exp.acquire_loop_rt(count=1):
+        with exp.section(uid="section"):
+            exp.delay("q1/drive", time=1e-6)
+
+    return convert_Experiment(exp), [], []

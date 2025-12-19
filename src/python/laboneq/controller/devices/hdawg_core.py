@@ -307,13 +307,15 @@ class HDAwgCore(CoreBase):
             nc_awg.add("dio/mask/value", 0x3FF)
             nc_awg.add("dio/mask/shift", 1)
 
-            # To align execution on all AWG cores on same instrument, enable  HW
-            # synchronization even in absence of pipeliner usage.
-            if awg_core_recipe_data is not None:
-                # TODO(2K): This node is not pipelinable, so it cannot be changed between pipeliner jobs.
-                # However, jobs may involve different AWG cores. In the future, enable synchronization
-                # across all cores, while loading a dummy program on cores not used in a given job.
-                nc_awg.add("synchronization/enable", 1)
+        # To align execution on all AWG cores on same instrument, enable  HW
+        # synchronization even in absence of pipeliner usage.
+        if (
+            self._is_leader or self._is_standalone
+        ) and awg_core_recipe_data is not None:
+            # TODO(2K): This node is not pipelinable, so it cannot be changed between pipeliner jobs.
+            # However, jobs may involve different AWG cores. In the future, enable synchronization
+            # across all cores, while loading a dummy program on cores not used in a given job.
+            nc_awg.add("synchronization/enable", 1)
 
         nc = NodeCollector(base=f"/{self._serial}/")
         if awg_config is not None:

@@ -51,7 +51,6 @@ from laboneq.data.compilation_job import (
 )
 from laboneq.data.experiment_description import (
     Acquire,
-    AcquireLoopRt,
     Delay,
     ExecutionType,
     Experiment,
@@ -118,8 +117,6 @@ class ExperimentInfoBuilder:
         self._check_physical_channel_calibration_conflict()
         for signal in self._experiment.signals:
             self._load_signal(signal)
-
-        self._validate_chunked_sweep()
 
         section_uid_map: dict[str, Section] = {}
         for section in self._experiment.sections:
@@ -660,7 +657,7 @@ class ExperimentInfoBuilder:
             markers.append(
                 Marker(
                     k,
-                    enable=v.get("enable"),
+                    enable=v.get("enable") or False,
                     start=v.get("start"),
                     length=v.get("length"),
                     pulse_id=marker_pulse_id,
@@ -726,28 +723,12 @@ class ExperimentInfoBuilder:
                     f" {section.uid}."
                 )
         if pulses == [None] and markers:
-            # generate a zero-amplitude pulse to play the markers
-
-            if any(
-                (m.start is None or m.length is None) and m.pulse_id is None
-                for m in markers
-            ):
-                raise RuntimeError(
-                    f"Please specify a start and length or a waveform for a play command without pulse and enabled marker(s) in section {section.uid}"
-                )
-
+            # Create a dummy pulse so this is registered as a pulse play operation
             pulses = [pulse] = [SimpleNamespace()]
-            pulse.uid = f"__marker__{next(auto_pulse_id)}"
+            pulse.uid = next(auto_pulse_id)
             pulse.function = "const"
             pulse.amplitude = 0.0
-            lengths = [
-                self._pulse_defs[m.pulse_id].length
-                if m.pulse_id is not None
-                else m.start + m.length
-                for m in markers
-            ]
-            pulse.length = max(lengths)
-            pulse.can_compress = False
+            pulse.length = 0.0
 
         if hasattr(operation, "kernel"):
             pulses = ensure_list(operation.kernel or [])
@@ -842,29 +823,7 @@ class ExperimentInfoBuilder:
                 or getattr(operation, "set_oscillator_phase", None) is not None
                 or getattr(operation, "phase", None) is not None
             ):
-                # virtual Z gate
-                if operation.phase is not None:
-                    raise LabOneQException(
-                        "Phase argument has no effect for virtual Z gates."
-                    )
-
-                increment_oscillator_phase = self.opt_param(
-                    operation.increment_oscillator_phase
-                )
-                set_oscillator_phase = self.opt_param(operation.set_oscillator_phase)
-                for par in [
-                    "precompensation_clear",
-                    "amplitude",
-                    "phase",
-                    "pulse_parameters",
-                    "handle",
-                    "length",
-                ]:
-                    if getattr(operation, par, None) is not None:
-                        raise LabOneQException(
-                            f"parameter {par} not supported for virtual Z gates"
-                        )
-
+                # Virtual Z gate
                 ssps.append(
                     SectionSignalPulse(
                         signal=signal_info,
@@ -970,9 +929,6 @@ class ExperimentInfoBuilder:
         _chunk_count = getattr(section, "chunk_count", 1)
         chunked = _auto_chunking or _chunk_count > 1
         if chunked:
-            assert (
-                self._chunking_info is None
-            )  # multiple sweeps being chunked should have been caught earlier in validation
             self._chunking_info = ChunkingInfo(_auto_chunking, _chunk_count, count)
 
         this_acquisition_type = None
@@ -1015,34 +971,6 @@ class ExperimentInfoBuilder:
         )
 
         return section_info
-
-    def _validate_chunked_sweep(self):
-        found_chunked_sweep = False
-
-        def visit(section: Section, inside_rt=False):
-            nonlocal found_chunked_sweep
-            if isinstance(section, AcquireLoopRt):
-                inside_rt = True
-            if isinstance(section, Sweep):
-                if section.chunk_count < 1:
-                    raise LabOneQException(
-                        f"Chunk count must be >= 1, but {section.chunk_count} was provided."
-                    )
-                if section.auto_chunking or section.chunk_count > 1:
-                    if found_chunked_sweep:
-                        raise LabOneQException("Found multiple chunked sweeps.")
-                    if not inside_rt:
-                        raise LabOneQException(
-                            "Sweeps that are not inside real-time execution cannot be chunked."
-                        )
-                    found_chunked_sweep = True
-            for child in section.children:
-                if isinstance(child, Section):
-                    visit(child, inside_rt)
-
-        for c in self._experiment.sections:
-            # depth-first search
-            visit(c)
 
     def _add_pulse(self, pulse) -> PulseDef:
         if pulse.uid not in self._pulse_defs:

@@ -99,6 +99,12 @@ class ParameterInfo:
 class DeviceInfo:
     uid: str
     device_type: DeviceInfoType
+    # Physical device UID
+    # Multiple devices can map to the same physical device (e.g., SHFQA and SHFSG
+    # from a SHFQC)
+    # This UID is used to group virtual devices that share the same
+    # physical hardware, enabling proper device detection.
+    physical_device_uid: int
     dev_type: str | None = None
     dev_opts: list[str] = field(default_factory=list)
     reference_clock_source: ReferenceClockSourceInfo | None = None
@@ -330,7 +336,7 @@ class SignalInfo:
     lo_frequency: float | ParameterInfo | None = None
     signal_range: SignalRange | None = None
     port_delay: float | ParameterInfo | None = None
-    delay_signal: float | ParameterInfo | None = None
+    delay_signal: float | None = None
     port_mode: PortMode | None = None
     threshold: float | list[float] | None = None
     amplitude: float | ParameterInfo | None = None

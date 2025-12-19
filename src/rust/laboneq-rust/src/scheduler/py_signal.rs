@@ -3,12 +3,12 @@
 
 use std::str::FromStr;
 
-use laboneq_common::types::{AwgKey, DeviceKind};
+use laboneq_common::types::AwgKey;
 use laboneq_scheduler::experiment::builders::AmplifierPumpBuilder;
 use laboneq_scheduler::experiment::types::{AmplifierPump, SignalUid, ValueOrParameter};
 use pyo3::prelude::*;
 
-use crate::scheduler::experiment::{Signal, SignalKind};
+use crate::scheduler::experiment::{PortMode, Signal, SignalKind};
 use crate::{
     error::{Error, Result},
     scheduler::py_conversion::ExperimentBuilder,
@@ -24,12 +24,15 @@ pub struct SignalPy {
     pub uid: String,
     pub sampling_rate: f64,
     pub awg_key: i64,
-    pub device_type: DeviceKind,
+    pub device_uid: String,
     pub oscillator: Option<Py<OscillatorPy>>,
     pub lo_frequency: Option<Py<PyAny>>,
     pub voltage_offset: Option<Py<PyAny>>,
     pub amplifier_pump: Option<Py<AmplifierPumpPy>>,
     pub kind: SignalKind,
+    pub channels: Vec<u16>,
+    pub port_mode: Option<PortMode>,
+    pub automute: bool,
 }
 
 #[pymethods]
@@ -40,23 +43,29 @@ impl SignalPy {
         uid: String,
         sampling_rate: f64,
         awg_key: i64,
-        device: &str,
+        device_uid: &str,
         oscillator: Option<Py<OscillatorPy>>,
         lo_frequency: Option<Py<PyAny>>,
         voltage_offset: Option<Py<PyAny>>,
         amplifier_pump: Option<Py<AmplifierPumpPy>>,
         kind: &str,
+        channels: Vec<u16>,
+        port_mode: Option<&str>,
+        automute: bool,
     ) -> Self {
         Self {
             uid,
             sampling_rate,
             awg_key,
-            device_type: extract_device_kind(device).unwrap(),
+            device_uid: device_uid.to_string(),
             oscillator,
             lo_frequency,
             voltage_offset,
             amplifier_pump,
             kind: SignalKind::from_str(kind).unwrap(),
+            channels,
+            port_mode: port_mode.and_then(|s| PortMode::from_str(s).ok()),
+            automute,
         }
     }
 }
@@ -195,27 +204,16 @@ pub(super) fn py_signal_to_signal(
         awg_key: AwgKey(signal_py.awg_key as u64),
         sampling_rate: signal_py.sampling_rate,
         oscillator,
-        device_type: signal_py.device_type,
+        device_uid: builder.id_store.get_or_insert(&signal_py.device_uid).into(),
         lo_frequency,
         voltage_offset,
         amplifier_pump,
         kind: signal_py.kind.clone(),
+        channels: signal_py.channels.clone().into(),
+        automute: signal_py.automute,
+        port_mode: signal_py.port_mode.clone(),
     };
     Ok(s)
-}
-
-fn extract_device_kind(device: &str) -> Result<DeviceKind> {
-    let kind = match device {
-        "HDAWG" => DeviceKind::Hdawg,
-        "SHFQA" => DeviceKind::Shfqa,
-        "SHFSG" => DeviceKind::Shfsg,
-        "UHFQA" => DeviceKind::Uhfqa,
-        "PRETTYPRINTERDEVICE" => DeviceKind::PrettyPrinterDevice,
-        _ => {
-            return Err(Error::new(format!("Unknown device type: {device}")));
-        }
-    };
-    Ok(kind)
 }
 
 fn extract_value_or_parameter<'py, T: FromPyObjectOwned<'py, Error = PyErr>>(

@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING
 from jsonschema import ValidationError
 
 from laboneq._utils import cached_method
-from laboneq.compiler.experiment_access import json_dumper, validators
 from laboneq.compiler.experiment_access.experiment_info_loader import (
     ExperimentInfoLoader,
 )
@@ -60,8 +59,6 @@ class ExperimentDAO:
         self._data = self._loader.data()
         self._acquisition_type: AcquisitionType = self._loader.acquisition_type
 
-        self.validate_experiment()
-
     def to_experiment_info(self):
         return ExperimentInfo(
             uid=self._uid,
@@ -73,7 +70,7 @@ class ExperimentDAO:
             global_leader_device=self._data.devices[self.global_leader_device()]
             if self.global_leader_device() is not None
             else None,
-            pulse_defs=list(self._data.pulses.values()),
+            pulse_defs=[],
         )
 
     def __eq__(self, other):
@@ -110,10 +107,6 @@ class ExperimentDAO:
                 _logger.warning("validation error: %s", line)
         loader.load(experiment)
         return loader
-
-    @staticmethod
-    def dump(experiment_dao: "ExperimentDAO"):
-        return json_dumper.dump(experiment_dao)
 
     @property
     def acquisition_type(self) -> AcquisitionType:
@@ -316,19 +309,12 @@ class ExperimentDAO:
     def section_parameters(self, section_id) -> list[ParameterInfo]:
         return self._data.section_parameters.get(section_id, [])
 
-    def validate_experiment(self):
-        validators.shfqa_unique_measure_pulse(self)
-        validators.check_triggers_and_markers(self)
-        validators.missing_sweep_parameter_for_play(self)
-        validators.check_ppc_sweeper(self)
-        validators.check_lo_frequency(self)
-        validators.freq_sweep_on_acquire_line_requires_spectroscopy_mode(self)
-        validators.check_phase_on_rf_signal_support(self)
-        validators.check_phase_increments_support(self)
-        validators.check_acquire_only_on_acquire_line(self)
-        validators.check_no_play_on_acquire_line(self)
-        validators.check_arbitrary_marker_is_valid(self)
-        validators.check_no_sweeping_acquire_pulses(self)
+    def parameter_map(self) -> dict[str, ParameterInfo]:
+        return {
+            param.uid: param
+            for params in self._data.section_parameters.values()
+            for param in params
+        }
 
     def acquisition_signal(self, handle: str) -> str | None:
         return self._data.handle_acquires[handle]

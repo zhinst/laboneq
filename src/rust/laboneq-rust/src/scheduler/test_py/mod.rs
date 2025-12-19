@@ -9,6 +9,7 @@ use std::ffi::CStr;
 
 use crate::scheduler::create_py_module;
 mod test_derived_parameters;
+mod test_experiment_signals;
 mod test_pulse_parameters;
 
 #[macro_export]

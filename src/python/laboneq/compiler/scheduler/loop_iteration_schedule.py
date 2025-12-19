@@ -69,10 +69,6 @@ class LoopIterationPreambleSchedule(IntervalSchedule):
 class LoopIterationSchedule(SectionSchedule):
     """Schedule of a single iteration of a loop (sweep or average)"""
 
-    iteration: int
-    num_repeats: int
-    prng_sample: str | None
-
     def __attrs_post_init__(self):
         # We always "steal" the data from a SectionSchedule which has already done
         # all the hard work in its own __attrs_post_init__().
@@ -82,14 +78,8 @@ class LoopIterationSchedule(SectionSchedule):
     def from_section_schedule(
         cls,
         schedule: SectionSchedule,
-        iteration,
-        num_repeats,
-        prng_sample,
     ):
         """Down-cast from SectionSchedule."""
         return cls(
             **asdict(schedule, recurse=False),
-            iteration=iteration,
-            num_repeats=num_repeats,
-            prng_sample=prng_sample,
         )

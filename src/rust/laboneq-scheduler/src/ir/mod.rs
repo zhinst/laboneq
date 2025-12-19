@@ -8,11 +8,13 @@ use std::collections::{HashMap, HashSet};
 use laboneq_units::tinysample::TinySamples;
 
 use crate::experiment::types::{
-    DeviceUid, HandleUid, ParameterUid, PulseParameterUid, PulseParameterValue, PulseUid,
-    SectionUid, SignalUid, ValueOrParameter,
+    AveragingMode, ComplexOrFloat, DeviceUid, HandleUid, Marker, ParameterUid, PrngSampleUid,
+    PulseParameterUid, PulseParameterValue, PulseUid, SectionUid, SignalUid, ValueOrParameter,
 };
 // Re-export for convenience
 pub use crate::experiment::types::MatchTarget;
+
+pub(crate) mod builders;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrKind {
@@ -27,6 +29,7 @@ pub enum IrKind {
         signal: SignalUid,
     },
     PlayPulse(PlayPulse),
+    ChangeOscillatorPhase(ChangeOscillatorPhase),
     Acquire(Acquire),
     Section(Section),
     SetOscillatorFrequency(SetOscillatorFrequency),
@@ -43,8 +46,6 @@ pub enum IrKind {
     ClearPrecompensation {
         signal: SignalUid,
     },
-    // Placeholder for unimplemented variants
-    NotYetImplemented,
 }
 
 pub struct SectionInfo<'a> {
@@ -72,7 +73,7 @@ impl IrKind {
             IrKind::PpcStep(_) => None,
             IrKind::Delay { .. } => None,
             IrKind::ClearPrecompensation { .. } => None,
-            IrKind::NotYetImplemented => None,
+            IrKind::ChangeOscillatorPhase(_) => None,
         }
     }
 
@@ -92,13 +93,13 @@ impl IrKind {
             IrKind::PpcStep(obj) => HashSet::from_iter([&obj.signal]),
             IrKind::Delay { signal } => HashSet::from_iter([signal]),
             IrKind::ClearPrecompensation { signal } => HashSet::from_iter([signal]),
+            IrKind::ChangeOscillatorPhase(obj) => HashSet::from_iter([&obj.signal]),
             IrKind::Loop(_)
             | IrKind::LoopIterationPreamble
             | IrKind::LoopIteration
             | IrKind::Root
             | IrKind::Match(_)
-            | IrKind::Case(_)
-            | IrKind::NotYetImplemented => HashSet::new(),
+            | IrKind::Case(_) => HashSet::new(),
         }
     }
 }
@@ -120,13 +121,40 @@ pub struct InitialVoltageOffset {
     pub value: ValueOrParameter<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoopKind {
+    Averaging { mode: AveragingMode },
+    Sweeping { parameters: Vec<ParameterUid> },
+    Prng { sample_uid: PrngSampleUid },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Loop {
     pub uid: SectionUid,
     pub iterations: usize,
-    /// Sweep parameters of this loop
-    /// All parameters need to be of equal length
-    pub parameters: Vec<ParameterUid>,
+    pub kind: LoopKind,
+}
+
+impl Loop {
+    /// Whether or not the loop is compressed.
+    ///
+    /// A loop is considered compressed if it has no sweep parameters
+    /// and more than one iteration.
+    pub fn compressed(&self) -> bool {
+        match &self.kind {
+            LoopKind::Averaging { .. } => self.iterations > 1,
+            LoopKind::Prng { .. } => self.iterations > 1,
+            LoopKind::Sweeping { parameters } => parameters.is_empty() && self.iterations > 1,
+        }
+    }
+
+    pub fn parameters(&self) -> &[ParameterUid] {
+        static EMPTY_VEC: &[ParameterUid] = &[];
+        match &self.kind {
+            LoopKind::Sweeping { parameters } => parameters,
+            _ => EMPTY_VEC,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -137,6 +165,21 @@ pub struct SetOscillatorFrequency {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayPulse {
     pub signal: SignalUid,
+    pub pulse: PulseUid,
+    pub amplitude: ValueOrParameter<ComplexOrFloat>,
+    pub phase: Option<ValueOrParameter<f64>>,
+    pub increment_oscillator_phase: Option<ValueOrParameter<f64>>,
+    pub set_oscillator_phase: Option<ValueOrParameter<f64>>,
+    pub parameters: HashMap<PulseParameterUid, PulseParameterValue>,
+    pub pulse_parameters: HashMap<PulseParameterUid, PulseParameterValue>,
+    pub markers: Vec<Marker>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChangeOscillatorPhase {
+    pub signal: SignalUid,
+    pub increment: Option<ValueOrParameter<f64>>,
+    pub set: Option<ValueOrParameter<f64>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -149,16 +192,23 @@ pub struct Acquire {
     pub pulse_parameters: Vec<HashMap<PulseParameterUid, PulseParameterValue>>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Trigger {
     pub signal: SignalUid,
     pub state: u8,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrngSetup {
+    pub range: u32,
+    pub seed: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Section {
     pub uid: SectionUid,
     pub triggers: Vec<Trigger>,
+    pub prng_setup: Option<PrngSetup>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

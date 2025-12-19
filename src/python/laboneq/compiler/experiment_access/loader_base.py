@@ -174,6 +174,7 @@ class LoaderBase:
             device_type=DeviceInfoType(device_type),
             reference_clock_source=_ref_clk_from_str(reference_clock_source),
             is_qc=is_qc,
+            physical_device_uid=len(self._devices),
         )
 
     def add_oscillator(self, oscillator_id: str, frequency, is_hardware):
@@ -201,7 +202,7 @@ class LoaderBase:
         lo_frequency: float | ParameterInfo | None,
         signal_range: SignalRange | None,
         port_delay: float | ParameterInfo | None,
-        delay_signal: float | ParameterInfo | None,
+        delay_signal: float | None,
         port_mode: PortMode | None,
         threshold: float | list[float] | None,
         amplitude: float | ParameterInfo | None,

@@ -76,10 +76,6 @@ class IntervalSchedule:
     #: The absolute start time (since trigger) of the interval in tiny samples.
     absolute_start: Deferred[int] = None
 
-    #: Whether the schedule can be cached, for example, if no match statements are used
-    #: in the section which may lead to timing differences.
-    cacheable: bool = True
-
     def __attrs_post_init__(self):
         # Avoid circular imports
         from laboneq.compiler.scheduler.acquire_group_schedule import (
@@ -105,8 +101,6 @@ class IntervalSchedule:
                 child, AcquireGroupSchedule
             ):
                 self.grid = lcm(self.grid, self.sequencer_grid)
-            if not child.cacheable:
-                self.cacheable = False
 
     def calculate_timing(
         self, schedule_data: ScheduleData, suggested_start: int, start_may_change: bool

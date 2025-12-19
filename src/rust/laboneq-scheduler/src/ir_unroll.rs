@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use crate::error::{Error, Result};
 use crate::experiment::sweep_parameter::SweepParameter;
 use crate::experiment::types::{ParameterUid, SectionUid};
-use crate::ir::{IrKind, MatchTarget, Section};
+use crate::ir::builders::SectionBuilder;
+use crate::ir::{IrKind, MatchTarget};
 use crate::parameter_resolver::ParameterResolver;
 use crate::{ParameterStore, ScheduledNode};
 
@@ -28,11 +29,12 @@ pub(crate) fn unroll_loops(
 fn unroll_loops_impl(node: &mut ScheduledNode, resolver: &ParameterResolver) -> Result<()> {
     match &node.kind {
         IrKind::Loop(obj) => {
-            let mut resolver = resolver.child_scope(&obj.parameters)?;
-            if obj.parameters.is_empty() || obj.iterations == node.children.len() {
+            let parameters = &obj.parameters();
+            let mut resolver = resolver.child_scope(parameters)?;
+            if parameters.is_empty() || obj.iterations == node.children.len() {
                 // Loop is already unrolled
                 for (iteration, child) in node.children.iter_mut().enumerate() {
-                    for param in obj.parameters.iter() {
+                    for param in parameters.iter() {
                         resolver.set_iteration(*param, iteration)?;
                     }
                     unroll_loops_impl(child.node.make_mut(), &resolver)?;
@@ -47,7 +49,7 @@ fn unroll_loops_impl(node: &mut ScheduledNode, resolver: &ParameterResolver) -> 
             let prototype = node.children.pop().unwrap();
             node.children = Vec::with_capacity(obj.iterations);
             for iteration in 0..obj.iterations {
-                for param in obj.parameters.iter() {
+                for param in parameters.iter() {
                     resolver.set_iteration(*param, iteration)?;
                 }
                 let mut proto = prototype.clone();
@@ -89,10 +91,7 @@ fn unroll_loops_impl(node: &mut ScheduledNode, resolver: &ParameterResolver) -> 
 }
 
 fn create_section_kind(uid: SectionUid) -> IrKind {
-    IrKind::Section(Section {
-        uid,
-        triggers: vec![],
-    })
+    IrKind::Section(SectionBuilder::new(uid).build())
 }
 
 #[cfg(test)]
@@ -102,7 +101,7 @@ mod tests {
     use crate::ParameterStoreBuilder;
     use crate::experiment::sweep_parameter::SweepParameter;
     use crate::experiment::types::{ParameterUid, SectionUid};
-    use crate::ir::{Case, IrKind, Loop, Match};
+    use crate::ir::{Case, IrKind, Loop, LoopKind, Match};
     use crate::scheduled_node::ir_node_structure;
     use laboneq_common::named_id::NamedId;
 
@@ -113,12 +112,14 @@ mod tests {
         let loop_top = Loop {
             uid: SectionUid(NamedId::debug_id(0)),
             iterations: 8,
-            parameters: vec![],
+            kind: LoopKind::Sweeping { parameters: vec![] },
         };
         let loop_to_unroll = Loop {
             uid: SectionUid(NamedId::debug_id(1)),
             iterations: parameter0.len(),
-            parameters: vec![parameter0.uid],
+            kind: LoopKind::Sweeping {
+                parameters: vec![parameter0.uid],
+            },
         };
         let mut root = ir_node_structure!(
             IrKind::Root,
@@ -174,20 +175,27 @@ mod tests {
         let loop_to_unroll = Loop {
             uid: SectionUid(NamedId::debug_id(1)),
             iterations: parameter0.len(),
-            parameters: vec![parameter0.uid],
+            kind: LoopKind::Sweeping {
+                parameters: vec![parameter0.uid],
+            },
         };
+
+        let section_match_uid = SectionUid(NamedId::debug_id(2));
+        let section_case_0_uid = SectionUid(NamedId::debug_id(3));
+        let section_case_1_uid = SectionUid(NamedId::debug_id(4));
+
         let match_ = Match {
-            uid: SectionUid(NamedId::debug_id(2)),
+            uid: section_match_uid,
             target: MatchTarget::SweepParameter(parameter0.uid),
             local: false,
             play_after: vec![],
         };
         let case_0 = Case {
-            uid: SectionUid(NamedId::debug_id(3)),
+            uid: section_case_0_uid,
             state: 0,
         };
         let case_1 = Case {
-            uid: SectionUid(NamedId::debug_id(4)),
+            uid: section_case_1_uid,
             state: 1,
         };
         let mut root = ir_node_structure!(
@@ -217,19 +225,9 @@ mod tests {
         // Expected structure after unrolling:
         // The match should be replaced by sections corresponding to the selected case
         // for each iteration of the loop.
-        let section_match = Section {
-            uid: SectionUid(NamedId::debug_id(2)),
-            triggers: vec![],
-        };
-
-        let section_case_0 = Section {
-            uid: SectionUid(NamedId::debug_id(3)),
-            triggers: vec![],
-        };
-        let section_case_1 = Section {
-            uid: SectionUid(NamedId::debug_id(4)),
-            triggers: vec![],
-        };
+        let section_match_uid = SectionUid(NamedId::debug_id(2));
+        let section_case_0_uid = SectionUid(NamedId::debug_id(3));
+        let section_case_1_uid = SectionUid(NamedId::debug_id(4));
         let root_expected = ir_node_structure!(
             IrKind::Root,
             [(
@@ -241,8 +239,8 @@ mod tests {
                         IrKind::LoopIteration,
                         [(
                             0,
-                            IrKind::Section(section_match.clone()),
-                            [(0, IrKind::Section(section_case_0), [])]
+                            create_section_kind(section_match_uid),
+                            [(0, create_section_kind(section_case_0_uid), [])]
                         )]
                     ),
                     (
@@ -250,8 +248,8 @@ mod tests {
                         IrKind::LoopIteration,
                         [(
                             0,
-                            IrKind::Section(section_match),
-                            [(0, IrKind::Section(section_case_1), [])]
+                            create_section_kind(section_match_uid),
+                            [(0, create_section_kind(section_case_1_uid), [])]
                         )]
                     ),
                 ]

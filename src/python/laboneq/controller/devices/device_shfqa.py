@@ -237,14 +237,12 @@ class DeviceSHFQA(DeviceSHFBase):
         self, recipe_data: RecipeData, nt_step: NtStepKey, with_pipeliner: bool
     ):
         hw_sync = with_pipeliner and (
-            self._has_awg_in_use(recipe_data) or self.options.is_qc
+            self._has_awg_in_use(recipe_data)
+            # TODO(2K): Remove this workaround once SHFQC is correctly modelled in the controller.
+            or self.options.is_qc is True
+            and self._has_awg_in_use(recipe_data, device_uid=self.uid + "_sg")
         )
-        nc = NodeCollector(base=f"/{self.serial}/")
-        if hw_sync and self._emit_trigger:
-            nc.add("system/internaltrigger/synchronization/enable", 1)  # enable
-        if hw_sync and not self._emit_trigger:
-            nc.add("system/synchronization/source", 1)  # external
-        await self.set_async(nc)
+        await self._set_hw_sync(hw_sync=hw_sync, emit_trigger=self._emit_trigger)
 
     async def emit_start_trigger(self, recipe_data: RecipeData):
         if self._emit_trigger:

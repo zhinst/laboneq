@@ -281,6 +281,13 @@ class DeviceHDAWG(DeviceBase):
         self,
         recipe_data: RecipeData,
     ):
+        # Resetting synchronization for all cores to ensue unused cores are
+        # not blocking the start trigger.
+        # TODO(2K): This node can’t be pipelined. Setting it here as a hotfix
+        # for HBAR-2434. Later, load dummy programs on unused cores instead.
+        await self._api.set_parallel(
+            NodeCollector.one(f"/{self.serial}/awgs/*/synchronization/enable", 0)
+        )
         device_recipe_data = recipe_data.device_settings[self.uid]
         if device_recipe_data is None:
             return

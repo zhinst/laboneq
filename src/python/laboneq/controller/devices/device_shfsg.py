@@ -156,7 +156,7 @@ class DeviceSHFSG(DeviceSHFBase):
         return channel < self._outputs
 
     def _is_internal_channel(self, channel: int) -> bool:
-        return self._outputs < channel < self._channels
+        return channel < self._channels
 
     def _validate_range(self, io: IO):
         if io.range is None:
@@ -237,17 +237,12 @@ class DeviceSHFSG(DeviceSHFBase):
     async def setup_one_step_execution(
         self, recipe_data: RecipeData, nt_step: NtStepKey, with_pipeliner: bool
     ):
-        hw_sync = (
-            with_pipeliner
-            and self._has_awg_in_use(recipe_data)
-            and not self.is_secondary
-        )
-        nc = NodeCollector(base=f"/{self.serial}/")
-        if hw_sync and self._emit_trigger:
-            nc.add("system/internaltrigger/synchronization/enable", 1)  # enable
-        if hw_sync and not self._emit_trigger:
-            nc.add("system/synchronization/source", 1)  # external
-        await self.set_async(nc)
+        # SG is secondary means it's a part of QC with QA actively used.
+        # In this case QA side takes care of synchronization settings.
+        # TODO(2K): Cleanup once SHFQC is correctly modelled in the controller.
+        if not self.is_secondary:
+            hw_sync = with_pipeliner and self._has_awg_in_use(recipe_data)
+            await self._set_hw_sync(hw_sync=hw_sync, emit_trigger=self._emit_trigger)
 
     async def start_execution(self, recipe_data: RecipeData):
         await for_each(
@@ -308,7 +303,7 @@ class DeviceSHFSG(DeviceSHFBase):
                 if not self._is_internal_channel(io.channel):
                     raise LabOneQControllerException(
                         f"{self.dev_repr}: Attempt to configure channel {io.channel} on a device "
-                        f"with {self._outputs} channels. Verify your device setup."
+                        f"with {self._channels} channels. Verify your device setup."
                     )
                 continue
             if io.lo_frequency is None:

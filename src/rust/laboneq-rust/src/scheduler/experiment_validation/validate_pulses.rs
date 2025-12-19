@@ -4,54 +4,23 @@
 use core::panic;
 use std::fmt::Display;
 
-use laboneq_scheduler::experiment::ExperimentNode;
-use laboneq_scheduler::experiment::types::{
-    ComplexOrFloat, Operation, ParameterUid, PlayPulse, ValueOrParameter,
-};
+use laboneq_scheduler::experiment::types::{ComplexOrFloat, PlayPulse, ValueOrParameter};
 use numeric_array::NumericArray;
 
 use crate::error::{Error, Result};
-use crate::scheduler::experiment::Experiment;
+use crate::scheduler::experiment_validation::{ExperimentContext, ValidationContext};
 
-/// Validate [Operation::PlayPulse]s in the experiment.
-///
-/// - Ensures that the amplitude of each pulse does not exceed unity when specified as a value or parameter.
-pub(super) fn validate_play_pulse_operations(experiment: &Experiment) -> Result<()> {
-    let mut ctx = Context {
-        experiment,
-        amplitude_check_done: Vec::new(),
-    };
-    for section in &experiment.sections {
-        visit_node(section, &mut ctx)?;
-    }
-    Ok(())
-}
-
-struct Context<'a> {
-    experiment: &'a Experiment,
-    amplitude_check_done: Vec<ParameterUid>,
-}
-
-fn visit_node(node: &ExperimentNode, ctx: &mut Context) -> Result<()> {
-    match &node.kind {
-        Operation::PlayPulse(op) => validate_play_pulse(op, ctx)?,
-        _ => {
-            for child in node.children.iter() {
-                visit_node(child, ctx)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_play_pulse(op: &PlayPulse, ctx: &mut Context) -> Result<()> {
+pub(super) fn validate_play_pulse(
+    op: &PlayPulse,
+    ctx: &ExperimentContext,
+    ctx_validator: &mut ValidationContext,
+) -> Result<()> {
     match &op.amplitude {
         ValueOrParameter::Parameter(param_uid) => {
-            if ctx.amplitude_check_done.contains(param_uid) {
+            if ctx_validator.amplitude_check_done.contains(param_uid) {
                 return Ok(());
             }
             let parameter = ctx
-                .experiment
                 .parameters
                 .get(param_uid)
                 .expect("Expected parameter to exist.");
@@ -63,7 +32,7 @@ fn validate_play_pulse(op: &PlayPulse, ctx: &mut Context) -> Result<()> {
                     Ok(())
                 })
                 .transpose()?;
-            ctx.amplitude_check_done.push(*param_uid);
+            ctx_validator.amplitude_check_done.push(*param_uid);
         }
         ValueOrParameter::Value(amp) => {
             match amp {

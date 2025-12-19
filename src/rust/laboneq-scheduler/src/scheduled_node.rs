@@ -48,7 +48,6 @@ pub struct NodeChild {
 #[cfg(test)]
 /// Helper macro to build scheduled IR trees
 ///
-/// Note: `Node` must be in the scope where the macro is used.
 /// TODO: Add scheduled information support. Currently only offset is supported.
 ///
 /// ```
@@ -91,29 +90,22 @@ mod tests {
 
     #[test]
     fn test_node_structure_macro() {
-        let root = ir_node_structure!(
-            IrKind::NotYetImplemented,
-            [(
-                10,
-                IrKind::NotYetImplemented,
-                [(0, IrKind::NotYetImplemented, []),]
-            )]
-        );
+        let root = ir_node_structure!(IrKind::Root, [(10, IrKind::Root, [(0, IrKind::Root, []),])]);
 
         // Test root
         assert_eq!(root.children.len(), 1);
-        assert_eq!(root.kind, IrKind::NotYetImplemented);
+        assert_eq!(root.kind, IrKind::Root);
 
         // Test children of root
         let node0_children = root.children;
         assert_eq!(node0_children.len(), 1);
         let node1 = &node0_children[0];
-        assert_eq!(node1.node.kind, IrKind::NotYetImplemented);
+        assert_eq!(node1.node.kind, IrKind::Root);
         assert_eq!(node1.offset, tiny_samples(10));
 
         // Test nested child
         let node2 = &node1.node.children[0];
         assert_eq!(node2.offset, tiny_samples(0));
-        assert_eq!(node2.node.kind, IrKind::NotYetImplemented);
+        assert_eq!(node2.node.kind, IrKind::Root);
     }
 }

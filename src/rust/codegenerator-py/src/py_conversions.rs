@@ -557,13 +557,7 @@ fn extract_loop(ob: &Bound<'_, PyAny>, dedup: &mut Deduplicator) -> Result<ir::L
             .as_str(),
     );
     let count = ob.getattr(intern!(py, "iterations"))?.extract::<u64>()?;
-    // NOTE: Currently PRNG information is only available in loop iterations.
-    // This is a workaround to get the PRNG sample from the first iteration.
-    let first_iteration = ob
-        .getattr(intern!(py, "children"))?
-        .get_item(0)
-        .expect("Internal Error: Loop has no children");
-    let prng_sample = first_iteration
+    let prng_sample = ob
         .getattr(intern!(py, "prng_sample"))?
         .extract::<Option<String>>()?;
     let parameters = ob.getattr(intern!(py, "sweep_parameters"))?;

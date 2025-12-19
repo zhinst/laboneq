@@ -186,7 +186,9 @@ class RealtimeCompiler:
                 (
                     device_type,
                     int(
-                        self._sampling_rate_tracker.sampling_rate_for_device(device_id)
+                        self._sampling_rate_tracker.sampling_rate_for_device(
+                            device_id, signal_info.type
+                        )
                     ),
                 )
             )

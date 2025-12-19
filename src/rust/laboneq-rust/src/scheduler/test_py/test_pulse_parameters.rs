@@ -30,7 +30,7 @@ fn test_pulse_parameters_handling() {
         let experiment = run_experiment.call0().unwrap();
 
         // Test Experiment building
-        let experiment = experiment_py_to_experiment(&experiment, vec![]).unwrap();
+        let (experiment, _) = experiment_py_to_experiment(&experiment, vec![], vec![]).unwrap();
         let id_store = experiment.id_store;
         // Test sweep parameter collection
         let parameter = experiment.parameters.iter().next().unwrap().1;
@@ -40,7 +40,7 @@ fn test_pulse_parameters_handling() {
         let mut asserted_sigma = false;
         let mut asserted_beta = false;
 
-        visit_node(&experiment.sections[0], &mut |node: &ExperimentNode| {
+        visit_node(&experiment.root, &mut |node: &ExperimentNode| {
             if let Operation::PlayPulse(play) = &node.kind {
                 for (param_uid, param) in &play.parameters {
                     let param_name = id_store.resolve(*param_uid).unwrap();

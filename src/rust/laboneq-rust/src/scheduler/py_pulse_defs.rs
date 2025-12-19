@@ -49,6 +49,11 @@ pub(super) fn pulse_def_to_py(
             kwargs.set_item("function", py.None())?;
             kwargs.set_item("length", length.value())?;
         }
+        PulseKind::MarkerPulse { length } => {
+            kwargs.set_item("samples", py.None())?;
+            kwargs.set_item("function", "const")?;
+            kwargs.set_item("length", length.value())?;
+        }
     }
     let pulse_def_py = pulse_def_py_cls.call((), Some(&kwargs))?;
     Ok(pulse_def_py.into())

@@ -32,7 +32,9 @@ def _ref_clk_from_ds(
     return None
 
 
-def _split_shfqc(device: Instrument) -> Tuple[DeviceInfo, DeviceInfo]:
+def _split_shfqc(
+    device: Instrument, physical_device_id: int
+) -> Tuple[DeviceInfo, DeviceInfo]:
     dev_type, dev_opts = devices.parse_device_options(device.device_options)
     shfqa = DeviceInfo(
         uid=device.uid,
@@ -41,6 +43,7 @@ def _split_shfqc(device: Instrument) -> Tuple[DeviceInfo, DeviceInfo]:
         dev_opts=dev_opts,
         reference_clock_source=_ref_clk_from_ds(device.reference_clock.source),
         is_qc=True,
+        physical_device_uid=physical_device_id,
     )
     dev_type, dev_opts = devices.parse_device_options(device.device_options)
     shfsg = DeviceInfo(
@@ -50,11 +53,12 @@ def _split_shfqc(device: Instrument) -> Tuple[DeviceInfo, DeviceInfo]:
         dev_opts=dev_opts,
         reference_clock_source=_ref_clk_from_ds(device.reference_clock.source),
         is_qc=True,
+        physical_device_uid=physical_device_id,
     )
     return shfqa, shfsg
 
 
-def _build_non_shfqc(device: Instrument) -> DeviceInfo:
+def _build_non_shfqc(device: Instrument, physical_device_id: int) -> DeviceInfo:
     dev_type, dev_opts = devices.parse_device_options(device.device_options)
     return DeviceInfo(
         uid=device.uid,
@@ -63,6 +67,7 @@ def _build_non_shfqc(device: Instrument) -> DeviceInfo:
         dev_opts=dev_opts,
         reference_clock_source=_ref_clk_from_ds(device.reference_clock.source),
         is_qc=False,
+        physical_device_uid=physical_device_id,
     )
 
 
@@ -101,9 +106,10 @@ class DeviceInfoBuilder:
         for device in self._setup.instruments:
             if device.device_type == DeviceType.UNMANAGED:
                 continue
+            physical_device_id = len(self._device_mapping)
             # Split SHFQC into SHFQA / SHFSG
             if device.device_type == DeviceType.SHFQC:
-                shfqa, shfsg = _split_shfqc(device)
+                shfqa, shfsg = _split_shfqc(device, physical_device_id)
                 # Check whether Physical channel ports in connection belong to SHFSG or SHFQA
                 # to make a LogicalSignal -> SHFQA/SHFSG connection
                 for conn in device.connections:
@@ -123,7 +129,8 @@ class DeviceInfoBuilder:
                 if shfsg in self._device_by_ls.values():
                     self._device_mapping[shfsg.uid] = shfsg
             else:
-                self._device_mapping[device.uid] = _build_non_shfqc(device)
+                device_info = _build_non_shfqc(device, physical_device_id)
+                self._device_mapping[device.uid] = device_info
                 for conn in device.connections:
                     self._device_by_ls[conn.logical_signal] = self._device_mapping[
                         device.uid

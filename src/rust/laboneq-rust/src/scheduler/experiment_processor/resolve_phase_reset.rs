@@ -78,7 +78,7 @@ mod tests {
 
     use super::*;
     use laboneq_common::named_id::NamedId;
-    use laboneq_common::types::{AwgKey, DeviceKind};
+    use laboneq_common::types::AwgKey;
     use laboneq_scheduler::experiment::types::{
         Oscillator, OscillatorKind, Reserve, ResetOscillatorPhase,
     };
@@ -89,7 +89,7 @@ mod tests {
             NamedId::debug_id(uid).into(),
             2e9,
             AwgKey(0),
-            DeviceKind::Hdawg,
+            NamedId::debug_id(0).into(),
             SignalKind::Iq,
         )
         .build()
@@ -162,7 +162,7 @@ mod tests {
             NamedId::debug_id(0).into(),
             2e9,
             AwgKey(0),
-            DeviceKind::Hdawg,
+            NamedId::debug_id(0).into(),
             SignalKind::Rf,
         )
         .oscillator(Oscillator {

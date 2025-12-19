@@ -8,8 +8,10 @@ use pyo3::ffi::c_str;
 use pyo3::prelude::*;
 
 use crate::include_py_file;
+use crate::scheduler::experiment::{DeviceSetup, Experiment};
 use crate::scheduler::experiment_py_to_experiment;
-use crate::scheduler::signal::SignalPy;
+use crate::scheduler::py_device::DevicePy;
+use crate::scheduler::py_signal::SignalPy;
 
 /// Test for derived parameter registration in experiments defined via calibration fields.
 #[test]
@@ -20,19 +22,7 @@ fn test_derived_parameters_calibration() {
         let exp_func = module
             .getattr("create_derived_param_experiment_calibration")
             .unwrap();
-        let experiment_signals = exp_func.call0().unwrap();
-        let _experiment = experiment_signals.get_item(0).unwrap();
-        let signals = experiment_signals.get_item(1).unwrap();
-        let signals = signals
-            .try_iter()
-            .unwrap()
-            .map(|py_signal| {
-                let binding: Bound<'_, PyAny> = py_signal.unwrap().clone();
-                let signal = binding.cast::<SignalPy>().unwrap();
-                signal.clone()
-            })
-            .collect::<Vec<_>>();
-        let experiment = experiment_py_to_experiment(&_experiment, signals).unwrap();
+        let (experiment, _) = parse_experiment_output(exp_func);
         let id_store = &experiment.id_store;
 
         // Test that the derived parameter is registered in the experiment parameters
@@ -54,11 +44,8 @@ fn test_derived_parameters_calibration() {
             None
         }
 
-        let target_sweep = find_sweep(
-            &experiment.sections[0],
-            &id_store.get("sweep").unwrap().into(),
-        )
-        .unwrap();
+        let target_sweep =
+            find_sweep(&experiment.root, &id_store.get("sweep").unwrap().into()).unwrap();
         assert_eq!(target_sweep.parameters.len(), 2); // Both original and derived
         assert!(target_sweep.parameters.contains(&target_param_uid));
     });
@@ -73,19 +60,7 @@ fn test_derived_parameters_operation_field() {
         let exp_func = module
             .getattr("create_derived_param_experiment_operation_field")
             .unwrap();
-        let experiment_signals = exp_func.call0().unwrap();
-        let _experiment = experiment_signals.get_item(0).unwrap();
-        let signals = experiment_signals.get_item(1).unwrap();
-        let signals = signals
-            .try_iter()
-            .unwrap()
-            .map(|py_signal| {
-                let binding: Bound<'_, PyAny> = py_signal.unwrap().clone();
-                let signal = binding.cast::<SignalPy>().unwrap();
-                signal.clone()
-            })
-            .collect::<Vec<_>>();
-        let experiment = experiment_py_to_experiment(&_experiment, signals).unwrap();
+        let (experiment, _) = parse_experiment_output(exp_func);
         let id_store = &experiment.id_store;
         let target_param_uid = ParameterUid(id_store.get("derived_param").unwrap());
         // Test that the derived parameter is registered in the experiment parameters
@@ -106,12 +81,38 @@ fn test_derived_parameters_operation_field() {
             None
         }
 
-        let target_sweep = find_sweep(
-            &experiment.sections[0],
-            &id_store.get("sweep").unwrap().into(),
-        )
-        .unwrap();
+        let target_sweep =
+            find_sweep(&experiment.root, &id_store.get("sweep").unwrap().into()).unwrap();
         assert_eq!(target_sweep.parameters.len(), 2); // Both original and derived
         assert!(target_sweep.parameters.contains(&target_param_uid));
     });
+}
+
+/// Helper function to parse experiment and device setup from a Python function.
+fn parse_experiment_output(exp_func: Bound<'_, PyAny>) -> (Experiment, DeviceSetup) {
+    // Call the function to get experiment, signals, and devices
+    let function_output = exp_func.call0().unwrap();
+
+    let experiment = function_output.get_item(0).unwrap();
+    let signals = function_output.get_item(1).unwrap();
+    let signals = signals
+        .try_iter()
+        .unwrap()
+        .map(|py_signal| {
+            let binding: Bound<'_, PyAny> = py_signal.unwrap().clone();
+            let signal = binding.cast::<SignalPy>().unwrap();
+            signal.clone()
+        })
+        .collect::<Vec<_>>();
+    let devices = function_output.get_item(2).unwrap();
+    let devices = devices
+        .try_iter()
+        .unwrap()
+        .map(|py_device| {
+            let binding: Bound<'_, PyAny> = py_device.unwrap().clone();
+            let signal = binding.cast::<DevicePy>().unwrap();
+            signal.clone()
+        })
+        .collect::<Vec<_>>();
+    experiment_py_to_experiment(&experiment, signals, devices).unwrap()
 }

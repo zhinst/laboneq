@@ -727,7 +727,7 @@ class Compiler:
             device_id = signal_info.device.uid
 
             sampling_rate = self._sampling_rate_tracker.sampling_rate_for_device(
-                device_id
+                device_id, signal_info.type
             )
             start_delay = get_lead_delay(
                 self._settings,
@@ -742,7 +742,7 @@ class Compiler:
                     delay_signal, signal_id, device_type, sampling_rate
                 )
             else:
-                delay_signal = 0
+                delay_signal = 0.0
 
             awg = awgs_by_signal_id[signal_id]
             awg.trigger_mode = TriggerMode.NONE
@@ -802,9 +802,6 @@ class Compiler:
                 mixer_type = None
 
             port_delay = self._experiment_dao.port_delay(signal_id)
-            if isinstance(port_delay, str):  # NT sweep param
-                port_delay = math.nan
-
             local_oscillator_frequency = self._experiment_dao.lo_frequency(signal_id)
 
             if signal_type != "integration":
@@ -822,7 +819,7 @@ class Compiler:
                 channel_to_port={
                     int(c): p for c, p in signal_info.channel_to_port.items()
                 },
-                port_delay=port_delay,
+                port_delay=port_delay or 0.0,
                 mixer_type=mixer_type,
                 hw_oscillator=hw_oscillator,
                 is_qc=device_info.is_qc,

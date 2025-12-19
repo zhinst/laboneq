@@ -13,7 +13,7 @@ use waveform_sampler::PlayHoldPy;
 use waveform_sampler::PlaySamplesPy;
 mod py_conversions;
 mod waveform_sampler;
-use codegenerator::generate_code;
+use codegenerator::{Error, generate_code};
 mod common_types;
 mod pulse_parameters;
 mod result;
@@ -73,16 +73,21 @@ fn generate_code_py(
         py_conversions::extract_feedback_register_layout(feedback_register_layout)?;
     let (ir_root, awgs, pulse_parameters) = transform_ir_and_awg(ir, awgs)?;
     let sampler = WaveformSamplerPy::new(&waveform_sampler, &pulse_parameters);
-    let result = py.detach(|| {
-        generate_code(
-            &ir_root,
-            &awgs,
-            &acquisition_type,
-            &feedback_register_layout,
-            settings,
-            &sampler,
-        )
-    })?;
+    let result = py
+        .detach(|| {
+            generate_code(
+                &ir_root,
+                &awgs,
+                &acquisition_type,
+                &feedback_register_layout,
+                settings,
+                &sampler,
+            )
+        })
+        .map_err(|e| {
+            let Error::Anyhow(e) = e;
+            e
+        })?;
     Python::attach(|py| {
         let result = SeqCGenOutputPy::new(py, result);
         Ok(result)

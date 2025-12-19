@@ -1,33 +1,70 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::str::FromStr;
 
+use crate::error::Error;
 use crate::scheduler::NamedIdStore;
 use crate::scheduler::pulse::PulseDef;
 use crate::scheduler::py_object_interner::PyObjectInterner;
-use laboneq_common::device_traits::DeviceTraits;
-use laboneq_common::types::{AwgKey, DeviceKind};
-use laboneq_scheduler::SignalInfo;
+use laboneq_common::types::{AwgKey, DeviceKind, PhysicalDeviceUid};
 use laboneq_scheduler::experiment::ExperimentNode;
 use laboneq_scheduler::experiment::sweep_parameter::SweepParameter;
 use laboneq_scheduler::experiment::types::{
-    AmplifierPump, ExternalParameterUid, Oscillator, ParameterUid, PulseUid, SignalUid,
+    AmplifierPump, DeviceUid, ExternalParameterUid, Oscillator, ParameterUid, PulseUid, SignalUid,
     ValueOrParameter,
 };
+use smallvec::SmallVec;
 
 pub(crate) struct Experiment {
-    pub sections: Vec<ExperimentNode>,
+    /// Root node of the experiment tree
+    pub root: ExperimentNode,
     pub id_store: NamedIdStore,
     pub parameters: HashMap<ParameterUid, SweepParameter>,
     pub pulses: HashMap<PulseUid, PulseDef>,
-    #[allow(dead_code)]
-    // Signal defined in the experiment
-    pub experiment_signals: HashSet<SignalUid>, // Not yet used except in tests
-    // Resolved signals with full info.
-    pub signals: HashMap<SignalUid, Signal>,
     pub py_object_store: PyObjectInterner<ExternalParameterUid>,
+}
+
+/// Device and signal setup used in the experiment.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub(crate) struct DeviceSetup {
+    pub signals: HashMap<SignalUid, Signal>,
+    pub devices: HashMap<DeviceUid, Device>,
+}
+
+impl DeviceSetup {
+    pub(crate) fn new(
+        signals: HashMap<SignalUid, Signal>,
+        devices: HashMap<DeviceUid, Device>,
+    ) -> Result<Self, Error> {
+        // Validate all signals reference existing devices
+        for signal in signals.values() {
+            if !devices.contains_key(&signal.device_uid) {
+                return Err(Error::new(format!(
+                    "Signal '{}' 'references unknown device",
+                    signal.uid.0
+                )));
+            }
+        }
+        Ok(Self { signals, devices })
+    }
+}
+
+/// Device used in the experiment.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Device {
+    pub uid: DeviceUid,
+    /// Physical device this device maps to
+    /// This UID is used to group virtual devices that share the same
+    /// physical hardware, enabling proper device detection.
+    pub physical_device_uid: PhysicalDeviceUid,
+    /// Whether the device is part of a SHFQC
+    /// This is needed as SHFQC device is split internally into virtual
+    /// SHFQA + SHFSG devices.
+    pub is_shfqc: bool,
+    pub kind: DeviceKind,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,58 +72,15 @@ pub(crate) struct Signal {
     pub uid: SignalUid,
     pub sampling_rate: f64,
     pub awg_key: AwgKey,
-    pub device_type: DeviceKind,
+    pub device_uid: DeviceUid,
     pub oscillator: Option<Oscillator>,
     pub lo_frequency: Option<ValueOrParameter<f64>>,
     pub voltage_offset: Option<ValueOrParameter<f64>>,
     pub amplifier_pump: Option<AmplifierPump>,
     pub kind: SignalKind,
-}
-
-impl SignalInfo for Signal {
-    fn uid(&self) -> SignalUid {
-        self.uid
-    }
-
-    fn awg_key(&self) -> AwgKey {
-        self.awg_key
-    }
-
-    fn sampling_rate(&self) -> f64 {
-        self.sampling_rate
-    }
-
-    fn device_traits(&self) -> &'static DeviceTraits {
-        DeviceTraits::from_device_kind(&self.device_type)
-    }
-
-    fn oscillator(&self) -> Option<&Oscillator> {
-        self.oscillator.as_ref()
-    }
-
-    fn lo_frequency(&self) -> Option<&ValueOrParameter<f64>> {
-        self.lo_frequency.as_ref()
-    }
-
-    fn supports_initial_local_oscillator_frequency(&self) -> bool {
-        DeviceTraits::from_device_kind(&self.device_type).device_class != 0
-    }
-
-    fn voltage_offset(&self) -> Option<&ValueOrParameter<f64>> {
-        self.voltage_offset.as_ref()
-    }
-
-    fn supports_initial_voltage_offset(&self) -> bool {
-        DeviceTraits::from_device_kind(&self.device_type).device_class != 0
-    }
-
-    fn amplifier_pump(&self) -> Option<&AmplifierPump> {
-        self.amplifier_pump.as_ref()
-    }
-
-    fn supports_multiple_acquisition_lengths(&self) -> bool {
-        matches!(self.device_type, DeviceKind::PrettyPrinterDevice)
-    }
+    pub channels: SmallVec<[u16; 1]>,
+    pub port_mode: Option<PortMode>,
+    pub automute: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -109,13 +103,32 @@ impl FromStr for SignalKind {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PortMode {
+    LF,
+    RF,
+}
+
+impl FromStr for PortMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "lf" => Ok(PortMode::LF),
+            "rf" => Ok(PortMode::RF),
+            _ => Err(format!("Unknown port mode: {}", s)),
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod builders {
     use super::{Signal, SignalKind};
-    use laboneq_common::types::{AwgKey, DeviceKind};
+    use laboneq_common::types::AwgKey;
     use laboneq_scheduler::experiment::types::{
-        AmplifierPump, Oscillator, SignalUid, ValueOrParameter,
+        AmplifierPump, DeviceUid, Oscillator, SignalUid, ValueOrParameter,
     };
+    use smallvec::smallvec;
 
     pub(crate) struct SignalBuilder {
         inner: Signal,
@@ -126,7 +139,7 @@ pub(crate) mod builders {
             uid: SignalUid,
             sampling_rate: f64,
             awg_key: AwgKey,
-            device_type: DeviceKind,
+            device_uid: DeviceUid,
             kind: SignalKind,
         ) -> Self {
             Self {
@@ -134,12 +147,15 @@ pub(crate) mod builders {
                     uid,
                     sampling_rate,
                     awg_key,
-                    device_type,
+                    device_uid,
                     oscillator: None,
                     lo_frequency: None,
                     voltage_offset: None,
                     kind,
                     amplifier_pump: None,
+                    channels: smallvec![],
+                    port_mode: None,
+                    automute: false,
                 },
             }
         }

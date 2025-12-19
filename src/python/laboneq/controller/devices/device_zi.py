@@ -325,8 +325,12 @@ class DeviceBase(DeviceZI):
     def interface(self):
         return self.options.interface.lower()
 
-    def _has_awg_in_use(self, recipe_data: RecipeData):
-        device_recipe_data = recipe_data.device_settings.get(self.uid)
+    def _has_awg_in_use(
+        self, recipe_data: RecipeData, device_uid: str | None = None
+    ) -> bool:
+        if device_uid is None:
+            device_uid = self.uid
+        device_recipe_data = recipe_data.device_settings.get(device_uid)
         if device_recipe_data is None:
             return False
         return len(device_recipe_data.allocated_awgs()) > 0

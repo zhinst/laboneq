@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from laboneq.core.types.enums.mixer_type import MixerType
-from laboneq.data.compilation_job import SignalRange
+from laboneq.data.compilation_job import ParameterInfo, SignalRange
 
 if TYPE_CHECKING:
     from laboneq.compiler.common.awg_info import AWGInfo
@@ -36,13 +36,13 @@ class SignalObj:
     start_delay: float
     delay_signal: float
     signal_type: str  # One of "iq" / "single" / "integration" - see SignalInfoType
-    base_delay_signal: float | None = None
+    base_delay_signal: float = 0.0
     local_oscillator_frequency: float | None = None
     channels: list[int] = field(default_factory=list)
     channel_to_port: dict[int, str] = field(default_factory=dict)
     awg: AWGInfo = None
-    port_delay: float = 0
-    base_port_delay: float | None = None
+    port_delay: float | ParameterInfo = 0.0
+    base_port_delay: float = 0.0
     mixer_type: MixerType | None = None
     hw_oscillator: str | None = None
     is_qc: bool | None = None

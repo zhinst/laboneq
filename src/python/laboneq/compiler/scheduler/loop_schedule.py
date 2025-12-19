@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, List, Optional
 
-from attrs import asdict, define
+from attrs import asdict, define, field
 
 from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.scheduler.loop_iteration_schedule import LoopIterationSchedule
@@ -14,7 +14,6 @@ from laboneq.compiler.scheduler.utils import ceil_to_grid, lcm
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.types.enums import AveragingMode
 from laboneq.core.types.enums.repetition_mode import RepetitionMode
-from laboneq.data.compilation_job import ParameterInfo
 
 if TYPE_CHECKING:
     from laboneq.compiler.scheduler.schedule_data import ScheduleData
@@ -23,11 +22,12 @@ if TYPE_CHECKING:
 @define(kw_only=True, slots=True)
 class LoopSchedule(SectionSchedule):
     compressed: bool
-    sweep_parameters: List[ParameterInfo]
     iterations: int
-    repetition_mode: Optional[RepetitionMode]
-    repetition_time: Optional[int]
-    averaging_mode: AveragingMode | None
+    sweep_parameters: List[str] = field(factory=list)
+    repetition_mode: Optional[RepetitionMode] = None
+    repetition_time: Optional[int] = None
+    averaging_mode: AveragingMode | None = None
+    prng_sample: str | None = None
 
     def _calculate_timing(
         self, schedule_data: ScheduleData, loop_start: int, start_may_change: bool
@@ -114,11 +114,12 @@ class LoopSchedule(SectionSchedule):
         cls,
         schedule: SectionSchedule,
         compressed: bool,
-        sweep_parameters: List[ParameterInfo],
+        sweep_parameters: List[str],
         iterations: int,
         repetition_mode: RepetitionMode | None,
         repetition_time: int | None,
         averaging_mode: AveragingMode | None,
+        prng_sample: str | None,
     ):
         """Down-cast from SectionSchedule."""
         return cls(
@@ -129,4 +130,5 @@ class LoopSchedule(SectionSchedule):
             repetition_mode=repetition_mode,
             repetition_time=repetition_time,
             averaging_mode=averaging_mode,
+            prng_sample=prng_sample,
         )  # type: ignore

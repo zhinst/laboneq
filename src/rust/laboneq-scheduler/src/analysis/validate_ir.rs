@@ -1,54 +1,118 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::ScheduledNode;
 use crate::error::{Error, Result};
-use crate::ir::{IrKind, MatchTarget};
+use crate::experiment::types::SectionAlignment;
+use crate::ir::{IrKind, Match, MatchTarget};
+use crate::{RepetitionMode, ScheduledNode};
 
 /// Validate the IR for correctness.
 ///
 /// * Checks that no acquisitions are present within match statements
 ///   when matching against targets other than sweep parameters.
+///
+/// * Ensures that match statements with handle targets are not nested
+///   within Auto repetition modes or right-aligned sections.
 pub(crate) fn validate_ir(node: &ScheduledNode) -> Result<()> {
-    let mut ctx = ValidationContext::new();
-    validate_ir_impl(node, &mut ctx)?;
+    let ctx = ValidationContext::new();
+    validate_ir_impl(node, &ctx)?;
     Ok(())
 }
 
 struct ValidationContext {
-    contains_acquisitions: bool,
+    repetition_mode: Option<RepetitionMode>,
+    parent_alignment_mode: SectionAlignment,
 }
 
 impl ValidationContext {
     fn new() -> Self {
         Self {
-            contains_acquisitions: false,
+            repetition_mode: None,
+            parent_alignment_mode: SectionAlignment::Left,
+        }
+    }
+
+    fn child_scope(
+        &self,
+        alignment_mode: SectionAlignment,
+        repetition_mode: Option<RepetitionMode>,
+    ) -> Self {
+        Self {
+            repetition_mode: repetition_mode.or(self.repetition_mode),
+            parent_alignment_mode: alignment_mode,
         }
     }
 }
 
-fn validate_ir_impl(node: &ScheduledNode, ctx: &mut ValidationContext) -> Result<()> {
+fn validate_node(node: &ScheduledNode, ctx: &ValidationContext) -> Result<()> {
+    if let IrKind::Match(obj) = &node.kind
+        && matches!(obj.target, MatchTarget::Handle(_))
+    {
+        if ctx.repetition_mode == Some(RepetitionMode::Auto) {
+            let msg = format!(
+                "Match statement '{}' with handle cannot be inside an Auto repetition mode.",
+                obj.uid.0
+            );
+            return Err(Error::new(&msg));
+        }
+        if ctx.parent_alignment_mode == SectionAlignment::Right {
+            let msg = format!(
+                "Match statement '{}' with handle cannot be a subsection of a right-aligned section.",
+                obj.uid.0
+            );
+            return Err(Error::new(&msg));
+        }
+    }
+    Ok(())
+}
+
+fn validate_match_children(
+    node: &ScheduledNode,
+    match_obj: &Match,
+    ctx: &ValidationContext,
+) -> Result<()> {
+    let disallow_acquisitions = !matches!(match_obj.target, MatchTarget::SweepParameter(_));
+
+    for child in &node.children {
+        validate_ir_impl(
+            &child.node,
+            &ctx.child_scope(node.schedule.alignment_mode, node.schedule.repetition_mode),
+        )?;
+        if disallow_acquisitions && subtree_has_acquisitions(&child.node) {
+            return Err(Error::new(format!(
+                "Acquisitions are not allowed within match statements when matching against {}",
+                match_obj.target.description()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn subtree_has_acquisitions(node: &ScheduledNode) -> bool {
+    match &node.kind {
+        IrKind::Acquire(_) => true,
+        _ => node
+            .children
+            .iter()
+            .any(|child| subtree_has_acquisitions(&child.node)),
+    }
+}
+
+fn validate_ir_impl(node: &ScheduledNode, ctx: &ValidationContext) -> Result<()> {
+    validate_node(node, ctx)?;
+
     match &node.kind {
         IrKind::Match(obj) => {
-            let mut context = ValidationContext::new();
-            let disallow_acquisitions = !matches!(obj.target, MatchTarget::SweepParameter(_));
-            for child in node.children.iter() {
-                validate_ir_impl(&child.node, &mut context)?;
-                if disallow_acquisitions && context.contains_acquisitions {
-                    let msg = format!(
-                        "Acquisitions are not allowed within match statements when matching against {}",
-                        obj.target.description()
-                    );
-                    return Err(Error::new(&msg));
-                }
-            }
-        }
-        IrKind::Acquire(_) => {
-            ctx.contains_acquisitions = true;
+            validate_match_children(node, obj, ctx)?;
         }
         _ => {
+            if node.children.is_empty() {
+                return Ok(());
+            }
+            let child_ctx =
+                ctx.child_scope(node.schedule.alignment_mode, node.schedule.repetition_mode);
             for child in node.children.iter() {
-                validate_ir_impl(&child.node, ctx)?;
+                validate_ir_impl(&child.node, &child_ctx)?;
             }
         }
     }

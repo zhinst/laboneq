@@ -16,3 +16,4 @@ class LoopIR(SectionIR):
     iterations: int
     averaging_mode: AveragingMode | None
     sweep_parameters: list[ParameterInfo] = field(factory=list)
+    prng_sample: str | None = None

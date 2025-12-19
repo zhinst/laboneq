@@ -617,7 +617,7 @@ def calc_outputs(
                 warnings = verify_precompensation_parameters(
                     precompensation,
                     sampling_rate_tracker.sampling_rate_for_device(
-                        signal_info.device.uid
+                        signal_info.device.uid, signal_info.type
                     ),
                     signal_id,
                 )

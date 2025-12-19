@@ -29,9 +29,10 @@ pub(crate) fn resolve_parameters(
 fn resolve_parameters_impl(ir: &mut ScheduledNode, resolver: &ParameterResolver) -> Result<()> {
     match &mut ir.kind {
         IrKind::Loop(obj) => {
-            let mut resolver = resolver.child_scope(obj.parameters.as_slice())?;
+            let parameters = &obj.parameters();
+            let mut resolver = resolver.child_scope(parameters)?;
             // Check whether the loops are fully unrolled. Currently partial unrolling is not supported.
-            if !obj.parameters.is_empty() && ir.children.len() != obj.iterations {
+            if !parameters.is_empty() && ir.children.len() != obj.iterations {
                 return Err(Error::new(format!(
                     "Expected loop to be unrolled. Mismatch between loop iterations ({}) and number of children ({})",
                     obj.iterations,
@@ -39,7 +40,7 @@ fn resolve_parameters_impl(ir: &mut ScheduledNode, resolver: &ParameterResolver)
                 )));
             }
             for (iteration, child) in ir.children.iter_mut().enumerate() {
-                for param in obj.parameters.iter() {
+                for param in parameters.iter() {
                     resolver.set_iteration(*param, iteration)?;
                 }
                 resolve_parameters_impl(child.node.make_mut(), &resolver)?;
@@ -174,6 +175,116 @@ fn resolve_parameter_fields(node: &mut ScheduledNode, resolver: &ParameterResolv
                 let length_tinysample = seconds_to_tinysamples(length_step_seconds.into());
                 node.schedule.length =
                     round_to_grid(length_tinysample.value(), node.schedule.grid.value()).into();
+            }
+        }
+        IrKind::PlayPulse(obj) => {
+            if let ValueOrParameter::Parameter(param_uid) = &obj.amplitude {
+                obj.amplitude = ValueOrParameter::ResolvedParameter {
+                    value: resolver
+                        .get_value(param_uid)?
+                        .try_into()
+                        .map_err(Error::new)
+                        .with_context(|| "Pulse amplitude must be complex or float value.")?,
+                    uid: *param_uid,
+                };
+            }
+            if let Some(phase) = obj.phase.as_mut()
+                && let ValueOrParameter::Parameter(param_uid) = phase
+            {
+                *phase = ValueOrParameter::Value(
+                    resolver
+                        .get_value(param_uid)?
+                        .try_into()
+                        .map_err(Error::new)
+                        .with_context(|| "Pulse phase must be a numeric value.")?,
+                );
+            }
+            if let Some(increment) = obj.increment_oscillator_phase.as_mut()
+                && let ValueOrParameter::Parameter(param_uid) = increment
+            {
+                *increment = ValueOrParameter::ResolvedParameter {
+                    value: resolver
+                        .get_value(param_uid)?
+                        .try_into()
+                        .map_err(Error::new)
+                        .with_context(
+                            || "Pulse increment oscillator phase must be a numeric value.",
+                        )?,
+                    uid: *param_uid,
+                };
+            }
+            if let Some(set_phase) = obj.set_oscillator_phase.as_mut()
+                && let ValueOrParameter::Parameter(param_uid) = set_phase
+            {
+                *set_phase = ValueOrParameter::Value(
+                    resolver
+                        .get_value(param_uid)?
+                        .try_into()
+                        .map_err(Error::new)
+                        .with_context(|| "Pulse set oscillator phase must be a numeric value.")?,
+                );
+            }
+            for value in obj.pulse_parameters.values_mut() {
+                if let PulseParameterValue::ValueOrParameter(ValueOrParameter::Parameter(
+                    param_uid,
+                )) = value
+                {
+                    *value = PulseParameterValue::ValueOrParameter(ValueOrParameter::Value(
+                        resolver.get_value(param_uid)?,
+                    ));
+                }
+            }
+            for value in obj.parameters.values_mut() {
+                if let PulseParameterValue::ValueOrParameter(ValueOrParameter::Parameter(
+                    param_uid,
+                )) = value
+                {
+                    *value = PulseParameterValue::ValueOrParameter(ValueOrParameter::Value(
+                        resolver.get_value(param_uid)?,
+                    ));
+                }
+            }
+            if let Some(param_uid) = node.schedule.length_param {
+                let length_step_seconds: f64 = resolver
+                    .get_value(&param_uid)?
+                    .try_into()
+                    .map_err(Error::new)
+                    .with_context(
+                        || "Play pulse length must be a real number (integer or float).",
+                    )?;
+                let length_tinysample = seconds_to_tinysamples(length_step_seconds.into());
+                node.schedule.length =
+                    round_to_grid(length_tinysample.value(), node.schedule.grid.value()).into();
+            }
+        }
+        IrKind::ChangeOscillatorPhase(obj) => {
+            if let Some(increment) = obj.increment.as_mut()
+                && let ValueOrParameter::Parameter(param_uid) = increment
+            {
+                *increment = ValueOrParameter::ResolvedParameter {
+                    value: resolver
+                        .get_value(param_uid)?
+                        .try_into()
+                        .map_err(Error::new)
+                        .with_context(
+                            || "Change oscillator phase increment must be a numeric value.",
+                        )?,
+                    uid: *param_uid,
+                };
+            }
+            if let Some(set_phase) = obj.set.as_mut()
+                && let ValueOrParameter::Parameter(param_uid) = set_phase
+            {
+                *set_phase = ValueOrParameter::ResolvedParameter {
+                    value: resolver
+                        .get_value(param_uid)?
+                        .try_into()
+                        .map_err(Error::new)
+                        .with_context(
+                            || "Change oscillator phase set value must be a numeric value.",
+                        )?,
+                    uid: *param_uid,
+                };
             }
         }
         _ => {}

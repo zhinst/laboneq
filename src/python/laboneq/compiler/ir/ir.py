@@ -12,6 +12,7 @@ from laboneq.data.compilation_job import (
     OscillatorInfo,
     PulseDef,
     SignalInfo,
+    SignalInfoType,
 )
 
 
@@ -30,6 +31,7 @@ class SignalIR:
     uid: str = ""
     device: DeviceIR | None = None
     oscillator: OscillatorInfo | None = None
+    type: SignalInfoType | None = None
 
     @classmethod
     def from_signal_info(cls, signal_info: SignalInfo):
@@ -37,6 +39,7 @@ class SignalIR:
             uid=signal_info.uid,
             device=DeviceIR.from_device_info(signal_info.device),
             oscillator=signal_info.oscillator,
+            type=signal_info.type,
         )
 
 

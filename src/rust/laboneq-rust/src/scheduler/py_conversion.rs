@@ -40,11 +40,13 @@ use pyo3::types::{PyDict, PyList, PyString};
 
 pub(super) struct ExperimentBuilder<'py> {
     // List of root sections
-    pub sections: Vec<ExperimentNode>,
+    pub root: ExperimentNode,
     pub id_store: NamedIdStore,
     pub parameters: HashMap<ParameterUid, SweepParameter>,
     pub pulses: HashMap<PulseUid, PulseDef>,
-    pub signals: HashSet<SignalUid>,
+    /// Signals that are defined in the experiment and can be referenced.
+    /// Signals used in operations must be part of this set.
+    pub available_signals: HashSet<SignalUid>,
     pub py_object_store: PyObjectInterner<ExternalParameterUid>,
     // Parameters that drive other parameters
     pub driving_parameters: HashMap<ParameterUid, HashSet<ParameterUid>>,
@@ -54,11 +56,11 @@ pub(super) struct ExperimentBuilder<'py> {
 impl<'py> ExperimentBuilder<'py> {
     pub(super) fn new(py: Python<'py>) -> Self {
         Self {
-            sections: Vec::new(),
+            root: ExperimentNode::new(Operation::Root),
             id_store: NamedIdStore::new(),
             parameters: HashMap::new(),
             pulses: HashMap::new(),
-            signals: HashSet::new(),
+            available_signals: HashSet::new(),
             py_object_store: PyObjectInterner::new(),
             dsl_types: DslTypes::new(py).unwrap(),
             driving_parameters: HashMap::new(),
@@ -69,8 +71,8 @@ impl<'py> ExperimentBuilder<'py> {
         self.id_store.get_or_insert(uid)
     }
 
-    fn add_root_section(&mut self, root: ExperimentNode) {
-        self.sections.push(root);
+    fn add_section(&mut self, root: ExperimentNode) {
+        self.root.children.push(root.into());
     }
 
     /// Register a signal that is available for use.
@@ -78,7 +80,27 @@ impl<'py> ExperimentBuilder<'py> {
     /// To match the current behavior, we register experiment signals
     /// even if they are not used.
     fn register_experiment_signal(&mut self, uid: SignalUid) {
-        self.signals.insert(uid);
+        self.available_signals.insert(uid);
+    }
+
+    /// Register a signal.
+    ///
+    /// Returns an error if the signal is not listed as experiment signal.
+    fn register_signal(&mut self, uid: &str) -> Result<SignalUid> {
+        let signal_uid = self.register_uid(uid).into();
+        if !self.available_signals.contains(&signal_uid) {
+            let msg = format!(
+                "Signal '{}' is not available in the experiment definition. Available signals are: '{}'.",
+                uid,
+                self.available_signals
+                    .iter()
+                    .map(|s| self.id_store.resolve(*s).unwrap())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            return Err(Error::new(msg));
+        }
+        Ok(signal_uid)
     }
 
     fn register_pulse(&mut self, pulse: PulseDef) -> PulseUid {
@@ -415,9 +437,7 @@ fn extract_sweep(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Res
         .get(parameters.iter().next().unwrap())
         .expect("Internal error: Missing sweep parameter")
         .len();
-    let chunk_count = obj
-        .getattr(intern!(obj.py(), "chunk_count"))?
-        .extract::<usize>()?;
+    let chunk_count = extract_chunk_count(&obj.getattr(intern!(obj.py(), "chunk_count"))?)?;
     let auto_chunking = obj
         .getattr(intern!(obj.py(), "auto_chunking"))?
         .extract::<bool>()?;
@@ -440,9 +460,21 @@ fn extract_sweep(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Res
     Ok(obj)
 }
 
+fn extract_chunk_count(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
+    obj.extract::<usize>().map_err(|e| {
+        if let Ok(v) = obj.extract::<i64>()
+            && v < 1
+        {
+            let msg = format!("Chunk count must be >= 1, but {} was provided.", v);
+            return Error::new(&msg).into();
+        }
+        e
+    })
+}
+
 fn extract_delay(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Result<Delay> {
     let py = obj.py();
-    let signal_uid = builder.register_uid(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?);
+    let signal = builder.register_signal(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?)?;
     let time = extract_value_or_parameter::<f64>(&obj.getattr(intern!(py, "time"))?, builder)?
         .ok_or_else(|| Error::new("Delay time must be specified"))?;
     let precompensation_clear = obj
@@ -450,7 +482,7 @@ fn extract_delay(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Res
         .extract::<Option<bool>>()?
         .unwrap_or(false);
     let out = Delay {
-        signal: signal_uid.into(),
+        signal,
         time: match time {
             ValueOrParameter::Value(v) => ValueOrParameter::Value(v.into()),
             ValueOrParameter::Parameter(p) => ValueOrParameter::Parameter(p),
@@ -463,10 +495,8 @@ fn extract_delay(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Res
 
 fn extract_reserve(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> PyResult<Reserve> {
     let py = obj.py();
-    let signal_uid = builder.register_uid(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?);
-    let out = Reserve {
-        signal: SignalUid(signal_uid),
-    };
+    let signal = builder.register_signal(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?)?;
+    let out = Reserve { signal };
     Ok(out)
 }
 
@@ -594,9 +624,7 @@ fn extract_acquire(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> R
         parameters.resize_with(kernels.len(), HashMap::new);
     }
     let out = Acquire {
-        signal: SignalUid(
-            builder.register_uid(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?),
-        ),
+        signal: builder.register_signal(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?)?,
         handle: HandleUid(
             builder.register_uid(obj.getattr(intern!(py, "handle"))?.extract::<&str>()?),
         ),
@@ -695,15 +723,17 @@ fn extract_play_pulse(
         extract_pulse_parameters(&obj.getattr(intern!(py, "pulse_parameters"))?, builder)?;
     let markers = extract_marker_dict(&obj.getattr(intern!(py, "marker"))?, builder)?;
     let pulse = PlayPulse {
-        signal: SignalUid(
-            builder.register_uid(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?),
-        ),
+        signal: builder.register_signal(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?)?,
         pulse: pulse.as_ref().map(|x| x.0),
         amplitude: amplitude.unwrap_or(ValueOrParameter::Value(ComplexOrFloat::Float(1.0))),
         phase,
         increment_oscillator_phase,
         set_oscillator_phase,
-        length,
+        length: length.map(|length| match length {
+            ValueOrParameter::Value(v) => ValueOrParameter::Value(v.into()),
+            ValueOrParameter::Parameter(p) => ValueOrParameter::Parameter(p),
+            _ => unreachable!(),
+        }),
         parameters,
         pulse_parameters: pulse.map(|x| x.1).unwrap_or_default(),
         markers,
@@ -819,7 +849,7 @@ fn extract_section(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> R
         let trigger_signal = signal_uid.extract::<&str>()?;
         let trigger_state = trigger.get_item("state")?.extract::<u8>()?;
         let trigger = Trigger {
-            signal: builder.register_uid(trigger_signal).into(),
+            signal: builder.register_signal(trigger_signal)?,
             state: trigger_state,
         };
         triggers.push(trigger)
@@ -858,6 +888,9 @@ fn extract_averaging_mode(obj: &Bound<'_, PyAny>) -> Result<AveragingMode> {
     Ok(out)
 }
 
+/// Convert `RepetitionMode` enum.
+///
+/// Defaults to `FASTEST` if not specified.
 fn extract_repetition_mode(
     obj: &Bound<'_, PyAny>,
     repetition_time: Option<f64>,
@@ -865,14 +898,7 @@ fn extract_repetition_mode(
     if obj.is_none() {
         return Ok(RepetitionMode::Fastest); // Default repetition mode
     }
-    let py = obj.py();
-    let out = match obj
-        .getattr(intern!(py, "name"))?
-        .cast_into::<PyString>()
-        .map_err(PyErr::from)?
-        .to_cow()?
-        .as_ref()
-    {
+    let out = match obj.getattr(intern!(obj.py(), "name"))?.extract::<&str>()? {
         "FASTEST" => RepetitionMode::Fastest,
         "CONSTANT" => {
             if repetition_time.is_none() {
@@ -881,7 +907,7 @@ fn extract_repetition_mode(
                 ));
             }
             RepetitionMode::Constant {
-                time: repetition_time.unwrap(),
+                time: seconds(repetition_time.unwrap()),
             }
         }
         "AUTO" => RepetitionMode::Auto,
@@ -972,11 +998,18 @@ fn extract_prng_loop(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) ->
     let py = obj.py();
     let uid = builder.register_uid(obj.getattr(intern!(py, "uid"))?.extract::<&str>()?);
     let prng_sample_py = obj.getattr(intern!(py, "prng_sample"))?;
+    let sample_uid = builder.register_uid(
+        prng_sample_py
+            .getattr(intern!(py, "uid"))?
+            .extract::<&str>()?,
+    );
+    let count = prng_sample_py
+        .getattr(intern!(py, "count"))?
+        .extract::<u32>()?;
     let obj = PrngLoop {
-        uid: SectionUid(uid),
-        count: prng_sample_py
-            .getattr(intern!(py, "count"))?
-            .extract::<u32>()?,
+        uid: uid.into(),
+        count,
+        sample_uid: sample_uid.into(),
     };
     Ok(obj)
 }
@@ -986,10 +1019,11 @@ fn extract_reset_oscillator_phase(
     builder: &mut ExperimentBuilder,
 ) -> Result<ResetOscillatorPhase> {
     let py = obj.py();
-    let signal_uid = obj
-        .getattr(intern!(py, "signal"))?
-        .extract::<Option<String>>()?;
-    let signals = signal_uid.map(|uid| SignalUid(builder.register_uid(&uid)));
+    let py_signal = obj.getattr(intern!(py, "signal"))?;
+    let signal_uid = py_signal.extract::<Option<&str>>()?;
+    let signals = signal_uid
+        .map(|uid| builder.register_signal(uid))
+        .transpose()?;
     let obj = ResetOscillatorPhase {
         signals: signals.into_iter().collect(),
     };
@@ -1121,9 +1155,7 @@ pub(super) fn build_experiment<'py>(
         .try_iter()?
     {
         let root_section = traverse_experiment(&section?, builder)?;
-        let mut root = ExperimentNode::new(Operation::Root);
-        root.children.push(root_section.into());
-        builder.add_root_section(root);
+        builder.add_section(root_section);
     }
     Ok(())
 }

@@ -6,6 +6,8 @@ from typing import Literal
 from numpy.typing import ArrayLike
 
 from laboneq.compiler.scheduler.acquire_group_schedule import AcquireGroupSchedule
+from laboneq.compiler.scheduler.loop_schedule import LoopSchedule
+from laboneq.compiler.scheduler.match_schedule import MatchSchedule
 from laboneq.compiler.scheduler.oscillator_schedule import (
     InitialLocalOscillatorFrequencySchedule,
     InitialOscillatorFrequencySchedule,
@@ -19,6 +21,7 @@ from laboneq.compiler.scheduler.pulse_schedule import (
 )
 from laboneq.compiler.scheduler.section_schedule import SectionSchedule
 from laboneq.compiler.scheduler.voltage_offset import InitialOffsetVoltageSchedule
+from laboneq.core.types.enums.port_mode import PortMode
 from laboneq.data.experiment_description import Experiment
 
 class ExperimentInfo:
@@ -52,13 +55,27 @@ class Signal:
         uid: str,
         sampling_rate: float,
         awg_key: int,
-        device: str,
+        device_uid: str,
         oscillator: Oscillator | None,
         lo_frequency: float | SweepParameter | None,
         voltage_offset: float | SweepParameter | None,
         kind: Literal["RF", "IQ", "INTEGRATION"],
+        amplifier_pump: AmplifierPump | None,
+        channels: list[int],
+        port_mode: PortMode | None,
+        automute: bool,
     ):
         """A representation of signal properties."""
+
+class Device:
+    def __init__(
+        self,
+        uid: str,
+        physical_device_uid: int,
+        kind: str,
+        is_shfqc: bool,
+    ):
+        """A representation of device properties."""
 
 def build_experiment(experiment: Experiment, signals: list[Signal]) -> ExperimentInfo:
     """Build a scheduled experiment.
@@ -90,23 +107,20 @@ class Schedules:
     section_delays: dict[str, list[PulseSchedule | PrecompClearSchedule]]
     # Sections in the order of depth-first traversal of the experiment tree
     sections: dict[str, list[SectionSchedule]]
-
-class RepetitionInfo:
-    mode: str  # "fastest", "constant", "auto"
-    time: float | None
-    loop_uid: str
+    # Section play pulse schedules in the order of depth-first traversal of the experiment tree
+    play_pulse_schedules: dict[str, list[PulseSchedule]]
+    loop_schedules: dict[str, list[LoopSchedule]]
+    match_schedules: dict[str, list[MatchSchedule]]
 
 class ScheduledExperiment:
     """Result of an experiment scheduling.
 
     Attributes:
-        repetition_info: Repetition information of the experiment.
         system_grid: System grid in tinysamples.
         used_parameters: Used near-time parameters in the experiment.
         schedules: Schedules object containing various schedules.
     """
 
-    repetition_info: RepetitionInfo | None
     system_grid: int
     used_parameters: set[str]
     schedules: Schedules

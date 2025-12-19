@@ -22,6 +22,7 @@ pub(crate) enum PulseKind {
     Functional(PulseFunctional),
     Sampled(PulseSampled),
     LengthOnly { length: Duration<Second> },
+    MarkerPulse { length: Duration<Second> },
 }
 
 pub(crate) enum PulseFunction {
@@ -30,6 +31,10 @@ pub(crate) enum PulseFunction {
     Custom {
         function: String,
     },
+}
+
+impl PulseFunction {
+    pub(crate) const CONSTANT_PULSE_NAME: &str = "const";
 }
 
 pub(crate) struct PulseFunctional {

@@ -1,25 +1,27 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::scheduler::py_export::complex_or_float_to_py;
+use crate::scheduler::{experiment::Experiment, py_pulse_parameters::pulse_parameters_to_py_dict};
+use crate::{error::Result, scheduler::py_object_interner::PyObjectInterner};
+use laboneq_common::named_id::{NamedId, NamedIdStore};
+use laboneq_scheduler::experiment::types::{AveragingMode, ComplexOrFloat, SectionAlignment};
+use laboneq_scheduler::experiment::types::{
+    ExternalParameterUid, Marker, MarkerSelector, SectionUid, SignalUid, ValueOrParameter,
+};
+use laboneq_scheduler::ir::{
+    Acquire, Case, ChangeOscillatorPhase, InitialLocalOscillatorFrequency,
+    InitialOscillatorFrequency, InitialVoltageOffset, IrKind, Loop, LoopKind, Match, MatchTarget,
+    PlayPulse, PpcStep, PrngSetup, Section, SetOscillatorFrequency, Trigger,
+};
+use laboneq_scheduler::{RepetitionMode, ScheduleInfo, ScheduledNode};
+use pyo3::IntoPyObjectExt;
 use pyo3::{
     intern,
     prelude::*,
     types::{PyDict, PyList, PySet, PyString, PyTuple},
 };
 use std::collections::HashMap;
-
-use crate::scheduler::{experiment::Experiment, py_pulse_parameters::pulse_parameters_to_py_dict};
-use crate::{error::Result, scheduler::py_object_interner::PyObjectInterner};
-use laboneq_common::named_id::{NamedId, NamedIdStore};
-use laboneq_scheduler::ir::{
-    Acquire, InitialLocalOscillatorFrequency, InitialOscillatorFrequency, InitialVoltageOffset,
-    IrKind, PpcStep, Section, SetOscillatorFrequency,
-};
-use laboneq_scheduler::{ScheduleInfo, ScheduledNode};
-use laboneq_scheduler::{
-    experiment::types::{ExternalParameterUid, SectionUid, SignalUid},
-    ir::Trigger,
-};
 
 /// Type representing `laboneq.compiler.scheduler.interval_schedule.IntervalSchedule`
 type IntervalSchedule = Py<PyAny>;
@@ -56,6 +58,15 @@ pub(super) struct PyScheduleCompat {
     /// Section delays per section UID and in the order of appearance in depth-first traversal.
     #[pyo3(get)]
     pub section_delays: HashMap<String, Vec<IntervalSchedule>>,
+    /// Play pulse schedules per section UID and in the order of appearance in depth-first traversal.
+    #[pyo3(get)]
+    pub play_pulse_schedules: HashMap<String, Vec<IntervalSchedule>>,
+    /// Loop schedules per section UID and in the order of appearance in depth-first traversal.
+    #[pyo3(get)]
+    pub loop_schedules: HashMap<String, Vec<IntervalSchedule>>,
+    /// Match schedules per section UID and in the order of appearance in depth-first traversal.
+    #[pyo3(get)]
+    pub match_schedules: HashMap<String, Vec<IntervalSchedule>>,
 }
 
 /// Converts a [`ScheduledNode`] into a [`PyScheduleCompat`], a container for Python schedule objects.
@@ -83,6 +94,9 @@ pub(super) fn generate_py_schedules<'py>(
         sections: HashMap::new(),
         acquire_schedules: HashMap::new(),
         section_delays: HashMap::new(),
+        play_pulse_schedules: HashMap::new(),
+        loop_schedules: HashMap::new(),
+        match_schedules: HashMap::new(),
     };
     generate_py_schedules_impl(py, scheduled_node, &mut context, None, None)?;
     Ok(PyScheduleCompat {
@@ -95,6 +109,9 @@ pub(super) fn generate_py_schedules<'py>(
         sections: context.sections,
         acquire_schedules: context.acquire_schedules,
         section_delays: context.section_delays,
+        play_pulse_schedules: context.play_pulse_schedules,
+        loop_schedules: context.loop_schedules,
+        match_schedules: context.match_schedules,
     })
 }
 
@@ -116,6 +133,9 @@ struct Context<'a, 'py> {
     sections: HashMap<String, Vec<IntervalSchedule>>,
     acquire_schedules: HashMap<String, Vec<IntervalSchedule>>,
     section_delays: HashMap<String, Vec<IntervalSchedule>>,
+    play_pulse_schedules: HashMap<String, Vec<IntervalSchedule>>,
+    loop_schedules: HashMap<String, Vec<IntervalSchedule>>,
+    match_schedules: HashMap<String, Vec<IntervalSchedule>>,
 }
 
 impl<'py> Context<'_, 'py> {
@@ -157,6 +177,12 @@ fn generate_py_schedules_impl<'ctx, 'py>(
             Ok(None)
         }
         IrKind::Loop(obj) => {
+            let py_schedule = handle_loop_schedule(py, context, &scheduled_node.schedule, obj)?;
+            context
+                .loop_schedules
+                .entry(context.id_store.resolve(obj.uid).unwrap().to_string())
+                .or_default()
+                .push(py_schedule.clone().into());
             // We track loop visits separately to iteration counts (for preamble sections)
             context.loop_visit_count.insert(
                 obj.uid,
@@ -252,6 +278,73 @@ fn generate_py_schedules_impl<'ctx, 'py>(
                 has_precompensation,
             )?;
             Ok(None)
+        }
+        IrKind::PlayPulse(obj) => {
+            handle_play_pulse(
+                py,
+                context,
+                &scheduled_node.schedule,
+                obj,
+                *parent_section_uid.unwrap(),
+            )?;
+            Ok(None)
+        }
+        IrKind::ChangeOscillatorPhase(obj) => {
+            handle_change_oscillator_phase(
+                py,
+                context,
+                &scheduled_node.schedule,
+                obj,
+                *parent_section_uid.unwrap(),
+            )?;
+            Ok(None)
+        }
+        IrKind::Match(obj) => {
+            let section = handle_match(py, context, &scheduled_node.schedule, obj)?;
+            context.section_visit_count.insert(
+                obj.uid,
+                context.section_visit_count.get(&obj.uid).unwrap_or(&0) + 1,
+            );
+            for child in scheduled_node.children.iter() {
+                if let Some(child_schedule) = generate_py_schedules_impl(
+                    py,
+                    &child.node,
+                    context,
+                    Some(&obj.uid),
+                    parent_iteration,
+                )? {
+                    section
+                        .getattr(intern!(py, "children"))?
+                        .call_method1(intern!(py, "append"), (child_schedule,))?;
+                }
+            }
+            context
+                .match_schedules
+                .entry(context.id_store.resolve(obj.uid).unwrap().to_string())
+                .or_default()
+                .push(section.clone().into());
+            Ok(Some(section.into()))
+        }
+        IrKind::Case(obj) => {
+            let schedule = handle_case(py, context, &scheduled_node.schedule, obj)?;
+            context.section_visit_count.insert(
+                obj.uid,
+                context.section_visit_count.get(&obj.uid).unwrap_or(&0) + 1,
+            );
+            for child in scheduled_node.children.iter() {
+                if let Some(child_schedule) = generate_py_schedules_impl(
+                    py,
+                    &child.node,
+                    context,
+                    Some(&obj.uid),
+                    parent_iteration,
+                )? {
+                    schedule
+                        .getattr(intern!(py, "children"))?
+                        .call_method1(intern!(py, "append"), (child_schedule,))?;
+                }
+            }
+            Ok(Some(schedule.into()))
         }
         _ => {
             let parent_section_uid = scheduled_node
@@ -529,10 +622,30 @@ fn handle_section<'py>(
     kwargs.set_item(intern!(py, "grid"), schedule.grid.value())?;
     kwargs.set_item(intern!(py, "signals"), PySet::new(py, py_signals)?)?;
     kwargs.set_item(intern!(py, "length"), schedule.length.value())?;
-    kwargs.set_item(intern!(py, "right_aligned"), false)?; // TODO
+    kwargs.set_item(
+        intern!(py, "right_aligned"),
+        schedule.alignment_mode == SectionAlignment::Right,
+    )?;
     kwargs.set_item(intern!(py, "trigger_output"), PySet::new(py, py_triggers)?)?;
+    kwargs.set_item(
+        intern!(py, "prng_setup"),
+        obj.prng_setup
+            .as_ref()
+            .map(|o| create_py_prng_info(py, o))
+            .transpose()?,
+    )?;
     let py_schedule: Bound<'_, PyAny> = py_schedule.call((), Some(&kwargs))?;
     Ok(py_schedule)
+}
+
+fn create_py_prng_info<'py>(py: Python<'py>, prng: &PrngSetup) -> Result<Bound<'py, PyAny>> {
+    let m = py.import(intern!(py, "laboneq.data.compilation_job"))?;
+    let py_prng_info = m.getattr(intern!(py, "PRNGInfo"))?;
+
+    let prng_init_kwargs = PyDict::new(py);
+    prng_init_kwargs.set_item(intern!(py, "range"), prng.range as i64)?;
+    prng_init_kwargs.set_item(intern!(py, "seed"), prng.seed as i64)?;
+    Ok(py_prng_info.call((), Some(&prng_init_kwargs))?)
 }
 
 fn trigger_to_py<'py>(
@@ -722,4 +835,379 @@ fn handle_delay<'py>(
         parent_section.push(py_clear_schedule.into());
     }
     Ok(())
+}
+
+fn handle_play_pulse<'py>(
+    py: Python<'py>,
+    ctx: &mut Context<'_, 'py>,
+    schedule: &ScheduleInfo,
+    obj: &PlayPulse,
+    parent_section_uid: SectionUid,
+) -> Result<()> {
+    let m = py.import(intern!(py, "laboneq.compiler.scheduler.pulse_schedule"))?;
+    let py_obj = m.getattr(intern!(py, "PulseSchedule"))?;
+
+    let kwargs = PyDict::new(py);
+    kwargs.set_item(intern!(py, "grid"), schedule.grid.value())?;
+    kwargs.set_item(
+        intern!(py, "signals"),
+        PySet::new(py, [ctx.py_string(py, obj.signal).unwrap()])?,
+    )?;
+    kwargs.set_item(intern!(py, "length"), schedule.length.value())?;
+    kwargs.set_item(intern!(py, "integration_length"), py.None())?;
+    kwargs.set_item(intern!(py, "pulse"), ctx.py_string(py, obj.pulse)?)?;
+    kwargs.set_item(intern!(py, "handle"), py.None())?;
+    kwargs.set_item(intern!(py, "is_acquire"), false)?;
+    if let Some(phase) = &obj.phase {
+        let (phase, _) = value_or_parameter_to_py_f64(py, phase, ctx)?;
+        kwargs.set_item(intern!(py, "phase"), phase)?;
+    } else {
+        kwargs.set_item(intern!(py, "phase"), 0.0)?;
+    }
+    if let Some(phase) = &obj.increment_oscillator_phase {
+        let (phase, phase_param) = value_or_parameter_to_py_f64(py, phase, ctx)?;
+        kwargs.set_item(intern!(py, "increment_oscillator_phase"), phase)?;
+        kwargs.set_item(intern!(py, "incr_phase_param_name"), phase_param)?;
+    }
+    if let Some(phase) = &obj.set_oscillator_phase {
+        let (phase, _) = value_or_parameter_to_py_f64(py, phase, ctx)?;
+        kwargs.set_item(intern!(py, "set_oscillator_phase"), phase)?;
+    }
+    let (amplitude, amp_param) =
+        complex_or_float_or_parameter_to_py_complex64(py, &obj.amplitude, ctx)?;
+    kwargs.set_item(intern!(py, "amplitude"), amplitude)?;
+    kwargs.set_item(intern!(py, "amp_param_name"), amp_param)?;
+    kwargs.set_item(
+        intern!(py, "markers"),
+        obj.markers
+            .iter()
+            .map(|marker| marker_to_py(py, marker, ctx))
+            .collect::<PyResult<Vec<_>>>()?,
+    )?;
+    let pulse_params_py =
+        pulse_parameters_to_py_dict(py, &obj.parameters, ctx.id_store, ctx.py_objects)?;
+    kwargs.set_item(intern!(py, "play_pulse_params"), pulse_params_py)?;
+
+    let pulse_pulse_params_py =
+        pulse_parameters_to_py_dict(py, &obj.pulse_parameters, ctx.id_store, ctx.py_objects)?;
+    kwargs.set_item(intern!(py, "pulse_pulse_params"), pulse_pulse_params_py)?;
+    let py_schedule = py_obj.call((), Some(&kwargs))?;
+
+    let parent_section = ctx
+        .play_pulse_schedules
+        .entry(
+            ctx.id_store
+                .resolve(parent_section_uid)
+                .expect("PlayPulse must have a valid parent section")
+                .to_string(),
+        )
+        .or_default();
+    parent_section.push(py_schedule.into());
+    Ok(())
+}
+
+fn handle_change_oscillator_phase<'py>(
+    py: Python<'py>,
+    ctx: &mut Context<'_, 'py>,
+    schedule: &ScheduleInfo,
+    obj: &ChangeOscillatorPhase,
+    parent_section_uid: SectionUid,
+) -> Result<()> {
+    let m = py.import(intern!(py, "laboneq.compiler.scheduler.pulse_schedule"))?;
+    let py_obj = m.getattr(intern!(py, "PulseSchedule"))?;
+
+    let kwargs = PyDict::new(py);
+    kwargs.set_item(intern!(py, "grid"), schedule.grid.value())?;
+    kwargs.set_item(
+        intern!(py, "signals"),
+        PySet::new(py, [ctx.py_string(py, obj.signal).unwrap()])?,
+    )?;
+    kwargs.set_item(intern!(py, "length"), schedule.length.value())?;
+    kwargs.set_item(intern!(py, "integration_length"), py.None())?;
+    kwargs.set_item(intern!(py, "pulse"), py.None())?;
+    kwargs.set_item(intern!(py, "handle"), py.None())?;
+    kwargs.set_item(intern!(py, "is_acquire"), false)?;
+    kwargs.set_item(intern!(py, "phase"), py.None())?;
+    if let Some(phase) = &obj.increment {
+        let (phase, phase_param) = value_or_parameter_to_py_f64(py, phase, ctx)?;
+        kwargs.set_item(intern!(py, "increment_oscillator_phase"), phase)?;
+        kwargs.set_item(intern!(py, "incr_phase_param_name"), phase_param)?;
+    }
+    if let Some(phase) = &obj.set {
+        let (phase, _) = value_or_parameter_to_py_f64(py, phase, ctx)?;
+        kwargs.set_item(intern!(py, "set_oscillator_phase"), phase)?;
+    }
+    kwargs.set_item(intern!(py, "amplitude"), py.None())?;
+    kwargs.set_item(intern!(py, "amp_param_name"), py.None())?;
+    kwargs.set_item(intern!(py, "markers"), py.None())?;
+    kwargs.set_item(intern!(py, "play_pulse_params"), py.None())?;
+    kwargs.set_item(intern!(py, "pulse_pulse_params"), py.None())?;
+    let py_schedule = py_obj.call((), Some(&kwargs))?;
+    let parent_section = ctx
+        .play_pulse_schedules
+        .entry(
+            ctx.id_store
+                .resolve(parent_section_uid)
+                .expect("ChangeOscillatorPhase must have a valid parent section")
+                .to_string(),
+        )
+        .or_default();
+    parent_section.push(py_schedule.into());
+    Ok(())
+}
+
+fn value_or_parameter_to_py_f64<'py>(
+    py: Python<'py>,
+    value: &ValueOrParameter<f64>,
+    ctx: &mut Context<'_, 'py>,
+) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+    match value {
+        ValueOrParameter::Value(value) => Ok((value.into_pyobject(py)?.into(), py.None())),
+        ValueOrParameter::ResolvedParameter { value, uid } => {
+            let py_param = ctx.py_string(py, *uid).unwrap();
+            Ok((
+                value.into_pyobject(py)?.into(),
+                py_param.into_pyobject(py)?.into(),
+            ))
+        }
+        _ => panic!("Expected value or resolved parameter"),
+    }
+}
+
+fn complex_or_float_or_parameter_to_py_complex64<'py>(
+    py: Python<'py>,
+    value: &ValueOrParameter<ComplexOrFloat>,
+    ctx: &mut Context<'_, 'py>,
+) -> PyResult<(Py<PyAny>, Py<PyAny>)> {
+    match value {
+        ValueOrParameter::Value(value) => Ok((complex_or_float_to_py(py, value)?, py.None())),
+        ValueOrParameter::ResolvedParameter { value, uid } => {
+            let py_param = ctx.py_string(py, *uid).unwrap();
+            Ok((
+                complex_or_float_to_py(py, value)?,
+                py_param.into_pyobject(py)?.into(),
+            ))
+        }
+        _ => panic!("Expected value or resolved parameter"),
+    }
+}
+
+fn marker_to_py<'py>(
+    py: Python<'py>,
+    marker: &Marker,
+    ctx: &mut Context<'_, 'py>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let m = py.import(intern!(py, "laboneq.data.compilation_job"))?;
+    let marker_py = m.getattr(intern!(py, "Marker"))?;
+    let d = PyDict::new(py);
+    let marker_selector = match marker.marker_selector {
+        MarkerSelector::M1 => intern!(py, "marker1"),
+        MarkerSelector::M2 => intern!(py, "marker2"),
+    };
+    d.set_item(intern!(py, "marker_selector"), marker_selector)?;
+    d.set_item(intern!(py, "enable"), marker.enable)?;
+    if let Some(start) = marker.start {
+        d.set_item(intern!(py, "start"), start.value())?;
+    } else {
+        d.set_item(intern!(py, "start"), py.None())?;
+    }
+    if let Some(length) = marker.length {
+        d.set_item(intern!(py, "length"), length.value())?;
+    } else {
+        d.set_item(intern!(py, "length"), py.None())?;
+    }
+    if let Some(pulse_uid) = marker.pulse_id {
+        let pulse = ctx.py_string(py, pulse_uid).unwrap();
+        d.set_item(intern!(py, "pulse_id"), pulse)?;
+    } else {
+        d.set_item(intern!(py, "pulse_id"), py.None())?;
+    }
+    marker_py.call((), Some(&d))
+}
+
+fn handle_loop_schedule<'py>(
+    py: Python<'py>,
+    ctx: &mut Context<'_, 'py>,
+    schedule: &ScheduleInfo,
+    obj: &Loop,
+) -> Result<Bound<'py, PyAny>> {
+    let m = py.import(intern!(py, "laboneq.compiler.scheduler.loop_schedule"))?;
+    let py_schedule = m.getattr(intern!(py, "LoopSchedule"))?;
+
+    let py_signals = schedule
+        .signals
+        .iter()
+        .map(|s| ctx.py_string(py, *s).map_err(Into::into))
+        .collect::<Result<Vec<Bound<'_, PyString>>>>()?;
+    let kwargs = PyDict::new(py);
+    let uid = ctx.py_string(py, obj.uid)?;
+    kwargs.set_item(intern!(py, "section"), uid)?;
+    kwargs.set_item(intern!(py, "grid"), schedule.grid.value())?;
+    kwargs.set_item(intern!(py, "signals"), PySet::new(py, py_signals)?)?;
+    kwargs.set_item(intern!(py, "length"), schedule.length.value())?;
+    kwargs.set_item(
+        intern!(py, "right_aligned"),
+        schedule.alignment_mode == SectionAlignment::Right,
+    )?;
+    kwargs.set_item(intern!(py, "iterations"), obj.iterations)?;
+    if let Some(repetition_mode) = &schedule.repetition_mode {
+        let (mode, time) = repetition_mode_to_py(py, repetition_mode)?;
+        kwargs.set_item(intern!(py, "repetition_mode"), mode)?;
+        kwargs.set_item(intern!(py, "repetition_time"), time)?;
+    } else {
+        kwargs.set_item(intern!(py, "repetition_mode"), py.None())?;
+        kwargs.set_item(intern!(py, "repetition_time"), py.None())?;
+    }
+    kwargs.set_item(intern!(py, "compressed"), obj.compressed())?;
+    match &obj.kind {
+        LoopKind::Averaging { mode } => {
+            kwargs.set_item(
+                intern!(py, "averaging_mode"),
+                averaging_mode_to_py(py, mode).unwrap(),
+            )?;
+        }
+        LoopKind::Sweeping { parameters } => {
+            let sweep_parameters = parameters
+                .iter()
+                .map(|param_uid| ctx.py_string(py, *param_uid).unwrap())
+                .collect::<Vec<_>>();
+            kwargs.set_item(intern!(py, "sweep_parameters"), sweep_parameters)?;
+        }
+        LoopKind::Prng { sample_uid } => {
+            let uid_py = ctx.py_string(py, *sample_uid)?;
+            kwargs.set_item(intern!(py, "prng_sample"), uid_py)?;
+        }
+    }
+    let py_schedule: Bound<'_, PyAny> = py_schedule.call((), Some(&kwargs))?;
+    Ok(py_schedule)
+}
+
+fn handle_match<'py>(
+    py: Python<'py>,
+    ctx: &mut Context<'_, 'py>,
+    schedule: &ScheduleInfo,
+    obj: &Match,
+) -> Result<Bound<'py, PyAny>> {
+    let m = py.import(intern!(py, "laboneq.compiler.scheduler.match_schedule"))?;
+    let py_schedule = m.getattr(intern!(py, "MatchSchedule"))?;
+
+    let py_signals = schedule
+        .signals
+        .iter()
+        .map(|s| ctx.py_string(py, *s).map_err(Into::into))
+        .collect::<Result<Vec<Bound<'_, PyString>>>>()?;
+    let kwargs = PyDict::new(py);
+    let uid = ctx.py_string(py, obj.uid)?;
+    kwargs.set_item(intern!(py, "section"), uid)?;
+    kwargs.set_item(intern!(py, "grid"), schedule.grid.value())?;
+    kwargs.set_item(intern!(py, "signals"), PySet::new(py, py_signals)?)?;
+    kwargs.set_item(intern!(py, "length"), schedule.length.value())?;
+    kwargs.set_item(intern!(py, "right_aligned"), false)?;
+    kwargs.set_item(intern!(py, "trigger_output"), PySet::empty(py)?)?;
+    kwargs.set_item(
+        intern!(py, "play_after"),
+        obj.play_after
+            .iter()
+            .map(|section_uid| ctx.py_string(py, *section_uid).unwrap())
+            .collect::<Vec<_>>(),
+    )?;
+    match obj.target {
+        MatchTarget::Handle(handle) => {
+            let handle_py = ctx.py_string(py, handle).unwrap();
+            kwargs.set_item(intern!(py, "handle"), handle_py)?;
+            kwargs.set_item(intern!(py, "user_register"), py.None())?;
+            kwargs.set_item(intern!(py, "prng_sample"), py.None())?;
+        }
+        MatchTarget::UserRegister(user_reg) => {
+            kwargs.set_item(intern!(py, "user_register"), user_reg as i64)?;
+            kwargs.set_item(intern!(py, "handle"), py.None())?;
+            kwargs.set_item(intern!(py, "prng_sample"), py.None())?;
+        }
+        MatchTarget::PrngSample(sample_uid) => {
+            kwargs.set_item(
+                intern!(py, "prng_sample"),
+                ctx.py_string(py, sample_uid).unwrap(),
+            )?;
+            kwargs.set_item(intern!(py, "handle"), py.None())?;
+            kwargs.set_item(intern!(py, "user_register"), py.None())?;
+        }
+        MatchTarget::SweepParameter(_) => {
+            panic!("Expected MatchTarget::SweepParameter to be resolved");
+        }
+    }
+    kwargs.set_item(intern!(py, "local"), obj.local)?;
+    kwargs.set_item(
+        intern!(py, "compressed_loop_grid"),
+        schedule.compressed_loop_grid.map(|v| v.value()),
+    )?;
+    let py_schedule: Bound<'_, PyAny> = py_schedule.call((), Some(&kwargs))?;
+    Ok(py_schedule)
+}
+
+fn repetition_mode_to_py<'py>(
+    py: Python<'py>,
+    repetition_mode: &RepetitionMode,
+) -> PyResult<(Bound<'py, PyAny>, Py<PyAny>)> {
+    let m = py.import(intern!(py, "laboneq.core.types.enums.repetition_mode"))?;
+    let py_obj = m.getattr(intern!(py, "RepetitionMode"))?;
+    match repetition_mode {
+        RepetitionMode::Fastest => {
+            let obj = py_obj.getattr(intern!(py, "FASTEST"))?;
+            Ok((obj, py.None()))
+        }
+        RepetitionMode::Constant { time } => {
+            let obj = py_obj.getattr(intern!(py, "CONSTANT"))?;
+            Ok((obj, time.value().into_py_any(py)?))
+        }
+        RepetitionMode::Auto => {
+            let obj = py_obj.getattr(intern!(py, "AUTO"))?;
+            Ok((obj, py.None()))
+        }
+    }
+}
+
+fn averaging_mode_to_py<'py>(
+    py: Python<'py>,
+    averaging_mode: &AveragingMode,
+) -> PyResult<Bound<'py, PyAny>> {
+    let m = py.import(intern!(py, "laboneq.core.types.enums.averaging_mode"))?;
+    let py_obj = m.getattr(intern!(py, "AveragingMode"))?;
+    match averaging_mode {
+        AveragingMode::Cyclic => py_obj.getattr(intern!(py, "CYCLIC")),
+        AveragingMode::Sequential => py_obj.getattr(intern!(py, "SEQUENTIAL")),
+        AveragingMode::SingleShot => py_obj.getattr(intern!(py, "SINGLE_SHOT")),
+    }
+}
+
+fn handle_case<'py>(
+    py: Python<'py>,
+    ctx: &mut Context<'_, 'py>,
+    schedule: &ScheduleInfo,
+    obj: &Case,
+) -> Result<Bound<'py, PyAny>> {
+    let m = py.import(intern!(py, "laboneq.compiler.scheduler.case_schedule"))?;
+    let py_schedule = m.getattr(intern!(py, "CaseSchedule"))?;
+
+    let py_signals = schedule
+        .signals
+        .iter()
+        .map(|s| ctx.py_string(py, *s).map_err(Into::into))
+        .collect::<Result<Vec<Bound<'_, PyString>>>>()?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item(intern!(py, "section"), ctx.py_string(py, obj.uid)?)?;
+    kwargs.set_item(intern!(py, "state"), obj.state)?;
+    kwargs.set_item(intern!(py, "grid"), schedule.grid.value())?;
+    kwargs.set_item(
+        intern!(py, "sequencer_grid"),
+        schedule.sequencer_grid.value(),
+    )?;
+    kwargs.set_item(intern!(py, "compressed_loop_grid"), py.None())?;
+    kwargs.set_item(intern!(py, "signals"), PySet::new(py, py_signals)?)?;
+    kwargs.set_item(intern!(py, "length"), schedule.grid.value())?;
+    kwargs.set_item(
+        intern!(py, "right_aligned"),
+        schedule.alignment_mode == SectionAlignment::Right,
+    )?;
+    let py_schedule: Bound<'_, PyAny> = py_schedule.call((), Some(&kwargs))?;
+    Ok(py_schedule)
 }

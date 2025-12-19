@@ -182,6 +182,14 @@ fn collect_osc_parameters(
                 }
             }
             if ob.signal.is_hw_modulated() {
+                if ob.increment_oscillator_phase.is_some() && ob.signal.kind != cjob::SignalKind::IQ
+                {
+                    let msg = format!(
+                        "Signal {}: phase increments are only supported on IQ signals, or on RF signals with SW modulation",
+                        &ob.signal.uid,
+                    );
+                    return Err(Error::new(&msg));
+                }
                 return Ok(());
             }
             // TODO: More elegant way to map to the node than a timestamp

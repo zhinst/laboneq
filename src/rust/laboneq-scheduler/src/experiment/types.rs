@@ -33,6 +33,9 @@ pub struct SignalUid(pub NamedId);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PulseParameterUid(pub NamedId);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub struct PrngSampleUid(pub NamedId);
+
 #[macro_export]
 macro_rules! impl_from_named_id {
     ($t:ty) => {
@@ -58,6 +61,7 @@ impl_from_named_id!(DeviceUid);
 impl_from_named_id!(PulseUid);
 impl_from_named_id!(SectionUid);
 impl_from_named_id!(PulseParameterUid);
+impl_from_named_id!(PrngSampleUid);
 
 pub type UserRegister = u16;
 
@@ -270,6 +274,20 @@ pub struct AmplifierPump {
     pub cancellation_attenuation: Option<ValueOrParameter<f64>>,
 }
 
+impl AmplifierPump {
+    pub fn values_or_parameters(&self) -> impl Iterator<Item = &Option<ValueOrParameter<f64>>> {
+        [
+            &self.pump_power,
+            &self.pump_frequency,
+            &self.probe_power,
+            &self.probe_frequency,
+            &self.cancellation_phase,
+            &self.cancellation_attenuation,
+        ]
+        .into_iter()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExperimentSignal {
     pub uid: SignalUid,
@@ -277,7 +295,7 @@ pub struct ExperimentSignal {
 
 // IR definition
 
-#[derive(Debug, Clone, PartialEq, Copy)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum SectionAlignment {
     Left,
     Right,
@@ -286,7 +304,7 @@ pub enum SectionAlignment {
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum RepetitionMode {
     Fastest,
-    Constant { time: f64 },
+    Constant { time: Duration<Second, f64> },
     Auto,
 }
 
@@ -298,6 +316,15 @@ pub enum AcquisitionType {
     Spectroscopy,
     Discrimination,
     Raw,
+}
+
+impl AcquisitionType {
+    pub fn is_spectroscopy(&self) -> bool {
+        matches!(
+            self,
+            Self::Spectroscopy | Self::SpectroscopyIq | Self::SpectroscopyPsd
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -345,7 +372,7 @@ pub struct PlayPulse {
     pub phase: Option<ValueOrParameter<f64>>,
     pub increment_oscillator_phase: Option<ValueOrParameter<f64>>,
     pub set_oscillator_phase: Option<ValueOrParameter<f64>>,
-    pub length: Option<ValueOrParameter<f64>>,
+    pub length: Option<ValueOrParameter<Duration<Second>>>,
     pub parameters: HashMap<PulseParameterUid, PulseParameterValue>,
     pub pulse_parameters: HashMap<PulseParameterUid, PulseParameterValue>,
     pub markers: Vec<Marker>,
@@ -382,6 +409,7 @@ pub struct PrngSetup {
 pub struct PrngLoop {
     pub uid: SectionUid,
     pub count: u32,
+    pub sample_uid: PrngSampleUid,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -445,7 +473,7 @@ pub struct Match {
     pub play_after: Vec<SectionUid>,
 }
 
-#[derive(Debug, Clone, PartialEq, Copy)]
+#[derive(Debug, Clone, PartialEq, Copy, Eq)]
 pub enum AveragingMode {
     Sequential,
     Cyclic,
@@ -493,6 +521,8 @@ pub struct LoopInfo<'a> {
     pub count: u32,
     pub parameters: &'a [ParameterUid],
     pub reset_oscillator_phase: bool,
+    pub alignment: &'a SectionAlignment,
+    pub repetition_mode: Option<RepetitionMode>,
 }
 
 impl Operation {
@@ -536,6 +566,8 @@ impl Operation {
                 count: s.count,
                 parameters: &[],
                 reset_oscillator_phase: false,
+                alignment: &SectionAlignment::Left,
+                repetition_mode: None,
             }
             .into(),
             Operation::Sweep(s) => LoopInfo {
@@ -543,6 +575,8 @@ impl Operation {
                 count: s.count,
                 parameters: &s.parameters,
                 reset_oscillator_phase: s.reset_oscillator_phase,
+                alignment: &s.alignment,
+                repetition_mode: None,
             }
             .into(),
             Operation::AveragingLoop(s) => LoopInfo {
@@ -550,6 +584,8 @@ impl Operation {
                 count: s.count,
                 parameters: &[],
                 reset_oscillator_phase: s.reset_oscillator_phase,
+                alignment: &s.alignment,
+                repetition_mode: Some(s.repetition_mode),
             }
             .into(),
             Operation::Root

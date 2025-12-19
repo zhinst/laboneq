@@ -788,7 +788,7 @@ def map_signal(experiment_signal: str, logical_signal: LogicalSignal | str):
             The logical signal to connect to the experiment signal.
 
     !!! note
-        One can also call [Experiment.map_signal][laboneq.dsl.experiment.Experiment.map_signal]
+        One can also call [Experiment.map_signal][laboneq.dsl.experiment.experiment.Experiment.map_signal]
         directly on the experiment after it is created.
     """
     _active_experiment().map_signal(experiment_signal, logical_signal)

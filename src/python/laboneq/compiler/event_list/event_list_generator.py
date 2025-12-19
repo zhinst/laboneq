@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import itertools
+from collections import defaultdict
 from typing import Any, Callable, Iterator
 
 from laboneq.compiler import ir as ir_mod
@@ -26,6 +27,8 @@ class EventListGenerator:
         self.signals = {s.uid: s for s in signals} if signals is not None else {}
         # Keep track of the current section name so that it can be added to events.
         self._section_stack: list[str] = []
+        # Keep track of iteration counts for loops by section name.
+        self._iteration_counter: dict[str, int] = defaultdict(int)
 
     # This is consumed mainly by the PSV and attached to the
     # CompiledExperiment with compiler flag `OUTPUT_EXTRAS`
@@ -186,6 +189,8 @@ class EventListGenerator:
         start: int,
         max_events: int,
     ) -> EventList:
+        # Reset the iteration counter for this loop
+        self._iteration_counter[loop_ir.section] = 0
         assert loop_ir.children_start is not None
         assert loop_ir.length is not None
 
@@ -215,15 +220,14 @@ class EventListGenerator:
                 assert prototype.length is not None
                 assert isinstance(prototype, ir_mod.LoopIterationIR)
                 iteration_start = start
-                for iteration in range(1, loop_ir.iterations):
+                for _ in range(1, loop_ir.iterations):
                     max_events -= len(children_events[-1])
                     if max_events <= 0:
                         break
                     iteration_start += prototype.length
-                    shadow_iteration = prototype.compressed_iteration(iteration)
                     children_events.append(
                         self.visit(
-                            shadow_iteration,
+                            prototype,
                             iteration_start,
                             max_events,
                         )
@@ -292,14 +296,16 @@ class EventListGenerator:
         max_events: int,
     ) -> EventList:
         assert loop_iteration_ir.length is not None
+        iteration = self._iteration_counter[self._section_name()]
+        self._iteration_counter[self._section_name()] += 1
+
         common = {
             "section_name": self._section_name(),
-            "iteration": loop_iteration_ir.iteration,
-            "num_repeats": loop_iteration_ir.num_repeats,
+            "iteration": iteration,
             "nesting_level": 0,
         }
         end = start + loop_iteration_ir.length
-        if loop_iteration_ir.iteration == 0:
+        if iteration == 0:
             max_events -= 1
 
         # we'll add one LOOP_STEP_START, LOOP_STEP_END, LOOP_ITERATION_END each
@@ -328,7 +334,7 @@ class EventListGenerator:
                         **common,
                     }
                 ]
-                if loop_iteration_ir.iteration == 0
+                if iteration == 0
                 else []
             ),
         ]

@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 from enum import IntEnum
 
+from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.devices.node_control import (
     Command,
@@ -87,3 +88,15 @@ class DeviceSHFBase(DeviceBase):
             Setting(f"/{self.serial}/system/clocks/referenceclock/in/source", source),
             Response(f"/{self.serial}/system/clocks/referenceclock/in/status", 0),
         ]
+
+    async def _set_hw_sync(self, *, hw_sync: bool, emit_trigger: bool):
+        nc = NodeCollector(base=f"/{self.serial}/")
+        if hw_sync:
+            if emit_trigger:
+                nc.add("system/internaltrigger/synchronization/enable", 1)  # enable
+            else:
+                nc.add("system/synchronization/source", 1)  # external
+        else:
+            nc.add("system/internaltrigger/synchronization/enable", 0)  # disable
+            nc.add("system/synchronization/source", 0)  # internal
+        await self._api.set_parallel(nc)
