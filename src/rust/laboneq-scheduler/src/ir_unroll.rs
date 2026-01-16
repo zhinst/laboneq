@@ -77,6 +77,9 @@ fn unroll_loops_impl(node: &mut ScheduledNode, resolver: &ParameterResolver) -> 
                 for case_child in case_node.children.iter_mut() {
                     unroll_loops_impl(case_child.node.make_mut(), resolver)?;
                 }
+                // Take the grid of the child
+                node.schedule.grid = scheduled_case.node.schedule.grid;
+                node.schedule.sequencer_grid = scheduled_case.node.schedule.sequencer_grid;
                 node.kind = create_section_kind(obj.uid);
                 node.children = vec![scheduled_case];
             }
@@ -188,7 +191,6 @@ mod tests {
             uid: section_match_uid,
             target: MatchTarget::SweepParameter(parameter0.uid),
             local: false,
-            play_after: vec![],
         };
         let case_0 = Case {
             uid: section_case_0_uid,

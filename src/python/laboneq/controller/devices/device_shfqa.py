@@ -3,40 +3,38 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
+from collections.abc import Iterable
 from typing import Iterator
 
-import numpy as np
-
 from laboneq.controller.attribute_value_tracker import (
-    AttributeName,
     DeviceAttribute,
     DeviceAttributesView,
 )
 from laboneq.controller.devices.async_support import _gather
-from laboneq.controller.devices.core_base import CoreBase
-from laboneq.controller.devices.device_shf_base import DeviceSHFBase
+from laboneq.controller.devices.core_base import CoreBase, SHFChannelBase
+from laboneq.controller.devices.device_shf_base import (
+    OPT_16_INTEGRATORS,
+    OPT_LONG_READOUT,
+    DeviceSHFBase,
+)
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import RawReadoutData
-from laboneq.controller.devices.qachannel import QAChannel
+from laboneq.controller.devices.qachannel import QAChannel, SHFQAMixIn
 from laboneq.controller.recipe_processor import (
+    VIRTUAL_SHFSG_UID_SUFFIX,
+    AwgType,
     RecipeData,
     RtExecutionInfo,
     WaveformItem,
-    get_artifacts,
-    get_initialization_by_device_uid,
 )
-from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.for_each import for_each
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.data.recipe import (
-    IO,
     Initialization,
-    IntegratorAllocation,
     NtStepKey,
 )
-from laboneq.data.scheduled_experiment import ArtifactsCodegen, ScheduledExperiment
+from laboneq.data.scheduled_experiment import ScheduledExperiment
 
 _logger = logging.getLogger(__name__)
 
@@ -46,28 +44,7 @@ SOFTWARE_TRIGGER_CHANNEL = 1024  # Software triggering on the SHFQA
 SAMPLE_FREQUENCY_HZ = 2.0e9
 
 
-def _integrator_has_consistent_msd_num_state(
-    integrator_allocation: IntegratorAllocation,
-):
-    num_states = integrator_allocation.kernel_count + 1
-    num_thresholds = len(integrator_allocation.thresholds)
-    num_expected_thresholds = (num_states - 1) * num_states // 2
-
-    def pluralize(n, noun):
-        return f"{n} {noun}{'s' if n > 1 else ''}"
-
-    if num_thresholds != num_expected_thresholds:
-        raise LabOneQControllerException(
-            f"Multi discrimination configuration of experiment is not consistent."
-            f" For {pluralize(num_states, 'state')}, I expected"
-            f" {pluralize(integrator_allocation.kernel_count, 'kernel')}"
-            f" and {pluralize(num_expected_thresholds, 'threshold')}, but got"
-            f" {pluralize(num_thresholds, 'threshold')}.\n"
-            "For n states, there should be n-1 kernels, and (n-1)*n/2 thresholds."
-        )
-
-
-class DeviceSHFQA(DeviceSHFBase):
+class DeviceSHFQA(SHFQAMixIn, DeviceSHFBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.dev_type = "SHFQA4"
@@ -81,10 +58,10 @@ class DeviceSHFQA(DeviceSHFBase):
         self._wait_for_awgs = True
         self._emit_trigger = False
 
-    def all_cores(self) -> Iterator[CoreBase]:
+    def all_cores(self) -> Iterable[CoreBase]:
         return iter(self._qachannels)
 
-    def allocated_cores(self, recipe_data: RecipeData) -> Iterator[CoreBase]:
+    def allocated_cores(self, recipe_data: RecipeData) -> Iterable[CoreBase]:
         for ch in recipe_data.allocated_awgs(self.uid):
             yield self._qachannels[ch]
 
@@ -110,11 +87,12 @@ class DeviceSHFQA(DeviceSHFBase):
                 self.dev_type,
             )
             self._channels = 4
-        if "16W" in self.dev_opts or self.dev_type == "SHFQA4":
-            self._integrators = 16
-        else:
-            self._integrators = 8
-        self._long_readout_available = "LRT" in self.dev_opts
+        self._integrators = (
+            16
+            if OPT_16_INTEGRATORS in self.dev_opts or self.dev_type == "SHFQA4"
+            else 8
+        )
+        self._long_readout_available = OPT_LONG_READOUT in self.dev_opts
         self._qachannels = [
             QAChannel(
                 api=self._api,
@@ -129,93 +107,26 @@ class DeviceSHFQA(DeviceSHFBase):
             for core_index in range(self._channels)
         ]
 
-    def _validate_range(self, io: IO, is_out: bool):
-        if io.range is None:
-            return
-        input_ranges = np.array(
-            [-50, -45, -40, -35, -30, -25, -20, -15, -10, -5, 0, 5, 10],
-            dtype=np.float64,
-        )
-        output_ranges = np.array(
-            [-30, -25, -20, -15, -10, -5, 0, 5, 10], dtype=np.float64
-        )
-        range_list = output_ranges if is_out else input_ranges
-        label = "Output" if is_out else "Input"
-
-        if io.range_unit not in (None, "dBm"):
-            raise LabOneQControllerException(
-                f"{label} range of device {self.dev_repr} is specified in "
-                f"units of {io.range_unit}. Units must be 'dBm'."
-            )
-        if not any(np.isclose([io.range] * len(range_list), range_list)):
-            _logger.warning(
-                "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. "
-                "Nearest allowed range will be used.",
-                self.dev_repr,
-                label,
-                io.channel,
-                io.range,
-                range_list,
-            )
-
     def validate_scheduled_experiment(
         self,
         scheduled_experiment: ScheduledExperiment,
         rt_execution_info: RtExecutionInfo,
     ):
-        artifacts = get_artifacts(scheduled_experiment.artifacts, ArtifactsCodegen)
-        long_readout_signals = artifacts.requires_long_readout.get(self.uid, [])
-        if len(long_readout_signals) > 0:
-            if not self._long_readout_available:
-                raise LabOneQControllerException(
-                    f"{self.dev_repr}: Experiment requires long readout that is not available on the device."
-                )
-
-        initialization = get_initialization_by_device_uid(
-            scheduled_experiment.recipe, self.uid
+        self._validate_scheduled_experiment_shfqa(
+            scheduled_experiment=scheduled_experiment
         )
-        if initialization is not None:
-            for output in initialization.outputs:
-                self._warn_for_unsupported_param(
-                    param_assert=output.offset is None or output.offset == 0,
-                    param_name="voltage_offsets",
-                    channel=output.channel,
-                )
-                self._warn_for_unsupported_param(
-                    param_assert=output.gains is None,
-                    param_name="correction_matrix",
-                    channel=output.channel,
-                )
-                if output.range is not None:
-                    self._validate_range(output, is_out=True)
-                if output.enable_output_mute and not self._is_plus:
-                    _logger.warning(
-                        f"{self.dev_repr}: Device output muting is enabled, but the device is not"
-                        " SHF+ and therefore no muting will happen. It is suggested to disable it."
-                    )
 
-            for input in initialization.inputs:
-                self._validate_range(input, is_out=False)
-                matching_output: IO | None = next(
-                    (
-                        output
-                        for output in initialization.outputs
-                        if output.channel == input.channel
-                    ),
-                    None,
-                )
-                if matching_output is None:
-                    continue
-                assert input.port_mode == matching_output.port_mode, (
-                    f"{self.dev_repr}: Port mode mismatch between input and output of"
-                    f" channel {input.channel}."
-                )
+    def pre_process_attributes(
+        self,
+        initialization: Initialization,
+    ) -> Iterator[DeviceAttribute]:
+        yield from super().pre_process_attributes(initialization)
+        yield from self._pre_process_attributes_shfqa(initialization)
 
     def validate_recipe_data(self, recipe_data: RecipeData):
-        for integrator_allocation in recipe_data.recipe.integrator_allocations:
-            _integrator_has_consistent_msd_num_state(integrator_allocation)
+        self._validate_recipe_data_shfqa(recipe_data=recipe_data)
 
-    def _make_osc_path(self, channel: int, index: int) -> str:
+    def _make_osc_path(self, channel: int, index: int, awg_type: AwgType) -> str:
         return self._qachannels[channel].nodes.osc_freq[index]
 
     def _busy_nodes(self, recipe_data: RecipeData) -> list[str]:
@@ -226,13 +137,6 @@ class DeviceSHFQA(DeviceSHFBase):
             for ch in recipe_data.allocated_awgs(self.uid)
         ]
 
-    async def start_execution(self, recipe_data: RecipeData):
-        await for_each(
-            self.allocated_cores(recipe_data=recipe_data),
-            CoreBase.start_execution,
-            with_pipeliner=recipe_data.rt_execution_info.with_pipeliner,
-        )
-
     async def setup_one_step_execution(
         self, recipe_data: RecipeData, nt_step: NtStepKey, with_pipeliner: bool
     ):
@@ -240,7 +144,9 @@ class DeviceSHFQA(DeviceSHFBase):
             self._has_awg_in_use(recipe_data)
             # TODO(2K): Remove this workaround once SHFQC is correctly modelled in the controller.
             or self.options.is_qc is True
-            and self._has_awg_in_use(recipe_data, device_uid=self.uid + "_sg")
+            and self._has_awg_in_use(
+                recipe_data, device_uid=self.uid + VIRTUAL_SHFSG_UID_SUFFIX
+            )
         )
         await self._set_hw_sync(hw_sync=hw_sync, emit_trigger=self._emit_trigger)
 
@@ -268,53 +174,8 @@ class DeviceSHFQA(DeviceSHFBase):
 
         await for_each(
             self.allocated_cores(recipe_data=recipe_data),
-            QAChannel.teardown_one_step_execution,
-            with_pipeliner=recipe_data.rt_execution_info.with_pipeliner,
-        )
-
-    def pre_process_attributes(
-        self,
-        initialization: Initialization,
-    ) -> Iterator[DeviceAttribute]:
-        yield from super().pre_process_attributes(initialization)
-
-        for output in initialization.outputs or []:
-            if output.amplitude is not None:
-                yield DeviceAttribute(
-                    name=AttributeName.QA_OUT_AMPLITUDE,
-                    index=output.channel,
-                    value_or_param=output.amplitude,
-                )
-
-        center_frequencies: dict[int, int] = {}
-        ios = (initialization.outputs or []) + (initialization.inputs or [])
-        for idx, io in enumerate(ios):
-            if io.lo_frequency is not None:
-                if io.channel in center_frequencies:
-                    prev_io_idx = center_frequencies[io.channel]
-                    if ios[prev_io_idx].lo_frequency != io.lo_frequency:
-                        raise LabOneQControllerException(
-                            f"{self.dev_repr}: Local oscillator frequency mismatch between IOs "
-                            f"sharing channel {io.channel}: "
-                            f"{ios[prev_io_idx].lo_frequency} != {io.lo_frequency}"
-                        )
-                    continue
-                center_frequencies[io.channel] = idx
-                yield DeviceAttribute(
-                    name=AttributeName.QA_CENTER_FREQ,
-                    index=io.channel,
-                    value_or_param=io.lo_frequency,
-                )
-
-    async def apply_initialization(self, recipe_data: RecipeData):
-        device_recipe_data = recipe_data.device_settings.get(self.uid)
-        if device_recipe_data is None:
-            return
-
-        await for_each(
-            self.all_cores(),
-            QAChannel.apply_initialization,
-            device_recipe_data=device_recipe_data,
+            SHFChannelBase.teardown_one_step_execution,
+            with_pipeliner=recipe_data.rt_execution_info.is_chunked,
         )
 
     async def _set_nt_step_nodes(
@@ -349,7 +210,7 @@ class DeviceSHFQA(DeviceSHFBase):
                 nc = NodeCollector(base=f"/{self.serial}/")
                 nc.add("system/internaltrigger/enable", 0)
                 nc.add("system/internaltrigger/repetitions", 1)
-                await self.set_async(nc)
+                await self._api.set_parallel(nc)
 
         trig_channel = 0
         if self.is_standalone():
@@ -370,7 +231,7 @@ class DeviceSHFQA(DeviceSHFBase):
             nc = NodeCollector(base=f"/{self.serial}/qachannels/0/")
             nc.add("markers/0/source", 32)
             nc.add("markers/1/source", 36)
-            await self.set_async(nc)
+            await self._api.set_parallel(nc)
 
     async def on_experiment_begin(self, recipe_data: RecipeData):
         await _gather(
@@ -383,11 +244,12 @@ class DeviceSHFQA(DeviceSHFBase):
         )
 
     async def on_experiment_end(self):
-        await super().on_experiment_end()
-        nc = NodeCollector(base=f"/{self.serial}/")
-        # in CW spectroscopy mode, turn off the tone
-        nc.add("qachannels/*/spectroscopy/envelope/enable", 1, cache=False)
-        await self.set_async(nc)
+        await _gather(
+            super().on_experiment_end(),
+            self._api.set_parallel(
+                QAChannel.on_experiment_end_nodes(base=f"/{self.serial}/")
+            ),
+        )
 
     async def get_measurement_data(
         self,
@@ -409,66 +271,30 @@ class DeviceSHFQA(DeviceSHFBase):
         integrators: list[int],
         rt_execution_info: RtExecutionInfo,
     ) -> RawReadoutData:
-        if len(integrators) == 1:
-            rt_result = all_raw_readouts[integrators[0]]
-            if rt_execution_info.acquisition_type == AcquisitionType.DISCRIMINATION:
-                rt_result.vector = rt_result.vector.real
-            return rt_result
-        raise LabOneQControllerException(
-            f"{self.dev_repr}: Internal error. Readout extraction is only supported for 1 integrator per signal, provided: {integrators}"
+        return QAChannel.extract_raw_readout(
+            dev_repr=self.dev_repr,
+            all_raw_readouts=all_raw_readouts,
+            integrators=integrators,
+            rt_execution_info=rt_execution_info,
         )
-
-    def _ch_repr_scope(self, ch: int) -> str:
-        return f"{self.dev_repr}:scope:ch{ch}"
 
     async def get_raw_data(
         self, channel: int, acquire_length: int, acquires: int | None, timeout_s: float
     ) -> RawReadoutData:
-        result_path = self._qachannels[channel].nodes.scope_result_wave
-        # Segment lengths are always multiples of 16 samples.
-        segment_length = (acquire_length + 0xF) & (~0xF)
-        if acquires is None:
-            acquires = 1
-        try:
-            raw_result = await self._subscriber.get_result(
-                result_path, timeout_s=timeout_s
-            )
-            raw_data = np.reshape(raw_result.vector, (acquires, segment_length))
-        except (TimeoutError, asyncio.TimeoutError):
-            _logger.error(
-                f"{self._ch_repr_scope(channel)}: Failed to receive a result from {result_path} within {timeout_s} seconds."
-            )
-            raw_data = np.full((acquires, segment_length), np.nan, dtype=np.complex128)
-        return RawReadoutData(raw_data)
+        return await self._qachannels[channel].get_raw_data(
+            acquire_length=acquire_length,
+            acquires=acquires,
+            timeout_s=timeout_s,
+        )
 
     async def reset_to_idle(self):
         await super().reset_to_idle()
-        nc = NodeCollector(base=f"/{self.serial}/")
-        # Reset pipeliner first, attempt to set generator enable leads to FW error if pipeliner was enabled.
-        nc.add("qachannels/*/pipeliner/reset", 1, cache=False)
-        nc.add("qachannels/*/pipeliner/mode", 0, cache=False)  # off
-        nc.add("qachannels/*/synchronization/enable", 0, cache=False)
-        nc.barrier()
-        nc.add("qachannels/*/generator/enable", 0, cache=False)
-        nc.add("system/synchronization/source", 0, cache=False)  # internal
-        if self.options.is_qc:
-            nc.add("system/internaltrigger/synchronization/enable", 0, cache=False)
-        nc.add("qachannels/*/readout/result/enable", 0, cache=False)
-        nc.add("qachannels/*/spectroscopy/psd/enable", 0, cache=False)
-        nc.add("qachannels/*/spectroscopy/result/enable", 0, cache=False)
-        nc.add("qachannels/*/output/rflfinterlock", 1, cache=False)
-        if self._long_readout_available:
-            nc.add("qachannels/*/modulation/enable", 0, cache=False)
-            nc.add("qachannels/*/generator/waveforms/*/hold/enable", 0, cache=False)
-            nc.add(
-                "qachannels/*/readout/integration/downsampling/factor", 1, cache=False
-            )
-        # Factory value after reset is 0.5 to avoid clipping during interpolation.
-        # We set it to 1.0 for consistency with integration mode.
-        nc.add("qachannels/*/oscs/*/gain", 1.0, cache=False)
-        nc.add("scopes/0/enable", 0, cache=False)
-        nc.add("scopes/0/channels/*/enable", 0, cache=False)
-        await self.set_async(nc)
+        nc_qa = QAChannel.reset_to_idle_nodes(
+            base=f"/{self.serial}/",
+            is_qc=self.options.is_qc is True,
+            long_readout_available=self._long_readout_available,
+        )
+        await self._api.set_parallel(nc_qa)
 
     def _collect_warning_nodes(self) -> list[tuple[str, str]]:
         warning_nodes = []

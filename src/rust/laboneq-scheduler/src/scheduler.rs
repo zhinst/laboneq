@@ -3,8 +3,6 @@
 
 use std::collections::HashMap;
 
-use laboneq_units::tinysample::TinySamples;
-
 use crate::ChunkingInfo;
 use crate::ExperimentContext;
 use crate::ScheduledNode;
@@ -22,11 +20,9 @@ use crate::parameter_store::ParameterStore;
 use crate::resolve_parameters::resolve_parameters;
 use crate::resolve_repetition_mode::resolve_repetition_mode;
 use crate::signal_info::SignalInfo;
-use crate::utils::compute_grid;
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ScheduledExperiment {
-    pub system_grid: TinySamples,
     /// Parameters used in the scheduled experiment
     pub parameters: HashMap<ParameterUid, SweepParameter>,
     pub root: Option<ScheduledNode>,
@@ -46,7 +42,6 @@ pub fn schedule_experiment<T: SignalInfo>(
         return Ok(ScheduledExperiment::default());
     }
     let mut root_section = real_time_root.unwrap().clone();
-    let system_grid = compute_grid(&context.signals.values().collect::<Vec<_>>()).1;
     // TODO: Preferably move chunking after scheduling after Rust migration.
     // Currently not possible as the scheduling in called per chunk.
     if let Some(chunking_info) = &chunking_info {
@@ -55,8 +50,7 @@ pub fn schedule_experiment<T: SignalInfo>(
     // TODO: Where in the IR tree `acquisition_type` should be stored?
     let acquisition_type =
         find_acquisition_type(&root_section).expect("Unspecified acquisition type.");
-    let mut scheduled_node =
-        lower_to_ir(&root_section, &context, near_time_parameters, system_grid)?;
+    let mut scheduled_node = lower_to_ir(&root_section, &context, near_time_parameters)?;
     resolve_repetition_mode(&mut scheduled_node)?;
     validate_ir(&scheduled_node)?;
     adjust_acquisition_lengths(&mut scheduled_node, context.signals, acquisition_type);
@@ -71,7 +65,6 @@ pub fn schedule_experiment<T: SignalInfo>(
         near_time_parameters,
     )?;
     let exp = ScheduledExperiment {
-        system_grid,
         root: Some(scheduled_node),
         parameters: context.parameters.clone(),
     };

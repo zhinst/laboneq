@@ -13,7 +13,7 @@ use crate::experiment::{ExperimentNode, NodeChild};
 use crate::experiment_context::ExperimentContext;
 use crate::ir::{Case, IrKind, Match};
 use crate::lower_experiment::local_context::LocalContext;
-use crate::lower_experiment::lower_children;
+use crate::lower_experiment::{adjust_node_grids, lower_children};
 use crate::schedule_info::ScheduleInfoBuilder;
 
 use crate::{ScheduledNode, SignalInfo};
@@ -39,10 +39,9 @@ pub(super) fn lower_match(
         uid: section.uid,
         target: section.target.clone(),
         local: section.local.unwrap_or(false),
-        play_after: section.play_after.clone(),
     };
 
-    let mut schedule_builder = ScheduleInfoBuilder::new().grid(local_ctx.system_grid);
+    let mut schedule_builder = ScheduleInfoBuilder::new().play_after(section.play_after.clone());
     if let experiment_types::MatchTarget::Handle(handle) = &match_.target {
         // TODO (PW) is this correct? should it not be 100 ns regardless of the sampling rate?
         let signal = ctx.get_signal(ctx.handle_to_signal.get(handle).unwrap())?;
@@ -55,9 +54,8 @@ pub(super) fn lower_match(
             (grid as f64 / signal.sampling_rate()).into(),
         ));
     }
-    let schedule = schedule_builder.grid(local_ctx.system_grid).build();
 
-    let mut root = ScheduledNode::new(IrKind::Match(match_), schedule);
+    let mut root = ScheduledNode::new(IrKind::Match(match_), schedule_builder.build());
     // Matching a sweep parameter requires special handling as each case
     // maps to a specific iteration of a loop.
     if let experiment_types::MatchTarget::SweepParameter(param_uid) = &section.target {
@@ -74,17 +72,30 @@ pub(super) fn lower_match(
                 state: iteration,
             });
             let mut case_node = ScheduledNode::new(kind, ScheduleInfoBuilder::new().build());
-            local_ctx
-                .with_section(case.uid, |local| {
-                    lower_children(&target_case.children, ctx, local)
-                })?
-                .into_iter()
-                .for_each(|child| {
-                    case_node.add_child(tiny_samples(0), child);
-                });
+            let (children, reserved_signals) = local_ctx.with_section(case.uid, |local| {
+                lower_children(&target_case.children, ctx, local)
+            })?;
+            case_node
+                .schedule
+                .signals
+                .extend(reserved_signals.iter().cloned());
+            for child in children {
+                case_node.add_child(tiny_samples(0), child);
+            }
+            let (grid, sequencer_grid) =
+                local_ctx.calculate_grids(case_node.schedule.signals.iter().cloned(), false, false);
+            case_node.schedule.grid = grid;
+            case_node.schedule.sequencer_grid = sequencer_grid;
+            adjust_node_grids(&mut case_node);
             root.add_child(tiny_samples(0), case_node);
         }
+        let (grid, sequencer_grid) =
+            local_ctx.calculate_grids(root.schedule.signals.iter().cloned(), false, false);
+        root.schedule.grid = grid;
+        root.schedule.sequencer_grid = sequencer_grid;
     } else {
+        root.schedule.grid = local_ctx.system_grid;
+        root.schedule.sequencer_grid = local_ctx.system_grid;
         for child in &node.children {
             let case =
                 cast_case(&child.kind).ok_or_else(|| Error::new("Expected a case operation."))?;
@@ -103,18 +114,26 @@ pub(super) fn lower_match(
                     .grid(local_ctx.system_grid)
                     .build(),
             );
-            local_ctx
-                .with_section(case.uid, |local_ctx| {
-                    lower_children(&child.children, ctx, local_ctx)
-                })?
-                .into_iter()
-                .for_each(|child| {
-                    case_node.add_child(tiny_samples(0), child);
-                });
+            let (children, reserved_signals) = local_ctx.with_section(case.uid, |local| {
+                lower_children(&child.children, ctx, local)
+            })?;
+            case_node
+                .schedule
+                .signals
+                .extend(reserved_signals.iter().cloned());
+            for child in children {
+                case_node.add_child(tiny_samples(0), child);
+            }
+            let (grid, sequencer_grid) =
+                local_ctx.calculate_grids(case_node.schedule.signals.iter().cloned(), false, false);
+            case_node.schedule.grid = grid;
+            case_node.schedule.sequencer_grid = sequencer_grid;
+            adjust_node_grids(&mut case_node);
             root.add_child(tiny_samples(0), case_node);
         }
         process_empty_branches(&mut root);
     }
+    adjust_node_grids(&mut root);
     Ok(root)
 }
 

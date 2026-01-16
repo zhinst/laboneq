@@ -167,7 +167,6 @@ class Recipe:
     oscillator_params: list[OscillatorParam] = field(default_factory=list)
     integrator_allocations: list[IntegratorAllocation] = field(default_factory=list)
     acquire_lengths: list[AcquireLength] = field(default_factory=list)
-    simultaneous_acquires: list[dict[str, str]] = field(default_factory=list)
     total_execution_time: float = 0.0
     max_step_execution_time: float = 0.0
     is_spectroscopy: bool = False

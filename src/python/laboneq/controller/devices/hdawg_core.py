@@ -262,7 +262,7 @@ class HDAwgCore(CoreBase):
             *[output.disable_output(outputs, invert) for output in self._outputs]
         )
 
-    async def apply_initialization(self, device_recipe_data: DeviceRecipeData):
+    async def apply_core_initialization(self, device_recipe_data: DeviceRecipeData):
         awg_core_recipe_data = device_recipe_data.hdawgcores.get(self._core_index)
         awg_config = device_recipe_data.awg_configs.get(self._core_index)
         if awg_core_recipe_data is None:
@@ -343,14 +343,14 @@ class HDAwgCore(CoreBase):
         elf_nodes = NodeCollector()
         upload_ready_conditions: dict[str, Any] = {}
 
-        if rt_execution_info.with_pipeliner:
+        if rt_execution_info.is_chunked:
             # enable pipeliner
             elf_nodes.extend(self._pipeliner.prepare_for_upload())
 
-        for pipeliner_job in range(rt_execution_info.pipeliner_jobs):
+        for pipeliner_job in range(rt_execution_info.chunk_count_or_1):
             effective_nt_step = (
                 NtStepKey(indices=tuple([*nt_step.indices, pipeliner_job]))
-                if rt_execution_info.with_pipeliner
+                if rt_execution_info.is_chunked
                 else nt_step
             )
             rt_exec_step = next(
@@ -364,7 +364,7 @@ class HDAwgCore(CoreBase):
                 None,
             )
 
-            if rt_execution_info.with_pipeliner:
+            if rt_execution_info.is_chunked:
                 rt_exec_step = self._pipeliner._reload_tracker.calc_next_step(
                     pipeliner_job=pipeliner_job,
                     rt_exec_step=rt_exec_step,
@@ -402,10 +402,10 @@ class HDAwgCore(CoreBase):
                     cache=False,
                 )
 
-            if rt_execution_info.with_pipeliner:
+            if rt_execution_info.is_chunked:
                 elf_nodes.extend(self._pipeliner.commit())
 
-        if rt_execution_info.with_pipeliner:
+        if rt_execution_info.is_chunked:
             upload_ready_conditions.update(self._pipeliner.ready_conditions())
 
         rw = ResponseWaiterAsync(api=self._api, dev_repr=self._unit_repr, timeout_s=10)

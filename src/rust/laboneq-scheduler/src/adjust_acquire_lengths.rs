@@ -87,7 +87,7 @@ fn calculate_max_lengths_per_awg(
         |mut acc, (awg_key, acquires)| {
             let max_length = acquires
                 .iter()
-                .map(|acquire| acquire.length)
+                .map(|acquire| acquire.length())
                 .max()
                 .expect("There should be at least one acquisition");
             acc.insert(*awg_key, max_length);
@@ -106,7 +106,7 @@ fn apply_max_lengths_to_acquisitions(
             .expect("Max length should exist for every AWG");
 
         for acquire in acquires {
-            acquire.length = *max_length;
+            acquire.resolve_length(*max_length);
         }
     }
 }

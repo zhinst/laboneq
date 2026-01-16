@@ -196,7 +196,7 @@ class DeviceLeaderBase(DeviceBase):
 
     async def teardown_one_step_execution(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
-        if recipe_data.rt_execution_info.with_pipeliner:
+        if recipe_data.rt_execution_info.is_chunked:
             nc.add("execution/synchronization/enable", 0)
         await self.set_async(nc)
 

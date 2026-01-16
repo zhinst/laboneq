@@ -69,7 +69,7 @@ class NearTimeRunner(AsyncExecutorBase, Generic[_SessionClass]):
             raise LabOneQControllerException(
                 "Internal error: Originating session has been destroyed."
             )
-        experiment_results = self.execution_context.submission.results
+        experiment_results = self.execution_context.submission.results_builder.results
         protected_session = ProtectedSession(
             wrapped_session=parent_session,
             controller=self.controller,

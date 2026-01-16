@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import TYPE_CHECKING, NamedTuple, Union
 
-from laboneq.compiler.common.awg_info import AwgKey
+from laboneq.data.awg_info import AwgKey
 
 if TYPE_CHECKING:
     from laboneq.compiler.workflow.compiler import IntegrationUnitAllocation

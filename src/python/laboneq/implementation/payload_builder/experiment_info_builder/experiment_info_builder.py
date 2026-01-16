@@ -16,7 +16,6 @@ from laboneq._utils import UIDReference, ensure_list, id_generator
 from laboneq.compiler import DeviceType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.path import LogicalSignalGroups_Path, insert_logical_signal_prefix
-from laboneq.core.types.enums import AveragingMode
 from laboneq.core.types.enums import acquisition_type as acq_type
 from laboneq.core.types.units import Quantity
 from laboneq.data.calibration import (
@@ -42,7 +41,6 @@ from laboneq.data.compilation_job import (
     ParameterInfo,
     PrecompensationInfo,
     PRNGInfo,
-    PulseDef,
     SectionInfo,
     SectionSignalPulse,
     SignalInfo,
@@ -99,7 +97,6 @@ class ExperimentInfoBuilder:
         self._chunking_info: ChunkingInfo | None = None
         self._oscillators: dict[str, OscillatorInfo] = {}
         self._signal_infos: dict[str, SignalInfo] = {}
-        self._pulse_defs: dict[str, PulseDef] = {}
 
         self._device_info = DeviceInfoBuilder(self._device_setup)
         self._setup_helper = SetupHelper(self._device_setup)
@@ -137,12 +134,10 @@ class ExperimentInfoBuilder:
             signals=sorted(self._signal_infos.values(), key=lambda s: s.uid),
             sections=root_sections,
             global_leader_device=self._device_info.global_leader,
-            pulse_defs=sorted(self._pulse_defs.values(), key=lambda s: s.uid),
             chunking=self._chunking_info,
             src=self._experiment,
             dsl_parameters=list(self._dsl_parameters.values()),
         )
-        self._resolve_seq_averaging(experiment_info)
         self._resolve_oscillator_modulation_type(experiment_info)
         return experiment_info
 
@@ -257,7 +252,7 @@ class ExperimentInfoBuilder:
         if oscillator.uid in self._oscillators:
             if self._oscillators[oscillator.uid] != oscillator_info:
                 raise LabOneQException(
-                    f"Found multiple, inconsistent oscillators with same UID  {oscillator.uid}."
+                    f"Found multiple, inconsistent oscillators with same UID '{oscillator.uid}'."
                 )
             oscillator_info = self._oscillators[oscillator.uid]
         else:
@@ -604,16 +599,10 @@ class ExperimentInfoBuilder:
                     visit_count,
                 )
                 section_info.children.append(child_section)
-                section_info.sections_and_operations.append(child_section)
             elif (
-                type(child_operation) is ResetOscillatorPhase
-                and child_operation.signal is None
+                isinstance(child_operation, SignalOperation)
+                and child_operation.signal is not None
             ):
-                section_info.sections_and_operations.append(
-                    SectionSignalPulse(signal=None, reset_oscillator_phase=True)
-                )
-            elif isinstance(child_operation, SignalOperation):
-                assert child_operation.signal is not None
                 try:
                     signal_info = self._signal_infos[child_operation.signal]
                 except KeyError as e:
@@ -629,7 +618,6 @@ class ExperimentInfoBuilder:
                     section_info,
                 )
                 section_info.pulses.extend(operations)
-                section_info.sections_and_operations.extend(operations)
         for trigger_signal in section.trigger:
             try:
                 signal_info = self._signal_infos[trigger_signal]
@@ -650,7 +638,6 @@ class ExperimentInfoBuilder:
         for k, v in markers_raw.items():
             marker_pulse = v.get("waveform")
             if marker_pulse is not None:
-                self._add_pulse(marker_pulse)
                 marker_pulse_id = marker_pulse.uid
             else:
                 marker_pulse_id = None
@@ -789,8 +776,6 @@ class ExperimentInfoBuilder:
 
         for pulse, op_pars in zip(pulses, operation_pulse_parameters_list):
             if pulse is not None:
-                pulse_def = self._add_pulse(pulse)
-
                 pulse_pulse_parameters = getattr(pulse, "pulse_parameters", {})
                 if pulse_pulse_parameters is not None:
                     pulse_pulse_parameters = {
@@ -801,7 +786,7 @@ class ExperimentInfoBuilder:
                 ssps.append(
                     SectionSignalPulse(
                         signal=signal_info,
-                        pulse=pulse_def,
+                        pulse=None,
                         length=operation_length,
                         amplitude=amplitude,
                         phase=phase,
@@ -972,24 +957,6 @@ class ExperimentInfoBuilder:
 
         return section_info
 
-    def _add_pulse(self, pulse) -> PulseDef:
-        if pulse.uid not in self._pulse_defs:
-            function = getattr(pulse, "function", None)
-            length = getattr(pulse, "length", None)
-            samples = getattr(pulse, "samples", None)
-            amplitude = getattr(pulse, "amplitude", 1.0)
-            can_compress = getattr(pulse, "can_compress", False)
-
-            self._pulse_defs[pulse.uid] = PulseDef(
-                uid=pulse.uid,
-                function=function,
-                length=length,
-                amplitude=amplitude,
-                can_compress=can_compress,
-                samples=samples,
-            )
-        return self._pulse_defs[pulse.uid]
-
     @staticmethod
     def _find_sweeps_by_parameter(
         root_sections: list[SectionInfo],
@@ -1108,113 +1075,6 @@ class ExperimentInfoBuilder:
 
         for root_section in root_sections:
             traverse_check_all_rt_inside_rt_loop(root_section)
-
-    @staticmethod
-    def _find_acquire_loop_with_parent(
-        parent: SectionInfo | ExperimentInfo,
-    ) -> tuple[SectionInfo | ExperimentInfo, SectionInfo] | None:
-        """DFS for the acquire loop"""
-        if isinstance(parent, SectionInfo):
-            children = parent.children
-        else:
-            children = parent.sections
-        for child in children:
-            if child.averaging_mode is not None:
-                return parent, child
-            if acquire_loop := ExperimentInfoBuilder._find_acquire_loop_with_parent(
-                child
-            ):
-                return acquire_loop
-        return None
-
-    @staticmethod
-    def _find_innermost_sweep_for_seq_averaging(
-        parent: SectionInfo,
-    ) -> SectionInfo | None:
-        innermost_sweep = None
-        for child in parent.children:
-            this_innermost_sweep = (
-                ExperimentInfoBuilder._find_innermost_sweep_for_seq_averaging(child)
-            )
-            if innermost_sweep is not None and this_innermost_sweep is not None:
-                raise LabOneQException(
-                    f"Section '{parent.uid}' has multiple sweeping subsections."
-                    f" This is illegal in sequential averaging mode."
-                )
-            innermost_sweep = this_innermost_sweep or innermost_sweep
-        if innermost_sweep is not None:
-            return innermost_sweep
-        if (
-            parent.count is not None
-            and parent.averaging_mode is None
-            and not parent.prng_sample
-            is not None  # PRNG loop is considered to be inside shot
-        ):
-            # this section is a sweep (aka loop but not averaging)
-            return parent
-        return None
-
-    def _resolve_seq_averaging(self, experiment_info: ExperimentInfo):
-        acquire_loop_with_parent = self._find_acquire_loop_with_parent(experiment_info)
-        if acquire_loop_with_parent is None:
-            return  # no acquire loop
-        parent, acquire_loop = acquire_loop_with_parent
-
-        if acquire_loop.averaging_mode != AveragingMode.SEQUENTIAL:
-            return
-
-        innermost_sweep = self._find_innermost_sweep_for_seq_averaging(acquire_loop)
-        if innermost_sweep is None:
-            _logger.debug("Sequential averaging but no real-time sweep")
-            return
-
-        current_section = acquire_loop
-        while current_section is not innermost_sweep:
-            if len(current_section.children) != 1:
-                raise LabOneQException(
-                    f"Section '{current_section.uid}' has multiple children."
-                    " With sequential averaging, the section graph from acquire loop to"
-                    " inner-most sweep must be a linear chain, with only a single"
-                    " subsection at each level. "
-                )
-            [current_section] = current_section.children
-
-        # We now know where the acquire loop _should_ go. Let's graft it there.
-        # First, remove it from its original location...
-        if not isinstance(parent, ExperimentInfo):
-            parent.children = acquire_loop.children
-        else:
-            parent.sections = acquire_loop.children
-        # ... and then re-insert it into the bottom of the tree.
-        acquire_loop.children = innermost_sweep.children
-        acquire_loop.sections_and_operations = innermost_sweep.sections_and_operations
-        innermost_sweep.children = [acquire_loop]
-        innermost_sweep.sections_and_operations = [acquire_loop]
-        # Similarly, move the pulses (also children) of the loops. Here, the added
-        # caveat is that any pulses directly in the acquire loop have nowhere to go, so
-        # we forbid them.
-        if acquire_loop.pulses or acquire_loop.signals:
-            raise LabOneQException(
-                "Pulses directly in the acquire loop are not allowed in sequential "
-                "averaging mode. Place them inside the sweep instead."
-            )
-        acquire_loop.pulses, innermost_sweep.pulses = innermost_sweep.pulses, []
-        acquire_loop.signals, innermost_sweep.signals = innermost_sweep.signals, []
-
-        # The acquire loop inherits the sweep's alignment; this is required for
-        # fixed-repetition-time shots to be right-aligned.
-        #
-        # [----------------- sweep iteration 1 ------------------][--- sweep iteration 2 ...
-        # [-- shot 1 --][-- shot 2 --][-- shot 3 --][-- shot 4 --][-- shot 1 --][...
-        #     [==body==]    [==body==]    [==body==]    [==body==]    [...
-        #               |<---------->|
-        #               repetition time
-        acquire_loop.alignment = innermost_sweep.alignment
-
-        # todo(PW): What about repetition time?
-        #  Should repetition time be associated with the outermost sweep?
-        #  Currently the scheduler appears to handle this just fine; it picks up the
-        #  correct repetition time no matter where it is located in the tree.
 
     def _resolve_oscillator_modulation_type(self, experiment_info: ExperimentInfo):
         for signal in experiment_info.signals:

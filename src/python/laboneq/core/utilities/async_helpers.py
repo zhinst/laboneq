@@ -8,6 +8,7 @@ import concurrent
 import concurrent.futures
 import signal
 import threading
+import time
 from contextlib import contextmanager
 from typing import Callable, Coroutine, Generic, TypeVar
 
@@ -24,14 +25,15 @@ class EventLoopHolder:
     of the process.
 
     **Warning:**
-    This class does not provide a mechanism to terminate the event loop. It is the
+    This class does not provide an automatism to terminate the event loop. It is the
     caller's responsibility to ensure that this class is instantiated only once
-    per desired event loop scope and that the instance is reused as needed.
+    per desired event loop scope, that the instance is reused as needed, or a call
+    to stop() is issued.
     """
 
     def __init__(self):
         self._thread: threading.Thread | None = None
-        self._loop = asyncio.new_event_loop()
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def run(self, func: Callable[..., Coroutine[None, None, T]], *args, **kwargs) -> T:
         self._ensure_event_loop()
@@ -39,6 +41,21 @@ class EventLoopHolder:
             return self._wait_with_yielding(
                 asyncio.run_coroutine_threadsafe(func(*args, **kwargs), self._loop)
             )
+
+    def start(self) -> None:
+        if not self._loop:
+            self._loop = asyncio.new_event_loop()
+        self._ensure_event_loop()
+
+    def stop(self) -> None:
+        if self._loop:
+            self._loop.stop()
+            while self._loop.is_running():
+                self._loop.call_soon_threadsafe(lambda: None)  # wake up the loop
+                time.sleep(0.01)
+            self._loop.close()
+        self._loop = None
+        self._thread = None
 
     def _ensure_event_loop(self):
         if self._thread is None:
@@ -102,7 +119,7 @@ class AsyncWorker(Generic[T]):
 
     Calling `stop` will block until all items in the queue are processed and the worker is stopped.
 
-    Make sure no exceptions escape from `run_one` — they’ll only be
+    Make sure no exceptions escape from `run_one` — they'll only be
     caught by the worker lifecycle logic as a last resort, and likely at an inappropriate point
     in execution, and also will prevent the worker from processing subsequent items.
     """

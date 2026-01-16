@@ -6,13 +6,15 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
+    DeviceAttribute,
     DeviceAttributesView,
 )
 from laboneq.controller.devices.async_support import (
@@ -22,7 +24,7 @@ from laboneq.controller.devices.async_support import (
     _gather,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
-from laboneq.controller.devices.core_base import CoreBase
+from laboneq.controller.devices.core_base import SHFBaseProtocol, SHFChannelBase
 from laboneq.controller.devices.device_shf_base import check_synth_frequency
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import (
@@ -34,9 +36,12 @@ from laboneq.controller.recipe_processor import (
     AwgKey,
     DeviceRecipeData,
     RecipeData,
+    RtExecutionInfo,
     WaveformItem,
     Waveforms,
+    get_artifacts,
     get_elf,
+    get_initialization_by_device_uid,
     get_readout_time,
     get_wave,
     get_weights_info,
@@ -45,8 +50,8 @@ from laboneq.controller.recipe_processor import (
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.data.recipe import IntegratorAllocation, NtStepKey
-from laboneq.data.scheduled_experiment import ArtifactsCodegen
+from laboneq.data.recipe import IO, Initialization, IntegratorAllocation, NtStepKey
+from laboneq.data.scheduled_experiment import ArtifactsCodegen, ScheduledExperiment
 
 _logger = logging.getLogger(__name__)
 
@@ -136,7 +141,7 @@ class QAChannelNodes:
     busy: str
 
 
-class QAChannel(CoreBase):
+class QAChannel(SHFChannelBase):
     def __init__(
         self,
         *,
@@ -190,6 +195,37 @@ class QAChannel(CoreBase):
                 NodeCollector.one(self.nodes.output_on, 0, cache=False)
             )
 
+    @staticmethod
+    def reset_to_idle_nodes(
+        *, base: str, is_qc: bool, long_readout_available: bool
+    ) -> NodeCollector:
+        nc = NodeCollector(base)
+        # Reset pipeliner first, attempt to set generator enable leads to FW error if pipeliner was enabled.
+        nc.add("qachannels/*/pipeliner/reset", 1, cache=False)
+        nc.add("qachannels/*/pipeliner/mode", 0, cache=False)  # off
+        nc.add("qachannels/*/synchronization/enable", 0, cache=False)
+        nc.barrier()
+        nc.add("qachannels/*/generator/enable", 0, cache=False)
+        nc.add("system/synchronization/source", 0, cache=False)  # internal
+        if is_qc:
+            nc.add("system/internaltrigger/synchronization/enable", 0, cache=False)
+        nc.add("qachannels/*/readout/result/enable", 0, cache=False)
+        nc.add("qachannels/*/spectroscopy/psd/enable", 0, cache=False)
+        nc.add("qachannels/*/spectroscopy/result/enable", 0, cache=False)
+        nc.add("qachannels/*/output/rflfinterlock", 1, cache=False)
+        if long_readout_available:
+            nc.add("qachannels/*/modulation/enable", 0, cache=False)
+            nc.add("qachannels/*/generator/waveforms/*/hold/enable", 0, cache=False)
+            nc.add(
+                "qachannels/*/readout/integration/downsampling/factor", 1, cache=False
+            )
+        # Factory value after reset is 0.5 to avoid clipping during interpolation.
+        # We set it to 1.0 for consistency with integration mode.
+        nc.add("qachannels/*/oscs/*/gain", 1.0, cache=False)
+        nc.add("scopes/0/enable", 0, cache=False)
+        nc.add("scopes/0/channels/*/enable", 0, cache=False)
+        return nc
+
     def allocate_resources(self):
         self._pipeliner._reload_tracker.reset()
 
@@ -200,7 +236,14 @@ class QAChannel(CoreBase):
             self.nodes.scope_result_wave,
         ]
 
-    async def apply_initialization(self, device_recipe_data: DeviceRecipeData):
+    @staticmethod
+    def on_experiment_end_nodes(base: str) -> NodeCollector:
+        nc = NodeCollector(base=base)
+        # in CW spectroscopy mode, turn off the tone
+        nc.add("qachannels/*/spectroscopy/envelope/enable", 1, cache=False)
+        return nc
+
+    async def apply_core_initialization(self, device_recipe_data: DeviceRecipeData):
         qa_ch_recipe_data = device_recipe_data.qachannels.get(self._core_index)
         if qa_ch_recipe_data is None:
             return
@@ -422,14 +465,14 @@ class QAChannel(CoreBase):
         elf_nodes = NodeCollector()
         upload_ready_conditions: dict[str, Any] = {}
 
-        if rt_execution_info.with_pipeliner:
+        if rt_execution_info.is_chunked:
             # enable pipeliner
             elf_nodes.extend(self.pipeliner.prepare_for_upload())
 
-        for pipeliner_job in range(rt_execution_info.pipeliner_jobs):
+        for pipeliner_job in range(rt_execution_info.chunk_count_or_1):
             effective_nt_step = (
                 NtStepKey(indices=tuple([*nt_step.indices, pipeliner_job]))
-                if rt_execution_info.with_pipeliner
+                if rt_execution_info.is_chunked
                 else nt_step
             )
             rt_exec_step = next(
@@ -443,7 +486,7 @@ class QAChannel(CoreBase):
                 None,
             )
 
-            if rt_execution_info.with_pipeliner:
+            if rt_execution_info.is_chunked:
                 rt_exec_step = self._pipeliner._reload_tracker.calc_next_step(
                     pipeliner_job=pipeliner_job,
                     rt_exec_step=rt_exec_step,
@@ -482,10 +525,10 @@ class QAChannel(CoreBase):
                 )
             )
 
-            if rt_execution_info.with_pipeliner:
+            if rt_execution_info.is_chunked:
                 elf_nodes.extend(self._pipeliner.commit())
 
-        if rt_execution_info.with_pipeliner:
+        if rt_execution_info.is_chunked:
             upload_ready_conditions.update(self._pipeliner.ready_conditions())
 
         rw = ResponseWaiterAsync(api=self._api, dev_repr=self._unit_repr, timeout_s=10)
@@ -586,7 +629,7 @@ class QAChannel(CoreBase):
             for integrator in integrator_allocations:
                 if (
                     integrator.device_id != self._device_uid
-                    or integrator.signal_id not in awg_config.acquire_signals
+                    or integrator.signal_id not in awg_config.signals
                 ):
                     continue
                 assert len(integrator.channels) == 1
@@ -909,7 +952,7 @@ class QAChannel(CoreBase):
                 await self._read_all_jobs_result(
                     result_path=self.nodes.spectroscopy_result_wave,
                     ch_repr=f"{self._unit_repr}:spectroscopy",
-                    pipeliner_jobs=rt_execution_info.pipeliner_jobs,
+                    pipeliner_jobs=rt_execution_info.chunk_count_or_1,
                     num_results=num_results,
                     timeout_s=timeout_s,
                 )
@@ -923,7 +966,7 @@ class QAChannel(CoreBase):
                 self._read_all_jobs_result(
                     result_path=self.nodes.readout_result_wave[integrator],
                     ch_repr=f"{self._unit_repr}:readout{integrator}",
-                    pipeliner_jobs=rt_execution_info.pipeliner_jobs,
+                    pipeliner_jobs=rt_execution_info.chunk_count_or_1,
                     num_results=num_results,
                     timeout_s=timeout_s,
                 )
@@ -1002,6 +1045,47 @@ class QAChannel(CoreBase):
 
         return rt_result
 
+    @staticmethod
+    def extract_raw_readout(
+        *,
+        dev_repr: str,
+        all_raw_readouts: list[RawReadoutData],
+        integrators: list[int],
+        rt_execution_info: RtExecutionInfo,
+    ) -> RawReadoutData:
+        if len(integrators) == 1:
+            rt_result = all_raw_readouts[integrators[0]]
+            # TODO(2K): This may not be needed, as the user-facing result
+            # object always returns complex, see ResultsBuilder._init_empty_result_by_shape
+            # and ResultsBuilder.add_acquired_data. This only ensures the imaginary part is
+            # zeroed out, but likely it's already zeroed out in the data from the device.
+            if rt_execution_info.acquisition_type == AcquisitionType.DISCRIMINATION:
+                rt_result.vector = rt_result.vector.real
+            return rt_result
+        raise LabOneQControllerException(
+            f"{dev_repr}: Internal error. Readout extraction is only supported for 1 integrator per signal, provided: {integrators}"
+        )
+
+    async def get_raw_data(
+        self, acquire_length: int, acquires: int | None, timeout_s: float
+    ) -> RawReadoutData:
+        result_path = self.nodes.scope_result_wave
+        # Segment lengths are always multiples of 16 samples.
+        segment_length = (acquire_length + 0xF) & (~0xF)
+        if acquires is None:
+            acquires = 1
+        try:
+            raw_result = await self._subscriber.get_result(
+                result_path, timeout_s=timeout_s
+            )
+            raw_data = np.reshape(raw_result.vector, (acquires, segment_length))
+        except (TimeoutError, asyncio.TimeoutError):
+            _logger.error(
+                f"{self._unit_repr}:scope: Failed to receive a result from {result_path} within {timeout_s} seconds."
+            )
+            raw_data = np.full((acquires, segment_length), np.nan, dtype=np.complex128)
+        return RawReadoutData(raw_data)
+
     async def teardown_one_step_execution(self, with_pipeliner: bool):
         nc = NodeCollector(base=f"{self._node_base}/")
         # In case of hold-off errors, the result logger may still be waiting. Disabling
@@ -1027,3 +1111,154 @@ class QAChannel(CoreBase):
                 f"Channel {self._core_index} Input overrange count",
             ),
         ]
+
+
+class SHFQAProtocol(SHFBaseProtocol, Protocol):
+    @property
+    def _long_readout_available(self) -> bool: ...
+
+    # Methods defined in SHFQAMixIn
+    def _validate_range_shfqa(self, io: IO, is_out: bool): ...
+
+
+class SHFQAMixIn:
+    def _validate_range_shfqa(self: SHFQAProtocol, io: IO, is_out: bool):
+        if io.range is None:
+            return
+        input_ranges = np.array(
+            [-50, -45, -40, -35, -30, -25, -20, -15, -10, -5, 0, 5, 10],
+            dtype=np.float64,
+        )
+        output_ranges = np.array(
+            [-30, -25, -20, -15, -10, -5, 0, 5, 10], dtype=np.float64
+        )
+        range_list = output_ranges if is_out else input_ranges
+        label = "Output" if is_out else "Input"
+
+        if io.range_unit not in (None, "dBm"):
+            raise LabOneQControllerException(
+                f"{label} range of device {self.dev_repr} is specified in "
+                f"units of {io.range_unit}. Units must be 'dBm'."
+            )
+        if not any(np.isclose([io.range] * len(range_list), range_list)):
+            _logger.warning(
+                "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. "
+                "Nearest allowed range will be used.",
+                self.dev_repr,
+                label,
+                io.channel,
+                io.range,
+                range_list,
+            )
+
+    def _validate_scheduled_experiment_shfqa(
+        self: SHFQAProtocol,
+        scheduled_experiment: ScheduledExperiment,
+    ):
+        artifacts = get_artifacts(scheduled_experiment.artifacts, ArtifactsCodegen)
+        long_readout_signals = artifacts.requires_long_readout.get(self.uid, [])
+        if len(long_readout_signals) > 0:
+            if not self._long_readout_available:
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Experiment requires long readout that is not available on the device."
+                )
+
+        if (
+            scheduled_experiment.rt_loop_properties.acquisition_type
+            == AcquisitionType.RAW
+            and scheduled_experiment.rt_loop_properties.chunk_count is not None
+        ):
+            raise LabOneQControllerException(
+                f"{self.dev_repr}: Experiment chunking in RAW acquisition mode is not supported by the device"
+            )
+
+        initialization = get_initialization_by_device_uid(
+            scheduled_experiment.recipe, self.uid
+        )
+        if initialization is not None:
+            for output in initialization.outputs:
+                self._warn_for_unsupported_param(
+                    param_assert=output.offset is None or output.offset == 0,
+                    param_name="voltage_offsets",
+                    channel=output.channel,
+                )
+                self._warn_for_unsupported_param(
+                    param_assert=output.gains is None,
+                    param_name="correction_matrix",
+                    channel=output.channel,
+                )
+                if output.range is not None:
+                    self._validate_range_shfqa(output, is_out=True)
+                if output.enable_output_mute and not self._is_plus:
+                    _logger.warning(
+                        f"{self.dev_repr}: Device output muting is enabled, but the device is not"
+                        " SHF+ and therefore no muting will happen. It is suggested to disable it."
+                    )
+
+            for input in initialization.inputs:
+                self._validate_range_shfqa(input, is_out=False)
+                matching_output: IO | None = next(
+                    (
+                        output
+                        for output in initialization.outputs
+                        if output.channel == input.channel
+                    ),
+                    None,
+                )
+                if matching_output is None:
+                    continue
+                assert input.port_mode == matching_output.port_mode, (
+                    f"{self.dev_repr}: Port mode mismatch between input and output of"
+                    f" channel {input.channel}."
+                )
+
+    def _pre_process_attributes_shfqa(
+        self: SHFQAProtocol,
+        initialization: Initialization,
+    ) -> Iterator[DeviceAttribute]:
+        for output in initialization.outputs or []:
+            if output.amplitude is not None:
+                yield DeviceAttribute(
+                    name=AttributeName.QA_OUT_AMPLITUDE,
+                    index=output.channel,
+                    value_or_param=output.amplitude,
+                )
+
+        center_frequencies: dict[int, int] = {}
+        ios = (initialization.outputs or []) + (initialization.inputs or [])
+        for idx, io in enumerate(ios):
+            if io.lo_frequency is not None:
+                if io.channel in center_frequencies:
+                    prev_io_idx = center_frequencies[io.channel]
+                    if ios[prev_io_idx].lo_frequency != io.lo_frequency:
+                        raise LabOneQControllerException(
+                            f"{self.dev_repr}: Local oscillator frequency mismatch between IOs "
+                            f"sharing channel {io.channel}: "
+                            f"{ios[prev_io_idx].lo_frequency} != {io.lo_frequency}"
+                        )
+                    continue
+                center_frequencies[io.channel] = idx
+                yield DeviceAttribute(
+                    name=AttributeName.QA_CENTER_FREQ,
+                    index=io.channel,
+                    value_or_param=io.lo_frequency,
+                )
+
+    def _validate_recipe_data_shfqa(self, recipe_data: RecipeData):
+        for integrator_allocation in recipe_data.recipe.integrator_allocations:
+            num_states = integrator_allocation.kernel_count + 1
+            num_thresholds = len(integrator_allocation.thresholds)
+            num_expected_thresholds = (num_states - 1) * num_states // 2
+
+            def pluralize(n, noun):
+                return f"{n} {noun}{'s' if n > 1 else ''}"
+
+            if num_thresholds != num_expected_thresholds:
+                raise LabOneQControllerException(
+                    f"Multi discrimination configuration of experiment is not consistent."
+                    f" For {pluralize(num_states, 'state')}, I expected"
+                    f" {pluralize(integrator_allocation.kernel_count, 'kernel')}"
+                    f" and {pluralize(num_expected_thresholds, 'threshold')}, but got"
+                    f" {pluralize(num_thresholds, 'threshold')}.\n"
+                    "For n states, there should be n-1 kernels, and (n-1)*n/2 thresholds."
+                )

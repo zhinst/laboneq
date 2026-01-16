@@ -70,6 +70,15 @@ class AttributeValue:
 
 @dataclass(frozen=True)
 class AttributeKey:
+    """AttributeKey is a globally unique identifier for an attribute in the AttributeValueTracker
+    collection, linked to a specific device setting.
+
+    It combines device_uid, name (enum), and index to guarantee uniqueness, keep attributes
+    easy to track, and work across different types of device settings. This could theoretically
+    be a device node path, but that would require building full paths during processing, which
+    is less traceable and more error-prone than using a structured key.
+    """
+
     device_uid: str
     name: AttributeName
     index: int | None

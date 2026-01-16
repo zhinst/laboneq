@@ -16,9 +16,11 @@ use crate::ir::experiment::Handle;
 use crate::passes::analyze_awg::analyze_awg_ir;
 use crate::passes::analyze_measurements;
 use crate::passes::fanout_awg::fanout_for_awg;
+use crate::result::Acquisition;
 use crate::result::AwgCodeGenerationResult;
 use crate::result::FeedbackRegisterConfig;
 use crate::result::Measurement;
+use crate::result::ResultSource;
 use crate::result::SeqCGenOutput;
 use crate::result::ShfPpcSweepJson;
 use crate::result::SignalIntegrationInfo;
@@ -264,6 +266,68 @@ fn estimate_total_execution_time(root: &IrNode) -> f64 {
     tinysamples_to_seconds(tiny_samples(root.data().length())).into()
 }
 
+fn construct_result_handle_maps(
+    simultaneous_acquires: Vec<Vec<Acquisition>>,
+    awgs: &[AwgCore],
+    acquisition_type: &AcquisitionType,
+) -> HashMap<ResultSource, Vec<Vec<String>>> {
+    fn _awg_has_acquires(awg: &AwgCore, acquires: &[Acquisition]) -> bool {
+        for acq in acquires {
+            for sig in &awg.signals {
+                if sig.uid == acq.signal {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    let simultaneous_awgs = simultaneous_acquires
+        .iter()
+        .map(|acquires| awgs.iter().filter(|awg| _awg_has_acquires(awg, acquires)));
+    let mut result_handle_maps: HashMap<ResultSource, Vec<Vec<String>>> = HashMap::new();
+    let mut signal_to_result_source = HashMap::new();
+    for (acquires, awgs) in std::iter::zip(simultaneous_acquires.iter(), simultaneous_awgs) {
+        let mut result_map_for_this_round: HashMap<ResultSource, Vec<String>> = HashMap::new();
+        for awg in awgs {
+            for sig in &awg.signals {
+                if !matches!(sig.kind, SignalKind::INTEGRATION) {
+                    continue;
+                }
+                let integrator_idx = match acquisition_type {
+                    AcquisitionType::RAW => None,
+                    _ => Some(sig.channels[0]),
+                };
+                let result_source = ResultSource {
+                    device_id: awg.device.uid().to_string(),
+                    awg_id: awg.uid,
+                    integrator_idx,
+                };
+                result_map_for_this_round
+                    .entry(result_source.clone())
+                    .or_default();
+                signal_to_result_source.insert(&sig.uid, result_source);
+            }
+        }
+        for acq in acquires {
+            let _ = result_map_for_this_round
+                .entry(signal_to_result_source.get(&acq.signal).unwrap().clone())
+                .and_modify(|entry| {
+                    entry.push(acq.handle.to_string());
+                });
+        }
+        result_map_for_this_round
+            .into_iter()
+            .for_each(|(result_source, val)| {
+                result_handle_maps
+                    .entry(result_source)
+                    .or_default()
+                    .push(val);
+            });
+    }
+
+    result_handle_maps
+}
+
 pub fn generate_code<T: SampleWaveforms + Sync + Send>(
     root: &IrNode,
     awgs: &[AwgCore],
@@ -295,10 +359,12 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
         feedback_register_layout,
     )?;
     let measurements = evaluate_measurement_per_device(awgs, &awg_results);
+    let result_handle_maps =
+        construct_result_handle_maps(feedback_config.into_acquisitions(), awgs, acquisition_type);
     let result = SeqCGenOutput {
         awg_results,
         total_execution_time,
-        simultaneous_acquires: feedback_config.into_acquisitions(),
+        result_handle_maps,
         measurements,
     };
     Ok(result)

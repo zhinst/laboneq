@@ -11,11 +11,7 @@ from zhinst.core import __version__ as zhinst_version
 
 from laboneq._utils import ensure_list
 from laboneq._version import get_version
-from laboneq.compiler.common.awg_info import AWGInfo
-from laboneq.compiler.common.device_type import (
-    DeviceType,
-    validate_local_oscillator_frequency,
-)
+from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.integration_times import IntegrationTimes
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
@@ -30,6 +26,7 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.core.types.enums.acquisition_type import is_spectroscopy
 from laboneq.core.types.enums.awg_signal_type import AWGSignalType
+from laboneq.data.awg_info import AWGInfo
 from laboneq.data.calibration import CancellationSource, PortMode
 from laboneq.data.compilation_job import (
     DeviceInfo,
@@ -67,7 +64,9 @@ _logger = logging.getLogger(__name__)
 
 
 class RecipeGenerator:
-    def __init__(self):
+    def __init__(
+        self,
+    ):
         self._recipe = Recipe()
         self._recipe.versions.target_labone = zhinst_version
         self._recipe.versions.laboneq = get_version()
@@ -476,9 +475,6 @@ class RecipeGenerator:
         )
         self._recipe.is_spectroscopy = is_spectroscopy(experiment_dao.acquisition_type)
 
-    def add_simultaneous_acquires(self, simultaneous_acquires: list[Dict[str, str]]):
-        self._recipe.simultaneous_acquires = list(simultaneous_acquires)
-
     def add_total_execution_time(self, total_execution_time):
         self._recipe.total_execution_time = total_execution_time
 
@@ -536,19 +532,6 @@ def calc_outputs(
         markers = experiment_dao.markers_on_signal(signal_id)
 
         triggers = experiment_dao.triggers_on_signal(signal_id)
-        if (
-            lo_frequency is not None
-            and not isinstance(lo_frequency, ParameterInfo)
-            and port_mode != PortMode.LF
-        ):
-            # TODO(2K): This validation had to be implemented in the controller
-            # to support swept lo_frequency
-            try:
-                validate_local_oscillator_frequency(lo_frequency, device_type)
-            except ValueError as error:
-                raise LabOneQException(
-                    f"Error on signal line '{signal_id}': {error}"
-                ) from error
         precompensation = precompensations[signal_id]
         for channel in signal_info.channels:
             output = {
@@ -834,9 +817,6 @@ def generate_recipe(
             )
         )
     recipe_generator.add_measurements(measurement_map_per_device)
-    recipe_generator.add_simultaneous_acquires(
-        combined_compiler_output.simultaneous_acquires
-    )
 
     recipe_generator.add_total_execution_time(
         combined_compiler_output.total_execution_time

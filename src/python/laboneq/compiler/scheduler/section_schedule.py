@@ -9,10 +9,6 @@ from attrs import define, field
 
 from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
-from laboneq.compiler.scheduler.pulse_schedule import (
-    PrecompClearSchedule,
-    PulseSchedule,
-)
 from laboneq.compiler.scheduler.utils import ceil_to_grid, floor_to_grid
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.data.compilation_job import PRNGInfo
@@ -98,23 +94,6 @@ class SectionSchedule(IntervalSchedule):
                     assert len(self.children_start) > pa_index
                     start = max(start, self.children_start[pa_index] + pa.length)
 
-            elif isinstance(c, PrecompClearSchedule):
-                # find the referenced pulse
-                # It is the nearest preceding PulseSchedule
-                try:
-                    start = next(
-                        start
-                        for start, other_child in zip(
-                            reversed(self.children_start[:i]),
-                            reversed(self.children[:i]),
-                        )
-                        if isinstance(other_child, PulseSchedule)
-                    )
-                except StopIteration:
-                    raise RuntimeError(
-                        "The precompensation clear refers to a pulse that could not be "
-                        "found."
-                    ) from None
             start = ceil_to_grid(start, c.grid)
             start = (
                 c.calculate_timing(
@@ -140,6 +119,11 @@ class SectionSchedule(IntervalSchedule):
             if pa_names:
                 pa_section = c.section
                 for pa_name in pa_names:
+                    if pa_name not in children_index_by_name:
+                        raise LabOneQException(
+                            f"Section '{pa_section}' should play after section '{pa_name}',"
+                            f"but it is not defined at the same level."
+                        )
                     play_before.setdefault(pa_name, []).append(pa_section)
         for i, c in reversed(list(enumerate(self.children))):
             offset = (
@@ -154,11 +138,6 @@ class SectionSchedule(IntervalSchedule):
             pb_section = getattr(c, "section", None)
             if pb_section is not None:
                 for pb_name in play_before.get(pb_section, []):
-                    if pb_name not in children_index_by_name:
-                        raise LabOneQException(
-                            f"Section '{pb_name}' should play after section '{pb_section}',"
-                            f"but it is not defined at the same level."
-                        )
                     pb_index = children_index_by_name[pb_name]
                     if pb_index <= i:
                         raise LabOneQException(
@@ -166,11 +145,6 @@ class SectionSchedule(IntervalSchedule):
                             f"but is actually defined earlier."
                         )
                     start = min(start, self.children_start[pb_index] - c.length)
-            elif isinstance(c, PrecompClearSchedule):
-                raise LabOneQException(
-                    "Cannot reset the precompensation filter inside a right-aligned section."
-                )
-
             start = floor_to_grid(start, c.grid)
             self.children_start[i] = start
             for s in c.signals:
@@ -185,11 +159,18 @@ class SectionSchedule(IntervalSchedule):
     def _calculate_timing(
         self, schedule_data: ScheduleData, start: int, start_may_change
     ) -> int:
-        children_index_by_name = {
-            child.section: i
-            for i, child in enumerate(self.children)
-            if isinstance(child, SectionSchedule)
-        }
+        # Record only the first occurrences of each section in children_index_by_name.
+        # This logic follows the existing behavior where sections with the same name
+        # were renamed to ensure uniqueness. Therefore the first occurrence is used.
+        # TODO: Fix behavior for multiple occurrences of the same section.
+        children_index_by_name: dict[str, int] = {}
+        for i, child in enumerate(self.children):
+            if (
+                isinstance(child, SectionSchedule)
+                and child.section not in children_index_by_name
+            ):
+                children_index_by_name[child.section] = i
+
         if not self.right_aligned:
             self._arrange_left_aligned(
                 schedule_data, start, children_index_by_name, start_may_change

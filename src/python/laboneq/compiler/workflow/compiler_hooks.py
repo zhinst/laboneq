@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
-    from laboneq.compiler.common.awg_info import AWGInfo
     from laboneq.compiler.common.iface_code_generator import ICodeGenerator
     from laboneq.compiler.common.iface_compiler_output import CombinedOutput
     from laboneq.compiler.common.iface_linker import ILinker
@@ -21,6 +20,7 @@ if TYPE_CHECKING:
         LeaderProperties,
     )
     from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
+    from laboneq.data.awg_info import AWGInfo
     from laboneq.data.compilation_job import PrecompensationInfo
     from laboneq.data.recipe import Recipe
 

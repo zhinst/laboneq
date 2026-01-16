@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import numpy.typing as npt
 
-from laboneq.compiler.common.awg_info import AWGInfo
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir import IRTree
 from laboneq.compiler.seqc.waveform_sampler import SampledWaveformSignature
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
+from laboneq.data.awg_info import AWGInfo
 from laboneq.data.compilation_job import Marker
 
 class PulseSignature:
@@ -104,21 +104,25 @@ class Measurement:
     length: int
     channel: int
 
+class ResultSource:
+    device_id: str
+    awg_id: int
+    integrator_idx: int | None
+
 class SeqCGenOutput:
     """Output of the SeqC code generation process.
 
     Attributes:
         awg_results: List of code generation results for each awg.
         total_execution_time: Total execution time in seconds of the generated code.
-        simultaneous_acquires: List of simultaneous acquisitions.
-            Each element is a mapping from signal name to its acquisition handle which
-            happen at the same time.
+        result_handle_maps: For each result source contains a mask that identifies the
+                           acquire handles corresponding to incoming stream of data.
         measurements: List of Measurement objects.
     """
 
     awg_results: list[AwgCodeGenerationResult]
     total_execution_time: float = 0.0
-    simultaneous_acquires: list[dict[str, str]] = []
+    result_handle_maps: dict[ResultSource, list[list[str]]] = {}
     measurements: list[Measurement] = []
 
 def generate_code(

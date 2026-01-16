@@ -25,9 +25,6 @@ pub enum IrKind {
     Loop(Loop),
     LoopIterationPreamble,
     LoopIteration,
-    Reserve {
-        signal: SignalUid,
-    },
     PlayPulse(PlayPulse),
     ChangeOscillatorPhase(ChangeOscillatorPhase),
     Acquire(Acquire),
@@ -65,7 +62,6 @@ impl IrKind {
             IrKind::InitialVoltageOffset(_) => None,
             IrKind::LoopIterationPreamble => None,
             IrKind::LoopIteration => None,
-            IrKind::Reserve { .. } => None,
             IrKind::PlayPulse(_) => None,
             IrKind::Acquire(_) => None,
             IrKind::SetOscillatorFrequency(_) => None,
@@ -85,7 +81,6 @@ impl IrKind {
             }
             IrKind::InitialLocalOscillatorFrequency(obj) => HashSet::from_iter([&obj.signal]),
             IrKind::InitialVoltageOffset(obj) => HashSet::from_iter([&obj.signal]),
-            IrKind::Reserve { signal } => HashSet::from_iter([signal]),
             IrKind::PlayPulse(obj) => HashSet::from_iter([&obj.signal]),
             IrKind::Acquire(obj) => HashSet::from_iter([&obj.signal]),
             IrKind::SetOscillatorFrequency(obj) => obj.values.iter().map(|(sig, _)| sig).collect(),
@@ -230,7 +225,6 @@ pub struct Match {
     pub uid: SectionUid,
     pub target: MatchTarget,
     pub local: bool,
-    pub play_after: Vec<SectionUid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

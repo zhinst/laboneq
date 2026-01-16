@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import importlib
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 import orjson
+import yaml
 
 from laboneq._version import get_version
 from laboneq.serializers.serializer_registry import (
@@ -24,6 +26,11 @@ if TYPE_CHECKING:
         JsonSerializableType,
         SerializationOptions,
     )
+
+
+class SerializerFormat(Enum):
+    JSON = "json"
+    YAML = "yaml"
 
 
 def _registry(
@@ -144,15 +151,45 @@ def from_json(data: bytes, options: DeserializationOptions | None = None) -> obj
     return from_dict(d, options)
 
 
+def to_yaml(
+    obj: object,
+    options: SerializationOptions | None = None,
+) -> str:
+    """Serialize an object to YAML."""
+    json_dict = to_dict(obj, options)
+    return yaml.dump(json_dict, sort_keys=True)
+
+
+def from_yaml(data: str, options: DeserializationOptions | None = None) -> object:
+    """Deserialize an object from YAML."""
+    d = yaml.safe_load(data)
+    return from_dict(d, options)
+
+
 def save(
-    obj: object, filename: Path, options: SerializationOptions | None = None
+    obj: object,
+    filename: Path,
+    options: SerializationOptions | None = None,
+    format: SerializerFormat = SerializerFormat.JSON,
 ) -> None:
     """Store an object to a file."""
     with open(filename, "wb") as f:
-        f.write(to_json(obj, options))
+        f.write(
+            to_json(obj, options)
+            if format == SerializerFormat.JSON
+            else to_yaml(obj, options).encode("utf-8")
+        )
 
 
-def load(filename: Path, options: DeserializationOptions | None = None) -> object:
+def load(
+    filename: Path,
+    options: DeserializationOptions | None = None,
+    format: SerializerFormat = SerializerFormat.JSON,
+) -> object:
     """Load an object from a file."""
     with open(filename, "rb") as f:
-        return from_json(f.read(), options)
+        return (
+            from_json(f.read(), options)
+            if format == SerializerFormat.JSON
+            else from_yaml(f.read().decode("utf-8"), options)
+        )

@@ -98,6 +98,11 @@ fn visit_node<'a>(
             validate_chunked_sweep(op, ctx_params)?;
         }
         Operation::RealTimeBoundary => {
+            assert_eq!(
+                node.children.len(),
+                1,
+                "RealTimeBoundary node must have exactly one child."
+            );
             ctx_params.enter_rt_bound();
             for child in node.children.iter() {
                 visit_node(child, ctx, ctx_validator, ctx_params, next_uid)?;
@@ -108,11 +113,22 @@ fn visit_node<'a>(
         _ => {}
     };
 
-    if !children_visited {
-        for child in node.children.iter() {
-            visit_node(child, ctx, ctx_validator, ctx_params, next_uid)?;
-        }
+    if children_visited {
+        ctx_validator.section_uid = prev_uid;
+        return Ok(());
     }
+
+    let mut rt_operation_mixer_checker = (ctx_params.inside_rt_bound && node.children.len() > 1)
+        .then(RealTimeSiblingOperationChecker::new);
+    for child in node.children.iter() {
+        if let Some(checker) = rt_operation_mixer_checker.as_mut() {
+            checker.visit_node(child)
+        }
+        visit_node(child, ctx, ctx_validator, ctx_params, next_uid)?;
+    }
+    rt_operation_mixer_checker
+        .map(|c| c.validate(next_uid))
+        .transpose()?;
 
     ctx_validator.section_uid = prev_uid;
     Ok(())
@@ -363,4 +379,50 @@ fn check_arbitrary_marker_is_valid(
         }
     }
     Ok(())
+}
+
+/// Validates that in real-time sections, no mixing of sections and (pulse) operations occurs.
+///
+/// This is an arbitrary restriction as scheduler currently does not support mixing of
+/// operations and sections in real-time.
+/// TODO: remove this restriction when scheduler supports it.
+struct RealTimeSiblingOperationChecker {
+    has_pulses: bool,
+    has_sections: bool,
+}
+
+impl RealTimeSiblingOperationChecker {
+    fn new() -> Self {
+        Self {
+            has_pulses: false,
+            has_sections: false,
+        }
+    }
+
+    fn visit_node(&mut self, node: &ExperimentNode) {
+        // Reserve is allowed to be mixed with sections
+        if matches!(&node.kind, Operation::Reserve(_)) {
+            return;
+        }
+        if node.kind.section_info().is_none() {
+            self.has_pulses = true;
+        } else {
+            self.has_sections = true;
+        }
+    }
+
+    fn has_mixed_operations(&self) -> bool {
+        self.has_pulses && self.has_sections
+    }
+
+    fn validate(&self, section: Option<SectionUid>) -> Result<()> {
+        if self.has_mixed_operations() {
+            let msg = format!(
+                "Sections and pulses cannot be mixed in section '{}'.",
+                section.map(|s| s.0.to_string()).unwrap_or("".to_string()),
+            );
+            return Err(Error::new(&msg));
+        }
+        Ok(())
+    }
 }

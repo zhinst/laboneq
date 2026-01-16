@@ -178,6 +178,9 @@ class Session:
         self._neartime_callbacks: Dict[str, Callable] = {}
         self._toolkit_devices = ToolkitDevices()
 
+    def __del__(self):
+        self.disconnect()
+
     @property
     def devices(self) -> ToolkitDevices:
         """Connected devices included in the system setup.
@@ -298,6 +301,7 @@ class Session:
             neartime_callbacks=self._neartime_callbacks,
             parent_session=self,
         )
+        controller.start()
         controller.connect(
             do_emulation=self._connection_state.emulated,
             reset_devices=reset_devices,

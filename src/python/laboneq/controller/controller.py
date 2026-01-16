@@ -7,7 +7,7 @@ import asyncio
 import logging
 import time
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Generic, TypeVar, cast
 from weakref import ref
 
@@ -27,9 +27,8 @@ from laboneq.controller.recipe_processor import (
     get_execution_time,
     pre_process_compiled,
 )
-from laboneq.controller.results import init_empty_result_by_shape
+from laboneq.controller.results import ResultsBuilder
 from laboneq.controller.utilities.exception import LabOneQControllerException
-from laboneq.controller.utilities.for_each import for_each_sync
 from laboneq.controller.utilities.sweep_params_tracker import SweepParamsTracker
 from laboneq.controller.versioning import (
     RECOMMENDED_MINIMUM_LABONE_VERSION,
@@ -69,9 +68,9 @@ _SessionClass = TypeVar("_SessionClass")
 @dataclass
 class ControllerSubmission:
     scheduled_experiment: ScheduledExperiment
-    completion_future: asyncio.Future[ExperimentResults]
+    completion_future: asyncio.Future[ResultsBuilder]
     temp_run_future: asyncio.Future[None]  # TODO(2K): Temporary
-    results: ExperimentResults = field(default_factory=lambda: ExperimentResults())
+    results_builder: ResultsBuilder
 
 
 @dataclass
@@ -156,6 +155,8 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
             DeviceBase.set_nt_step_nodes, recipe_data, user_set_nodes
         )
         recipe_data.attribute_value_tracker.reset_updated()
+        sweep_params_tracker.clear_for_next_step()
+        user_set_nodes.clear()
 
         # Feedback
         await self._devices.for_each(DeviceBase.configure_feedback, recipe_data)
@@ -166,8 +167,6 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
             recipe_data=recipe_data,
             nt_step=nt_step,
         )
-        sweep_params_tracker.clear_for_next_step()
-        user_set_nodes.clear()
 
     async def _after_nt_step(self):
         await self._devices.for_each(DeviceBase.update_warning_nodes)
@@ -248,7 +247,7 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
                 DeviceBase.setup_one_step_execution,
                 recipe_data=recipe_data,
                 nt_step=nt_step,
-                with_pipeliner=rt_execution_info.with_pipeliner,
+                with_pipeliner=rt_execution_info.is_chunked,
             )
 
             # This call must happen after the setup_one_step_execution,
@@ -272,7 +271,7 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
                     cause=e,
                 )
             # TODO(2K): introduce "hard" controller exceptions
-            execution_context.submission.results.execution_errors.append(
+            execution_context.submission.results_builder.add_execution_error(
                 (
                     list(nt_step.indices),
                     execution_context.recipe_data.rt_execution_info.uid,
@@ -335,6 +334,7 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
 
     def disconnect(self):
         self._event_loop.run(self._disconnect_async)
+        self.stop()
 
     async def _disconnect_async(self):
         _logger.info("Disconnecting from all devices and servers...")
@@ -356,8 +356,14 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
     def stop_workers(self):
         self._event_loop.run(self.stop_workers_async)
 
+    def start(self):
+        self._event_loop.start()
+
+    def stop(self):
+        self._event_loop.stop()
+
     def submission_results(self, submission: ControllerSubmission) -> ExperimentResults:
-        return submission.results
+        return submission.results_builder.results
 
     async def _submit_compiled_async(
         self,
@@ -367,6 +373,9 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
             scheduled_experiment=scheduled_experiment,
             completion_future=asyncio.get_running_loop().create_future(),
             temp_run_future=asyncio.get_running_loop().create_future(),
+            results_builder=ResultsBuilder.from_scheduled_experiment(
+                scheduled_experiment
+            ),
         )
         await self._experiment_runner.submit(submission)
         return submission
@@ -391,8 +400,6 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
         recipe_data = pre_process_compiled(
             submission.scheduled_experiment, self._devices
         )
-        results = init_empty_result_by_shape(recipe_data)
-        submission.results = results
 
         execution_context = ExecutionContext(
             submission=submission,
@@ -401,16 +408,8 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
 
         async with self._devices.capture_logs():
             try:
-                for_each_sync(
-                    self._devices.devices.values(),
-                    DeviceBase.allocate_resources,
-                )
                 await self._devices.for_each(
                     DeviceBase.on_experiment_begin, recipe_data=recipe_data
-                )
-                await self._devices.for_each(DeviceBase.init_warning_nodes)
-                await self._devices.for_each(
-                    DeviceBase.apply_initialization, recipe_data
                 )
                 await self._devices.for_each(
                     DeviceBase.initialize_oscillators, recipe_data
@@ -539,12 +538,12 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
                 # Indicates end of the near-time execution.
                 # Resolve the overall submission future with the results.
                 nt_step_result_context.execution_context.submission.completion_future.set_result(
-                    nt_step_result_context.execution_context.submission.results
+                    nt_step_result_context.execution_context.submission.results_builder
                 )
             else:
                 await self._read_one_step_results(
                     recipe_data=nt_step_result_context.execution_context.recipe_data,
-                    results=nt_step_result_context.execution_context.submission.results,
+                    results_builder=nt_step_result_context.execution_context.submission.results_builder,
                     nt_step=nt_step_result_context.nt_step,
                 )
         except Exception as exc:
@@ -558,11 +557,14 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
         nt_step_result_context.nt_step_result_completed.set_result(None)
 
     async def _read_one_step_results(
-        self, recipe_data: RecipeData, results: ExperimentResults, nt_step: NtStepKey
+        self,
+        recipe_data: RecipeData,
+        results_builder: ResultsBuilder,
+        nt_step: NtStepKey,
     ):
         await self._devices.for_each(
             DeviceZI.read_results,
             recipe_data=recipe_data,
             nt_step=nt_step,
-            results=results,
+            results_builder=results_builder,
         )

@@ -27,10 +27,6 @@ def floor_to_grid(value, grid: int):
     return math.floor(value / grid) * grid
 
 
-def to_tinysample(t: float | None, tinysample: float) -> int | None:
-    return None if t is None else round(t / tinysample)
-
-
 T = TypeVar("T")
 
 

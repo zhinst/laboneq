@@ -1,5 +1,5 @@
 [workspace.package]
-version = "26.1.0-b3"
+version = "26.1.0-b4"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
 edition = "2024"
 publish = false
@@ -18,7 +18,7 @@ resolver = "2"
 [workspace.dependencies]
 anyhow = "1.0"
 approx = "0.5.1"
-askama = "0.14.0"
+askama = "0.15.0"
 bitvec = "1.0"
 clap = "4.5.38"
 criterion = "0.8"

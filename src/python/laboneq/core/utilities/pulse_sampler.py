@@ -211,9 +211,10 @@ def sample_pulse(
                 "modulation is not permitted)."
             )
         samples = samples.real * (1.0 + 1.0j)
-
+    # TODO: Collect warnings and return them as part of the result to avoid
+    # spamming the log in case of many pulses.
     if signal_type != "iq":
-        if not all(samples.imag == 0.0):
+        if not np.allclose(samples.imag, 0.0):
             if modulation_frequency:
                 _logger.debug(
                     "Complex-valued pulse envelope provided for an rf-signal, imaginary part will be dropped after performing software modulation."

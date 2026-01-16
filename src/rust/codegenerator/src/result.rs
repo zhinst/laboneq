@@ -21,7 +21,7 @@ use crate::{
 pub struct SeqCGenOutput<T: SampleWaveforms> {
     pub awg_results: Vec<AwgCodeGenerationResult<T>>,
     pub total_execution_time: f64,
-    pub simultaneous_acquires: Vec<Vec<Acquisition>>,
+    pub result_handle_maps: HashMap<ResultSource, Vec<Vec<String>>>,
     pub measurements: Vec<Measurement>,
 }
 
@@ -68,4 +68,11 @@ pub struct Measurement {
     pub device: DeviceUid,
     pub channel: u16,
     pub length: Samples,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ResultSource {
+    pub device_id: String,
+    pub awg_id: u16,
+    pub integrator_idx: Option<u8>,
 }

@@ -10,8 +10,10 @@ from laboneq.data.experiment_description import (
     Acquire,
     AcquireLoopRt,
     Call,
+    Case,
     Delay,
     Experiment,
+    Match,
     Operation,
     PlayPulse,
     PrngLoop,
@@ -28,7 +30,6 @@ from laboneq.executor import executor
 class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
     def __init__(self):
         super().__init__()
-        self._chunk_count: int = 1
         # A mapping from driver parameter UIDs to the parameters they drive
         # Not all parameters are mapped to their respective sweeps, therefore we
         # use this mapping to find driven parameters when handling sweeps and placing them into
@@ -38,24 +39,18 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
     def make(
         self,
         experiment: Experiment,
-        chunk_count: int = 1,
         driver_parameter_map: dict[str, list[Parameter]] | None = None,
     ) -> executor.Statement:
         self._driver_parameter_map = driver_parameter_map or {}
-        self._chunk_count = chunk_count
-        self._handle_children(experiment.sections, experiment.uid)
+        self._handle_children(experiment.sections)
         return self._root_sequence
 
-    def _handle_children(self, children: list[Operation | Section], parent_uid: str):
+    def _handle_children(self, children: list[Operation | Section]):
         for child in children:
             if isinstance(child, Operation):
-                self._append_statement(
-                    self._statement_from_operation(child, parent_uid)
-                )
+                self._append_statement(self._statement_from_operation(child))
             elif isinstance(child, AcquireLoopRt):
-                loop_body = self._sub_scope(
-                    self._handle_children, child.children, child.uid
-                )
+                loop_body = self._sub_scope(self._handle_children, child.children)
                 loop = executor.ExecRT(
                     count=child.count,
                     body=loop_body,
@@ -80,15 +75,28 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
                 self._append_statement(
                     executor.ForLoop(count=count, body=loop_body, loop_flags=flag)
                 )
+            elif isinstance(child, Match):
+                sweep_parameter = child.sweep_parameter
+                cases = self._sub_scope(self._handle_children, child.children)
+                self._append_statement(
+                    executor.MatchSection(
+                        sweep_parameter=sweep_parameter.uid
+                        if sweep_parameter is not None
+                        else None,
+                        cases=cases,
+                    )
+                )
+            elif isinstance(child, Case):
+                state = child.state
+                body = self._sub_scope(self._handle_children, child.children)
+                self._append_statement(executor.CaseSection(state=state, body=body))
             elif isinstance(child, PrngLoop):
                 prng_sample = child.prng_sample
                 count = prng_sample.count
                 loop_body = self._sub_scope(self._handle_prng_loop, child)
                 self._append_statement(executor.ForLoop(count=count, body=loop_body))
             else:
-                sub_sequence = self._sub_scope(
-                    self._handle_children, child.children, child.uid
-                )
+                sub_sequence = self._sub_scope(self._handle_children, child.children)
                 self._append_statement(sub_sequence)
 
     def _handle_sweep(self, sweep: Sweep):
@@ -96,16 +104,17 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
         for parameter in sweep.parameters:
             seen_params.add(parameter.uid)
             self._append_statement(self._statement_from_param(parameter))
+
             for driven_param in self._driver_parameter_map.get(parameter.uid, []):
                 if driven_param.uid in seen_params:
                     continue
                 seen_params.add(driven_param.uid)
                 self._append_statement(self._statement_from_param(driven_param))
-        self._handle_children(sweep.children, sweep.uid)
+        self._handle_children(sweep.children)
 
     def _handle_prng_loop(self, loop: PrngLoop):
         self._append_statement(self._statement_from_param(loop.prng_sample))
-        self._handle_children(loop.children, loop.uid)
+        self._handle_children(loop.children)
 
     def _statement_from_param(
         self, parameter: SweepParameter | LinearSweepParameter | PRNGSample
@@ -127,7 +136,7 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
             name=parameter.uid, values=values, axis_name=axis_name
         )
 
-    def _statement_from_operation(self, operation, parent_uid: str):
+    def _statement_from_operation(self, operation):
         if isinstance(operation, Call):
             return executor.ExecNeartimeCall(operation.func_name, operation.args)
         if isinstance(operation, SetNode):
@@ -140,5 +149,5 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
             return executor.Nop()
         if isinstance(operation, Acquire):
             assert operation.signal is not None
-            return executor.ExecAcquire(operation.handle, operation.signal, parent_uid)
+            return executor.ExecAcquire(operation.handle, operation.signal)
         return executor.Nop()

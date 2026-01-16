@@ -6,13 +6,14 @@ from __future__ import annotations
 
 import sys
 from enum import Enum
-from typing import ClassVar, Type, Union
+from typing import Any, ClassVar, Type, Union
 
 import attrs
 
 from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.core.types.enums.io_signal_type import IOSignalType
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
+from laboneq.dsl.device import SystemProfile
 from laboneq.dsl.device.connection import Connection
 from laboneq.dsl.device.instruments.hdawg import HDAWG
 from laboneq.dsl.device.instruments.nonqc import NonQC
@@ -40,16 +41,13 @@ from laboneq.serializers.implementations._models._calibration import (
     make_converter as make_calibration_converter,
 )
 
-from ._common import (
-    collect_models,
-    register_models,
-)
+from ._common import collect_models, register_models
 
 
 class IODirectionModel(Enum):
     IN = "IN"
     OUT = "OUT"
-    _target_class = IODirection
+    _target_class: ClassVar[Type] = IODirection
 
 
 class IOSignalTypeModel(Enum):
@@ -62,19 +60,19 @@ class IOSignalTypeModel(Enum):
     DIO = "DIO"
     ZSYNC = "ZSYNC"
     PPC = "PPC"
-    _target_class = IOSignalType
+    _target_class: ClassVar[Type] = IOSignalType
 
 
 class ReferenceClockSourceModel(Enum):
     INTERNAL = "internal"
     EXTERNAL = "external"
-    _target_class = ReferenceClockSource
+    _target_class: ClassVar[Type] = ReferenceClockSource
 
 
 class PhysicalChannelTypeModel(Enum):
     IQ_CHANNEL = "iq_channel"
     RF_CHANNEL = "rf_channel"
-    _target_class = PhysicalChannelType
+    _target_class: ClassVar[Type] = PhysicalChannelType
 
 
 @attrs.define
@@ -230,6 +228,42 @@ class LogicalSignalGroupModel:
     _target_class: ClassVar[Type] = LogicalSignalGroup
 
 
+@attrs.define
+class SystemProfileModel:
+    """Polymorphic model for SystemProfile using plugin registry."""
+
+    _target_class: ClassVar[Type] = None
+
+    @classmethod
+    def _unstructure(cls, obj: SystemProfile):
+        for profile_type, (
+            target_class,
+            model_class,
+        ) in _system_profile_plugins.items():
+            if isinstance(obj, target_class):
+                result = _converter.unstructure(obj, model_class)
+                result["_profile_type"] = profile_type
+                return result
+
+        raise ValueError(
+            f"Unknown SystemProfile type: {type(obj).__name__}. "
+            f"No registered handler found. Available types: {', '.join(_system_profile_plugins.keys())}"
+        )
+
+    @classmethod
+    def _structure(cls, obj: dict[str, Any], _) -> SystemProfile:
+        profile_type = obj.pop("_profile_type")
+
+        if profile_type in _system_profile_plugins:
+            _, model_class = _system_profile_plugins[profile_type]
+            return _converter.structure(obj, model_class)
+
+        raise ValueError(
+            f"Unknown _profile_type: {profile_type}. "
+            f"Available types: {', '.join(_system_profile_plugins.keys())}"
+        )
+
+
 def make_converter():
     _converter = make_calibration_converter()
     register_models(_converter, collect_models(sys.modules[__name__]))
@@ -237,3 +271,19 @@ def make_converter():
 
 
 _converter = make_converter()
+
+_system_profile_plugins: dict[str, tuple[type, type]] = {}
+
+
+def register_system_profile_plugin(
+    profile_type: str, target_class: type, model_class: type
+) -> None:
+    """
+    Register a SystemProfile plugin for optional profile types.
+
+    Args:
+        profile_type: The discriminator value (e.g., "QCCS")
+        target_class: The target class (e.g., SystemProfileQCCS)
+        model_class: The serialization model class (e.g., SystemProfileQCCSModel)
+    """
+    _system_profile_plugins[profile_type] = (target_class, model_class)

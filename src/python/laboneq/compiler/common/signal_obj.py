@@ -10,7 +10,7 @@ from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.data.compilation_job import ParameterInfo, SignalRange
 
 if TYPE_CHECKING:
-    from laboneq.compiler.common.awg_info import AWGInfo
+    from laboneq.data.awg_info import AWGInfo
 
 
 @dataclass(init=True, repr=True, order=True)

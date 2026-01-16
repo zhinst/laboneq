@@ -12,7 +12,6 @@ import orjson
 
 from laboneq._rust import codegenerator as codegen_rs
 from laboneq._rust.codegenerator import SampledWaveform
-from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
 from laboneq.compiler.common.compiler_settings import (
     CompilerSettings,
 )
@@ -31,10 +30,12 @@ from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput, SeqCProgram
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.core.types.enums.awg_signal_type import AWGSignalType
 from laboneq.core.types.enums.wave_type import WaveType
+from laboneq.data.awg_info import AWGInfo, AwgKey
 from laboneq.data.scheduled_experiment import (
     COMPLEX_USAGE,
     CodegenWaveform,
     PulseMapEntry,
+    ResultSource,
     WeightInfo,
 )
 
@@ -84,7 +85,7 @@ class CodeGenerator(ICodeGenerator):
         self._integration_weights: dict[AwgKey, list[codegen_rs.IntegrationWeight]] = (
             defaultdict(dict)
         )
-        self._simultaneous_acquires: list[dict[str, str]] = []
+        self._result_handle_maps: dict[ResultSource, list[set[str]]] = {}
         self._feedback_register_layout = feedback_register_layout
         self._feedback_register_config: dict[
             AwgKey, codegen_rs.FeedbackRegisterConfig
@@ -100,7 +101,7 @@ class CodeGenerator(ICodeGenerator):
             signal_delays=self.signal_delays(),
             integration_weights=self.integration_weights(),
             integration_times=self.integration_times(),
-            simultaneous_acquires=self.simultaneous_acquires(),
+            result_handle_maps=self.result_handle_maps(),
             src=self.src(),
             total_execution_time=self.total_execution_time(),
             waves=self.waves(),
@@ -150,8 +151,8 @@ class CodeGenerator(ICodeGenerator):
             iws_awgs[awg_key] = awg_weights
         return iws_awgs
 
-    def simultaneous_acquires(self) -> list[dict[str, str]]:
-        return self._simultaneous_acquires
+    def result_handle_maps(self) -> dict[ResultSource, list[set[str]]]:
+        return self._result_handle_maps
 
     def total_execution_time(self):
         return self._total_execution_time
@@ -375,7 +376,12 @@ class CodeGenerator(ICodeGenerator):
             settings=settings,
         )
         self._total_execution_time = codegen_result.total_execution_time
-        self._simultaneous_acquires = codegen_result.simultaneous_acquires
+        self._result_handle_maps = {
+            ResultSource(k.device_id, k.awg_id, k.integrator_idx): [
+                set(item) for item in v
+            ]
+            for k, v in codegen_result.result_handle_maps.items()
+        }
         self._measurements = codegen_result.measurements
         res_usage_collector: ResourceUsageCollector = ResourceUsageCollector()
         for idx, awg in enumerate(awgs_sorted):

@@ -20,6 +20,9 @@ from laboneq.controller.devices.node_control import (
 _logger = logging.getLogger(__name__)
 
 OPT_SHF_PLUS = "PLUS"
+OPT_16_INTEGRATORS = "16W"
+OPT_LONG_READOUT = "LRT"
+OPT_OUTPUT_ROUTER_ADDER = "RTR"
 
 
 def check_synth_frequency(synth_cf: float, device: str, index: int):

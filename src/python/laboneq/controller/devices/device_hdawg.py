@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from enum import IntEnum
 from typing import Iterator
 
@@ -30,8 +31,7 @@ from laboneq.controller.devices.node_control import (
     Setting,
     WaitCondition,
 )
-from laboneq.controller.recipe_processor import RecipeData
-from laboneq.controller.utilities.for_each import for_each
+from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.data.recipe import (
     Initialization,
     NtStepKey,
@@ -85,10 +85,10 @@ class DeviceHDAWG(DeviceBase):
         assert self._sampling_rate is not None
         return self._sampling_rate
 
-    def all_cores(self) -> Iterator[CoreBase]:
+    def all_cores(self) -> Iterable[CoreBase]:
         return iter(self._hd_awg_cores)
 
-    def allocated_cores(self, recipe_data: RecipeData) -> Iterator[CoreBase]:
+    def allocated_cores(self, recipe_data: RecipeData) -> Iterable[CoreBase]:
         for ch in recipe_data.allocated_awgs(self.uid):
             yield self._hd_awg_cores[ch]
 
@@ -229,7 +229,7 @@ class DeviceHDAWG(DeviceBase):
     async def _do_start_execution(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
         for awg_index in recipe_data.allocated_awgs(self.uid):
-            if recipe_data.rt_execution_info.with_pipeliner:
+            if recipe_data.rt_execution_info.is_chunked:
                 nc.extend(
                     self._hd_awg_cores[awg_index]._pipeliner.collect_execution_nodes()
                 )
@@ -261,11 +261,11 @@ class DeviceHDAWG(DeviceBase):
     async def teardown_one_step_execution(self, recipe_data: RecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
 
-        if recipe_data.rt_execution_info.with_pipeliner and not self.is_standalone():
+        if recipe_data.rt_execution_info.is_chunked and not self.is_standalone():
             # Deregister this instrument from synchronization via ZSync.
             nc.add("system/synchronization/source", 0)
 
-        if recipe_data.rt_execution_info.with_pipeliner:
+        if recipe_data.rt_execution_info.is_chunked:
             for awg_index in recipe_data.allocated_awgs(self.uid):
                 nc.extend(self._hd_awg_cores[awg_index]._pipeliner.reset_nodes())
 
@@ -277,28 +277,14 @@ class DeviceHDAWG(DeviceBase):
 
         await self.set_async(nc)
 
-    async def apply_initialization(
-        self,
-        recipe_data: RecipeData,
-    ):
+    async def _apply_initialization(self, device_recipe_data: DeviceRecipeData):
+        nc = NodeCollector(base=f"/{self.serial}/")
+
         # Resetting synchronization for all cores to ensue unused cores are
         # not blocking the start trigger.
         # TODO(2K): This node can’t be pipelined. Setting it here as a hotfix
         # for HBAR-2434. Later, load dummy programs on unused cores instead.
-        await self._api.set_parallel(
-            NodeCollector.one(f"/{self.serial}/awgs/*/synchronization/enable", 0)
-        )
-        device_recipe_data = recipe_data.device_settings[self.uid]
-        if device_recipe_data is None:
-            return
-
-        await for_each(
-            self.all_cores(),
-            HDAwgCore.apply_initialization,
-            device_recipe_data=device_recipe_data,
-        )
-
-        nc = NodeCollector(base=f"/{self.serial}/")
+        nc.add("awgs/*/synchronization/enable", 0)
 
         # Configure DIO/ZSync at init (previously was after AWG loading).
         # This is a prerequisite for passing AWG checks in FW on the pipeliner commit.

@@ -12,7 +12,6 @@ from rich.console import Console
 from rich.table import Table
 
 from laboneq.compiler import CompilerSettings
-from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.common.iface_compiler_output import (
     CombinedOutput,
     RTCompilerOutputContainer,
@@ -21,6 +20,7 @@ from laboneq.compiler.workflow.compiler_output import (
     CombinedRTCompilerOutputContainer,
 )
 from laboneq.core.types.enums.wave_type import WaveType
+from laboneq.data.awg_info import AwgKey
 from laboneq.data.scheduled_experiment import CodegenWaveform
 from laboneq.laboneq_logging import get_logger
 

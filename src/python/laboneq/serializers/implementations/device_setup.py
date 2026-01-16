@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from laboneq.dsl.device.device_setup import DeviceSetup
 from laboneq.serializers.base import LabOneQClassicSerializer, VersionedClassSerializer
@@ -14,6 +15,7 @@ from laboneq.serializers.implementations._models._device_setup import (
     DataServerModel,
     LogicalSignalGroupModel,
     PhysicalChannelGroupModel,
+    SystemProfileModel,
     ZIStandardInstrumentModel,
     make_converter,
 )
@@ -32,7 +34,7 @@ _converter = make_converter()
 @serializer(types=DeviceSetup, public=True)
 class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
     SERIALIZER_ID = "laboneq.serializers.implementations.DeviceSetupSerializer"
-    VERSION = 3
+    VERSION = 4
 
     @classmethod
     def to_dict(
@@ -59,6 +61,11 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
             k: QuantumElementSerializer.to_dict(v, options)
             for k, v in obj.qubits.items()
         }
+        system_profile = None
+        if obj.system_profile:
+            system_profile = _converter.unstructure(
+                obj.system_profile, SystemProfileModel
+            )
         return {
             "__serializer__": cls.serializer_id(),
             "__version__": cls.version(),
@@ -69,8 +76,23 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
                 "physical_channel_groups": physical_channels_groups,
                 "logical_signal_groups": logical_signal_groups,
                 "qubits": qubits,
+                "system_profile": system_profile,
             },
         }
+
+    @classmethod
+    def from_dict_v4(
+        cls,
+        serialized_data: JsonSerializableType,
+        options: DeserializationOptions | None = None,
+    ) -> DeviceSetup:
+        d = cls.from_dict_v3(serialized_data, options)
+        sys_prof_data: dict[str, Any] = serialized_data["__data__"].get(
+            "system_profile"
+        )
+        if sys_prof_data:
+            d.system_profile = _converter.structure(sys_prof_data, SystemProfileModel)
+        return d
 
     @classmethod
     def from_dict_v3(

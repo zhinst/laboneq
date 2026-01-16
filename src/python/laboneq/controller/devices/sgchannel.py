@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import json
+import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
+    DeviceAttribute,
     DeviceAttributesView,
 )
 from laboneq.controller.devices.async_support import (
@@ -19,18 +22,26 @@ from laboneq.controller.devices.async_support import (
     ResponseWaiterAsync,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
-from laboneq.controller.devices.core_base import CoreBase
+from laboneq.controller.devices.core_base import SHFBaseProtocol, SHFChannelBase
+from laboneq.controller.devices.device_shf_base import (
+    OPT_OUTPUT_ROUTER_ADDER,
+    check_synth_frequency,
+)
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import delay_to_rounded_samples
 from laboneq.controller.recipe_processor import (
     DeviceRecipeData,
     RecipeData,
     get_elf,
+    get_initialization_by_device_uid,
     prepare_command_table,
     prepare_waves,
 )
-from laboneq.data.recipe import NtStepKey
-from laboneq.data.scheduled_experiment import ArtifactsCodegen
+from laboneq.controller.utilities.exception import LabOneQControllerException
+from laboneq.data.recipe import IO, Initialization, NtStepKey
+from laboneq.data.scheduled_experiment import ArtifactsCodegen, ScheduledExperiment
+
+_logger = logging.getLogger(__name__)
 
 SAMPLE_FREQUENCY_HZ = 2.0e9
 DELAY_NODE_GRANULARITY_SAMPLES = 1
@@ -50,7 +61,7 @@ class SGChannelNodes:
     busy: str
 
 
-class SGChannel(CoreBase):
+class SGChannel(SHFChannelBase):
     def __init__(
         self,
         *,
@@ -105,6 +116,32 @@ class SGChannel(CoreBase):
             await self._api.set_parallel(
                 NodeCollector.one(self.nodes.output_on, 0, cache=False)
             )
+
+    @staticmethod
+    def reset_to_idle_nodes(
+        *, base: str, is_qc: bool, is_secondary: bool, has_opt_rtr: bool
+    ) -> NodeCollector:
+        nc = NodeCollector(base=f"{base}/")
+        # Reset pipeliner first, attempt to set AWG enable leads to FW error if pipeliner was enabled.
+        nc.add("sgchannels/*/pipeliner/reset", 1, cache=False)
+        nc.add("sgchannels/*/pipeliner/mode", 0, cache=False)  # off
+        nc.add("sgchannels/*/synchronization/enable", 0, cache=False)
+        nc.barrier()
+        nc.add("sgchannels/*/awg/enable", 0, cache=False)
+        if not is_secondary:
+            nc.add(
+                "system/synchronization/source",
+                0,  # internal
+                cache=False,
+            )
+            if is_qc:
+                nc.add("system/internaltrigger/synchronization/enable", 0, cache=False)
+        if has_opt_rtr:
+            # Disable any previously configured output routers to make sure they
+            # do not introduce signal delay or unexpected signal paths.
+            nc.add("sgchannels/*/outputrouter/enable", 0, cache=False)
+            nc.add("sgchannels/*/outputrouter/routes/*/enable", 0, cache=False)
+        return nc
 
     def allocate_resources(self):
         self._pipeliner._reload_tracker.reset()
@@ -161,7 +198,7 @@ class SGChannel(CoreBase):
             )
         return nc
 
-    async def apply_initialization(self, device_recipe_data: DeviceRecipeData):
+    async def apply_core_initialization(self, device_recipe_data: DeviceRecipeData):
         sg_ch_recipe_data = device_recipe_data.sgchannels.get(self._core_index)
         if sg_ch_recipe_data is None:
             return
@@ -280,14 +317,14 @@ class SGChannel(CoreBase):
         elf_nodes = NodeCollector()
         upload_ready_conditions: dict[str, Any] = {}
 
-        if rt_execution_info.with_pipeliner:
+        if rt_execution_info.is_chunked:
             # enable pipeliner
             elf_nodes.extend(self._pipeliner.prepare_for_upload())
 
-        for pipeliner_job in range(rt_execution_info.pipeliner_jobs):
+        for pipeliner_job in range(rt_execution_info.chunk_count_or_1):
             effective_nt_step = (
                 NtStepKey(indices=tuple([*nt_step.indices, pipeliner_job]))
-                if rt_execution_info.with_pipeliner
+                if rt_execution_info.is_chunked
                 else nt_step
             )
             rt_exec_step = next(
@@ -301,7 +338,7 @@ class SGChannel(CoreBase):
                 None,
             )
 
-            if rt_execution_info.with_pipeliner:
+            if rt_execution_info.is_chunked:
                 rt_exec_step = self._pipeliner._reload_tracker.calc_next_step(
                     pipeliner_job=pipeliner_job,
                     rt_exec_step=rt_exec_step,
@@ -339,10 +376,10 @@ class SGChannel(CoreBase):
                     cache=False,
                 )
 
-            if rt_execution_info.with_pipeliner:
+            if rt_execution_info.is_chunked:
                 elf_nodes.extend(self._pipeliner.commit())
 
-        if rt_execution_info.with_pipeliner:
+        if rt_execution_info.is_chunked:
             upload_ready_conditions.update(self._pipeliner.ready_conditions())
 
         rw = ResponseWaiterAsync(api=self._api, dev_repr=self._unit_repr, timeout_s=10)
@@ -402,3 +439,204 @@ class SGChannel(CoreBase):
                     f"AWG {self._core_index} didn't stop. Missing start trigger? Check ZSync.",
                 )
             }
+
+    async def teardown_one_step_execution(self, with_pipeliner: bool):
+        nc = NodeCollector(base=f"{self._node_base}/")
+        if with_pipeliner:
+            nc.extend(self.pipeliner.reset_nodes())
+        await self._api.set_parallel(nc)
+
+
+class SHFSGProtocol(SHFBaseProtocol, Protocol):
+    @property
+    def _outputs(self) -> int: ...
+
+    @property
+    def _channels(self) -> int: ...
+
+    @property
+    def _sgchannels(self) -> list[SGChannel]: ...
+
+    @property
+    def _output_to_synth_map(self) -> list[int]: ...
+
+    @property
+    def _has_opt_rtr(self) -> bool: ...
+
+    def _is_internal_channel(self, channel: int) -> bool: ...
+
+    # Methods defined in SHFSGMixIn
+    def _validate_range_shfsg(self, io: IO): ...
+    def _is_full_channel(self, channel: int) -> bool: ...
+
+
+class SHFSGMixIn:
+    def _is_full_channel(self: SHFSGProtocol, channel: int) -> bool:
+        return channel < self._outputs
+
+    def _is_internal_channel(self: SHFSGProtocol, channel: int) -> bool:
+        return channel < self._channels
+
+    def _validate_range_shfsg(self: SHFSGProtocol, io: IO):
+        if io.range is None:
+            return
+        range_list = np.array([-30, -25, -20, -15, -10, -5, 0, 5, 10], dtype=np.float64)
+        label = "Output"
+
+        if io.range_unit not in (None, "dBm"):
+            raise LabOneQControllerException(
+                f"{label} range of device {self.dev_repr} is specified in "
+                f"units of {io.range_unit}. Units must be 'dBm'."
+            )
+        if not any(np.isclose([io.range] * len(range_list), range_list)):
+            _logger.warning(
+                "%s: %s channel %d range %.1f is not on the list of allowed ranges: %s. "
+                "Nearest allowed range will be used.",
+                self.dev_repr,
+                label,
+                io.channel,
+                io.range,
+                range_list,
+            )
+
+    def _validate_scheduled_experiment_shfsg(
+        self: SHFSGProtocol,
+        scheduled_experiment: ScheduledExperiment,
+    ):
+        initialization = get_initialization_by_device_uid(
+            scheduled_experiment.recipe, self.uid
+        )
+        if initialization is None:
+            return
+        for output in initialization.outputs:
+            self._validate_range_shfsg(output)
+            self._warn_for_unsupported_param(
+                output.offset is None or output.offset == 0,
+                "voltage_offsets",
+                output.channel,
+            )
+            self._warn_for_unsupported_param(
+                output.gains is None, "correction_matrix", output.channel
+            )
+            if output.marker_mode not in (None, "TRIGGER", "MARKER"):
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Marker mode must be either 'MARKER' or 'TRIGGER', but got {output.marker_mode} for output {output.channel}"
+                )
+            if output.enable_output_mute and not self._is_plus:
+                _logger.warning(
+                    f"{self.dev_repr}: Device output muting is enabled, but the device is not"
+                    " SHF+ and therefore no muting will happen. It is suggested to disable it."
+                )
+            if len(output.routed_outputs) > 0:
+                if not self._has_opt_rtr:
+                    msg = f"{self.dev_repr}: Output router and adder requires '{OPT_OUTPUT_ROUTER_ADDER}' option on SHFSG / SHFQC devices."
+                    raise LabOneQControllerException(msg)
+                if not self._is_full_channel(output.channel):
+                    msg = f"{self.dev_repr}: Outputs can only be routed to device front panel outputs. Invalid channel: {output.channel}"
+                    raise LabOneQControllerException(msg)
+
+    def _pre_process_attributes_shfsg(
+        self: SHFSGProtocol,
+        initialization: Initialization,
+    ) -> Iterator[DeviceAttribute]:
+        center_frequencies: dict[int, IO] = {}
+
+        def get_synth_idx(io: IO):
+            synth_idx = self._output_to_synth_map[io.channel]
+            prev_io = center_frequencies.get(synth_idx)
+            if prev_io is None:
+                center_frequencies[synth_idx] = io
+            elif prev_io.lo_frequency != io.lo_frequency:
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Local oscillator frequency mismatch between outputs "
+                    f"{prev_io.channel} and {io.channel} sharing synthesizer {synth_idx}: "
+                    f"{prev_io.lo_frequency} != {io.lo_frequency}"
+                )
+            return synth_idx
+
+        ios = initialization.outputs or []
+        for io in ios:
+            if not self._is_full_channel(io.channel):
+                if not self._is_internal_channel(io.channel):
+                    raise LabOneQControllerException(
+                        f"{self.dev_repr}: Attempt to configure channel {io.channel} on a device "
+                        f"with {self._channels} channels. Verify your device setup."
+                    )
+                continue
+            if io.lo_frequency is None:
+                raise LabOneQControllerException(
+                    f"{self.dev_repr}: Local oscillator for channel {io.channel} is required, "
+                    f"but is not provided."
+                )
+            if io.port_mode is None or io.port_mode == "rf":
+                yield DeviceAttribute(
+                    name=AttributeName.SG_SYNTH_CENTER_FREQ,
+                    index=get_synth_idx(io),
+                    value_or_param=io.lo_frequency,
+                )
+            else:
+                yield DeviceAttribute(
+                    name=AttributeName.SG_DIG_MIXER_CENTER_FREQ,
+                    index=io.channel,
+                    value_or_param=io.lo_frequency,
+                )
+            route_ampl_attrs = [
+                AttributeName.OUTPUT_ROUTE_1_AMPLITUDE,
+                AttributeName.OUTPUT_ROUTE_2_AMPLITUDE,
+                AttributeName.OUTPUT_ROUTE_3_AMPLITUDE,
+            ]
+            route_phase_attrs = [
+                AttributeName.OUTPUT_ROUTE_1_PHASE,
+                AttributeName.OUTPUT_ROUTE_2_PHASE,
+                AttributeName.OUTPUT_ROUTE_3_PHASE,
+            ]
+            for idx, router in enumerate(io.routed_outputs):
+                yield DeviceAttribute(
+                    name=route_ampl_attrs[idx],
+                    index=io.channel,
+                    value_or_param=router.amplitude,
+                )
+                yield DeviceAttribute(
+                    name=route_phase_attrs[idx],
+                    index=io.channel,
+                    value_or_param=router.phase,
+                )
+
+    async def _teardown_one_step_execution_shfsg(self: SHFSGProtocol):
+        nc = NodeCollector(base=f"/{self.serial}/")
+        # HACK: HBAR-1427 and HBAR-2165 show that runtime checks generate
+        # wrongly detected gaps when enabled during experiments with feedback.
+        # Here we make sure that if they were enabled at `session.connect` we
+        # re-enable them in case the previous experiment had feedback.
+        nc.add("raw/system/awg/runtimechecks/enable", int(self._enable_runtime_checks))
+
+        await self._api.set_parallel(nc)
+
+    async def _set_nt_step_nodes_shfsg(
+        self: SHFSGProtocol, *, attributes: DeviceAttributesView
+    ):
+        nc = NodeCollector(base=f"/{self.serial}/")
+        for synth_idx in set(self._output_to_synth_map):
+            [synth_cf], synth_cf_updated = attributes.resolve(
+                keys=[(AttributeName.SG_SYNTH_CENTER_FREQ, synth_idx)]
+            )
+            if synth_cf_updated:
+                check_synth_frequency(synth_cf, self.dev_repr, synth_idx)
+                nc.add(f"synthesizers/{synth_idx}/centerfreq", synth_cf)
+        await self._api.set_parallel(nc)
+
+    async def _apply_initialization_shfsg(
+        self: SHFSGProtocol, device_recipe_data: DeviceRecipeData
+    ):
+        # If multiple oscillators are assigned to a channel, it indicates oscillator switching
+        # via the command table, and the oscselect node is ignored. Therefore it can be set to
+        # any oscillator.
+        nc = NodeCollector(base=f"/{self.serial}/")
+        osc_selects = {
+            ch: osc.index
+            for osc in device_recipe_data.allocated_oscs
+            for ch in osc.channels
+        }
+        for ch, osc_idx in osc_selects.items():
+            nc.extend(self._sgchannels[ch]._collect_configure_oscillator_nodes(osc_idx))
+        await self._api.set_parallel(nc)

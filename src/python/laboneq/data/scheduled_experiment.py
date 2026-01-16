@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
@@ -11,9 +10,13 @@ from typing import Any, Literal
 import numpy as np
 from numpy import typing as npt
 
+from laboneq.core.types.enums.acquisition_type import AcquisitionType
+from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.types.enums.wave_type import WaveType
+from laboneq.core.types.numpy_support import NumPyArray
 from laboneq.core.validators import dicts_equal
 from laboneq.data import EnumReprMixin
+from laboneq.data.awg_info import AwgKey
 from laboneq.data.recipe import Recipe
 from laboneq.executor.executor import Statement
 
@@ -143,35 +146,82 @@ class ArtifactsCodegen(CompilerArtifact):
 
 
 @dataclass
+class HandleResultShape:
+    signal: str
+    shape: tuple[int, ...]
+    axis_names: list[str | list[str]]
+    axis_values: list[NumPyArray | list[NumPyArray]]
+    chunked_axis_index: int | None
+    # Maps axis to sorted indices of rows along that axis that correspond to this result
+    # e.g. if shape = (3, 5, 7), and mask = {2: [6, 8]}, then this result fills the subarray [:, :, [6, 8]]
+    match_case_mask: dict[int, list[int]] | None
+
+    def __eq__(self, other):
+        if id(self) == id(other):
+            return True
+        if not isinstance(other, HandleResultShape):
+            return False
+
+        return (
+            self.signal,
+            self.shape,
+            self.axis_names,
+            self.chunked_axis_index,
+            self.match_case_mask,
+        ) == (
+            self.signal,
+            other.shape,
+            other.axis_names,
+            other.chunked_axis_index,
+            other.match_case_mask,
+        )
+
+
+@dataclass(frozen=True)
+class ResultSource:
+    device_id: str
+    awg_id: int | str
+    integrator_idx: int | None  # None for RAW acquisition
+
+
+@dataclass
+class RtLoopProperties:
+    uid: str
+    acquisition_type: AcquisitionType
+    averaging_mode: AveragingMode
+    shots: int
+    chunk_count: int | None
+
+
+@dataclass(frozen=True)
+class ResultShapeInfo:
+    shapes: dict[str, HandleResultShape]
+    result_handle_maps: dict[ResultSource, list[set[str]]]
+    result_lengths: dict[AwgKey, int]
+
+
+@dataclass
 class ScheduledExperiment:
-    device_setup_fingerprint: str | None = None
+    device_setup_fingerprint: str
 
     #: Instructions to the controller for running the experiment.
-    recipe: Recipe | None = None
+    recipe: Recipe
 
     #: Compiler artifacts specific to backend(s)
-    artifacts: CompilerArtifact | None = None
+    artifacts: CompilerArtifact
 
     #: list of events as scheduled by the compiler.
-    schedule: dict[str, Any] | None = None
+    schedule: dict[str, Any] | None
 
     #: Experiment execution model
-    execution: Statement | None = None
+    execution: Statement
 
-    chunk_count: int | None = None
+    rt_loop_properties: RtLoopProperties
+
+    result_shape_info: ResultShapeInfo
 
     def __getattr__(self, attr):
         return getattr(self.artifacts, attr)  # @IgnoreException
-
-    def __copy__(self):
-        new_artifacts = copy.copy(self.artifacts)
-        new_scheduled_experiment = ScheduledExperiment(
-            device_setup_fingerprint=self.device_setup_fingerprint,
-            artifacts=new_artifacts,
-            schedule=self.schedule,
-            execution=self.execution,
-        )
-        return new_scheduled_experiment
 
     def __eq__(self, other):
         if other is self:
@@ -186,9 +236,11 @@ class ScheduledExperiment:
         return (
             other.device_setup_fingerprint,
             other.artifacts,
+            other.result_shape_info,
         ) == (
             self.device_setup_fingerprint,
             self.artifacts,
+            self.result_shape_info,
         ) and dicts_equal(
             {n: w.samples for n, w in other.waves.items()},
             {n: w.samples for n, w in self.waves.items()},

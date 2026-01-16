@@ -22,6 +22,7 @@ mod signature;
 use crate::pulse_parameters::PulseParameters;
 use crate::result::FeedbackRegisterConfigPy;
 use crate::result::MeasurementPy;
+use crate::result::ResultSourcePy;
 use crate::settings::code_generator_settings_from_dict;
 use codegenerator::ir::experiment::PulseParametersId;
 use result::{AwgCodeGenerationResultPy, SampledWaveformPy, SeqCGenOutputPy};
@@ -113,5 +114,6 @@ pub fn create_py_module<'a>(py: Python<'a>, name: &str) -> PyResult<Bound<'a, Py
     m.add_class::<AwgCodeGenerationResultPy>()?;
     m.add_class::<FeedbackRegisterConfigPy>()?;
     m.add_class::<MeasurementPy>()?;
+    m.add_class::<ResultSourcePy>()?;
     Ok(m)
 }

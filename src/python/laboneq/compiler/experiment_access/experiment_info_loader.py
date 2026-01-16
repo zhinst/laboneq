@@ -3,7 +3,6 @@
 
 
 from laboneq.compiler.experiment_access.loader_base import LoaderBase
-from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import AcquisitionType
 from laboneq.data.compilation_job import ExperimentInfo, SectionInfo
 
@@ -26,22 +25,8 @@ class ExperimentInfoLoader(LoaderBase):
             if s.device.uid not in self._devices:
                 self._devices[s.device.uid] = s.device
 
-            if s.oscillator is not None:
-                o = s.oscillator
-                if o.uid in self._oscillators and self._oscillators[o.uid] != o:
-                    raise LabOneQException(
-                        f"Detected duplicate oscillator UID '{o.uid}'"
-                    )
-                self._oscillators[s.oscillator.uid] = s.oscillator
-                if s.oscillator.is_hardware:
-                    self.add_device_oscillator(s.device.uid, s.oscillator.uid)
-
-        for pulse in job.pulse_defs:
-            self._pulses[pulse.uid] = pulse
-
         if job.sections is not None:
             for section in job.sections:
-                self._root_sections.append(section.uid)
                 self.walk_sections(section)
 
     def walk_sections(self, section: SectionInfo):
@@ -54,10 +39,7 @@ class ExperimentInfoLoader(LoaderBase):
             self.acquisition_type = AcquisitionType.INTEGRATION
 
         if section.pulses:
-            d = self._section_signal_pulses[section.uid] = {}
             for ssp in section.pulses:
-                d.setdefault(ssp.signal.uid, []).append(ssp)
-
                 for marker in ssp.markers:
                     self.add_signal_marker(ssp.signal.uid, marker.marker_selector)
 

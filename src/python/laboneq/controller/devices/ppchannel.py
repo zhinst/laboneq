@@ -11,7 +11,8 @@ from laboneq.controller.devices.async_support import (
     InstrumentConnection,
 )
 from laboneq.controller.devices.core_base import CoreBase
-from laboneq.controller.recipe_processor import RecipeData
+from laboneq.controller.devices.device_utils import NodeCollector
+from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.data.recipe import NtStepKey
 
 
@@ -37,6 +38,9 @@ class PPChannel(CoreBase):
         pass
 
     def allocate_resources(self):
+        pass
+
+    async def apply_core_initialization(self, device_recipe_data: DeviceRecipeData):
         pass
 
     async def load_awg_program(
@@ -65,7 +69,9 @@ class PPChannel(CoreBase):
         }
 
     async def start_execution(self, with_pipeliner: bool):
-        pass
+        nc = NodeCollector(base=f"/{self._serial}/")
+        nc.add(f"ppchannels/{self._core_index}/sweeper/enable", 1, cache=False)
+        await self._api.set_parallel(nc)
 
     def conditions_for_execution_done(
         self, with_pipeliner: bool

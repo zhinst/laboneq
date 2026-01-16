@@ -6,13 +6,11 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from collections.abc import ItemsView, Iterator
-from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import (
     TYPE_CHECKING,
     Any,
-    Iterable,
     KeysView,
     Literal,
     TypeVar,
@@ -34,6 +32,7 @@ from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.types.enums.awg_signal_type import AWGSignalType
 from laboneq.core.types.enums.wave_type import WaveType
+from laboneq.data.awg_info import AwgKey as AwgKeyFromData
 from laboneq.data.calibration import PortMode as RecipePortMode
 from laboneq.data.recipe import IO, Initialization, Recipe
 from laboneq.data.scheduled_experiment import (
@@ -43,9 +42,6 @@ from laboneq.data.scheduled_experiment import (
     WeightInfo,
 )
 from laboneq.executor.executor import (
-    ExecutorBase,
-    LoopFlags,
-    LoopingMode,
     Statement,
 )
 
@@ -60,24 +56,7 @@ _logger = logging.getLogger(__name__)
 
 MIN_LABONEQ_VERSION_FOR_COMPILED_EXPERIMENT = Version("2.52.0")
 
-
-@dataclass
-class HandleResultShape:
-    signal: str
-    base_shape: list[int]
-    base_axis_name: list[str | list[str]]
-    base_axis: list[NumPyArray | list[NumPyArray]]
-    chunked_axis_index: int | None
-    # If a handle is used in multiple acquires, it adds an extra result dimension.
-    # handle_acquire_count tracks the number of such acquires. This works only if
-    # outer loops are the same for all acquires with the same handle.
-    # base_shape is the result shape without this dimension. The extra dimension
-    # is added with the handle as the axis name if the count is >1.
-    handle_acquire_count: int = 1
-
-
-AcquireHandle = str
-HandleResultShapes = dict[AcquireHandle, HandleResultShape]
+VIRTUAL_SHFSG_UID_SUFFIX = "_sg"
 
 
 @dataclass(frozen=True)
@@ -103,16 +82,6 @@ class AwgConfig:
     signals: set[str]
     # QA
     raw_acquire_length: int | None = None
-    signal_raw_acquire_lengths: dict[str, int] = field(default_factory=dict)
-    # signal_id -> sequence of handle/None for each result vector entry.
-    # Important! Length must be equal for all acquire signals / integrators of one AWG.
-    # All integrators occupy an entry in the respective result vectors per startQA event,
-    # regardless of the given integrators mask. Masked-out integrators just leave the
-    # value at NaN (corresponds to None in the map).
-    # TODO(2K): to be replaced by event-based calculation in the compiler
-    signal_result_map: dict[str, list[str | None]] = field(
-        default_factory=lambda: defaultdict(list)
-    )
     result_length: int | None = None
     acquire_signals: set[str] = field(default_factory=set)
     # SG
@@ -250,6 +219,7 @@ class PPChannelRecipeData:
 @dataclass
 class AllocatedOscillator:
     channels: set[int]
+    awg_type: AwgType
     index: int
     id_index: int
     frequency: float | None
@@ -283,15 +253,15 @@ class RtExecutionInfo:
     averages: int
     averaging_mode: AveragingMode
     acquisition_type: AcquisitionType
-    pipeliner_job_count: int | None
+    chunk_count: int | None
 
     @property
-    def with_pipeliner(self) -> bool:
-        return self.pipeliner_job_count is not None
+    def is_chunked(self) -> bool:
+        return self.chunk_count is not None
 
     @property
-    def pipeliner_jobs(self) -> int:
-        return self.pipeliner_job_count or 1
+    def chunk_count_or_1(self) -> int:
+        return self.chunk_count or 1
 
     @property
     def is_raw_acquisition(self) -> bool:
@@ -300,10 +270,6 @@ class RtExecutionInfo:
     @property
     def effective_averages(self) -> int:
         return 1 if self.averaging_mode == AveragingMode.SINGLE_SHOT else self.averages
-
-    @property
-    def mapping_repeats(self) -> int:
-        return self.averages if self.averaging_mode == AveragingMode.SINGLE_SHOT else 1
 
     @property
     def effective_averaging_mode(self) -> AveragingMode:
@@ -363,7 +329,6 @@ class RecipeData:
     scheduled_experiment: ScheduledExperiment
     recipe: Recipe
     execution: Statement
-    result_shapes: HandleResultShapes
     rt_execution_info: RtExecutionInfo
     device_settings: dict[DeviceUID, DeviceRecipeData]
     awg_configs: AwgConfigs
@@ -405,7 +370,7 @@ class RecipeData:
 
 def _validate_scheduled_experiment(
     scheduled_experiment: ScheduledExperiment, devices: DeviceCollection
-) -> tuple[Recipe, Statement]:
+):
     recipe = scheduled_experiment.recipe
     assert recipe is not None  # Recipe is present
 
@@ -435,10 +400,7 @@ def _validate_scheduled_experiment(
             "Please recompile using the current device setup."
         )
 
-    execution = scheduled_experiment.execution
-    assert execution is not None
-
-    return recipe, execution
+    assert scheduled_experiment.execution is not None
 
 
 def _pre_process_iq_settings_hdawg(
@@ -488,8 +450,8 @@ def _pre_process_iq_settings_hdawg(
     return iq_settings
 
 
-def _pre_process_oscillator_allocations(
-    recipe: Recipe, oscillator_ids: list[str], device_id: str
+def _pre_process_oscillator_allocations_per_type(
+    *, recipe: Recipe, oscillator_ids: list[str], device_id: str, awg_type: AwgType
 ):
     allocated_oscs: list[AllocatedOscillator] = []
     for osc_param in recipe.oscillator_params:
@@ -503,6 +465,7 @@ def _pre_process_oscillator_allocations(
             allocated_oscs.append(
                 AllocatedOscillator(
                     channels={osc_param.channel},
+                    awg_type=awg_type,
                     index=osc_param.allocated_index,
                     id_index=osc_id_index,
                     frequency=osc_param.frequency,
@@ -521,6 +484,18 @@ def _pre_process_oscillator_allocations(
                     f"'{osc_param.id}': {same_id_osc.index} != {osc_param.allocated_index}"
                 )
             same_id_osc.channels.add(osc_param.channel)
+    return allocated_oscs
+
+
+def _pre_process_oscillator_allocations(
+    *, recipe: Recipe, oscillator_ids: list[str], device_id: str
+):
+    allocated_oscs = _pre_process_oscillator_allocations_per_type(
+        recipe=recipe,
+        oscillator_ids=oscillator_ids,
+        device_id=device_id,
+        awg_type=AwgType.QA,
+    )
     return allocated_oscs
 
 
@@ -714,209 +689,9 @@ def _pre_process_pp_channels(
     return channels
 
 
-@dataclass
-class _LoopStackEntry:
-    count: int
-    is_averaging: bool
-    is_chunked: bool
-    axis_names: list[str] = field(default_factory=list)
-    axis_points: list[NumPyArray | Iterable[int]] = field(default_factory=list)
-
-    @property
-    def axis_name(self) -> str | list[str]:
-        return self.axis_names[0] if len(self.axis_names) == 1 else self.axis_names
-
-    @property
-    def axis(self) -> NumPyArray | list[NumPyArray]:
-        if len(self.axis_points) == 1:
-            return np.array(self.axis_points[0])
-        return [np.array(axis) for axis in self.axis_points]
-
-
-@dataclass
-class _RtExecutionState:
-    uid: str
-    averages: int
-    averaging_mode: AveragingMode
-    acquisition_type: AcquisitionType
-
-
-class _LoopsPreprocessor(ExecutorBase):
-    def __init__(self):
-        super().__init__(looping_mode=LoopingMode.ONCE)
-
-        self._result_shapes: HandleResultShapes = {}
-        self._loop_stack: list[_LoopStackEntry] = []
-        self._current_rt_state: _RtExecutionState | None = None
-        self._last_rt_state: _RtExecutionState | None = None
-
-    def get_rt_execution_info(self, pipeliner_job_count: int | None) -> RtExecutionInfo:
-        if self._last_rt_state is None:
-            raise LabOneQControllerException(
-                "No 'acquire_loop_rt' section found in the experiment."
-            )
-        return RtExecutionInfo(
-            uid=self._last_rt_state.uid,
-            averages=self._last_rt_state.averages,
-            averaging_mode=self._last_rt_state.averaging_mode,
-            acquisition_type=self._last_rt_state.acquisition_type,
-            pipeliner_job_count=pipeliner_job_count,
-        )
-
-    def get_result_shapes(
-        self,
-        devices: DeviceCollection,
-        awg_configs: AwgConfigs,
-        scheduled_experiment: ScheduledExperiment,
-        rt_execution_info: RtExecutionInfo,
-    ) -> HandleResultShapes:
-        result_shapes: HandleResultShapes = HandleResultShapes()
-        for handle, shape_info in self._result_shapes.items():
-            # Append extra dimension for multiple acquires with the same handle
-            axis_name = deepcopy(shape_info.base_axis_name)
-            axis = deepcopy(shape_info.base_axis)
-            shape = deepcopy(shape_info.base_shape)
-            if shape_info.handle_acquire_count > 1:
-                axis_name.append(handle)
-                axis.append(
-                    np.arange(shape_info.handle_acquire_count, dtype=np.float64)
-                )
-                shape.append(shape_info.handle_acquire_count)
-
-            # Append extra dimension for samples of the raw acquisition
-            if rt_execution_info.is_raw_acquisition:
-                signal_id = shape_info.signal
-                awg_key, awg_config = awg_configs.by_signal(signal_id)
-                device = devices.find_by_uid(awg_key.device_uid)
-                raw_acquire_length = device.calc_raw_acquire_length(
-                    scheduled_experiment.artifacts,
-                    awg_config,
-                    signal_id,
-                    handle,
-                )
-                axis_name.append("samples")
-                axis.append(np.arange(raw_acquire_length, dtype=np.float64))
-                shape.append(raw_acquire_length)
-
-            result_shapes[handle] = HandleResultShape(
-                signal=shape_info.signal,
-                base_shape=shape,
-                base_axis_name=axis_name,
-                base_axis=axis,
-                chunked_axis_index=shape_info.chunked_axis_index,
-            )
-
-        return result_shapes
-
-    @property
-    def current_rt_state(self) -> _RtExecutionState:
-        assert self._current_rt_state is not None
-        return self._current_rt_state
-
-    def _single_shot_axis(self) -> range:
-        # The number of averages may potentially be large,
-        # so we represent it with a lazy iterator.
-        return range(self.current_rt_state.averages)
-
-    def acquire_handler(self, handle: str, signal: str, parent_uid: str):
-        # Determine result shape for each acquire handle
-        single_shot_cyclic = (
-            self.current_rt_state.averaging_mode == AveragingMode.SINGLE_SHOT
-        )
-        shape = [
-            loop.count
-            for loop in self._loop_stack
-            if not loop.is_averaging or single_shot_cyclic
-        ]
-        known_shape = self._result_shapes.get(handle)
-        if known_shape is None:
-            relevant_loops = [
-                loop
-                for loop in self._loop_stack
-                if not loop.is_averaging or single_shot_cyclic
-            ]
-            axis_name = [loop.axis_name for loop in relevant_loops]
-            axis = [loop.axis for loop in relevant_loops]
-            chunked_axis_index = next(
-                (i for i, loop in enumerate(relevant_loops) if loop.is_chunked),
-                None,
-            )
-            self._result_shapes[handle] = HandleResultShape(
-                signal=signal,
-                base_shape=shape,
-                base_axis_name=axis_name,
-                base_axis=axis,
-                chunked_axis_index=chunked_axis_index,
-            )
-        elif known_shape.base_shape == shape:
-            known_shape.handle_acquire_count += 1
-        else:
-            raise LabOneQControllerException(
-                f"Multiple acquire events with the same handle ('{handle}') and different result shapes are not allowed."
-            )
-
-    def set_sw_param_handler(
-        self, name: str, index: int, value: float, axis_name: str, values: NumPyArray
-    ):
-        self._loop_stack[-1].axis_names.append(name if axis_name is None else axis_name)
-        self._loop_stack[-1].axis_points.append(values)
-
-    def for_loop_entry_handler(self, count: int, index: int, loop_flags: LoopFlags):
-        self._loop_stack.append(
-            _LoopStackEntry(
-                count=count,
-                is_averaging=loop_flags.is_average,
-                is_chunked=bool(loop_flags & LoopFlags.CHUNKED),
-            )
-        )
-        if loop_flags.is_average:
-            single_shot_cyclic = (
-                self.current_rt_state.averaging_mode == AveragingMode.SINGLE_SHOT
-            )
-            if single_shot_cyclic:
-                self._loop_stack[-1].axis_names.append(self.current_rt_state.uid)
-                self._loop_stack[-1].axis_points.append(self._single_shot_axis())
-
-    def for_loop_exit_handler(self, count: int, index: int, loop_flags: LoopFlags):
-        self._loop_stack.pop()
-
-    def rt_entry_handler(
-        self,
-        count: int,
-        uid: str,
-        averaging_mode: AveragingMode,
-        acquisition_type: AcquisitionType,
-    ):
-        if self._last_rt_state is not None and self._last_rt_state.uid != uid:
-            raise LabOneQControllerException(
-                "Multiple 'acquire_loop_rt' sections per experiment is not supported."
-            )
-        self._current_rt_state = _RtExecutionState(
-            uid=uid,
-            averages=count,
-            averaging_mode=averaging_mode,
-            acquisition_type=acquisition_type,
-        )
-
-    def rt_exit_handler(
-        self,
-        count: int,
-        uid: str,
-        averaging_mode: AveragingMode,
-        acquisition_type: AcquisitionType,
-    ):
-        if self._current_rt_state is None:
-            raise LabOneQControllerException(
-                "Nested 'acquire_loop_rt' are not allowed."
-            )
-        self._last_rt_state = self._current_rt_state
-        self._current_rt_state = None
-
-
 def _calculate_awg_configs(
     rt_execution_info: RtExecutionInfo,
     scheduled_experiment: ScheduledExperiment,
-    recipe: Recipe,
     devices: DeviceCollection,
 ) -> AwgConfigs:
     awg_configs = AwgConfigs()
@@ -927,6 +702,7 @@ def _calculate_awg_configs(
         device.fetch_awg_configs(awg_configs, scheduled_experiment.artifacts)
 
     # TODO(2K): Move recipe data into artifacts.
+    recipe = scheduled_experiment.recipe
     for initialization in recipe.initializations:
         awg_type = (
             AwgType.QA
@@ -967,85 +743,36 @@ def _calculate_awg_configs(
         )
         awg_configs[awg_key].acquire_signals.add(integrator_allocation.signal_id)
 
-    raw_acquire_length_by_signal = {
-        al.signal_id: al.acquire_length for al in recipe.acquire_lengths
-    }
-    raw_acquire_signals = set(raw_acquire_length_by_signal.keys())
+    for awg_key, awg_config in awg_configs.items():
+        result_length = scheduled_experiment.result_shape_info.result_lengths.get(
+            AwgKeyFromData(awg_key.device_uid, awg_key.awg_index)
+        )
+        if result_length is not None:
+            awg_config.result_length = result_length
+            awg_configs.update_max_result_length(result_length)
 
     # Determine the raw acquisition lengths across various acquire events.
     # Will use the maximum length, as scope / monitor can only be configured for one.
     # device_uid + awg_index -> raw acquisition lengths
     raw_acquire_lengths: dict[str, dict[str, int]] = defaultdict(dict)
     raw_acquire_channels: dict[str, set[int]] = defaultdict(set)
-    if rt_execution_info.acquisition_type == AcquisitionType.RAW:
-        for signal in raw_acquire_signals:
-            ac_awg_key, _ = awg_configs.by_signal(signal)
-            raw_acquire_lengths[ac_awg_key.device_uid][signal] = (
-                raw_acquire_length_by_signal.get(signal, 0)
-            )
+    if rt_execution_info.is_raw_acquisition:
+        for al in recipe.acquire_lengths:
+            ac_awg_key, _ = awg_configs.by_signal(al.signal_id)
+            raw_acquire_lengths[ac_awg_key.device_uid][al.signal_id] = al.acquire_length
             raw_acquire_channels[ac_awg_key.device_uid].add(ac_awg_key.awg_index)
+
     for awg_key, awg_config in awg_configs.items():
         dev_raw_acquire_lengths = raw_acquire_lengths.get(awg_key.device_uid, {})
         # Use dummy raw_acquire_length 4096 if there's no acquire statements in experiment
         raw_acquire_length = max(dev_raw_acquire_lengths.values(), default=4096)
         awg_config.raw_acquire_length = raw_acquire_length
-        awg_config.signal_raw_acquire_lengths = dev_raw_acquire_lengths
-
-        for acquires in recipe.simultaneous_acquires:
-            if any(signal in acquires for signal in awg_config.acquire_signals):
-                for signal in awg_config.acquire_signals:
-                    awg_config.signal_result_map[signal].append(acquires.get(signal))
-        if len(awg_config.signal_result_map) > 0:
-            # All lengths are the same, see comment above.
-            any_awg_signal_result_map = next(
-                iter(awg_config.signal_result_map.values())
-            )
-            result_length = (
-                len(any_awg_signal_result_map) * rt_execution_info.mapping_repeats
-            )
-            is_raw_acquisition = awg_key.device_uid in raw_acquire_lengths
-            if is_raw_acquisition:
-                if (
-                    rt_execution_info.averaging_mode == AveragingMode.SEQUENTIAL
-                    and rt_execution_info.averages > 1
-                ):
-                    raise LabOneQControllerException(
-                        "Sequential averaging is not supported for raw acquisitions."
-                    )
-                if awg_config.awg_type == AwgType.QA:
-                    if devices.find_by_uid(awg_key.device_uid).options.is_qc:
-                        SCOPE_MEMORY_SIZE = 64 * 1024
-                    else:
-                        SCOPE_MEMORY_SIZE = 256 * 1024
-                    enabled_channels = raw_acquire_channels.get(awg_key.device_uid, {0})
-                    if len(enabled_channels) < 2:
-                        ch_split = 1
-                    elif len(enabled_channels) == 2:
-                        ch_split = 2
-                    else:
-                        ch_split = 4
-                    max_length = (SCOPE_MEMORY_SIZE // ch_split // result_length) & ~0xF
-                    max_segments = 1024
-                else:
-                    max_length = 4096
-                    max_segments = 1
-                if result_length > max_segments:
-                    raise LabOneQControllerException(
-                        f"A maximum of {max_segments} raw result(s) is supported per real-time execution."
-                    )
-                if raw_acquire_length > max_length:
-                    raise LabOneQControllerException(
-                        "The total size of the requested raw traces exceeds the instrument's memory capacity."
-                    )
-
-            awg_config.result_length = result_length
-            awg_configs.update_max_result_length(result_length)
 
     return awg_configs
 
 
 def _pre_process_attributes(
-    recipe: Recipe, devices: DeviceCollection, oscillator_ids: list[str]
+    *, recipe: Recipe, devices: DeviceCollection, oscillator_ids: list[str]
 ) -> AttributeValueTracker:
     attribute_value_tracker = AttributeValueTracker()
     oscillators_check: dict[str, str | float] = {}
@@ -1085,20 +812,26 @@ def pre_process_compiled(
     scheduled_experiment: ScheduledExperiment,
     devices: DeviceCollection,
 ) -> RecipeData:
-    recipe, execution = _validate_scheduled_experiment(scheduled_experiment, devices)
+    _validate_scheduled_experiment(scheduled_experiment, devices)
 
-    lp = _LoopsPreprocessor()
-    lp.run(execution)
-    rt_execution_info = lp.get_rt_execution_info(scheduled_experiment.chunk_count)
+    rt_loop_properties = scheduled_experiment.rt_loop_properties
+    rt_execution_info = RtExecutionInfo(
+        uid=rt_loop_properties.uid,
+        averages=rt_loop_properties.shots,
+        averaging_mode=rt_loop_properties.averaging_mode,
+        acquisition_type=rt_loop_properties.acquisition_type,
+        chunk_count=rt_loop_properties.chunk_count,
+    )
 
     for _, device in devices.all:
         device.validate_scheduled_experiment(scheduled_experiment, rt_execution_info)
 
+    recipe = scheduled_experiment.recipe
     # Mapping of the unique oscillator ids to integer indices for use with the AttributeValueTracker
     oscillator_ids = list(set(o.id for o in recipe.oscillator_params))
 
     awg_configs = _calculate_awg_configs(
-        rt_execution_info, scheduled_experiment, recipe, devices
+        rt_execution_info, scheduled_experiment, devices
     )
 
     device_settings: dict[DeviceUID, DeviceRecipeData] = {}
@@ -1109,7 +842,7 @@ def pre_process_compiled(
             start_trigger_repetitions=1 if init is None else init.config.repetitions,
             iq_settings=_pre_process_iq_settings_hdawg(init),
             allocated_oscs=_pre_process_oscillator_allocations(
-                recipe, oscillator_ids, device_uid
+                recipe=recipe, oscillator_ids=oscillator_ids, device_id=device_uid
             ),
             uhfqacore=_pre_process_uhfqa(init),
             hdawgcores=_pre_process_hd_awgs(init),
@@ -1128,20 +861,15 @@ def pre_process_compiled(
             ),
         )
 
-    result_shapes = lp.get_result_shapes(
-        devices, awg_configs, scheduled_experiment, rt_execution_info
-    )
-
     recipe_data = RecipeData(
         scheduled_experiment=scheduled_experiment,
         recipe=recipe,
-        execution=execution,
-        result_shapes=result_shapes,
+        execution=scheduled_experiment.execution,
         rt_execution_info=rt_execution_info,
         device_settings=device_settings,
         awg_configs=awg_configs,
         attribute_value_tracker=_pre_process_attributes(
-            recipe, devices, oscillator_ids
+            recipe=recipe, devices=devices, oscillator_ids=oscillator_ids
         ),
         max_step_execution_time=recipe.max_step_execution_time,
     )
@@ -1163,11 +891,11 @@ def calc_result_transfer_base_time(recipe_data: RecipeData) -> float:
 def get_execution_time(recipe_data: RecipeData) -> tuple[float, float]:
     rt_execution_info = recipe_data.rt_execution_info
     min_wait_time = recipe_data.max_step_execution_time
-    if rt_execution_info.with_pipeliner:
+    if rt_execution_info.is_chunked:
         pipeliner_reload_worst_case = 1500e-6
         min_wait_time = (
             min_wait_time + pipeliner_reload_worst_case
-        ) * rt_execution_info.pipeliner_jobs
+        ) * rt_execution_info.chunk_count_or_1
 
     # Add extra guard time for potential state node update delayed by the
     # large result transfer from a previous measurement. Assume up to two result blocks

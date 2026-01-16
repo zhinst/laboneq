@@ -45,23 +45,31 @@ impl ValidationContext {
 }
 
 fn validate_node(node: &ScheduledNode, ctx: &ValidationContext) -> Result<()> {
-    if let IrKind::Match(obj) = &node.kind
-        && matches!(obj.target, MatchTarget::Handle(_))
-    {
-        if ctx.repetition_mode == Some(RepetitionMode::Auto) {
-            let msg = format!(
-                "Match statement '{}' with handle cannot be inside an Auto repetition mode.",
-                obj.uid.0
-            );
-            return Err(Error::new(&msg));
+    match &node.kind {
+        IrKind::Match(obj) if matches!(obj.target, MatchTarget::Handle(_)) => {
+            if ctx.repetition_mode == Some(RepetitionMode::Auto) {
+                let msg = format!(
+                    "Match statement '{}' with handle cannot be inside an Auto repetition mode.",
+                    obj.uid.0
+                );
+                return Err(Error::new(&msg));
+            }
+            if ctx.parent_alignment_mode == SectionAlignment::Right {
+                let msg = format!(
+                    "Match statement '{}' with handle cannot be a subsection of a right-aligned section.",
+                    obj.uid.0
+                );
+                return Err(Error::new(&msg));
+            }
         }
-        if ctx.parent_alignment_mode == SectionAlignment::Right {
-            let msg = format!(
-                "Match statement '{}' with handle cannot be a subsection of a right-aligned section.",
-                obj.uid.0
-            );
-            return Err(Error::new(&msg));
+        IrKind::ClearPrecompensation { .. }
+            if ctx.parent_alignment_mode == SectionAlignment::Right =>
+        {
+            return Err(Error::new(
+                "Cannot reset the precompensation filter inside a right-aligned section.",
+            ));
         }
+        _ => {}
     }
     Ok(())
 }

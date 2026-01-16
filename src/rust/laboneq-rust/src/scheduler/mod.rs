@@ -16,7 +16,7 @@ use crate::scheduler::parameter_store::create_parameter_store;
 use crate::scheduler::py_conversion::ExperimentBuilder;
 use crate::scheduler::py_device::DevicePy;
 use crate::scheduler::py_device::py_device_to_device;
-use crate::scheduler::py_schedules::PyScheduleCompat;
+use crate::scheduler::py_schedules::IntervalSchedule;
 use crate::scheduler::py_schedules::generate_py_schedules;
 use crate::scheduler::py_signal::AmplifierPumpPy;
 use crate::scheduler::py_signal::SweepParameterPy;
@@ -142,13 +142,11 @@ fn build_experiment_py(
 
 #[pyclass(name = "ScheduleResult", frozen)]
 struct ScheduleResult {
-    #[pyo3(get)]
-    system_grid: i64,
     /// Parameters used in the experiment
     #[pyo3(get)]
     used_parameters: HashSet<String>,
     #[pyo3(get)]
-    schedules: Py<PyScheduleCompat>,
+    root: IntervalSchedule,
 }
 
 #[pyfunction(name = "schedule_experiment")]
@@ -179,15 +177,14 @@ fn schedule_experiment_py(
         let msg = create_error_message(e);
         Error::new(resolve_ids(&msg, &experiment.id_store))
     })?;
-    let py_schedules = generate_py_schedules(py, &result.root.unwrap(), experiment)?;
+    let root = generate_py_schedules(py, &result.root.unwrap(), experiment)?;
     let out = ScheduleResult {
-        system_grid: result.system_grid.value(),
         used_parameters: parameter_store
             .empty_queries()
             .iter()
             .map(|p| experiment.id_store.resolve(p.0).unwrap().to_string())
             .collect(),
-        schedules: Py::new(py, py_schedules)?,
+        root,
     };
     Ok(out)
 }

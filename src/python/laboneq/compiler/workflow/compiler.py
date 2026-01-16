@@ -16,12 +16,11 @@ import numpy as np
 # reporter import is required to register the CompilationReportGenerator hook
 import laboneq.compiler.workflow.reporter  # noqa: F401
 from laboneq.compiler.common import compiler_settings
-from laboneq.compiler.common.awg_info import AWGInfo, AwgKey
 from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.resource_usage import ResourceLimitationError
+from laboneq.compiler.common.result_shape import construct_result_shape_info
 from laboneq.compiler.common.signal_obj import SignalObj
-from laboneq.compiler.common.trigger_mode import TriggerMode
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.feedback_router.feedback_router import (
     FeedbackRegisterLayout,
@@ -41,12 +40,13 @@ from laboneq.compiler.workflow.precompensation_helpers import (
     compute_precompensations_and_delays,
 )
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
-from laboneq.compiler.workflow.rt_linker import CombinedRTCompilerOutputContainer
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.awg_signal_type import AWGSignalType
 from laboneq.core.types.enums.mixer_type import MixerType
+from laboneq.core.types.enums.trigger_mode import TriggerMode
+from laboneq.data.awg_info import AWGInfo, AwgKey
 from laboneq.data.compilation_job import (
     ChunkingInfo,
     CompilationJob,
@@ -60,7 +60,7 @@ from laboneq.data.compilation_job import (
     SignalInfoType,
 )
 from laboneq.data.recipe import Recipe
-from laboneq.data.scheduled_experiment import ScheduledExperiment
+from laboneq.data.scheduled_experiment import ResultShapeInfo, ScheduledExperiment
 from laboneq.executor.executor import Statement
 
 if TYPE_CHECKING:
@@ -374,13 +374,12 @@ def calc_shfqa_generator_allocation(
 
 class Compiler:
     def __init__(self, settings: dict | None = None):
+        self._device_setup_fingerprint: str = ""
         self._experiment_dao: ExperimentDAO = None
         self._execution: Statement = None
         self._chunking_info: ChunkingInfo | None = None
-        self._final_chunk_count: int | None = None
         self._settings = compiler_settings.from_dict(settings)
         self._sampling_rate_tracker: SamplingRateTracker = None
-        self._combined_compiler_output: CombinedRTCompilerOutputContainer = None
 
         self._leader_properties = LeaderProperties()
         self._clock_settings: dict[str, Any] = {}
@@ -392,7 +391,7 @@ class Compiler:
         self._signal_objects: dict[str, SignalObj] = {}
         self._feedback_register_layout: FeedbackRegisterLayout = {}
         self._has_uhfqa: bool = False
-        self._recipe = Recipe()
+        self._compiler_output: CompiledExperiment | None = None
 
         _logger.info("Starting LabOne Q Compiler run...")
         self._check_tinysamples()
@@ -412,6 +411,9 @@ class Compiler:
 
     def use_experiment(self, experiment: CompilationJob):
         if isinstance(experiment, CompilationJob):
+            self._device_setup_fingerprint = (
+                experiment.experiment_info.device_setup_fingerprint
+            )
             self._experiment_dao = ExperimentDAO(experiment.experiment_info)
             self._execution = experiment.execution
             self._chunking_info = experiment.experiment_info.chunking
@@ -552,7 +554,9 @@ class Compiler:
         self._leader_properties.global_leader = leader
         self._has_uhfqa = has_uhfqa
 
-    def _compile_whole_or_with_chunks(self, chunk_count: int | None):
+    def _compile_whole_or_with_chunks(
+        self, chunk_count: int | None
+    ) -> CompiledExperiment:
         rt_compiler = RealtimeCompiler(
             self._experiment_dao,
             self._sampling_rate_tracker,
@@ -567,9 +571,54 @@ class Compiler:
         if combined_compiler_output is None:
             raise LabOneQException("Experiment has no real-time averaging loop")
 
+        rt_loop_properties = executor.rt_loop_properties()
+
         executor.finalize()
 
-        return combined_compiler_output
+        awgs: list[AWGInfo] = sorted(self._awgs, key=lambda awg: awg.key)
+
+        device_class, combined_output = (
+            combined_compiler_output.get_first_combined_output()
+        )
+        if combined_output is None:
+            recipe = Recipe()
+            result_shape_info = ResultShapeInfo({}, {}, {})
+        else:
+            generate_recipe_args = GenerateRecipeArgs(
+                awgs=awgs,
+                experiment_dao=self._experiment_dao,
+                leader_properties=self._leader_properties,
+                clock_settings=self._clock_settings,
+                sampling_rate_tracker=self._sampling_rate_tracker,
+                integration_unit_allocation=self._integration_unit_allocation,
+                delays_by_signal=self._delays_by_signal,
+                precompensations=self._precompensations,
+                combined_compiler_output=combined_output,
+            )
+            recipe = get_compiler_hooks(device_class).generate_recipe(
+                generate_recipe_args
+            )
+            result_shape_info = construct_result_shape_info(
+                self._execution,
+                rt_loop_properties,
+                awgs,
+                combined_output,
+                self._experiment_dao.device_infos(),
+                self._settings,
+            )
+
+        return CompiledExperiment(
+            experiment_dict=None,
+            scheduled_experiment=ScheduledExperiment(
+                device_setup_fingerprint=self._device_setup_fingerprint,
+                recipe=recipe,
+                artifacts=combined_compiler_output.get_artifacts(),
+                schedule=combined_compiler_output.schedule,
+                execution=self._execution,
+                rt_loop_properties=rt_loop_properties,
+                result_shape_info=result_shape_info,
+            ),
+        )
 
     def _process_experiment(self):
         dao = self._experiment_dao
@@ -609,10 +658,9 @@ class Compiler:
                     )
 
             try:
-                self._combined_compiler_output = self._compile_whole_or_with_chunks(
+                self._compiler_output = self._compile_whole_or_with_chunks(
                     chunk_count=chunk_count
                 )
-                self._final_chunk_count = chunk_count
             except ResourceLimitationError as err:
                 msg = (
                     "Compilation error - resource limitation exceeded.\n"
@@ -632,10 +680,9 @@ class Compiler:
             while True:
                 try:
                     _logger.debug("Attempting to compile with %s chunks", chunk_count)
-                    self._combined_compiler_output = self._compile_whole_or_with_chunks(
+                    self._compiler_output = self._compile_whole_or_with_chunks(
                         chunk_count=chunk_count
                     )
-                    self._final_chunk_count = chunk_count
                     _logger.info(
                         "Auto-chunked sweep divided into %s chunks", chunk_count
                     )
@@ -675,12 +722,11 @@ class Compiler:
         Returns:
             Signal and device port delays which are adjusted to delays on device.
         """
-        signal_infos: dict[str, SignalInfo] = {info.uid: info for info in signal_infos}
         delay_from_output_router = on_device_delays.calculate_output_router_delays(
-            {uid: sig.output_routing for uid, sig in signal_infos.items()}
+            {sig.uid: sig.output_routing or [] for sig in signal_infos}
         )
         signal_grid = {}
-        for info in signal_infos.values():
+        for info in signal_infos:
             devtype = DeviceType.from_device_info_type(info.device.device_type)
             sampling_rate = (
                 devtype.sampling_rate_2GHz
@@ -697,9 +743,12 @@ class Compiler:
                 sample_multiple=devtype.sample_multiple,
                 delay_samples=initial_delay,
             )
+        signal_infos_by_uid: dict[str, SignalInfo] = {
+            info.uid: info for info in signal_infos
+        }
         compensated_values = on_device_delays.compensate_on_device_delays(signal_grid)
         for key, values in compensated_values.items():
-            if signal_infos[key].device.device_type == DeviceInfoType.UHFQA:
+            if signal_infos_by_uid[key].device.device_type == DeviceInfoType.UHFQA:
                 assert values.on_port == 0
         return compensated_values
 
@@ -839,34 +888,6 @@ class Compiler:
             s.base_delay_signal = delay_info.delay_signal_gen
         return signal_objects
 
-    def compiler_output(self) -> CompiledExperiment:
-        return CompiledExperiment(
-            experiment_dict=None,
-            scheduled_experiment=ScheduledExperiment(
-                recipe=self._recipe,
-                artifacts=self._combined_compiler_output.get_artifacts(),
-                execution=self._execution,
-                schedule=self._combined_compiler_output.schedule,
-                chunk_count=self._final_chunk_count,
-            ),
-        )
-
-    def dump_src(self, info=False):
-        for src in self.compiler_output().scheduled_experiment.src:
-            if info:
-                _logger.info("*** %s", src["filename"])
-            else:
-                _logger.debug("*** %s", src["filename"])
-            for line in src["text"].splitlines():
-                if info:
-                    _logger.info(line)
-                else:
-                    _logger.debug(line)
-        if info:
-            _logger.info("END %s", src["filename"])
-        else:
-            _logger.debug("END %s", src["filename"])
-
     def run(self, data: CompilationJob) -> CompiledExperiment:
         _logger.debug("ES Compiler run")
 
@@ -874,34 +895,10 @@ class Compiler:
         self._analyze_setup(self._experiment_dao)
         self._process_experiment()
 
-        awgs: list[AWGInfo] = sorted(self._awgs, key=lambda awg: awg.key)
-
-        device_class, combined_output = (
-            self._combined_compiler_output.get_first_combined_output()
-        )
-        if combined_output is None:
-            self._recipe = Recipe()
-        else:
-            generate_recipe_args = GenerateRecipeArgs(
-                awgs=awgs,
-                experiment_dao=self._experiment_dao,
-                leader_properties=self._leader_properties,
-                clock_settings=self._clock_settings,
-                sampling_rate_tracker=self._sampling_rate_tracker,
-                integration_unit_allocation=self._integration_unit_allocation,
-                delays_by_signal=self._delays_by_signal,
-                precompensations=self._precompensations,
-                combined_compiler_output=combined_output,
-            )
-            self._recipe = get_compiler_hooks(device_class).generate_recipe(
-                generate_recipe_args
-            )
-
-        retval = self.compiler_output()
-
+        assert self._compiler_output is not None
         _logger.info("Finished LabOne Q Compiler run.")
 
-        return retval
+        return self._compiler_output
 
 
 def get_lead_delay(

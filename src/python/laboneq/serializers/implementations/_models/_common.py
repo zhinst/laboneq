@@ -6,6 +6,7 @@ import types
 import typing
 from collections.abc import Iterable
 from enum import Enum
+from types import ModuleType
 from typing import Type, TypeVar
 
 import attrs
@@ -145,7 +146,7 @@ def _predicate(cls):
     return lambda obj: obj is cls
 
 
-def register_models(converter: Converter, models: Iterable) -> None:
+def register_models(converter: Converter, models: Iterable[type]) -> None:
     for model in models:
         if issubclass(model, Enum):
             # Register the enum models
@@ -199,9 +200,9 @@ def register_models(converter: Converter, models: Iterable) -> None:
                 )
 
 
-def collect_models(module_models) -> frozenset:
+def collect_models(module_models: ModuleType) -> frozenset[type]:
     """Collect all attrs models for serialization."""
-    subclasses = []
+    subclasses: list[type] = []
     for _, cls in inspect.getmembers(module_models):
         if hasattr(cls, "_target_class"):
             subclasses.append(cls)

@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Optional
 
-from laboneq.data.compilation_job import DeviceInfoType
+from laboneq.data.compilation_job import DeviceInfo, DeviceInfoType
 
 
 @dataclass(eq=True, frozen=True)
@@ -39,6 +39,20 @@ class DeviceTraits:
     integration_dsp_latency: Optional[float] = None
     supports_output_mute: bool = False
     device_class: int = 0x0
+    max_result_vector_length: int | None = None
+    scope_max_segments: int | None = None
+
+    def scope_memory_size_samples(self, device_info: DeviceInfo) -> int:
+        if self == DeviceType.SHFQA and device_info.is_qc:
+            return 64 * 1024
+        if self == DeviceType.SHFQA:
+            return 256 * 1024
+        if self == DeviceType.UHFQA:
+            return 4096
+        if self == DeviceType.PRETTYPRINTERDEVICE:
+            return 133120
+
+        return 0
 
 
 class DeviceType(DeviceTraits, Enum):
@@ -97,6 +111,8 @@ class DeviceType(DeviceTraits, Enum):
         reset_osc_duration=40e-9,
         is_qa_device=True,
         device_class=0x0,
+        max_result_vector_length=1 << 20,
+        scope_max_segments=1,
     )
 
     SHFQA = DeviceTraits(
@@ -128,6 +144,8 @@ class DeviceType(DeviceTraits, Enum):
         integration_dsp_latency=212e-9,
         device_class=0x0,
         supports_output_mute=True,
+        max_result_vector_length=1 << 19,
+        scope_max_segments=1024,
     )
     SHFSG = DeviceTraits(
         str_value="shfsg",
@@ -171,31 +189,3 @@ class DeviceType(DeviceTraits, Enum):
     def __repr__(self):
         cls_name = self.__class__.__name__
         return f"{cls_name}.{self.name}"
-
-
-def validate_local_oscillator_frequency(value: float, device_type: DeviceType):
-    """Validate correct local oscillator frequencies.
-
-    Raises:
-        ValueError: The value is invalid for given device type.
-    """
-    if device_type.min_lo_frequency is not None:
-        if value < device_type.min_lo_frequency:
-            raise ValueError(
-                f"({device_type}) Local oscillator frequency {value} Hz is smaller than minimum "
-                f"{device_type.min_lo_frequency} Hz."
-            )
-
-    if device_type.max_lo_frequency:
-        if value > device_type.max_lo_frequency:
-            raise ValueError(
-                f"({device_type}) Local oscillator frequency {value} Hz is larger than maximum "
-                f"{device_type.max_lo_frequency} Hz."
-            )
-
-    if device_type.lo_frequency_granularity is not None:
-        if value % device_type.lo_frequency_granularity != 0:
-            raise ValueError(
-                f"({device_type}) Local oscillator frequency {value} "
-                f"(device {device_type}) is not multiple of {device_type.lo_frequency_granularity} Hz."
-            )

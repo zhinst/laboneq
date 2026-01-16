@@ -19,6 +19,10 @@ from numpy.lib.format import read_array, write_array
 from sortedcontainers import SortedDict
 
 from laboneq._version import get_version
+from laboneq.core.serialization.custom_serializers import (
+    ResultShapeInfoDeserializer,
+    serialize_to_string,
+)
 from laboneq.core.serialization.externals import (
     XarrayDataArrayDeserializer,
     XarrayDatasetDeserializer,
@@ -267,6 +271,8 @@ def construct_object(content, mapped_class):
         return mapped_class(content)
     if _issubclass(mapped_class, XarrayDatasetDeserializer):
         return mapped_class(content)
+    if mapped_class is ResultShapeInfoDeserializer:
+        return mapped_class.deserialize(content)
     arg_names = class_argnames(mapped_class)
     has_kwargs = "kwargs" in arg_names
     filtered_args = {}
@@ -448,6 +454,8 @@ def serialize_to_dict_with_entities(
                 outvalue = getattr(to_serialize, outkey)
             else:
                 continue
+        else:
+            outkey = serialize_to_string(k)
         if item_class in (bool, int, float, str) or v is None:
             sub_dict[outkey] = outvalue
             continue
@@ -690,6 +698,7 @@ def deserialize_from_dict_with_ref(data, class_mapping, entity_classes, entity_m
     class_mapping[NumpyArrayRepr.__name__] = NumpyArrayRepr
     class_mapping[XarrayDataArrayDeserializer._type_] = XarrayDataArrayDeserializer
     class_mapping[XarrayDatasetDeserializer._type_] = XarrayDatasetDeserializer
+    class_mapping[ResultShapeInfoDeserializer._type_] = ResultShapeInfoDeserializer
     entity_pool = {}
 
     for entity_list in data.get("entities", {}).values():

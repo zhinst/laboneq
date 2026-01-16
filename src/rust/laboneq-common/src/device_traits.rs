@@ -1,6 +1,8 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::ops::RangeInclusive;
+
 use crate::types::DeviceKind;
 use laboneq_units::duration::{Duration, Frequency, Hertz, Second, hertz, seconds};
 
@@ -13,6 +15,7 @@ pub struct DeviceTraits {
     pub oscillator_set_latency: Duration<Second>,
     pub oscillator_reset_duration: Duration<Second>,
     pub lo_frequency_granularity: Option<Frequency<Hertz>>,
+    pub lo_frequency_range: Option<RangeInclusive<Frequency<Hertz>>>,
 }
 
 impl DeviceTraits {
@@ -25,6 +28,14 @@ impl DeviceTraits {
             DeviceKind::PrettyPrinterDevice => &PRETTYPRINTERDEVICE_TRAITS,
         }
     }
+
+    pub fn min_lo_frequency(&self) -> Option<&Frequency<Hertz>> {
+        self.lo_frequency_range.as_ref().map(|r| r.start())
+    }
+
+    pub fn max_lo_frequency(&self) -> Option<&Frequency<Hertz>> {
+        self.lo_frequency_range.as_ref().map(|r| r.end())
+    }
 }
 
 pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
@@ -35,6 +46,7 @@ pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     oscillator_set_latency: seconds(304e-9),
     oscillator_reset_duration: seconds(80e-9),
     lo_frequency_granularity: None,
+    lo_frequency_range: None,
 };
 
 pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -45,6 +57,7 @@ pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     oscillator_set_latency: seconds(0.0),
     oscillator_reset_duration: seconds(40e-9),
     lo_frequency_granularity: None,
+    lo_frequency_range: None,
 };
 
 pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
@@ -55,6 +68,7 @@ pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     oscillator_set_latency: seconds(88e-9),
     oscillator_reset_duration: seconds(56e-9),
     lo_frequency_granularity: Some(hertz(100e6)),
+    lo_frequency_range: Some(hertz(1e9)..=hertz(8.5e9)),
 };
 
 pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -65,6 +79,7 @@ pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     oscillator_set_latency: seconds(88e-9),
     oscillator_reset_duration: seconds(56e-9),
     lo_frequency_granularity: Some(hertz(100e6)),
+    lo_frequency_range: Some(hertz(1e9)..=hertz(8.5e9)),
 };
 
 pub const PRETTYPRINTERDEVICE_TRAITS: DeviceTraits = DeviceTraits {
@@ -75,4 +90,5 @@ pub const PRETTYPRINTERDEVICE_TRAITS: DeviceTraits = DeviceTraits {
     oscillator_set_latency: seconds(36e-9),
     oscillator_reset_duration: seconds(32e-9),
     lo_frequency_granularity: None,
+    lo_frequency_range: None,
 };

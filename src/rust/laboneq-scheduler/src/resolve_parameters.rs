@@ -173,8 +173,9 @@ fn resolve_parameter_fields(node: &mut ScheduledNode, resolver: &ParameterResolv
                     .map_err(Error::new)
                     .with_context(|| "Delay must be a real number (integer or float).")?;
                 let length_tinysample = seconds_to_tinysamples(length_step_seconds.into());
-                node.schedule.length =
-                    round_to_grid(length_tinysample.value(), node.schedule.grid.value()).into();
+                node.schedule.resolve_length(
+                    round_to_grid(length_tinysample.value(), node.schedule.grid.value()).into(),
+                );
             }
         }
         IrKind::PlayPulse(obj) => {
@@ -253,8 +254,9 @@ fn resolve_parameter_fields(node: &mut ScheduledNode, resolver: &ParameterResolv
                         || "Play pulse length must be a real number (integer or float).",
                     )?;
                 let length_tinysample = seconds_to_tinysamples(length_step_seconds.into());
-                node.schedule.length =
-                    round_to_grid(length_tinysample.value(), node.schedule.grid.value()).into();
+                node.schedule.resolve_length(
+                    round_to_grid(length_tinysample.value(), node.schedule.grid.value()).into(),
+                );
             }
         }
         IrKind::ChangeOscillatorPhase(obj) => {

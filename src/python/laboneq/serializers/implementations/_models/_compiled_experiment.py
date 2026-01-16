@@ -5,13 +5,16 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from enum import Enum
 from typing import Any, ClassVar, Literal, Optional, Type, Union
 
 import attrs
+import numpy
 
 from laboneq.core.types.enums.awg_signal_type import AWGSignalType
+from laboneq.data.awg_info import AwgKey
 from laboneq.data.recipe import (
     AWG,
     IO,
@@ -31,18 +34,24 @@ from laboneq.data.recipe import (
     TriggeringMode,
 )
 from laboneq.data.scheduled_experiment import (
-    ArtifactsCodegen,
     CompilerArtifact,
+    HandleResultShape,
+    ResultShapeInfo,
+    ResultSource,
+    RtLoopProperties,
     ScheduledExperiment,
 )
 from laboneq.dsl.serialization import Serializer
 from laboneq.executor.executor import Statement
 
 from ._common import (
+    _structure_arraylike,
+    _unstructure_arraylike,
     collect_models,
     make_laboneq_converter,
     register_models,
 )
+from ._experiment import AcquisitionTypeModel, AveragingModeModel
 
 # Models for Recipe:
 
@@ -201,10 +210,42 @@ class RealtimeExecutionInitModel:
 
 
 @attrs.define
+class RtLoopPropertiesModel:
+    uid: str
+    acquisition_type: AcquisitionTypeModel
+    averaging_mode: AveragingModeModel
+    shots: int
+    chunk_count: int | None
+
+    _target_class: ClassVar[Type] = RtLoopProperties
+
+
+@attrs.define
 class SoftwareVersionsModel:
     target_labone: str
     laboneq: str
     _target_class: ClassVar[Type] = SoftwareVersions
+
+
+@attrs.define
+class HandleResultShapeModel:
+    signal: str
+    shape: tuple[int, ...]
+    axis_names: list[str | list[str]]
+    axis_values: list[numpy.ndarray | list[numpy.ndarray]]
+    chunked_axis_index: int | None
+    match_case_mask: dict[int, list[int]] | None
+
+    _target_class: ClassVar[Type] = HandleResultShape
+
+
+@attrs.define
+class ResultShapeInfoModel:
+    shapes: dict[str, HandleResultShapeModel]
+    result_handle_maps: dict[ResultSource, list[set[str]]]
+    result_lengths: dict[AwgKey, int]
+
+    _target_class: ClassVar[Type] = ResultShapeInfo
 
 
 @attrs.define
@@ -214,7 +255,6 @@ class RecipeModel:
     oscillator_params: list[OscillatorParamModel]
     integrator_allocations: list[IntegratorAllocationModel]
     acquire_lengths: list[AcquireLengthModel]
-    simultaneous_acquires: list[dict[str, str]]
     total_execution_time: float
     max_step_execution_time: float
     is_spectroscopy: bool
@@ -224,45 +264,97 @@ class RecipeModel:
 
 @attrs.define
 class ScheduledExperimentModel:
-    device_setup_fingerprint: str | None = None
-    recipe: RecipeModel | None = None
+    device_setup_fingerprint: str
+    recipe: RecipeModel
+    rt_loop_properties: RtLoopPropertiesModel
+    result_shape_info: ResultShapeInfoModel
 
     # NOTE! The data structure for the following fields is not completely
-    # defined in the original code.
-    # Resort to using the old serializer for now.
+    # defined in the original code. We will resort to using the old serializer
+    # for now (see the function make_converter below).
     # TODO: Revisit this later to swap out the old serializer
     # with the new one completely.
-    artifacts: CompilerArtifact | None = None
-    schedule: dict[str, Any] | None = None
-    execution: Statement | None = None
+    artifacts: CompilerArtifact
+    schedule: dict[str, Any] | None
+    execution: Statement
 
     _target_class: ClassVar[Type] = ScheduledExperiment
 
-    @classmethod
-    def _unstructure(cls, obj):
-        return {
-            "device_setup_fingerprint": obj.device_setup_fingerprint,
-            "recipe": _converter.unstructure(obj.recipe, RecipeModel),
-            "artifacts": Serializer.to_dict(obj.artifacts),
-            "schedule": Serializer.to_dict(obj.schedule),
-            "execution": Serializer.to_dict(obj.execution),
-        }
 
-    @classmethod
-    def _structure(cls, obj, _):
-        return cls._target_class(
-            device_setup_fingerprint=obj["device_setup_fingerprint"],
-            recipe=_converter.structure(obj["recipe"], RecipeModel),
-            artifacts=Serializer.load(obj["artifacts"], ArtifactsCodegen),
-            schedule=Serializer.load(obj["schedule"], dict),
-            execution=Serializer.load(obj["execution"], Statement),
-        )
+def _old_serialize(obj):
+    return Serializer.to_dict(obj)
+
+
+def _old_deserialize(obj, obj_type):
+    return Serializer.load(obj, obj_type)
+
+
+def _unstructure_awg_key(obj: AwgKey):
+    return f"AwgKey({obj.device_id}, {obj.awg_id})"
+
+
+def _structure_awg_key(obj, _) -> AwgKey:
+    match_result = re.fullmatch(r"AwgKey\((.*), (.*)\)", obj)
+    assert match_result is not None
+    device_id, awg_idx = match_result.groups()
+    if awg_idx.isnumeric():
+        awg_idx = int(awg_idx)
+    return AwgKey(device_id, awg_idx)
+
+
+def _unstructure_result_source(obj: ResultSource):
+    return f"ResultSource({obj.device_id}, {obj.awg_id}, {obj.integrator_idx})"
+
+
+def _structure_result_source(obj, _) -> ResultSource:
+    match_result = re.fullmatch(r"ResultSource\((.*), (.*), (.*)\)", obj)
+    assert match_result is not None
+    device_id, awg_id, integrator_idx = match_result.groups()
+    if awg_id.isnumeric():
+        awg_id = int(awg_id)
+    return ResultSource(device_id, awg_id, int(integrator_idx))
+
+
+def _unstructure_np_or_list_np(obj: numpy.ndarray | list[numpy.ndarray]):
+    if isinstance(obj, list):
+        return [_unstructure_arraylike(item) for item in obj]
+    return _unstructure_arraylike(obj)
+
+
+def _structure_np_or_list_np(obj, _) -> numpy.ndarray | list[numpy.ndarray]:
+    if isinstance(obj, list):
+        return [_structure_arraylike(item, _) for item in obj]
+    return _structure_arraylike(obj, _)
 
 
 def make_converter():
-    _converter = make_laboneq_converter()
-    register_models(_converter, collect_models(sys.modules[__name__]))
-    return _converter
+    converter = make_laboneq_converter()
 
+    # NOTE! Because of 1. The data structure for some fields is not completely defined in the original code,
+    # 2. To cut some corners during the new serializer implementation; for some objects we still resort to
+    # the old serializer for now. Hence, we manually register custom hooks for them.
+    # We have to register these custom hooks first, otherwise the automatic hooks generated for parent attrs
+    # classes (via make_dict_unstructure_fn / make_dict_structure_fn) silently assume some default repr based
+    # implementation which does not get overridden if custom hooks are registered later.
+    for cls in [Statement, CompilerArtifact, dict[str, Any] | None]:
+        converter.register_unstructure_hook(cls, _old_serialize)
+        converter.register_structure_hook(cls, _old_deserialize)
 
-_converter = make_converter()
+    # For AwgKey and ResultSource we register custom serializer/deserializer, since they are used as dictionary key
+    # and cannot be serialized to a dict
+    converter.register_unstructure_hook(AwgKey, _unstructure_awg_key)
+    converter.register_structure_hook(AwgKey, _structure_awg_key)
+    converter.register_unstructure_hook(ResultSource, _unstructure_result_source)
+    converter.register_structure_hook(ResultSource, _structure_result_source)
+
+    # The type of HandleResultShapeModel.axis_values is simple, yet the serializer is not able to consume it,
+    # even though we have serializers for both list and numpy.ndarray. Thus, have to register special hooks.
+    converter.register_unstructure_hook(
+        numpy.ndarray | list[numpy.ndarray], _unstructure_np_or_list_np
+    )
+    converter.register_structure_hook(
+        numpy.ndarray | list[numpy.ndarray], _structure_np_or_list_np
+    )
+
+    register_models(converter, collect_models(sys.modules[__name__]))
+    return converter

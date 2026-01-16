@@ -29,7 +29,7 @@ class DeduplicationCache:
         if cached is not None:
             cached_obj, cached_options, cached_files = cached
             if isinstance(obj, np.ndarray) and isinstance(cached_obj, np.ndarray):
-                is_equal = np.array_equal(cached_obj, obj)
+                is_equal = np.array_equal(cached_obj, obj, equal_nan=True)
             else:
                 is_equal = cached_obj == obj
             if is_equal and cached_options == options:

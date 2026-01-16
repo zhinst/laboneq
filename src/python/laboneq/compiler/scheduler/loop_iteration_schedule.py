@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from attrs import asdict, define
+from attrs import define
 
 from laboneq.compiler.scheduler.interval_schedule import IntervalSchedule
 from laboneq.compiler.scheduler.oscillator_schedule import (
@@ -68,18 +68,3 @@ class LoopIterationPreambleSchedule(IntervalSchedule):
 @define(kw_only=True, slots=True)
 class LoopIterationSchedule(SectionSchedule):
     """Schedule of a single iteration of a loop (sweep or average)"""
-
-    def __attrs_post_init__(self):
-        # We always "steal" the data from a SectionSchedule which has already done
-        # all the hard work in its own __attrs_post_init__().
-        pass
-
-    @classmethod
-    def from_section_schedule(
-        cls,
-        schedule: SectionSchedule,
-    ):
-        """Down-cast from SectionSchedule."""
-        return cls(
-            **asdict(schedule, recurse=False),
-        )

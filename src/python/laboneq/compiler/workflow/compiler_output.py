@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from laboneq.compiler.common.iface_compiler_output import (
@@ -16,7 +16,7 @@ class CombinedRTCompilerOutputContainer:
     """Container (by device class) for the compiler artifacts, after linking."""
 
     combined_output: dict[int, CombinedOutput]
-    schedule: dict[str, Any] = field(default_factory=dict)
+    schedule: dict[str, Any] | None = None
 
     def get_artifacts(self):
         if len(self.combined_output) == 1:

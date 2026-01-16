@@ -23,9 +23,6 @@ from laboneq.implementation.payload_builder.target_setup_generator import (
 def _compile(job: CompilationJob):
     compiler = Compiler(job.compiler_settings)
     compiler_output = compiler.run(job)
-    compiler_output.scheduled_experiment.device_setup_fingerprint = (
-        job.experiment_info.device_setup_fingerprint
-    )
     return compiler_output.scheduled_experiment
 
 

@@ -23,8 +23,8 @@ pub(crate) trait SignalGridInfo {
 /// The sequencer grid is the LCM of the sequencer rates (sampling rate / sample multiple).
 ///
 /// This function will panic if any signal has an invalid sampling rate (non-finite or non-positive).
-pub(crate) fn compute_grid<T: SignalGridInfo + Sized>(
-    signals: &[&T],
+pub(crate) fn compute_grid<'a, T: SignalGridInfo + Sized + 'a>(
+    signals: impl Iterator<Item = &'a T>,
 ) -> (TinySamples, TinySamples) {
     let mut signals_grid = 1;
     let mut sequencer_grid = 1;
@@ -37,14 +37,21 @@ pub(crate) fn compute_grid<T: SignalGridInfo + Sized>(
                 signal.uid()
             );
         }
-        signals_grid = lcm(signals_grid, signal_grid(*signal).value());
-        let sequencer_rate = signal.sampling_rate() / signal.sample_multiple() as f64;
-        sequencer_grid = lcm(
-            sequencer_grid,
-            (1.0 / (TINYSAMPLE_DURATION * sequencer_rate)).round() as i64,
-        );
+        let (grid, sequencer) = compute_signal_grids(signal);
+        signals_grid = lcm(signals_grid, grid.value());
+        sequencer_grid = lcm(sequencer_grid, sequencer.value());
     }
     (tiny_samples(signals_grid), tiny_samples(sequencer_grid))
+}
+
+pub(crate) fn compute_signal_grids<'a, T: SignalGridInfo + Sized + 'a>(
+    signal: &T,
+) -> (TinySamples, TinySamples) {
+    let signal_grid = signal_grid(signal);
+    let sequencer_rate = signal.sampling_rate() / signal.sample_multiple() as f64;
+    let sequencer_grid =
+        tiny_samples((1.0 / (TINYSAMPLE_DURATION * sequencer_rate)).round() as i64);
+    (signal_grid, sequencer_grid)
 }
 
 pub(crate) fn signal_grid(signal: &impl SignalGridInfo) -> TinySamples {
@@ -117,7 +124,9 @@ mod tests {
     use super::*;
     use crate::experiment::types::SignalUid;
     use laboneq_common::{
-        device_traits::{HDAWG_TRAITS, SHFSG_TRAITS, UHFQA_TRAITS},
+        device_traits::{
+            HDAWG_TRAITS, PRETTYPRINTERDEVICE_TRAITS, SHFQA_TRAITS, SHFSG_TRAITS, UHFQA_TRAITS,
+        },
         named_id::NamedId,
     };
 
@@ -152,7 +161,7 @@ mod tests {
 
     #[test]
     fn test_compute_grid_no_signals() {
-        let (signal_grid, sequencer_grid) = compute_grid::<MySignal>(&[]);
+        let (signal_grid, sequencer_grid) = compute_grid::<MySignal>([].iter());
         assert_eq!(signal_grid, tiny_samples(1));
         assert_eq!(sequencer_grid, tiny_samples(1));
     }
@@ -160,7 +169,7 @@ mod tests {
     #[test]
     fn test_compute_grid_single() {
         let signals = [MySignal::new(2.0e9, 16)];
-        let (signal_grid, sequencer_grid) = compute_grid(&signals.iter().collect::<Vec<_>>());
+        let (signal_grid, sequencer_grid) = compute_grid(signals.iter());
         assert_eq!(signal_grid, tiny_samples(1800));
         assert_eq!(sequencer_grid, tiny_samples(28800));
     }
@@ -172,7 +181,7 @@ mod tests {
             MySignal::new(2.0e9, 16),
             MySignal::new(2.0e9, 16),
         ];
-        let (signal_grid, sequencer_grid) = compute_grid(&signals.iter().collect::<Vec<_>>());
+        let (signal_grid, sequencer_grid) = compute_grid(signals.iter());
         // Same as single signal
         assert_eq!(signal_grid, tiny_samples(1800));
         assert_eq!(sequencer_grid, tiny_samples(28800));
@@ -185,7 +194,7 @@ mod tests {
             MySignal::new(SHFSG_TRAITS.sampling_rate, SHFSG_TRAITS.sample_multiple),
             MySignal::new(UHFQA_TRAITS.sampling_rate, UHFQA_TRAITS.sample_multiple),
         ];
-        let (signal_grid, sequencer_grid) = compute_grid(&signals.iter().collect::<Vec<_>>());
+        let (signal_grid, sequencer_grid) = compute_grid(signals.iter());
         // 2.4 GHz -> 1500, 2.0 GHz -> 1800, 1.8 GHz -> 2000
         // lcm(1500, 1800, 2000) = 18000
         assert_eq!(signal_grid, tiny_samples(18000));
@@ -198,9 +207,71 @@ mod tests {
             .take(signals.len() * 300)
             .cloned()
             .collect::<Vec<_>>();
-        let (signal_grid, sequencer_grid) = compute_grid(&signals.iter().collect::<Vec<_>>());
+        let (signal_grid, sequencer_grid) = compute_grid(signals.iter());
         assert_eq!(signal_grid, tiny_samples(18000));
         assert_eq!(sequencer_grid, tiny_samples(144000));
+    }
+
+    /// Test various sampling rates and their expected signal and sequencer grids.
+    #[test]
+    fn test_compute_signal_grids() {
+        let sampling_rate_expected_grids = [
+            (
+                HDAWG_TRAITS.sampling_rate,
+                HDAWG_TRAITS.sample_multiple,
+                tiny_samples(1500),
+                tiny_samples(24000),
+            ),
+            (
+                2.0e9,
+                HDAWG_TRAITS.sample_multiple,
+                tiny_samples(1800),
+                tiny_samples(28800),
+            ), // HDAWG with 2 Ghz
+            (
+                UHFQA_TRAITS.sampling_rate,
+                UHFQA_TRAITS.sample_multiple,
+                tiny_samples(2000),
+                tiny_samples(16000),
+            ),
+            (
+                SHFQA_TRAITS.sampling_rate,
+                SHFQA_TRAITS.sample_multiple,
+                tiny_samples(1800),
+                tiny_samples(28800),
+            ),
+            (
+                SHFSG_TRAITS.sampling_rate,
+                SHFSG_TRAITS.sample_multiple,
+                tiny_samples(1800),
+                tiny_samples(28800),
+            ),
+            (
+                PRETTYPRINTERDEVICE_TRAITS.sampling_rate,
+                PRETTYPRINTERDEVICE_TRAITS.sample_multiple,
+                tiny_samples(1800),
+                tiny_samples(7200),
+            ),
+        ];
+
+        for (
+            idx,
+            (sampling_rate, sample_multiple, expected_signal_grid, expected_sequencer_grid),
+        ) in sampling_rate_expected_grids.iter().enumerate()
+        {
+            let signal = MySignal::new(*sampling_rate, *sample_multiple);
+            let (signal_grid, sequencer_grid) = compute_signal_grids(&signal);
+            assert_eq!(
+                signal_grid, *expected_signal_grid,
+                "Failed for setup: {}",
+                idx
+            );
+            assert_eq!(
+                sequencer_grid, *expected_sequencer_grid,
+                "Failed for setup: {}",
+                idx
+            );
+        }
     }
 
     #[test]

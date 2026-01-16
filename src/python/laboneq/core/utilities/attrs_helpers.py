@@ -33,8 +33,18 @@ def validate_type(instance: object, attribute: attrs.Attribute, value: object) -
         the [typeguard](https://typeguard.readthedocs.io/) library.
     """
     attrs.resolve_types(type(instance))
+
+    # Workaround for missing support of TypeAliasType (Python 3.12+, PEP 695) in
+    # typeguard. This is required for correct checks with numpy 2.4+.
+    # TODO: remove when fixed: https://github.com/agronholm/typeguard/issues/541
+    type_to_check = attribute.type
+    if hasattr(typing, "TypeAliasType") and isinstance(
+        type_to_check, typing.TypeAliasType
+    ):
+        type_to_check = type_to_check.__value__
+
     try:
-        typeguard.check_type(value, attribute.type)
+        typeguard.check_type(value, type_to_check)
     except typeguard.TypeCheckError as err:
         raise TypeError(
             f"{attribute.name} must be of type {attribute.type} but received: {value!r}"

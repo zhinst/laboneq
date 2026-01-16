@@ -15,7 +15,7 @@ from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.devices.ppchannel import PPChannel
-from laboneq.controller.recipe_processor import RecipeData
+from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.data.calibration import CancellationSource
 from laboneq.data.recipe import Initialization
@@ -110,11 +110,8 @@ class DeviceSHFPPC(DeviceBase):
         nc.add("ppchannels/*/sweeper/enable", 0, cache=False)
         await self.set_async(nc)
 
-    async def apply_initialization(self, recipe_data: RecipeData):
+    async def _apply_initialization(self, device_recipe_data: DeviceRecipeData):
         nc = NodeCollector()
-        device_recipe_data = recipe_data.device_settings.get(self.uid)
-        if device_recipe_data is None:
-            return
 
         def _convert(value):
             if isinstance(value, bool):
@@ -175,10 +172,4 @@ class DeviceSHFPPC(DeviceBase):
                 if updated:
                     path = self._key_to_path(key, ch)
                     nc.add(path, value)
-        await self.set_async(nc)
-
-    async def start_execution(self, recipe_data: RecipeData):
-        nc = NodeCollector(base=f"/{self.serial}/")
-        for channel in sorted(self._allocated_sweepers):
-            nc.add(f"ppchannels/{channel}/sweeper/enable", 1, cache=False)
         await self.set_async(nc)

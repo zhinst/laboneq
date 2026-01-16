@@ -11,7 +11,6 @@ import numpy as np
 
 import laboneq._rust.codegenerator as codegen_rs
 from laboneq.compiler import CompilerSettings
-from laboneq.compiler.common.awg_info import AwgKey
 from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.iface_compiler_output import (
     CombinedOutput,
@@ -27,6 +26,7 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.utilities import seqc_compile
 from laboneq.core.utilities.seqc_compile import SeqCCompileItem
+from laboneq.data.awg_info import AwgKey
 from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import (
     COMPLEX_USAGE,
@@ -37,6 +37,7 @@ from laboneq.data.scheduled_experiment import (
     CompilerArtifact,
     ParameterPhaseIncrementMap,
     PulseMapEntry,
+    ResultSource,
 )
 
 
@@ -47,7 +48,7 @@ class CombinedRTOutputSeqC(CombinedOutput):
     signal_delays: SignalDelays = field(default_factory=dict)
     # key - SeqC name
     integration_weights: dict[str, AwgWeights] = field(default_factory=dict)
-    simultaneous_acquires: list[dict[str, str]] = field(default_factory=list)
+    result_handle_maps: dict[ResultSource, list[set[str]]] = field(default_factory=dict)
     src: dict[str, SeqCProgram] = field(default_factory=dict)
     waves: dict[str, CodegenWaveform] = field(default_factory=dict)
     requires_long_readout: dict[str, list[str]] = field(
@@ -93,6 +94,15 @@ class CombinedRTOutputSeqC(CombinedOutput):
             parameter_phase_increment_map=self.parameter_phase_increment_map,
         )
 
+    def get_raw_acquire_length(
+        self,
+        signal_id: str,
+        handle: str,  # unused; all scope acquisitions must share the same length regardless of handle
+    ) -> int:
+        integration_info = self.integration_times.signal_infos.get(signal_id)
+        assert integration_info is not None
+        return integration_info.length_in_samples
+
 
 @dataclass
 class SeqCProgram:
@@ -112,7 +122,7 @@ class SeqCGenOutput(RTCompilerOutput):
     signal_delays: SignalDelays
     integration_weights: dict[AwgKey, AwgWeights]
     integration_times: IntegrationTimes
-    simultaneous_acquires: list[dict[str, str]]
+    result_handle_maps: dict[ResultSource, list[set[str]]]
     src: dict[AwgKey, SeqCProgram]
     waves: dict[str, CodegenWaveform]
     requires_long_readout: dict[str, list[str]]
@@ -139,9 +149,9 @@ def _check_compatibility(this, new):
         raise LabOneQException(
             "Integration times do not match between real-time iterations"
         )
-    if this.simultaneous_acquires != new.simultaneous_acquires:
+    if this.result_handle_maps != new.result_handle_maps:
         raise LabOneQException(
-            "Simultaneous acquires do not match between real-time iterations"
+            "Acquisition structures do not match between real-time iterations"
         )
     if this.feedback_register_configurations != new.feedback_register_configurations:
         raise LabOneQException(
@@ -212,7 +222,7 @@ class SeqCLinker(ILinker):
             feedback_connections=output.feedback_connections,
             signal_delays=output.signal_delays,
             integration_weights=integration_weights,
-            simultaneous_acquires=output.simultaneous_acquires,
+            result_handle_maps=output.result_handle_maps,
             total_execution_time=output.total_execution_time,
             max_execution_time_per_step=output.total_execution_time,
             src=src,

@@ -78,6 +78,10 @@ class StatementType(Enum):
     SetSwParam = auto()
     ForLoopEntry = auto()
     ForLoopExit = auto()
+    MatchContextEntry = auto()
+    MatchContextExit = auto()
+    CaseContextEntry = auto()
+    CaseContextExit = auto()
     RTEntry = auto()
     RTExit = auto()
 
@@ -183,32 +187,28 @@ class ExecNeartimeCall(Statement):
 
 
 class ExecAcquire(Statement):
-    def __init__(self, handle: str, signal: str, parent_uid: str):
+    def __init__(self, handle: str, signal: str):
         self.handle = handle
         self.signal = min(signal) if isinstance(signal, list) else signal
-        self.parent_uid = parent_uid
 
     def run(self, scope: ExecutionScope) -> Iterator[Notification]:
         yield Notification(
             statement_type=StatementType.Acquire,
-            args=dict(
-                handle=self.handle, signal=self.signal, parent_uid=self.parent_uid
-            ),
+            args=dict(handle=self.handle, signal=self.signal),
         )
 
     def __eq__(self, other):
         if other is self:
             return True
         if type(other) is ExecAcquire:
-            return (self.handle, self.signal, self.parent_uid) == (
+            return (self.handle, self.signal) == (
                 other.handle,
                 other.signal,
-                other.parent_uid,
             )
         return NotImplemented
 
     def __repr__(self):
-        return f"ExecAcquire({repr(self.handle)}, {repr(self.signal)}, {repr(self.parent_uid)})"
+        return f"ExecAcquire({repr(self.handle)}, {repr(self.signal)})"
 
 
 class SetSoftwareParamLinear(Statement):
@@ -285,6 +285,80 @@ class SetSoftwareParam(Statement):
 
     def __repr__(self):
         return f"SetSoftwareParam({repr(self.name)}, {repr(self.values)}, {repr(self.axis_name)})"
+
+
+class MatchSection(Statement):
+    def __init__(self, sweep_parameter: str | None, cases: Sequence):
+        self.sweep_parameter = sweep_parameter
+        self.cases = cases
+
+    def run(self, scope):
+        yield Notification(
+            statement_type=StatementType.MatchContextEntry,
+            args=dict(
+                sweep_parameter=self.sweep_parameter,
+            ),
+        )
+
+        yield from self.cases.run(scope.make_sub_scope())
+
+        yield Notification(
+            statement_type=StatementType.MatchContextExit,
+            args=dict(
+                sweep_parameter=self.sweep_parameter,
+            ),
+        )
+
+    def __eq__(self, other):
+        if other is self:
+            return True
+        if isinstance(other, MatchSection):
+            return (self.sweep_parameter, self.cases) == (
+                other.sweep_parameter,
+                other.cases,
+            )
+
+        return False
+
+    def __repr__(self):
+        return f"MatchSection({repr(self.sweep_parameter)}, {repr(self.cases)})"
+
+
+class CaseSection(Statement):
+    def __init__(self, state: int, body: Sequence):
+        self.state = state
+        self.body = body
+
+    def run(self, scope):
+        yield Notification(
+            statement_type=StatementType.CaseContextEntry,
+            args=dict(
+                state=self.state,
+            ),
+        )
+
+        yield from self.body.run(scope.make_sub_scope())
+
+        yield Notification(
+            statement_type=StatementType.CaseContextExit,
+            args=dict(
+                state=self.state,
+            ),
+        )
+
+    def __eq__(self, other):
+        if other is self:
+            return True
+        if isinstance(other, CaseSection):
+            return (self.state, self.body) == (
+                other.state,
+                other.body,
+            )
+
+        return False
+
+    def __repr__(self):
+        return f"CaseSection({self.state}, {repr(self.body)})"
 
 
 class ForLoop(Statement):
@@ -432,6 +506,10 @@ class ExecutorBase:
             StatementType.SetSwParam: self.set_sw_param_handler,
             StatementType.ForLoopEntry: self.for_loop_entry_handler,
             StatementType.ForLoopExit: self.for_loop_exit_handler,
+            StatementType.MatchContextEntry: self.match_context_entry_handler,
+            StatementType.MatchContextExit: self.match_context_exit_handler,
+            StatementType.CaseContextEntry: self.case_context_entry_handler,
+            StatementType.CaseContextExit: self.case_context_exit_handler,
             StatementType.RTEntry: self.rt_entry_handler,
             StatementType.RTExit: self.rt_exit_handler,
         }
@@ -442,7 +520,7 @@ class ExecutorBase:
     def nt_callback_handler(self, func_name: str, args: dict[str, Any]):
         pass
 
-    def acquire_handler(self, handle: str, signal: str, parent_uid: str):
+    def acquire_handler(self, handle: str, signal: str):
         pass
 
     def set_sw_param_handler(
@@ -454,6 +532,18 @@ class ExecutorBase:
         pass
 
     def for_loop_exit_handler(self, count: int, index: int, loop_flags: LoopFlags):
+        pass
+
+    def match_context_entry_handler(self, sweep_parameter: str | None):
+        pass
+
+    def match_context_exit_handler(self, sweep_parameter: str | None):
+        pass
+
+    def case_context_entry_handler(self, state: int):
+        pass
+
+    def case_context_exit_handler(self, state: int):
         pass
 
     def rt_entry_handler(
@@ -495,6 +585,10 @@ class AsyncExecutorBase:
             StatementType.SetSwParam: self.set_sw_param_handler,
             StatementType.ForLoopEntry: self.for_loop_entry_handler,
             StatementType.ForLoopExit: self.for_loop_exit_handler,
+            StatementType.MatchContextEntry: self.match_context_entry_handler,
+            StatementType.MatchContextExit: self.match_context_exit_handler,
+            StatementType.CaseContextEntry: self.case_context_entry_handler,
+            StatementType.CaseContextExit: self.case_context_exit_handler,
             StatementType.RTEntry: self.rt_entry_handler,
             StatementType.RTExit: self.rt_exit_handler,
         }
@@ -505,7 +599,7 @@ class AsyncExecutorBase:
     async def nt_callback_handler(self, func_name: str, args: dict[str, Any]):
         pass
 
-    async def acquire_handler(self, handle: str, signal: str, parent_uid: str):
+    async def acquire_handler(self, handle: str, signal: str):
         pass
 
     async def set_sw_param_handler(
@@ -521,6 +615,18 @@ class AsyncExecutorBase:
     async def for_loop_exit_handler(
         self, count: int, index: int, loop_flags: LoopFlags
     ):
+        pass
+
+    async def match_context_entry_handler(self, sweep_parameter: str | None):
+        pass
+
+    async def match_context_exit_handler(self, sweep_parameter: str | None):
+        pass
+
+    async def case_context_entry_handler(self, state: int):
+        pass
+
+    async def case_context_exit_handler(self, state: int):
         pass
 
     async def rt_entry_handler(

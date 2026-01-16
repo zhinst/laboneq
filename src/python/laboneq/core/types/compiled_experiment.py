@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from laboneq.core.types.enums.wave_type import WaveType
@@ -66,6 +66,8 @@ class CompiledExperiment:
         be internal and subject to change.
     """
 
+    scheduled_experiment: ScheduledExperiment
+
     # The source device setup.
     device_setup: DeviceSetup | None = None
 
@@ -78,11 +80,6 @@ class CompiledExperiment:
     # A representation of the source experiment, using primitive Python datatypes only
     # (dicts, lists, etc.)
     experiment_dict: dict[str, Any] | None = None
-
-    # Compiled
-    scheduled_experiment: ScheduledExperiment = field(
-        default_factory=ScheduledExperiment
-    )
 
     # Proxy props for backwards compatibility
     @property

@@ -6,7 +6,6 @@
 //! This module defines the [`AwgCodeGenerationResultPy`] class, which is used to
 //! represent the result of the code generation process for an AWG.
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 use std::collections::{HashMap, HashSet};
 
 use codegenerator::ir::compilation_job::DeviceUid;
@@ -15,8 +14,8 @@ use codegenerator::result::AwgCodeGenerationResult;
 use codegenerator::result::ParameterPhaseIncrement;
 use codegenerator::result::SampledWaveform;
 use codegenerator::result::SeqCGenOutput;
+use codegenerator::result::ShfPpcSweepJson;
 use codegenerator::result::SignalType;
-use codegenerator::result::{Acquisition, ShfPpcSweepJson};
 
 use crate::waveform_sampler::SampledWaveformSignaturePy;
 use crate::waveform_sampler::WaveformSamplerPy;
@@ -304,7 +303,8 @@ pub struct SeqCGenOutputPy {
     awg_results: Vec<Py<AwgCodeGenerationResultPy>>,
     #[pyo3(get)]
     total_execution_time: f64,
-    simultaneous_acquires: Vec<Vec<Acquisition>>,
+    #[pyo3(get)]
+    result_handle_maps: HashMap<ResultSourcePy, Vec<Vec<String>>>,
     #[pyo3(get)]
     measurements: Vec<MeasurementPy>,
 }
@@ -319,6 +319,20 @@ impl SeqCGenOutputPy {
                     .expect("Failed to create AwgCodeGenerationResultPy")
             })
             .collect();
+        let result_handle_maps = results
+            .result_handle_maps
+            .into_iter()
+            .map(|(result_source, map)| {
+                (
+                    ResultSourcePy {
+                        device_id: result_source.device_id,
+                        awg_id: result_source.awg_id,
+                        integrator_idx: result_source.integrator_idx,
+                    },
+                    map,
+                )
+            })
+            .collect();
         let measurements = results
             .measurements
             .into_iter()
@@ -331,7 +345,7 @@ impl SeqCGenOutputPy {
         SeqCGenOutputPy {
             awg_results,
             total_execution_time: results.total_execution_time,
-            simultaneous_acquires: results.simultaneous_acquires,
+            result_handle_maps,
             measurements,
         }
     }
@@ -342,19 +356,6 @@ impl SeqCGenOutputPy {
     #[getter]
     fn awg_results(&self) -> &Vec<Py<AwgCodeGenerationResultPy>> {
         &self.awg_results
-    }
-
-    #[getter]
-    fn simultaneous_acquires(&self, py: Python) -> PyResult<Vec<Py<PyAny>>> {
-        let mut sim_acquires = Vec::new();
-        for acquisitions in &self.simultaneous_acquires {
-            let dict = PyDict::new(py);
-            for acquisition in acquisitions {
-                dict.set_item(acquisition.signal.clone(), acquisition.handle.to_string())?;
-            }
-            sim_acquires.push(dict.into_pyobject(py)?.into());
-        }
-        Ok(sim_acquires)
     }
 }
 
@@ -374,4 +375,15 @@ impl MeasurementPy {
     fn device(&self) -> &str {
         &self.device
     }
+}
+
+#[pyclass(name = "ResultSource")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct ResultSourcePy {
+    #[pyo3(get)]
+    pub device_id: String,
+    #[pyo3(get)]
+    pub awg_id: u16,
+    #[pyo3(get)]
+    pub integrator_idx: Option<u8>,
 }

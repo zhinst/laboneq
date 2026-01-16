@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from laboneq.compiler.common.trigger_mode import TriggerMode
+from laboneq.core.types.enums.trigger_mode import TriggerMode
 
 if TYPE_CHECKING:
     from laboneq.compiler.common.device_type import DeviceType

@@ -207,7 +207,10 @@ where
                 && !signals_share_hw_oscillator(s0, s1)
             {
                 let msg = format!(
-                    "Overlapping HW oscillators: '{:}' on signal '{:}' and '{:}' on signal '{:}'",
+                    "Overlapping HW oscillators: '{:}' on signal '{:}' and '{:}' on signal '{:}'.\n\
+                    If you play different pulses on the same SG channel but on different logical signal lines,\n\
+                    then LabOne Q must fit an oscillator switch in between them.\n\
+                    Either add a delay, or ensure the 2nd pulse starts on the system grid.",
                     s0.oscillator.as_ref().unwrap().uid,
                     s0.uid,
                     s1.oscillator.as_ref().unwrap().uid,

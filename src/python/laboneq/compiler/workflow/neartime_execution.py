@@ -8,7 +8,7 @@ import logging
 import time
 from builtins import frozenset
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.iface_compiler_output import RTCompilerOutputContainer
@@ -16,14 +16,16 @@ from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.workflow import rt_linker
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
 from laboneq.compiler.workflow.rt_linker import CombinedRTCompilerOutputContainer
+from laboneq.core.exceptions import LabOneQException
+from laboneq.core.types.enums.acquisition_type import AcquisitionType
+from laboneq.core.types.enums.averaging_mode import AveragingMode
+from laboneq.core.types.numpy_support import NumPyArray
+from laboneq.data.scheduled_experiment import RtLoopProperties
 from laboneq.executor.executor import (
     ExecutorBase,
     LoopFlags,
     LoopingMode,
 )
-
-if TYPE_CHECKING:
-    from laboneq.core.types.numpy_support import NumPyArray
 
 _logger = logging.getLogger(__name__)
 
@@ -98,6 +100,7 @@ class NtCompilerExecutor(ExecutorBase):
         chunk_count: int | None = None,
     ):
         super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY)
+        self._rt_loop_properties: RtLoopProperties | None = None
         self._rt_compiler = rt_compiler
         self._settings = settings
         self._chunk_count = chunk_count
@@ -144,6 +147,23 @@ class NtCompilerExecutor(ExecutorBase):
         averaging_mode,
         acquisition_type,
     ):
+        if (
+            acquisition_type == AcquisitionType.RAW
+            and averaging_mode == AveragingMode.SEQUENTIAL
+            and count > 1
+        ):
+            raise LabOneQException(
+                "Sequential averaging is not supported for raw acquisitions."
+            )
+
+        self._rt_loop_properties = RtLoopProperties(
+            uid=uid,
+            acquisition_type=acquisition_type,
+            averaging_mode=averaging_mode,
+            shots=count,
+            chunk_count=self._chunk_count,
+        )
+
         if self._chunk_count is None:
             self._rt_entry_handler()
         else:
@@ -236,6 +256,10 @@ class NtCompilerExecutor(ExecutorBase):
 
     def combined_compiler_output(self):
         return self._combined_compiler_output
+
+    def rt_loop_properties(self) -> RtLoopProperties:
+        assert self._rt_loop_properties is not None
+        return self._rt_loop_properties
 
     def finalize(self):
         if self._combined_compiler_output is not None:

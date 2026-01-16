@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Set
 
-from laboneq.compiler.common.awg_info import AwgKey
+from laboneq.data.awg_info import AwgKey
 
 
 @dataclass

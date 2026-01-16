@@ -215,9 +215,6 @@ class MatchSchedule(SectionSchedule):
     prng_sample: str | None
     local: bool | None
 
-    def __attrs_post_init__(self):
-        super().__attrs_post_init__()
-
     def _calculate_timing(
         self, schedule_data: ScheduleData, start: int, start_may_change
     ) -> int:

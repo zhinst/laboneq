@@ -7,8 +7,6 @@ from typing import TYPE_CHECKING, List, Optional, Set
 
 from attrs import define, field
 
-from laboneq.compiler.scheduler.utils import lcm
-
 if TYPE_CHECKING:
     from laboneq.compiler.scheduler.schedule_data import ScheduleData
 
@@ -56,13 +54,9 @@ class IntervalSchedule:
     #: tiny samples.
     grid: int
 
-    #: The time grid along which the interval may be scheduled/shifted, commensurate
-    #: with the sequencer rate. Expressed in tiny samples.
-    sequencer_grid: Optional[int] = None
-
     #: The time grid to be used for compressed loops which contain this section.
     #: Expressed in tiny samples.
-    compressed_loop_grid: Optional[int] = None
+    compressed_loop_grid: int = 1
 
     #: The length of the interval. Expressed in tiny samples
     length: Deferred[int] = None
@@ -75,32 +69,6 @@ class IntervalSchedule:
 
     #: The absolute start time (since trigger) of the interval in tiny samples.
     absolute_start: Deferred[int] = None
-
-    def __attrs_post_init__(self):
-        # Avoid circular imports
-        from laboneq.compiler.scheduler.acquire_group_schedule import (
-            AcquireGroupSchedule,
-        )
-        from laboneq.compiler.scheduler.pulse_schedule import PulseSchedule
-
-        for child in self.children:
-            self.grid = lcm(self.grid, child.grid)
-            self.sequencer_grid = (
-                lcm(self.sequencer_grid, child.sequencer_grid)
-                if self.sequencer_grid is not None or child.sequencer_grid is not None
-                else None
-            )
-            self.compressed_loop_grid = (
-                lcm(self.compressed_loop_grid, child.compressed_loop_grid)
-                if self.compressed_loop_grid is not None
-                or child.compressed_loop_grid is not None
-                else None
-            )
-            # An acquisition escalates the grid of the containing section
-            if (isinstance(child, PulseSchedule) and child.is_acquire) or isinstance(
-                child, AcquireGroupSchedule
-            ):
-                self.grid = lcm(self.grid, self.sequencer_grid)
 
     def calculate_timing(
         self, schedule_data: ScheduleData, suggested_start: int, start_may_change: bool

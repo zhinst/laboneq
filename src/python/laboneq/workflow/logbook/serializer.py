@@ -10,6 +10,7 @@ See the functions below named `serialize_` for the list of types that can be ser
 from __future__ import annotations
 
 import abc
+import warnings
 from functools import singledispatch, singledispatchmethod
 from typing import TYPE_CHECKING
 
@@ -210,9 +211,19 @@ class OrjsonSerializer:
             self, obj: UncertaintiesAffineScalarFunc
         ) -> object:
             """A `default` orjson handler for UncertaintiesAffineScalarFunc."""
+            # In uncertainties 3.2.4+, accessing std_dev triggers FutureWarnings about
+            # deprecated internal methods (error_components() and derivatives()).
+            # TODO: Remove workaround after migration to v4 when available.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore",
+                    category=FutureWarning,
+                    module="uncertainties",
+                )
+                std_dev = obj.std_dev
             return {
                 "value": obj.nominal_value,
-                "std_dev": obj.std_dev,
+                "std_dev": std_dev,
             }
 
     if SKLEARN_IMPORTED:

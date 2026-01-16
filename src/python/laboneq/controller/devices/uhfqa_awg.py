@@ -23,6 +23,7 @@ from laboneq.controller.devices.device_zi import RawReadoutData
 from laboneq.controller.recipe_processor import (
     AwgConfig,
     AwgKey,
+    DeviceRecipeData,
     HWModulation,
     RecipeData,
     RtExecutionInfo,
@@ -184,11 +185,11 @@ class UHFQAAwg(CoreBase):
             *self.nodes.monitor_result_wave,
         ]
 
-    async def apply_initialization(self, uhfqa_recipe_data: UHFQARecipeData):
+    async def apply_core_initialization(self, device_recipe_data: DeviceRecipeData):
         await _gather(
             self._configure_awg_core(),
-            self._outputs[0].configure(uhfqa_recipe_data=uhfqa_recipe_data),
-            self._outputs[1].configure(uhfqa_recipe_data=uhfqa_recipe_data),
+            self._outputs[0].configure(uhfqa_recipe_data=device_recipe_data.uhfqacore),
+            self._outputs[1].configure(uhfqa_recipe_data=device_recipe_data.uhfqacore),
         )
 
     def _configure_standard_mode_nodes(
@@ -476,7 +477,9 @@ class UHFQAAwg(CoreBase):
         }
 
     async def start_execution(self, with_pipeliner: bool):
-        raise NotImplementedError
+        nc = NodeCollector(base=f"/{self._serial}/")
+        nc.add(f"awgs/{self._core_index}/enable", 1, cache=False)
+        await self._api.set_parallel(nc)
 
     def conditions_for_execution_done(
         self, with_pipeliner: bool

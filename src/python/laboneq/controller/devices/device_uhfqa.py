@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterable
 from typing import NoReturn
 
 import numpy as np
@@ -35,7 +35,6 @@ from laboneq.controller.recipe_processor import (
     get_initialization_by_device_uid,
 )
 from laboneq.controller.utilities.exception import LabOneQControllerException
-from laboneq.controller.utilities.for_each import for_each
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import IO
 from laboneq.data.scheduled_experiment import ScheduledExperiment
@@ -65,10 +64,10 @@ class DeviceUHFQA(DeviceBase):
         self._integrators = 10
         self._use_internal_clock = True
 
-    def all_cores(self) -> Iterator[CoreBase]:
+    def all_cores(self) -> Iterable[CoreBase]:
         return iter(self._awg_cores)
 
-    def allocated_cores(self, recipe_data: RecipeData) -> Iterator[CoreBase]:
+    def allocated_cores(self, recipe_data: RecipeData) -> Iterable[CoreBase]:
         for ch in recipe_data.allocated_awgs(self.uid):
             yield self._awg_cores[ch]
 
@@ -110,9 +109,9 @@ class DeviceUHFQA(DeviceBase):
         if initialization is None:
             return
 
-        if scheduled_experiment.chunk_count is not None:
+        if scheduled_experiment.rt_loop_properties.chunk_count is not None:
             raise LabOneQControllerException(
-                f"{self.dev_repr}: Pipeliner is not supported by the device."
+                f"{self.dev_repr}: Chunking is not supported by the device."
             )
 
         for output in initialization.outputs:
@@ -141,13 +140,8 @@ class DeviceUHFQA(DeviceBase):
         # _validate_scheduled_experiment + _calculate_awg_configs. Cleanup after improving recipe.
         recipe = scheduled_experiment.recipe
         assert recipe is not None
-        this_device_signals = {
-            i.signal_id
-            for i in recipe.integrator_allocations
-            if i.device_id == self.uid
-        }
         this_device_has_acquires = any(
-            (this_device_signals & set(a.keys())) for a in recipe.simultaneous_acquires
+            init for init in recipe.initializations if len(init.measurements) > 0
         )
         averages = rt_execution_info.effective_averages
         if (
@@ -230,20 +224,6 @@ class DeviceUHFQA(DeviceBase):
             Command(f"/{self.serial}/system/preset/load", 1),
             Response(f"/{self.serial}/system/preset/busy", 0),
         ]
-
-    async def start_execution(self, recipe_data: RecipeData):
-        nc = NodeCollector(base=f"/{self.serial}/")
-        for awg_index in recipe_data.allocated_awgs(self.uid):
-            nc.add(f"awgs/{awg_index}/enable", 1, cache=False)
-        await self.set_async(nc)
-
-    async def apply_initialization(self, recipe_data: RecipeData):
-        uhfqa_recipe_data = recipe_data.device_settings[self.uid].uhfqacore
-        await for_each(
-            self.all_cores(),
-            UHFQAAwg.apply_initialization,
-            uhfqa_recipe_data=uhfqa_recipe_data,
-        )
 
     async def _set_nt_step_nodes(
         self, recipe_data: RecipeData, attributes: DeviceAttributesView

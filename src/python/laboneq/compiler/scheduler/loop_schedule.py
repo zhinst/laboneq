@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, List, Optional
 
-from attrs import asdict, define, field
+from attrs import define, field
 
 from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.scheduler.loop_iteration_schedule import LoopIterationSchedule
@@ -108,27 +108,3 @@ class LoopSchedule(SectionSchedule):
                 self.children_start = [longest * i for i in range(len(self.children))]
             self._calculate_length(schedule_data)
         return loop_start
-
-    @classmethod
-    def from_section_schedule(
-        cls,
-        schedule: SectionSchedule,
-        compressed: bool,
-        sweep_parameters: List[str],
-        iterations: int,
-        repetition_mode: RepetitionMode | None,
-        repetition_time: int | None,
-        averaging_mode: AveragingMode | None,
-        prng_sample: str | None,
-    ):
-        """Down-cast from SectionSchedule."""
-        return cls(
-            **asdict(schedule, recurse=False),
-            compressed=compressed,
-            sweep_parameters=sweep_parameters,
-            iterations=iterations,
-            repetition_mode=repetition_mode,
-            repetition_time=repetition_time,
-            averaging_mode=averaging_mode,
-            prng_sample=prng_sample,
-        )  # type: ignore

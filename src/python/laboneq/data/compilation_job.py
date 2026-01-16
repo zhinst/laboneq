@@ -241,11 +241,6 @@ class SectionInfo:
     triggers: list[dict[str, Any]] = field(default_factory=list)
     parameters: list[ParameterInfo] = field(default_factory=list)
     play_after: list[str] = field(default_factory=list)
-    # Rust migration helpers
-    # List of all children in the order they are defined.
-    sections_and_operations: list[SectionInfo | SectionSignalPulse] = field(
-        default_factory=list
-    )
     # Whether this section is reused many times in the experiment.
     is_reused: bool = False
     # Original UID
@@ -388,7 +383,6 @@ class ExperimentInfo:
     signals: list[SignalInfo]
     sections: list[SectionInfo]
     global_leader_device: DeviceInfo | None  # todo: remove
-    pulse_defs: list[PulseDef]
     chunking: ChunkingInfo | None
     # Scheduler Rust integration fields
     src: Experiment | None = field(default=None)
