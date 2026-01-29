@@ -21,6 +21,7 @@ use crate::scheduler::py_schedules::generate_py_schedules;
 use crate::scheduler::py_signal::AmplifierPumpPy;
 use crate::scheduler::py_signal::SweepParameterPy;
 use crate::scheduler::py_signal::{OscillatorPy, py_signal_to_signal};
+use crate::scheduler::qccs_feedback_calculator::QccsFeedbackCalculator;
 use laboneq_common::named_id::{NamedIdStore, resolve_ids};
 use laboneq_scheduler::{ChunkingInfo, ExperimentContext as SchedulerContext, schedule_experiment};
 use pyo3::prelude::*;
@@ -45,6 +46,7 @@ mod py_object_interner;
 mod py_pulse_defs;
 mod py_pulse_parameters;
 mod py_schedules;
+mod qccs_feedback_calculator;
 mod signal_view;
 
 use signal_view::signal_views;
@@ -162,6 +164,8 @@ fn schedule_experiment_py(
     let device_setup = &experiment.device_setup;
     let experiment = &experiment.inner;
     let mut parameter_store = create_parameter_store(parameters, &experiment.id_store);
+    let feedback_calculator =
+        QccsFeedbackCalculator::new(py, signal_views(device_setup).values().cloned())?;
     let result = schedule_experiment(
         &experiment.root,
         SchedulerContext {
@@ -172,12 +176,18 @@ fn schedule_experiment_py(
         },
         &parameter_store,
         chunking_info.map(|(index, count)| ChunkingInfo { index, count }),
+        Some(&feedback_calculator),
     )
     .map_err(|e| {
         let msg = create_error_message(e);
         Error::new(resolve_ids(&msg, &experiment.id_store))
     })?;
-    let root = generate_py_schedules(py, &result.root.unwrap(), experiment)?;
+    let root = generate_py_schedules(
+        py,
+        result.root.as_ref().unwrap(),
+        experiment,
+        &context.acquisition_type,
+    )?;
     let out = ScheduleResult {
         used_parameters: parameter_store
             .empty_queries()

@@ -4,10 +4,8 @@
 use std::collections::HashMap;
 
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_scheduler::{
-    ParameterStore, ParameterStoreBuilder,
-    experiment::types::{NumericLiteral, ParameterUid},
-};
+use laboneq_dsl::types::{NumericLiteral, ParameterUid};
+use laboneq_scheduler::{ParameterStore, ParameterStoreBuilder};
 
 pub(super) fn create_parameter_store(
     parameters: HashMap<String, f64>,

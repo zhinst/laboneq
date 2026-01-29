@@ -4,11 +4,6 @@
 use core::panic;
 
 use crate::error::{Error, Result};
-use crate::experiment::sweep_parameter::SweepParameter;
-use crate::experiment::types::{
-    self as experiment_types, NumericLiteral, Operation, SectionAlignment,
-};
-use crate::experiment::{ExperimentNode, NodeChild};
 
 use crate::experiment_context::ExperimentContext;
 use crate::ir::{Case, IrKind, Match};
@@ -17,6 +12,9 @@ use crate::lower_experiment::{adjust_node_grids, lower_children};
 use crate::schedule_info::ScheduleInfoBuilder;
 
 use crate::{ScheduledNode, SignalInfo};
+use laboneq_dsl::operation::{Case as CaseDsl, Match as MatchDsl, Operation};
+use laboneq_dsl::types::{MatchTarget, NumericLiteral, SectionAlignment, SweepParameter};
+use laboneq_dsl::{ExperimentNode, NodeChild};
 use laboneq_units::tinysample::{seconds_to_tinysamples, tiny_samples};
 
 /// Grid size for local feedback
@@ -42,7 +40,7 @@ pub(super) fn lower_match(
     };
 
     let mut schedule_builder = ScheduleInfoBuilder::new().play_after(section.play_after.clone());
-    if let experiment_types::MatchTarget::Handle(handle) = &match_.target {
+    if let MatchTarget::Handle(handle) = &match_.target {
         // TODO (PW) is this correct? should it not be 100 ns regardless of the sampling rate?
         let signal = ctx.get_signal(ctx.handle_to_signal.get(handle).unwrap())?;
         let grid = if match_.local {
@@ -58,7 +56,7 @@ pub(super) fn lower_match(
     let mut root = ScheduledNode::new(IrKind::Match(match_), schedule_builder.build());
     // Matching a sweep parameter requires special handling as each case
     // maps to a specific iteration of a loop.
-    if let experiment_types::MatchTarget::SweepParameter(param_uid) = &section.target {
+    if let MatchTarget::SweepParameter(param_uid) = &section.target {
         let matching_cases = find_matching_cases(
             &node.children,
             local_ctx
@@ -146,7 +144,7 @@ fn process_empty_branches(parent: &mut ScheduledNode) {
         if child.node.children.is_empty() {
             let schedule = ScheduleInfoBuilder::new()
                 .grid(parent.schedule.grid)
-                .length(parent.schedule.grid)
+                .length(0)
                 .sequencer_grid(parent.schedule.grid)
                 .alignment_mode(SectionAlignment::Left)
                 .signals(parent.schedule.signals.clone())
@@ -191,7 +189,7 @@ fn find_matching_cases<'a>(
     Ok(matches)
 }
 
-fn cast_case(kind: &Operation) -> Option<&experiment_types::Case> {
+fn cast_case(kind: &Operation) -> Option<&CaseDsl> {
     if let Operation::Case(case) = kind {
         Some(case)
     } else {
@@ -199,7 +197,7 @@ fn cast_case(kind: &Operation) -> Option<&experiment_types::Case> {
     }
 }
 
-fn try_cast_match(kind: &Operation) -> &experiment_types::Match {
+fn try_cast_match(kind: &Operation) -> &MatchDsl {
     if let Operation::Match(match_) = kind {
         match_
     } else {

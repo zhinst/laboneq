@@ -4,10 +4,9 @@
 use std::collections::HashMap;
 
 use crate::error::{Error, Result};
-use crate::experiment::sweep_parameter::SweepParameter;
-use crate::experiment::types::{HandleUid, ParameterUid, SignalUid};
 use crate::signal_info::SignalInfo;
 use laboneq_common::named_id::{NamedId, NamedIdStore};
+use laboneq_dsl::types::{HandleUid, ParameterUid, SignalUid, SweepParameter};
 
 /// Experiment context.
 ///

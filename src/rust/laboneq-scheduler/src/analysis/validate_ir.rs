@@ -1,8 +1,11 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashSet;
+
+use laboneq_dsl::types::SectionAlignment;
+
 use crate::error::{Error, Result};
-use crate::experiment::types::SectionAlignment;
 use crate::ir::{IrKind, Match, MatchTarget};
 use crate::{RepetitionMode, ScheduledNode};
 
@@ -108,19 +111,35 @@ fn subtree_has_acquisitions(node: &ScheduledNode) -> bool {
 
 fn validate_ir_impl(node: &ScheduledNode, ctx: &ValidationContext) -> Result<()> {
     validate_node(node, ctx)?;
+    if node.children.is_empty() {
+        return Ok(());
+    }
+    let mut seen_sections = HashSet::new();
 
     match &node.kind {
         IrKind::Match(obj) => {
             validate_match_children(node, obj, ctx)?;
         }
         _ => {
-            if node.children.is_empty() {
-                return Ok(());
-            }
             let child_ctx =
                 ctx.child_scope(node.schedule.alignment_mode, node.schedule.repetition_mode);
             for child in node.children.iter() {
+                // Validate child recursively
                 validate_ir_impl(&child.node, &child_ctx)?;
+
+                // Validate play_after constraints
+                if let Some(section_info) = child.node.kind.section_info() {
+                    for play_after in child.node.schedule.play_after.iter() {
+                        if !seen_sections.contains(play_after) {
+                            let msg = format!(
+                                "Section '{}' should play after section '{}' that is not defined before it on the same level.",
+                                section_info.uid.0, play_after.0
+                            );
+                            return Err(Error::new(&msg));
+                        }
+                    }
+                    seen_sections.insert(section_info.uid);
+                }
             }
         }
     }

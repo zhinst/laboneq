@@ -3,19 +3,19 @@
 
 use std::collections::HashMap;
 
+use crate::scheduler::experiment::{Device, DeviceSetup, PortMode, Signal, SignalKind};
 use laboneq_common::device_traits::DeviceTraits;
 use laboneq_common::types::{AwgKey, DeviceKind};
-use laboneq_scheduler::SignalInfo;
-use laboneq_scheduler::experiment::types::{
+use laboneq_dsl::types::{
     AmplifierPump, DeviceUid, Oscillator, OscillatorKind, SignalUid, ValueOrParameter,
 };
+use laboneq_scheduler::SignalInfo;
 
-use crate::scheduler::experiment::{Device, DeviceSetup, PortMode, Signal, SignalKind};
-
+use laboneq_units::duration::{Duration, Second};
 /// A view over a signal and its associated device.
 ///
 /// Provides convenient access to signal and device properties.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub(crate) struct SignalView<'a> {
     device: &'a Device,
     signal: &'a Signal,
@@ -48,6 +48,10 @@ impl SignalView<'_> {
 
     pub(crate) fn device_uid(&self) -> DeviceUid {
         self.device.uid
+    }
+
+    pub(crate) fn device_traits(&self) -> &'static DeviceTraits {
+        DeviceTraits::from_device_kind(self.device_kind())
     }
 
     pub(crate) fn sampling_rate(&self) -> f64 {
@@ -87,6 +91,18 @@ impl SignalView<'_> {
             .oscillator
             .as_ref()
             .is_some_and(|osc| matches!(osc.kind, OscillatorKind::Hardware))
+    }
+
+    pub(crate) fn signal_delay(&self) -> Duration<Second> {
+        self.signal.signal_delay
+    }
+
+    pub(crate) fn port_delay(&self) -> &ValueOrParameter<Duration<Second>> {
+        &self.signal.port_delay
+    }
+
+    pub(crate) fn start_delay(&self) -> Duration<Second> {
+        self.signal.start_delay
     }
 }
 

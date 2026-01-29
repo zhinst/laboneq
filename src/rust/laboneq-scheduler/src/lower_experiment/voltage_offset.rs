@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::error::{Error, Result};
-use crate::experiment::types::ValueOrParameter;
 
 use crate::ir::{InitialVoltageOffset, IrKind};
 use crate::schedule_info::ScheduleInfoBuilder;
 use crate::{ParameterStore, ScheduledNode, SignalInfo};
+use laboneq_dsl::types::ValueOrParameter;
 use laboneq_units::tinysample::TinySamples;
 
 pub(super) fn handle_initial_voltage_offset<T: SignalInfo + Sized>(

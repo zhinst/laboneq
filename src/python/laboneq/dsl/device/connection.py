@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Iterable, Optional
 
 import attrs
@@ -93,23 +94,24 @@ def create_connection(
         ports: Ports of the target instrument.
 
     Keyword Args:
-        Only one of the following can be exists:
+        Only one of the following can exist:
 
-            - to_instrument: If the connection is to an another instrument
+            - to_instrument: If the connection is to another instrument
                 Takes one instrument port.
 
             - to_signal: If the connection is to a signal
                 The number of allowed ports depends on the instrument and its port.
 
-        signal_type: Optional argument, can be used to specify a signal type, allowed values are "iq", "rf" or "acquire"
+        type: Optional argument, can be used to specify a signal type, allowed values are "iq", "rf" or "acquire"
 
     Returns:
         Created connection.
 
     Raises:
-        ValueError: Neither or both 'to_instrument' and 'to_signal' defined.
-            'to_instrument' was given more than one port.
-            'to_signal' input format is invalid.
+        ValueError:
+         - Either none or both 'to_instrument' and 'to_signal' defined.
+         - 'to_instrument' was given more than one port.
+         - 'to_signal' input format is invalid.
     """
     if "to_instrument" in kwargs and "to_signal" in kwargs:
         raise ValueError(
@@ -125,7 +127,15 @@ def create_connection(
         elif isinstance(ports, str):
             ports = [ports]
         if "signal_type" in kwargs:
-            signal_type = kwargs["signal_type"]
+            warnings.warn(
+                "Argument 'signal_type' of 'create_connection' has been renamed to 'type'.",
+                FutureWarning,
+                stacklevel=2,
+            )
+            kwargs["type"] = kwargs["signal_type"]
+            del kwargs["signal_type"]
+        if "type" in kwargs:
+            signal_type = kwargs["type"]
         else:
             signal_type = None
         return SignalConnection(uid=to, ports=list(ports), type=signal_type)

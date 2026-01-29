@@ -9,12 +9,14 @@ use crate::scheduler::NamedIdStore;
 use crate::scheduler::pulse::PulseDef;
 use crate::scheduler::py_object_interner::PyObjectInterner;
 use laboneq_common::types::{AwgKey, DeviceKind, PhysicalDeviceUid};
-use laboneq_scheduler::experiment::ExperimentNode;
-use laboneq_scheduler::experiment::sweep_parameter::SweepParameter;
-use laboneq_scheduler::experiment::types::{
-    AmplifierPump, DeviceUid, ExternalParameterUid, Oscillator, ParameterUid, PulseUid, SignalUid,
-    ValueOrParameter,
+use laboneq_dsl::{
+    ExperimentNode,
+    types::{
+        AmplifierPump, DeviceUid, ExternalParameterUid, Oscillator, ParameterUid, PulseUid,
+        SignalUid, SweepParameter, ValueOrParameter,
+    },
 };
+use laboneq_units::duration::{Duration, Second};
 use smallvec::SmallVec;
 
 pub(crate) struct Experiment {
@@ -81,6 +83,9 @@ pub(crate) struct Signal {
     pub channels: SmallVec<[u16; 1]>,
     pub port_mode: Option<PortMode>,
     pub automute: bool,
+    pub signal_delay: Duration<Second>,
+    pub port_delay: ValueOrParameter<Duration<Second>>,
+    pub start_delay: Duration<Second>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -125,9 +130,8 @@ impl FromStr for PortMode {
 pub(crate) mod builders {
     use super::{Signal, SignalKind};
     use laboneq_common::types::AwgKey;
-    use laboneq_scheduler::experiment::types::{
-        AmplifierPump, DeviceUid, Oscillator, SignalUid, ValueOrParameter,
-    };
+    use laboneq_dsl::types::{AmplifierPump, DeviceUid, Oscillator, SignalUid, ValueOrParameter};
+    use laboneq_units::duration::{Duration, Second, seconds};
     use smallvec::smallvec;
 
     pub(crate) struct SignalBuilder {
@@ -156,6 +160,9 @@ pub(crate) mod builders {
                     channels: smallvec![],
                     port_mode: None,
                     automute: false,
+                    signal_delay: 0.0.into(),
+                    port_delay: ValueOrParameter::Value(seconds(0.0)),
+                    start_delay: 0.0.into(),
                 },
             }
         }
@@ -180,6 +187,21 @@ pub(crate) mod builders {
         #[expect(dead_code)]
         pub(crate) fn amplifier_pump(mut self, amplifier_pump: AmplifierPump) -> Self {
             self.inner.amplifier_pump = Some(amplifier_pump);
+            self
+        }
+
+        pub(crate) fn signal_delay(mut self, signal_delay: f64) -> Self {
+            self.inner.signal_delay = signal_delay.into();
+            self
+        }
+
+        pub(crate) fn port_delay(mut self, port_delay: ValueOrParameter<Duration<Second>>) -> Self {
+            self.inner.port_delay = port_delay;
+            self
+        }
+
+        pub(crate) fn start_delay(mut self, start_delay: f64) -> Self {
+            self.inner.start_delay = start_delay.into();
             self
         }
 

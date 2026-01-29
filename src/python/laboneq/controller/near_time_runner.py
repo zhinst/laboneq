@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from inspect import iscoroutinefunction
+from inspect import isawaitable
 from typing import TYPE_CHECKING, Any, Generic, TypeVar
 from weakref import ReferenceType
 
@@ -77,10 +77,11 @@ class NearTimeRunner(AsyncExecutorBase, Generic[_SessionClass]):
             experiment_results=experiment_results,
         )
         try:
-            if iscoroutinefunction(func):
-                res = await func(protected_session, **args)
+            res_or_coro = func(protected_session, **args)
+            if isawaitable(res_or_coro):
+                res = await res_or_coro
             else:
-                res = func(protected_session, **args)
+                res = res_or_coro
         except AbortExecution:
             _logger.warning(f"Execution aborted by near-time callback '{func_name}'")
             raise

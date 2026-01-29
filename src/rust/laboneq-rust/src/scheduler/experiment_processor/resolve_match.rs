@@ -8,8 +8,9 @@ use crate::scheduler::experiment::Device;
 use crate::scheduler::experiment_context::ExperimentContext;
 use crate::scheduler::signal_view::SignalView;
 use laboneq_common::types::DeviceKind;
-use laboneq_scheduler::experiment::ExperimentNode;
-use laboneq_scheduler::experiment::types::{HandleUid, MatchTarget, Operation, SignalUid};
+use laboneq_dsl::ExperimentNode;
+use laboneq_dsl::operation::Operation;
+use laboneq_dsl::types::{HandleUid, MatchTarget, SignalUid};
 
 /// Resolves [`Operation::Match`] nodes in the experiment tree.
 ///
@@ -123,8 +124,9 @@ mod tests {
     use crate::scheduler::signal_view::signal_views;
     use laboneq_common::named_id::NamedId;
     use laboneq_common::types::{AwgKey, PhysicalDeviceUid};
-    use laboneq_scheduler::experiment::types::{Acquire, Match, MatchTarget, Reserve};
-    use laboneq_scheduler::node_structure;
+    use laboneq_dsl::node_structure;
+    use laboneq_dsl::operation::{Acquire, Match, Reserve};
+    use laboneq_dsl::types::AcquisitionType;
     use std::collections::HashMap;
 
     fn create_device_setup(
@@ -205,7 +207,10 @@ mod tests {
     fn create_test_context(handle: HandleUid, signal: SignalUid) -> ExperimentContext {
         let mut handle_to_signal = HashMap::new();
         handle_to_signal.insert(handle, signal);
-        ExperimentContext { handle_to_signal }
+        ExperimentContext {
+            handle_to_signal,
+            acquisition_type: AcquisitionType::Integration,
+        }
     }
 
     fn create_feedback_experiment(

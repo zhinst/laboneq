@@ -7,8 +7,9 @@ use crate::scheduler::experiment_validation::{
 };
 use crate::scheduler::signal_view::SignalView;
 use laboneq_common::types::DeviceKind;
-use laboneq_scheduler::experiment::ExperimentNode;
-use laboneq_scheduler::experiment::types::{Chunking, Section, Sweep, ValueOrParameter};
+use laboneq_dsl::ExperimentNode;
+use laboneq_dsl::operation::{Chunking, Section, Sweep};
+use laboneq_dsl::types::ValueOrParameter;
 
 /// Validates sweep parameters in an [`Experiment`].
 pub(super) fn validate_sweep_parameters(ctx: &mut ParamsContext) -> Result<()> {

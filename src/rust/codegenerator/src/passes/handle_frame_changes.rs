@@ -5,7 +5,6 @@ use crate::Result;
 use crate::ir;
 use crate::ir::compilation_job::{self as cjob};
 use crate::signature::PulseSignature;
-use anyhow::anyhow;
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
@@ -43,7 +42,7 @@ pub(crate) fn handle_frame_changes(node: &mut ir::IrNode) {
     }
 }
 
-struct ActivateWaveform<'a> {
+struct ActiveWaveform<'a> {
     start: ir::Samples,
     length: ir::Samples,
     osc: Option<&'a str>,
@@ -51,7 +50,7 @@ struct ActivateWaveform<'a> {
 }
 
 struct FrameChangeTracker<'a> {
-    current_waveform: HashMap<Option<u16>, ActivateWaveform<'a>>,
+    current_waveform: HashMap<Option<u16>, ActiveWaveform<'a>>,
 }
 
 impl<'a> FrameChangeTracker<'a> {
@@ -71,7 +70,7 @@ impl<'a> FrameChangeTracker<'a> {
     ) {
         self.current_waveform.insert(
             state,
-            ActivateWaveform {
+            ActiveWaveform {
                 start,
                 length,
                 osc,
@@ -84,6 +83,21 @@ impl<'a> FrameChangeTracker<'a> {
         range.start < point && point < range.end
     }
 
+    fn insert_into_last_pulse_signature(
+        wf: &mut ActiveWaveform,
+        phase: f64,
+        parameter: &mut Option<String>,
+    ) {
+        let Some(pulse) = wf.signatures.last_mut() else {
+            panic!("Internal error: found waveform without pulse signature(s).");
+        };
+        *pulse.increment_oscillator_phase.get_or_insert(0.0) += phase;
+        *pulse.oscillator_phase.get_or_insert(0.0) -= phase;
+        if let Some(incr_phase_param) = parameter.take() {
+            pulse.incr_phase_params.push(incr_phase_param);
+        }
+    }
+
     /// Try to insert a frame change into a currently playing waveform
     ///
     /// # Returns
@@ -93,68 +107,88 @@ impl<'a> FrameChangeTracker<'a> {
         &mut self,
         state: &Option<u16>,
         signal: &cjob::Signal,
-        offset: ir::Samples,
+        node_offset: ir::Samples,
         phase: f64,
         parameter: &mut Option<String>,
-    ) -> Result<bool> {
-        if let Some(wf) = self.current_waveform.get_mut(state) {
-            let wf_start = wf.start;
-            let wf_range = wf_start..wf_start + wf.length;
-            // Frame change does not overlap with waveform within the case block
-            if !wf_range.contains(&offset) {
-                if state.is_some() {
-                    let msg = "Cannot handle free-standing oscillator phase change in conditional branch.\n\
-                    A zero-length 'increment_oscillator_phase' must not occur at the \
-                    very end of a 'case' block. Consider stretching the branch by \
-                    adding a small delay after the phase increment.";
-                    return Err(anyhow!(msg).into());
-                }
+    ) -> Result<bool, anyhow::Error> {
+        let Some(wf) = self.current_waveform.get_mut(state) else {
+            match state {
+                Some(s) => panic!("Internal error: no waveform found for case-branch {s}."),
+                None => return Ok(false),
+            }
+        };
+        assert!(!wf.signatures.is_empty(), "No pulse signature(s) found.");
+
+        let wf_start = wf.start;
+        let wf_range = wf_start..wf_start + wf.length;
+        let overlapping_osc = match (wf.osc.as_ref(), signal.oscillator.as_ref()) {
+            (Some(&wf_uid), Some(o)) if wf_uid != o.uid => Some((wf_uid, &o.uid)),
+            _ => None,
+        };
+
+        // Frame-change does not overlap with current waveform
+        if !wf_range.contains(&node_offset) {
+            // Leave frame-changes outside a match-block as standalone,
+            // i.e. to be handled as 0-length command-table entries
+            if state.is_none() {
                 return Ok(false);
             }
-            // Check for overlapping oscillators
-            // If the frame change happens at the start or end of an waveform, that is ok:
-            // we can emit a 0-length command table entry.
-            if let Some(cjob::Oscillator { uid, .. }) = &signal.oscillator
-                && let Some(wf_osc) = wf.osc.as_ref().filter(|&wf_osc| wf_osc != uid)
-            {
-                if FrameChangeTracker::point_inside_range(&wf_range, offset) {
-                    let msg = format!(
-                        "Cannot increment oscillator '{}' of signal '{}': the line is occupied by '{}'",
-                        uid, signal.uid, wf_osc
-                    );
-                    return Err(anyhow!(msg).into());
-                } else {
-                    return Ok(false);
-                }
+            // Here we are inside a case-branch. Assume it has a duration interval ['a', 'b').
+            // Waveforms are merged by state, so there should be one waveform per case-branch starting at 'a'.
+            // Nodes have been sorted such that for equal start times, waveforms appear before frame-changes.
+            // The earliest start-time for a conditional frame-change is that of its case-branch, i.e. 'a'.
+            // Thus, a frame-change reaching this point must be occurring after the current waveform,
+            // and we try to insert the frame-change into its last pulse.
+            assert!(
+                wf_range.end <= node_offset,
+                "Internal error: found conditional frame-change starting before its parent case-branch."
+            );
+            if overlapping_osc.is_none() {
+                FrameChangeTracker::insert_into_last_pulse_signature(wf, phase, parameter);
+                return Ok(true);
             }
-            // Change timing to relative for comparison
-            let offset_fc = offset - wf_start;
-            let mut apply_to_last = false;
-            // Insert the frame change into the first overlapping pulse
-            for pulse in wf.signatures.iter_mut() {
-                if pulse.start < offset_fc {
-                    apply_to_last = true;
-                    continue;
-                }
-                *pulse.increment_oscillator_phase.get_or_insert(0.0) += phase;
-                if let Some(incr_phase_param) = parameter.take() {
-                    pulse.incr_phase_params.push(incr_phase_param.clone());
-                }
-                apply_to_last = false;
-                break;
-            }
-            // Insert the frame change into the last pulse anyways, and rewind its
-            // own phase by the same amount.
-            if apply_to_last && let Some(pulse) = wf.signatures.last_mut() {
-                *pulse.increment_oscillator_phase.get_or_insert(0.0) += phase;
-                *pulse.oscillator_phase.get_or_insert(0.0) -= phase;
-                if let Some(incr_phase_param) = parameter.take() {
-                    pulse.incr_phase_params.push(incr_phase_param);
-                }
-            }
-            return Ok(true);
+            // Frame-change could not be handled. This stage should be unreachable
+            // since every conditional branch should have an available (placeholder) waveform
+            let msg = "Cannot handle free-standing oscillator phase change in conditional branch.\n\
+            A zero-length 'increment_oscillator_phase' must not occur at the \
+            very end of a 'case' block. Consider stretching the branch by \
+            adding a small delay after the phase increment.";
+            panic!("{}", msg);
         }
-        Ok(false)
+        // Check for overlapping oscillators
+        // If the frame change happens at the start or end of a waveform, that is ok:
+        // we can emit a 0-length command table entry.
+        if let Some((wf_osc, uid)) = overlapping_osc {
+            if !FrameChangeTracker::point_inside_range(&wf_range, node_offset) {
+                return Ok(false);
+            }
+            let msg = format!(
+                "Cannot increment oscillator '{}' of signal '{}': the line is occupied by '{}'",
+                uid, signal.uid, wf_osc
+            );
+            anyhow::bail!(msg);
+        }
+        // Change timing to relative for comparison
+        let offset_fc = node_offset - wf_start;
+        let mut apply_to_last = false;
+        // Insert the frame change into the first overlapping pulse
+        for pulse in wf.signatures.iter_mut() {
+            if pulse.start < offset_fc {
+                apply_to_last = true;
+                continue;
+            }
+            *pulse.increment_oscillator_phase.get_or_insert(0.0) += phase;
+            if let Some(incr_phase_param) = parameter.take() {
+                pulse.incr_phase_params.push(incr_phase_param.clone());
+            }
+            apply_to_last = false;
+            break;
+        }
+        // Insert the phase increment into the last pulse signature, rewinding its own phase by the same amount.
+        if apply_to_last {
+            FrameChangeTracker::insert_into_last_pulse_signature(wf, phase, parameter);
+        }
+        Ok(true)
     }
 }
 
@@ -184,7 +218,7 @@ fn sort_nodes(nodes: &mut Vec<(Option<u16>, &mut ir::IrNode)>) {
 ///     * Frame change does not overlap with any of the waveforms within a case block
 pub(crate) fn insert_frame_changes(mut nodes: Vec<(Option<u16>, &mut ir::IrNode)>) -> Result<()> {
     // Sort so that the waveforms are always before frame change if they happen at the same time.
-    // This is due to the fact that a frame change which start at the same time a waveform with length 0, can potentially be
+    // This is due to the fact that a frame change with the same starting time as a length-0 waveform, can potentially be
     // after the waveform in the source tree.
     // Then whenever a frame change is encountered, a waveform starting at the same time or before
     // is already seen.
@@ -193,13 +227,13 @@ pub(crate) fn insert_frame_changes(mut nodes: Vec<(Option<u16>, &mut ir::IrNode)
     // Track nodes that are to be removed
     let mut nodes_to_be_removed = vec![];
     for (idx, (state, node)) in nodes.iter_mut().enumerate() {
-        let offset = *node.offset();
-        match node.data_mut() {
+        let (node_data, node_offset) = node.data_and_offset_mut();
+        match node_data {
             ir::NodeKind::FrameChange(ob) => {
                 if tracker.try_insert_frame_change(
                     state,
                     &ob.signal,
-                    offset,
+                    *node_offset,
                     ob.phase,
                     &mut ob.parameter,
                 )? {
@@ -208,7 +242,7 @@ pub(crate) fn insert_frame_changes(mut nodes: Vec<(Option<u16>, &mut ir::IrNode)
             }
             ir::NodeKind::PlayWave(ob) => {
                 tracker.set_active_waveform(
-                    offset,
+                    *node_offset,
                     ob.length(),
                     *state,
                     ob.oscillator.as_deref(),
@@ -286,7 +320,7 @@ mod tests {
             .unwrap();
         // Test that both phase increments applied to the first pulse
         assert_eq!(signatures[0].increment_oscillator_phase, Some(1.0 + 1.0));
-        // The that last pulse gets the last phase increment
+        // Test that last pulse gets the last phase increment
         assert_eq!(signatures[1].increment_oscillator_phase, Some(0.5));
         // Test that last pulse oscillator phase is rewound by the incremented amount
         assert_eq!(signatures[1].oscillator_phase, Some(2.0 - 0.5));
@@ -371,7 +405,6 @@ mod tests {
             mixer_type: None,
             automute: false,
         });
-
         // Test error when frame change inside waveform, start/end exclusive
         let result = tracker.try_insert_frame_change(&None, &signal_fc, 5, 1.0, &mut None);
         assert!(result.is_err());

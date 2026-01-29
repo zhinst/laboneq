@@ -117,7 +117,7 @@ class _InstrumentGenerator(abc.ABC):
         elif channel_type == "rf":
             channel_type_ = PhysicalChannelType.RF_CHANNEL
         else:
-            return None
+            raise ValueError(f"Invalid channel type: '{channel_type}'")
         return PhysicalChannel(
             uid=f"{instrument}/{signal_name}",
             name=signal_name,
@@ -347,9 +347,7 @@ class _UHFQAGenerator(_InstrumentGenerator):
         connection_type = _UHFQAGenerator.determine_signal_type(ports)
         if connection_type == "acquire":
             ports = ["QAS/0", "QAS/1"]
-        return _InstrumentGenerator.make_physical_channel(
-            instrument, ports, connection_type
-        )
+        return super().make_physical_channel(instrument, ports, connection_type)
 
 
 class _SHFPPCGenerator(_InstrumentGenerator):

@@ -516,10 +516,14 @@ def convert_device_setup_to_setup(
         InstrumentConverter(
             instr,
             ls_legacy_to_new_map,
-            servers[instr.server_uid],
+            servers[instr.server_uid] if instr.server_uid is not None else None,
         )
         for instr in device_setup.instruments
-        if isinstance(instr, ZIStandardInstrument) and instr.server_uid is not None
+        if isinstance(instr, ZIStandardInstrument)
+        and (
+            instr.server_uid is not None
+            or isinstance(instr, legacy_instruments.PRETTYPRINTERDEVICE)
+        )
     ]
 
     instruments = [converter.instrument for converter in converters]

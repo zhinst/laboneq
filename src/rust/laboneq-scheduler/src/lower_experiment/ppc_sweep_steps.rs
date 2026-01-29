@@ -4,11 +4,11 @@
 use std::collections::HashMap;
 
 use laboneq_common::types::AwgKey;
+use laboneq_dsl::types::{AmplifierPump, ParameterUid, SignalUid, ValueOrParameter};
 use laboneq_units::duration::{Duration, Second, seconds};
 use laboneq_units::tinysample::{TinySamples, seconds_to_tinysamples, tiny_samples};
 
 use crate::error::Result;
-use crate::experiment::types::{AmplifierPump, ParameterUid, SignalUid, ValueOrParameter};
 
 use crate::ir::{IrKind, PpcStep};
 use crate::schedule_info::ScheduleInfoBuilder;

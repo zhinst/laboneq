@@ -4,11 +4,11 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
+use laboneq_dsl::operation::PulseParameterValue;
+use laboneq_dsl::types::{ParameterUid, SweepParameter, ValueOrParameter};
 use laboneq_units::tinysample::seconds_to_tinysamples;
 
 use crate::error::{Error, Result};
-use crate::experiment::sweep_parameter::SweepParameter;
-use crate::experiment::types::{ParameterUid, PulseParameterValue, ValueOrParameter};
 use crate::ir::IrKind;
 use crate::parameter_resolver::ParameterResolver;
 use crate::utils::round_to_grid;

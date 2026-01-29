@@ -103,6 +103,7 @@ class DeviceSHFQA(SHFQAMixIn, DeviceSHFBase):
                 integrators=self._integrators,
                 repr_base=self.dev_repr,
                 is_plus=self._is_plus,
+                long_readout_available=self._long_readout_available,
             )
             for core_index in range(self._channels)
         ]

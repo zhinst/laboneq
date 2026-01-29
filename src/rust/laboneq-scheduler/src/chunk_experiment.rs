@@ -3,10 +3,11 @@
 
 use std::collections::HashMap;
 
+use laboneq_dsl::ExperimentNode;
+use laboneq_dsl::operation::Operation;
+use laboneq_dsl::types::{ParameterUid, SweepParameter};
+
 use crate::error::Result;
-use crate::experiment::ExperimentNode;
-use crate::experiment::sweep_parameter::SweepParameter;
-use crate::experiment::types::{Operation, ParameterUid};
 
 /// Information about chunking of experiment.
 #[derive(Debug, Clone, PartialEq)]
@@ -84,11 +85,11 @@ fn chunk_experiment_impl(
 #[cfg(test)]
 mod tests {
     use super::{ChunkingInfo, chunk_experiment};
-    use crate::experiment::builders::SweepBuilder;
-    use crate::experiment::sweep_parameter::SweepParameter;
-    use crate::experiment::types::{Chunking, Operation, ParameterUid, SectionUid};
-    use crate::node_structure;
     use laboneq_common::named_id::NamedId;
+    use laboneq_dsl::node_structure;
+    use laboneq_dsl::operation::builders::SweepBuilder;
+    use laboneq_dsl::operation::{Chunking, Operation};
+    use laboneq_dsl::types::{ParameterUid, SectionUid, SweepParameter};
     use numeric_array::NumericArray;
     use std::collections::HashMap;
     use std::vec;

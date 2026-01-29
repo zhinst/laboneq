@@ -4,10 +4,9 @@
 use std::sync::Arc;
 
 use crate::error::{Error, Result};
-use laboneq_scheduler::experiment::{
-    ExperimentNode, NodeChild, NodePtr,
-    types::{AveragingMode, Operation},
-};
+use laboneq_dsl::{ExperimentNode, NodeChild, operation::Operation, types::AveragingMode};
+
+type NodePtr = *const ExperimentNode;
 
 /// Transformation pass to resolve sequential averaging loop in the experiment.
 ///
@@ -130,11 +129,11 @@ fn insert_to_innermost_sweep(
 mod tests {
     use super::*;
     use laboneq_common::named_id::NamedIdStore;
-    use laboneq_scheduler::experiment::types::{
-        AcquisitionType, AveragingLoop, RepetitionMode, Reserve, SectionAlignment, SectionUid,
-        SignalUid, Sweep,
+    use laboneq_dsl::{
+        node_structure,
+        operation::{AveragingLoop, Reserve, Sweep},
+        types::{AcquisitionType, RepetitionMode, SectionAlignment, SectionUid, SignalUid},
     };
-    use laboneq_scheduler::node_structure;
 
     fn make_sweep(store: &mut NamedIdStore, name: &str) -> Sweep {
         Sweep {

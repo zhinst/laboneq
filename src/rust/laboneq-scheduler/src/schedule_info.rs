@@ -1,7 +1,7 @@
 // Copyright 2024 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::experiment::types::{ParameterUid, SectionAlignment, SectionUid, SignalUid};
+use laboneq_dsl::types::{ParameterUid, SectionAlignment, SectionUid, SignalUid};
 use laboneq_units::tinysample::{TinySamples, tiny_samples};
 use std::collections::HashSet;
 
@@ -9,7 +9,7 @@ use std::collections::HashSet;
 type DeferredLength = Option<TinySamples>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScheduleInfo {
+pub(crate) struct ScheduleInfo {
     /// Grid of the node and its children.
     /// Defaults to 1.
     pub grid: TinySamples,
@@ -36,6 +36,7 @@ pub struct ScheduleInfo {
     pub escalate_to_sequencer_grid: bool,
     /// Sections that should be played after this one.
     pub play_after: Vec<SectionUid>,
+    pub(crate) absolute_start: TinySamples,
 }
 
 impl ScheduleInfo {
@@ -50,7 +51,7 @@ impl ScheduleInfo {
     /// Try to get the length of the scheduled node.
     ///
     /// Returns None if the length is unresolved.
-    pub fn try_length(&self) -> Option<TinySamples> {
+    pub(crate) fn try_length(&self) -> Option<TinySamples> {
         self.length
     }
 
@@ -154,6 +155,7 @@ impl ScheduleInfoBuilder {
             sequencer_grid: self.sequencer_grid,
             escalate_to_sequencer_grid: self.escalate_to_sequencer_grid,
             play_after: self.play_after,
+            absolute_start: tiny_samples(0),
         }
     }
 }

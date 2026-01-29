@@ -8,7 +8,7 @@ import copy
 import logging
 import time
 from itertools import groupby
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.iface_code_generator import ICodeGenerator
@@ -19,7 +19,6 @@ from laboneq.compiler.common.iface_compiler_output import (
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.event_list.event_list_generator import generate_event_list_from_ir
 from laboneq.compiler.event_list.preorder_map import preorder_map
-from laboneq.compiler.experiment_access import ExperimentDAO
 from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
 from laboneq.compiler.ir.ir import IRTree
 from laboneq.compiler.ir.section_ir import SectionIR
@@ -30,6 +29,10 @@ from laboneq.compiler.workflow.compiler_hooks import (
     all_compiler_hooks,
     get_compiler_hooks,
 )
+from laboneq.data.compilation_job import SignalInfo
+
+if TYPE_CHECKING:
+    from laboneq._rust import compiler as compiler_rs
 
 _logger = logging.getLogger(__name__)
 
@@ -44,28 +47,21 @@ class Schedule(TypedDict):
 class RealtimeCompiler:
     def __init__(
         self,
-        experiment_dao: ExperimentDAO,
+        experiment: compiler_rs.ExperimentInfo,
+        signal_infos: list[SignalInfo],
         sampling_rate_tracker: SamplingRateTracker,
         signal_objects: dict[str, SignalObj],
         feedback_register_layout: FeedbackRegisterLayout,
         settings: CompilerSettings | None = None,
     ):
+        self._signal_infos = signal_infos
+        self._experiment = experiment
         self._feedback_register_layout = feedback_register_layout
-        self._scheduler = Scheduler(
-            experiment_dao,
-            sampling_rate_tracker,
-            signal_objects,
-            settings,
-        )
-        self._ir = None
         self._sampling_rate_tracker = sampling_rate_tracker
         self._signal_objects = signal_objects
         self._settings = settings if settings is not None else CompilerSettings()
 
         self._code_generators: dict[int, ICodeGenerator] = {}
-
-    def _lower_to_ir(self):
-        return self._scheduler.generate_ir()
 
     def _lower_ir_to_code(self, ir: IRTree):
         awgs = [signal_obj.awg for signal_obj in self._signal_objects.values()]
@@ -100,30 +96,25 @@ class RealtimeCompiler:
 
         _logger.debug("Code generation completed")
 
-    def _generate_code(self):
-        ir = self._lower_to_ir()
-        _logger.debug("IR lowering complete")
-        self._ir = ir
-        self._lower_ir_to_code(ir)
-        _logger.debug("lowering IR to code complete")
-
     def run(
         self, near_time_parameters: ParameterStore[str, float]
     ) -> RTCompilerOutputContainer:
         time_start = time.perf_counter()
-        self._scheduler.run(near_time_parameters)
-        schedule = self.prepare_schedule() if self._settings.OUTPUT_EXTRAS else None
+        scheduler = Scheduler()
+        scheduler.run(self._experiment, near_time_parameters)
+        ir = scheduler.generate_ir(
+            pulse_defs=self._experiment.pulse_defs, signals=self._signal_infos
+        )
+        schedule = self.prepare_schedule(ir) if self._settings.OUTPUT_EXTRAS else None
         time_delta = time.perf_counter() - time_start
         _logger.info(f"Schedule completed. [{time_delta:.3f} s]")
 
         time_start = time.perf_counter()
-        self._generate_code()
-
+        self._lower_ir_to_code(ir)
         outputs: dict[int, RTCompilerOutput] = {
             device_class: code_generator.get_output()
             for device_class, code_generator in self._code_generators.items()
         }
-
         compiler_output = RTCompilerOutputContainer(
             codegen_output=outputs, schedule=schedule
         )
@@ -210,7 +201,5 @@ class RealtimeCompiler:
             sampling_rates=sampling_rates,
         )
 
-    def prepare_schedule(self):
-        if self._ir is None:
-            self._ir = self._lower_to_ir()
-        return self._lower_ir_to_pulse_sheet(self._ir)
+    def prepare_schedule(self, ir: IRTree) -> Schedule:
+        return self._lower_ir_to_pulse_sheet(ir)

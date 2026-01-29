@@ -48,7 +48,8 @@ where
 /// Example usage:
 ///
 /// ```
-/// use laboneq_scheduler::node_structure;
+/// use laboneq_dsl::node_structure;
+///
 /// let tree = node_structure!(
 ///     "root",
 ///     [
@@ -62,10 +63,10 @@ where
 #[macro_export]
 macro_rules! node_structure {
     ($value:expr, []) => {
-        $crate::experiment::node::Node::new($value.clone())
+        $crate::node::Node::new($value.clone())
     };
     ($value:expr, [ $( ($child:expr, $subtree:tt) ),* $(,)? ]) => {{
-        let mut node = $crate::experiment::node::Node::new($value.clone());
+        let mut node = $crate::node::Node::new($value.clone());
         $(
             let child = node_structure!($child, $subtree);
             node.children.push(child.into());

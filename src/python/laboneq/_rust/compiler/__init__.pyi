@@ -5,7 +5,7 @@ from typing import Literal
 
 from numpy.typing import ArrayLike
 
-from laboneq.compiler.scheduler.root_schedule import RootSchedule
+from laboneq.compiler.ir import RootScheduleIR
 from laboneq.core.types.enums.port_mode import PortMode
 from laboneq.data.experiment_description import Experiment
 
@@ -78,11 +78,11 @@ class ScheduledExperiment:
 
     Attributes:
         used_parameters: Used near-time parameters in the experiment.
-        root: Root scheduled node.
+        root: Root IR node.
     """
 
     used_parameters: set[str]
-    root: RootSchedule
+    root: RootScheduleIR
 
 def schedule_experiment(
     experiment: ExperimentInfo,

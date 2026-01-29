@@ -5,14 +5,17 @@
 
 use std::collections::{HashMap, HashSet};
 
+use laboneq_dsl::{
+    operation::PulseParameterValue,
+    types::{
+        AveragingMode, ComplexOrFloat, DeviceUid, HandleUid, Marker, ParameterUid, PrngSampleUid,
+        PulseParameterUid, PulseUid, SectionUid, SignalUid, ValueOrParameter,
+    },
+};
 use laboneq_units::tinysample::TinySamples;
 
-use crate::experiment::types::{
-    AveragingMode, ComplexOrFloat, DeviceUid, HandleUid, Marker, ParameterUid, PrngSampleUid,
-    PulseParameterUid, PulseParameterValue, PulseUid, SectionUid, SignalUid, ValueOrParameter,
-};
 // Re-export for convenience
-pub use crate::experiment::types::MatchTarget;
+pub use laboneq_dsl::types::MatchTarget;
 
 pub(crate) mod builders;
 

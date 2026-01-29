@@ -4,18 +4,17 @@
 use std::str::FromStr;
 
 use laboneq_common::types::AwgKey;
-use laboneq_scheduler::experiment::builders::AmplifierPumpBuilder;
-use laboneq_scheduler::experiment::types::{AmplifierPump, SignalUid, ValueOrParameter};
+use laboneq_dsl::types::{
+    AmplifierPump, AmplifierPumpBuilder, Oscillator, OscillatorKind, OscillatorUid, ParameterUid,
+    SignalUid, SweepParameter, ValueOrParameter,
+};
+use laboneq_units::duration::seconds;
 use pyo3::prelude::*;
 
 use crate::scheduler::experiment::{PortMode, Signal, SignalKind};
 use crate::{
     error::{Error, Result},
     scheduler::py_conversion::ExperimentBuilder,
-};
-use laboneq_scheduler::experiment::sweep_parameter::SweepParameter;
-use laboneq_scheduler::experiment::types::{
-    Oscillator, OscillatorKind, OscillatorUid, ParameterUid,
 };
 use numeric_array::NumericArray;
 
@@ -33,6 +32,11 @@ pub struct SignalPy {
     pub channels: Vec<u16>,
     pub port_mode: Option<PortMode>,
     pub automute: bool,
+    pub signal_delay: f64,
+    /// Port delay.
+    /// Either a float or a sweep parameter
+    pub port_delay: Py<PyAny>,
+    pub start_delay: f64,
 }
 
 #[pymethods]
@@ -52,6 +56,9 @@ impl SignalPy {
         channels: Vec<u16>,
         port_mode: Option<&str>,
         automute: bool,
+        signal_delay: f64,
+        port_delay: Py<PyAny>,
+        start_delay: f64,
     ) -> Self {
         Self {
             uid,
@@ -66,6 +73,9 @@ impl SignalPy {
             channels,
             port_mode: port_mode.and_then(|s| PortMode::from_str(s).ok()),
             automute,
+            signal_delay,
+            port_delay,
+            start_delay,
         }
     }
 }
@@ -196,6 +206,18 @@ pub(super) fn py_signal_to_signal(
         .transpose()?
         .flatten();
     let amplifier_pump = extract_amplifier_pump(py, signal_py, builder)?;
+    let port_delay = if let Some(port_delay) =
+        extract_value_or_parameter::<f64>(signal_py.port_delay.bind(py), builder)?
+    {
+        // convert ValueOrParameter<f64> to ValueOrParameter<Duration>
+        match port_delay {
+            ValueOrParameter::Value(v) => ValueOrParameter::Value(seconds(v)),
+            ValueOrParameter::Parameter(p_uid) => ValueOrParameter::Parameter(p_uid),
+            _ => unreachable!(),
+        }
+    } else {
+        ValueOrParameter::Value(seconds(0.0))
+    };
     let s = Signal {
         uid: SignalUid(
             // We must insert the signal as Compiler may add dummy signals that do not exist in the experiment.
@@ -212,6 +234,9 @@ pub(super) fn py_signal_to_signal(
         channels: signal_py.channels.clone().into(),
         automute: signal_py.automute,
         port_mode: signal_py.port_mode.clone(),
+        signal_delay: signal_py.signal_delay.into(),
+        port_delay,
+        start_delay: signal_py.start_delay.into(),
     };
     Ok(s)
 }

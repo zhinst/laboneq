@@ -17,19 +17,30 @@ use crate::scheduler::pulse::PulseSampled;
 use crate::scheduler::py_object_interner::PyObjectInterner;
 use anyhow::Context;
 use laboneq_common::named_id::{NamedId, NamedIdStore};
-use laboneq_scheduler::experiment::ExperimentNode;
-use laboneq_scheduler::experiment::sweep_parameter::SweepParameter;
-use laboneq_scheduler::experiment::types::Chunking;
-use laboneq_scheduler::experiment::types::ComplexOrFloat;
-use laboneq_scheduler::experiment::types::NumericLiteral;
-use laboneq_scheduler::experiment::types::PulseParameterUid;
-use laboneq_scheduler::experiment::types::ValueOrParameter;
-use laboneq_scheduler::experiment::types::{
-    Acquire, AcquisitionType, AveragingLoop, AveragingMode, Case, Delay, ExternalParameterUid,
-    HandleUid, Marker, MarkerSelector, Match, MatchTarget, Operation, ParameterUid, PlayPulse,
-    PrngLoop, PrngSetup, PulseParameterValue, PulseUid, RepetitionMode, Reserve,
-    ResetOscillatorPhase, Section, SectionAlignment, SectionUid, SignalUid, Sweep, Trigger,
+use laboneq_dsl::ExperimentNode;
+use laboneq_dsl::operation::{
+    Acquire, AveragingLoop, Case, Chunking, Delay, Match, Operation, PlayPulse, PrngLoop,
+    PrngSetup, PulseParameterValue, Reserve, ResetOscillatorPhase, Section, Sweep,
 };
+use laboneq_dsl::types::AcquisitionType;
+use laboneq_dsl::types::AveragingMode;
+use laboneq_dsl::types::ComplexOrFloat;
+use laboneq_dsl::types::ExternalParameterUid;
+use laboneq_dsl::types::HandleUid;
+use laboneq_dsl::types::Marker;
+use laboneq_dsl::types::MarkerSelector;
+use laboneq_dsl::types::MatchTarget;
+use laboneq_dsl::types::NumericLiteral;
+use laboneq_dsl::types::ParameterUid;
+use laboneq_dsl::types::PulseParameterUid;
+use laboneq_dsl::types::PulseUid;
+use laboneq_dsl::types::RepetitionMode;
+use laboneq_dsl::types::SectionAlignment;
+use laboneq_dsl::types::SectionUid;
+use laboneq_dsl::types::SignalUid;
+use laboneq_dsl::types::SweepParameter;
+use laboneq_dsl::types::Trigger;
+use laboneq_dsl::types::ValueOrParameter;
 use laboneq_units::duration::seconds;
 use num_complex::Complex64;
 use numeric_array::NumericArray;

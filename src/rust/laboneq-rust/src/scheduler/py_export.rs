@@ -1,10 +1,8 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_dsl::types::{ComplexOrFloat, NumericLiteral};
 use pyo3::{prelude::*, types::PyComplex};
-
-use laboneq_scheduler::experiment::types::ComplexOrFloat;
-use laboneq_scheduler::experiment::types::NumericLiteral;
 
 /// Convert a [`NumericLiteral`] to a Python object.
 pub(crate) fn numeric_literal_to_py(py: Python, value: &NumericLiteral) -> PyResult<Py<PyAny>> {

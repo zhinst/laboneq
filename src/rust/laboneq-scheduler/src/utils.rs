@@ -1,9 +1,9 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::experiment::types::SignalUid;
+use laboneq_dsl::types::SignalUid;
 use laboneq_units::tinysample::{TINYSAMPLE_DURATION, TinySamples, tiny_samples};
-use num_integer::{Integer, div_ceil};
+use num_integer::{Integer, div_ceil, div_floor};
 // Re-export for convenience
 pub(crate) use num_integer::lcm;
 
@@ -68,6 +68,14 @@ pub(crate) fn ceil_to_grid<T: Integer + Copy>(value: T, grid: T) -> T {
     div_ceil(value, grid) * grid
 }
 
+/// Floor the given value to the nearest multiple of the grid.
+///
+/// This function panics if `grid` is not positive.
+pub(crate) fn floor_to_grid<T: Integer + Copy>(value: T, grid: T) -> T {
+    assert!(grid > T::zero(), "Grid must be positive for rounding.");
+    div_floor(value, grid) * grid
+}
+
 /// Round the given value to the nearest multiple of the grid.
 ///
 /// The rounding follows the "round half to even" strategy.
@@ -122,7 +130,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::experiment::types::SignalUid;
     use laboneq_common::{
         device_traits::{
             HDAWG_TRAITS, PRETTYPRINTERDEVICE_TRAITS, SHFQA_TRAITS, SHFSG_TRAITS, UHFQA_TRAITS,

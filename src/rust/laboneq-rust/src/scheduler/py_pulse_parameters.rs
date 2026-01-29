@@ -4,14 +4,15 @@
 use std::collections::HashMap;
 
 use laboneq_common::named_id::NamedIdStore;
+use laboneq_dsl::operation::PulseParameterValue;
+use laboneq_dsl::types::{
+    ExternalParameterUid, NumericLiteral, PulseParameterUid, ValueOrParameter,
+};
 use pyo3::{prelude::*, types::PyDict};
 
 use crate::error::Result;
 use crate::scheduler::py_export::numeric_literal_to_py;
 use crate::scheduler::py_object_interner::PyObjectInterner;
-use laboneq_scheduler::experiment::types::{
-    ExternalParameterUid, NumericLiteral, PulseParameterUid, PulseParameterValue, ValueOrParameter,
-};
 
 pub(super) fn pulse_parameters_to_py_dict(
     py: Python,

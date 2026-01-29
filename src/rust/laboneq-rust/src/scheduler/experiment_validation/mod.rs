@@ -13,10 +13,9 @@ use std::collections::{HashMap, HashSet};
 
 mod validate_parameters;
 use laboneq_common::types::AwgKey;
-use laboneq_scheduler::experiment::{
+use laboneq_dsl::{
     ExperimentNode,
-    sweep_parameter::SweepParameter,
-    types::{ParameterUid, PulseUid, SectionUid, SignalUid},
+    types::{ParameterUid, PulseUid, SectionUid, SignalUid, SweepParameter},
 };
 
 mod validate_operations;

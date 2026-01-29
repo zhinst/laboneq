@@ -1,9 +1,10 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_scheduler::experiment::{
+use laboneq_dsl::{
     ExperimentNode,
-    types::{NumericLiteral, Operation, PulseParameterValue, ValueOrParameter},
+    operation::{Operation, PulseParameterValue},
+    types::{NumericLiteral, ValueOrParameter},
 };
 use pyo3::ffi::c_str;
 

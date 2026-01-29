@@ -58,6 +58,22 @@ impl NumericArray {
     pub fn from_py(ob: &Bound<'_, PyAny>) -> PyResult<Self> {
         extract_numeric_array(ob)
     }
+
+    /// Convert the `NumericArray` into a numpy array.
+    #[cfg(feature = "pyo3")]
+    pub fn to_py<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        use pyo3::IntoPyObjectExt;
+
+        match self {
+            NumericArray::Float64(arr) => PyArray1::from_vec(py, arr.clone()).into_bound_py_any(py),
+            NumericArray::Integer64(arr) => {
+                PyArray1::from_vec(py, arr.clone()).into_bound_py_any(py)
+            }
+            NumericArray::Complex64(arr) => {
+                PyArray1::from_vec(py, arr.clone()).into_bound_py_any(py)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -69,12 +85,36 @@ mod tests {
     use crate::NumericArray;
     use num_complex::Complex;
 
+    fn is_numpy_array(arr: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let numpy = PyModule::import(arr.py(), "numpy")?;
+        let ndarray_type = numpy.getattr("ndarray")?;
+        arr.is_instance(&ndarray_type)
+    }
+
+    fn test_round_trip_conversion(arr: &NumericArray) {
+        Python::attach(|py| {
+            let c = arr.to_py(py).unwrap();
+            assert!(is_numpy_array(&c).unwrap());
+            let arr_back = NumericArray::from_py(&c).unwrap();
+            assert_eq!(arr, &arr_back);
+        })
+    }
+
+    /// Helper function to build a NumericArray from Python code defining `arr`.
+    ///
+    /// This function also tests round-trip conversion on successful conversion.
     fn build_arr(py_text: &CStr) -> Result<NumericArray, PyErr> {
         Python::attach(|py| {
             let activators =
                 PyModule::from_code(py, py_text, c_str!("test.py"), c_str!("test")).unwrap();
             let py_obj = activators.getattr("arr").unwrap();
-            NumericArray::from_py(&py_obj)
+            let arr = NumericArray::from_py(&py_obj);
+            if let Ok(arr) = arr {
+                // Test round-trip conversion
+                test_round_trip_conversion(&arr);
+                return Ok(arr);
+            }
+            arr
         })
     }
 

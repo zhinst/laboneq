@@ -36,7 +36,7 @@ _module_by_filename_cache: dict[str, str] = {}
 def _module_by_filename(filename: str) -> str:
     if (modname := _module_by_filename_cache.get(filename)) is not None:
         return modname
-    for modname, module in sys.modules.items():
+    for modname, module in sys.modules.copy().items():
         path = getattr(module, "__file__", None)
         if path is not None and filename == os.path.abspath(path):
             _module_by_filename_cache[filename] = modname

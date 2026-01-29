@@ -1,6 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_dsl::types::{OscillatorKind, SectionUid, SignalUid};
 use laboneq_log::diagnostic;
 use laboneq_units::tinysample::{
     TinySamples, seconds_to_tinysamples, tiny_samples, tinysamples_to_seconds,
@@ -8,7 +9,6 @@ use laboneq_units::tinysample::{
 use num_traits::Inv;
 
 use crate::error::Result;
-use crate::experiment::types::{OscillatorKind, SectionUid, SignalUid};
 use crate::experiment_context::ExperimentContext;
 use crate::ir::IrKind;
 use crate::schedule_info::ScheduleInfoBuilder;

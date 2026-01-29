@@ -1,6 +1,8 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::fmt::Display;
+
 use crate::named_id::NamedId;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -30,5 +32,18 @@ pub enum DeviceKind {
 impl DeviceKind {
     pub fn is_qa_device(&self) -> bool {
         matches!(self, Self::Shfqa | Self::Uhfqa)
+    }
+}
+
+impl Display for DeviceKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let out = match self {
+            DeviceKind::Hdawg => "HDAWG",
+            DeviceKind::Shfqa => "SHFQA",
+            DeviceKind::Shfsg => "SHFSG",
+            DeviceKind::Uhfqa => "UHFQA",
+            DeviceKind::PrettyPrinterDevice => "PrettyPrinterDevice",
+        };
+        write!(f, "{}", out)
     }
 }

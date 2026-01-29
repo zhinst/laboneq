@@ -4,7 +4,7 @@
 use numeric_array::NumericArray;
 use std::sync::Arc;
 
-use crate::experiment::types::{NumericLiteral, ParameterUid};
+use crate::types::{NumericLiteral, ParameterUid};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SweepParameter {

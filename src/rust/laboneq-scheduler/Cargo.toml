@@ -12,12 +12,14 @@ version.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+itertools = { workspace = true }
 num-complex = { workspace = true }
 num-traits = { workspace = true }
 num-integer = { workspace = true }
 smallvec = { workspace = true }
 
 laboneq-common = { path = "../laboneq-common" }
+laboneq-dsl = { path = "../laboneq-dsl" }
 laboneq-units = { path = "../laboneq-units" }
 laboneq-log = { path = "../laboneq-log" }
 numeric-array = { path = "../numeric-array" }

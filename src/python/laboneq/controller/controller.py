@@ -288,18 +288,24 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
         disable_runtime_checks: bool = True,
         timeout_s: float | None = None,
     ):
-        # Remember settings for later implicit connect check
-        self._do_emulation = do_emulation
-        self._devices.set_timeout(timeout_s)
         self._event_loop.run(
             self._connect_async,
+            do_emulation=do_emulation,
             reset_devices=reset_devices,
             disable_runtime_checks=disable_runtime_checks,
+            timeout_s=timeout_s,
         )
 
     async def _connect_async(
-        self, reset_devices: bool = False, disable_runtime_checks: bool = True
+        self,
+        do_emulation: bool = True,
+        reset_devices: bool = False,
+        disable_runtime_checks: bool = True,
+        timeout_s: float | None = None,
     ):
+        # Remember settings for later implicit connect check
+        self._do_emulation = do_emulation
+        self._devices.set_timeout(timeout_s)
         now = time.monotonic()
         if (
             self._last_connect_check_ts is None

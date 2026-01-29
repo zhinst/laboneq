@@ -21,12 +21,8 @@ class SignalObj:
       realized as initial playZeros; includes lead time and precompensation
     - delay_signal: user-defined additional delays, realized by adding to the initial
       playZeros; rounded to the sequencer grid (sample_multiple)
-    - base_delay_signal: in case of an acquisition pulse, the delay_signal of the
-      corresponding measure pulse on the same AWG
     - port_delay: port delay specified via the calibration; realized via the device node
       in addition to potential on-device delays.
-    - base_port_delay: in case of an acquisition pulse, the port_delay of the
-      corresponding measure pulse on the same AWG
     - automute: The signal output can be automatically muted when no waveforms
         are played.
     - signal_range: The selected input our output range of the signal.
@@ -36,13 +32,11 @@ class SignalObj:
     start_delay: float
     delay_signal: float
     signal_type: str  # One of "iq" / "single" / "integration" - see SignalInfoType
-    base_delay_signal: float = 0.0
     local_oscillator_frequency: float | None = None
     channels: list[int] = field(default_factory=list)
     channel_to_port: dict[int, str] = field(default_factory=dict)
     awg: AWGInfo = None
     port_delay: float | ParameterInfo = 0.0
-    base_port_delay: float = 0.0
     mixer_type: MixerType | None = None
     hw_oscillator: str | None = None
     is_qc: bool | None = None

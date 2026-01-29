@@ -12,12 +12,12 @@ pub(crate) type NodeRef = Rc<Node>;
 #[non_exhaustive]
 pub struct Node {
     pub kind: IrKind,
-    pub schedule: ScheduleInfo,
+    pub(crate) schedule: ScheduleInfo,
     pub children: Vec<NodeChild>,
 }
 
 impl Node {
-    pub fn new(kind: IrKind, mut schedule: ScheduleInfo) -> Self {
+    pub(crate) fn new(kind: IrKind, mut schedule: ScheduleInfo) -> Self {
         schedule.signals.extend(kind.signals().into_iter().cloned());
         Self {
             kind,
@@ -26,7 +26,7 @@ impl Node {
         }
     }
 
-    pub fn add_child(&mut self, offset: TinySamples, child: Node) {
+    pub(crate) fn add_child(&mut self, offset: TinySamples, child: Node) {
         self.schedule.signals.extend(&child.schedule.signals);
         self.children.push(NodeChild {
             offset,
@@ -34,15 +34,34 @@ impl Node {
         });
     }
 
-    pub fn make_mut(self: &mut Rc<Node>) -> &mut Self {
+    pub(crate) fn make_mut(self: &mut Rc<Node>) -> &mut Self {
         Rc::make_mut(self)
+    }
+
+    /// Returns the length of the node.
+    pub fn length(&self) -> TinySamples {
+        self.schedule
+            .try_length()
+            .expect("Expected node to have length")
+    }
+
+    /// Returns an iterator over the signals used in this node and its children.
+    pub fn signals(&self) -> impl Iterator<Item = &SignalUid> {
+        self.schedule.signals.iter()
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeChild {
-    pub offset: TinySamples,
+    pub(crate) offset: TinySamples,
     pub node: NodeRef,
+}
+
+impl NodeChild {
+    /// Returns the relative offset from the parent node.
+    pub fn offset(&self) -> TinySamples {
+        self.offset
+    }
 }
 
 #[cfg(test)]
@@ -79,6 +98,7 @@ macro_rules! ir_node_structure {
     }
 #[cfg(test)]
 pub(crate) use ir_node_structure;
+use laboneq_dsl::types::SignalUid;
 use laboneq_units::tinysample::TinySamples;
 
 #[cfg(test)]

@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::iter;
 
-use crate::ir::compilation_job::{AwgCore, AwgKind, DeviceKind, OscillatorKind, PulseDefKind};
+use crate::ir::compilation_job::{AwgCore, AwgKind, DeviceKind, PulseDefKind};
 use crate::ir::{InitAmplitudeRegister, IrNode, NodeKind, ParameterOperation};
 use crate::signature::{PulseSignature, quantize_amplitude_ct, quantize_amplitude_pulse};
 use crate::signature::{quantize_phase_ct, quantize_phase_pulse};
@@ -74,12 +74,7 @@ fn handle_signature_phases(
 /// Evaluate whether the phase increments should be used via command table.
 fn evaluate_use_ct_phase(awg: &AwgCore) -> bool {
     if awg.use_command_table_phase_amp() {
-        let mut hw_oscs = awg.signals.iter().map(|signal| {
-            signal
-                .oscillator
-                .as_ref()
-                .is_some_and(|osc| osc.kind == OscillatorKind::HARDWARE)
-        });
+        let mut hw_oscs = awg.signals.iter().map(|signal| signal.is_hw_modulated());
         hw_oscs.all(|is_hw_osc| is_hw_osc)
     } else {
         false

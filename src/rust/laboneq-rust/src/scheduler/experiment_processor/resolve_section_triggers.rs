@@ -4,8 +4,7 @@
 use std::collections::HashMap;
 
 use crate::error::Result;
-use laboneq_scheduler::experiment::ExperimentNode;
-use laboneq_scheduler::experiment::types::{Operation, SignalUid};
+use laboneq_dsl::{ExperimentNode, operation::Operation, types::SignalUid};
 
 /// Computes the effective triggers for nested sections in the experiment.
 ///

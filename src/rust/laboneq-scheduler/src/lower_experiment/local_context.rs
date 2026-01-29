@@ -1,18 +1,14 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_dsl::types::{ParameterUid, SectionUid, SignalUid, SweepParameter};
 use laboneq_units::tinysample::TinySamples;
 use num_integer::lcm;
 use std::collections::HashMap;
 
 use crate::error::Result;
-use crate::experiment::sweep_parameter::SweepParameter;
-use crate::experiment::types::SignalUid;
+use crate::parameter_resolver::ParameterResolver;
 use crate::utils::{SignalGridInfo, compute_signal_grids};
-use crate::{
-    experiment::types::{ParameterUid, SectionUid},
-    parameter_resolver::ParameterResolver,
-};
 
 pub(super) struct LocalContext<'a> {
     pub section_uid: Option<SectionUid>,

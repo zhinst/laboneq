@@ -4,9 +4,9 @@
 use std::collections::HashMap;
 
 use laboneq_common::types::AwgKey;
+use laboneq_dsl::types::{AcquisitionType, SignalUid};
 use laboneq_units::tinysample::TinySamples;
 
-use crate::experiment::types::{AcquisitionType, SignalUid};
 use crate::ir::IrKind;
 use crate::{ScheduleInfo, ScheduledNode, SignalInfo};
 

@@ -5,8 +5,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::error::{Error, Result};
 use crate::scheduler::experiment::{Signal, SignalKind};
-use laboneq_scheduler::experiment::ExperimentNode;
-use laboneq_scheduler::experiment::types::{Operation, OscillatorKind, SignalUid};
+use laboneq_dsl::ExperimentNode;
+use laboneq_dsl::operation::Operation;
+use laboneq_dsl::types::{OscillatorKind, SignalUid};
 
 /// Resolves phase resets without assigned signals by assigning them
 /// to the signals present in their scope: Signals in the same section.
@@ -79,10 +80,9 @@ mod tests {
     use super::*;
     use laboneq_common::named_id::NamedId;
     use laboneq_common::types::AwgKey;
-    use laboneq_scheduler::experiment::types::{
-        Oscillator, OscillatorKind, Reserve, ResetOscillatorPhase,
-    };
-    use laboneq_scheduler::node_structure;
+    use laboneq_dsl::node_structure;
+    use laboneq_dsl::operation::{Reserve, ResetOscillatorPhase};
+    use laboneq_dsl::types::Oscillator;
 
     fn make_iq_signal(uid: u32) -> Signal {
         SignalBuilder::new(

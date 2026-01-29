@@ -153,6 +153,7 @@ class QAChannel(SHFChannelBase):
         integrators: int,
         repr_base: str,
         is_plus: bool,
+        long_readout_available: bool,
     ):
         super().__init__(
             api=api,
@@ -164,6 +165,7 @@ class QAChannel(SHFChannelBase):
         self._node_base = f"/{serial}/qachannels/{core_index}"
         self._unit_repr = f"{repr_base}:qa{core_index}"
         self._is_plus = is_plus
+        self._long_readout_available = long_readout_available
         self._pipeliner = AwgPipeliner(self._node_base, f"QA{core_index}")
         # TODO(2K): Use actual device config to determine number of oscs.
         # Currently the max possible number is hardcoded
@@ -410,8 +412,8 @@ class QAChannel(SHFChannelBase):
         )
         if measurement is not None:
             uses_lrt = ch_uses_lrt(self._device_uid, self._core_index, recipe_data)
-            if uses_lrt:
-                nc.add("modulation/enable", 1)
+            if self._long_readout_available:
+                nc.add("modulation/enable", 1 if uses_lrt else 0)
 
             if is_spectroscopy(acquisition_type):
                 nc.add("spectroscopy/trigger/channel", 36 + self._core_index)
@@ -806,9 +808,12 @@ class QAChannel(SHFChannelBase):
             cache=False,
             filename=wave.name,
         )
-        if wave.hold_start is not None:
+        hold_base = f"generator/waveforms/{wave.index}/hold"
+        if wave.hold_start is None:
+            if self._long_readout_available:
+                nc.add(f"{hold_base}/enable", 0, cache=False)
+        else:
             assert wave.hold_length is not None
-            hold_base = f"generator/waveforms/{wave.index}/hold"
             nc.add(f"{hold_base}/enable", 1, cache=False)
             nc.add(f"{hold_base}/samples/startindex", wave.hold_start, cache=False)
             nc.add(f"{hold_base}/samples/length", wave.hold_length, cache=False)
@@ -897,6 +902,9 @@ class QAChannel(SHFChannelBase):
                         weight_vector,
                         filename=wave_name,
                     )
+
+        if self._long_readout_available and not uses_lrt:
+            nc.add("integration/downsampling/factor", 1, cache=False)
 
         if integration_length is not None:
             nc.add("integration/length", integration_length)

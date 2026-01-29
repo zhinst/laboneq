@@ -4,7 +4,8 @@
 use core::panic;
 use std::fmt::Display;
 
-use laboneq_scheduler::experiment::types::{ComplexOrFloat, PlayPulse, ValueOrParameter};
+use laboneq_dsl::operation::PlayPulse;
+use laboneq_dsl::types::{ComplexOrFloat, ValueOrParameter};
 use numeric_array::NumericArray;
 
 use crate::error::{Error, Result};

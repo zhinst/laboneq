@@ -1,8 +1,9 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_dsl::types::SectionUid;
+
 use crate::error::{Error, Result};
-use crate::experiment::types::SectionUid;
 use crate::ir::IrKind;
 use crate::schedule_info::RepetitionMode;
 use crate::{ScheduleInfo, ScheduledNode};

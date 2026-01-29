@@ -1,5 +1,5 @@
 [workspace.package]
-version = "26.1.0-b4"
+version = "26.1.0"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
 edition = "2024"
 publish = false
@@ -24,6 +24,7 @@ clap = "4.5.38"
 criterion = "0.8"
 derive_more = "2.0.1"
 indexmap = "2.9"
+itertools = "0.14.0"
 log = "0.4.27"
 md5 = "0.8.0"
 num-complex = "0.4.6"

@@ -22,7 +22,6 @@ class DeviceTraits:
     sampling_rate: float
     min_play_wave: int
     sample_multiple: int
-    port_delay_granularity: int  # Granularity of the port delay in samples
     supports_binary_waves: bool
     supports_complex_waves: bool
     supports_precompensation: bool
@@ -36,7 +35,6 @@ class DeviceTraits:
     min_lo_frequency: Optional[float] = None
     max_lo_frequency: Optional[float] = None
     max_ct_entries: Optional[int] = None
-    integration_dsp_latency: Optional[float] = None
     supports_output_mute: bool = False
     device_class: int = 0x0
     max_result_vector_length: int | None = None
@@ -77,7 +75,6 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate_2GHz=2.0e9,
         min_play_wave=32,
         sample_multiple=16,
-        port_delay_granularity=1,
         supports_binary_waves=True,
         supports_complex_waves=False,
         supports_precompensation=True,
@@ -101,7 +98,6 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate=1.8e9,
         min_play_wave=16,
         sample_multiple=8,
-        port_delay_granularity=4,
         supports_binary_waves=True,  # Todo (Pol): useful or not?
         supports_complex_waves=False,
         supports_precompensation=False,
@@ -128,7 +124,6 @@ class DeviceType(DeviceTraits, Enum):
         # sample_multiple=4,
         min_play_wave=32,
         sample_multiple=16,
-        port_delay_granularity=4,
         supports_binary_waves=False,
         supports_complex_waves=True,
         supports_precompensation=False,
@@ -141,7 +136,6 @@ class DeviceType(DeviceTraits, Enum):
         min_lo_frequency=1e9,
         max_lo_frequency=8.5e9,
         is_qa_device=True,
-        integration_dsp_latency=212e-9,
         device_class=0x0,
         supports_output_mute=True,
         max_result_vector_length=1 << 19,
@@ -152,7 +146,6 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate=2.0e9,
         min_play_wave=32,
         sample_multiple=16,
-        port_delay_granularity=1,
         supports_binary_waves=True,
         supports_complex_waves=False,
         supports_precompensation=False,
@@ -174,7 +167,6 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate=2.0e9,
         min_play_wave=4,
         sample_multiple=4,
-        port_delay_granularity=-(1 << 32),  # FIXME: Unknown or NA
         supports_binary_waves=False,
         supports_complex_waves=False,
         supports_precompensation=False,

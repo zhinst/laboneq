@@ -1,12 +1,12 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_dsl::types::{OscillatorKind, ParameterUid, ValueOrParameter};
 use laboneq_units::duration::seconds;
 use laboneq_units::tinysample::{TinySamples, seconds_to_tinysamples, tiny_samples};
 use std::collections::HashSet;
 
 use crate::error::{Error, Result};
-use crate::experiment::types::{OscillatorKind, ParameterUid, ValueOrParameter};
 use crate::ir::{
     InitialLocalOscillatorFrequency, InitialOscillatorFrequency, IrKind, SetOscillatorFrequency,
 };

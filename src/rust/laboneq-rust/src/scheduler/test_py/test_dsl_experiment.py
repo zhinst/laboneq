@@ -9,15 +9,15 @@ but written in Python for readability.
 
 from typing import cast
 
-import laboneq._rust.scheduler as scheduler
-import laboneq._rust.test_scheduler as scheduler_rs
+import laboneq._rust.compiler as compiler_rs
+import laboneq._rust.test_compiler as test_compiler
 from laboneq import simple
 from laboneq.core.utilities.laboneq_compile import laboneq_compile
 from laboneq.implementation.legacy_adapters.converters_experiment_description import (
     convert_Experiment,
 )
 
-scheduler_rs = cast(scheduler, scheduler_rs)
+compiler_rs = cast(compiler_rs, test_compiler)
 
 
 def simple_hdawg_setup():
@@ -90,14 +90,14 @@ def create_derived_param_experiment_calibration():
                 exp.play("q0/drive", simple.pulse_library.const())
 
     laboneq_compile(setup, exp)  # Smoke test to ensure the experiment is valid
-    signal = scheduler_rs.Signal(
+    signal = compiler_rs.Signal(
         uid="q0/drive",
         sampling_rate=2e9,
         awg_key=0,
         device_uid="device_hdawg",
-        oscillator=scheduler_rs.Oscillator(
+        oscillator=compiler_rs.Oscillator(
             uid="osc",
-            frequency=scheduler_rs.SweepParameter(
+            frequency=compiler_rs.SweepParameter(
                 uid="derived_param", values=[1e9, 2e9], driven_by=["param"]
             ),
             is_hardware=True,
@@ -109,8 +109,11 @@ def create_derived_param_experiment_calibration():
         channels=[],
         port_mode=None,
         automute=False,
+        signal_delay=0.0,
+        port_delay=0.0,
+        start_delay=0.0,
     )
-    device = scheduler_rs.Device(
+    device = compiler_rs.Device(
         uid="device_hdawg",
         physical_device_uid=0,
         kind="HDAWG",
@@ -143,7 +146,7 @@ def create_derived_param_experiment_operation_field():
                 exp.delay("q0/drive", time=derived)
 
     laboneq_compile(setup, exp)  # Smoke test to ensure the experiment is valid
-    signal = scheduler_rs.Signal(
+    signal = compiler_rs.Signal(
         uid="q0/drive",
         sampling_rate=2e9,
         awg_key=0,
@@ -156,8 +159,11 @@ def create_derived_param_experiment_operation_field():
         channels=[],
         port_mode=None,
         automute=False,
+        signal_delay=0.0,
+        port_delay=0.0,
+        start_delay=0.0,
     )
-    device = scheduler_rs.Device(
+    device = compiler_rs.Device(
         uid="device_hdawg",
         physical_device_uid=0,
         kind="HDAWG",

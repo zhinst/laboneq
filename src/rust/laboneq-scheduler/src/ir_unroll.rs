@@ -3,9 +3,9 @@
 
 use std::collections::HashMap;
 
+use laboneq_dsl::types::{ParameterUid, SectionUid, SweepParameter};
+
 use crate::error::{Error, Result};
-use crate::experiment::sweep_parameter::SweepParameter;
-use crate::experiment::types::{ParameterUid, SectionUid};
 use crate::ir::builders::SectionBuilder;
 use crate::ir::{IrKind, MatchTarget};
 use crate::parameter_resolver::ParameterResolver;
@@ -102,8 +102,6 @@ mod tests {
     use super::*;
 
     use crate::ParameterStoreBuilder;
-    use crate::experiment::sweep_parameter::SweepParameter;
-    use crate::experiment::types::{ParameterUid, SectionUid};
     use crate::ir::{Case, IrKind, Loop, LoopKind, Match};
     use crate::scheduled_node::ir_node_structure;
     use laboneq_common::named_id::NamedId;

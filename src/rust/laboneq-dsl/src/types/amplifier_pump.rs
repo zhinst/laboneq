@@ -1,11 +1,33 @@
-// Copyright 2025 Zurich Instruments AG
+// Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-pub use crate::experiment::types::AmplifierPump;
-use crate::experiment::types::{
-    Chunking, DeviceUid, ParameterUid, Reserve, ResetOscillatorPhase, SectionAlignment, SectionUid,
-    SignalUid, Sweep, ValueOrParameter,
-};
+use crate::types::{DeviceUid, ValueOrParameter};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AmplifierPump {
+    pub device: DeviceUid,
+    pub channel: u16,
+    pub pump_power: Option<ValueOrParameter<f64>>,
+    pub pump_frequency: Option<ValueOrParameter<f64>>,
+    pub probe_power: Option<ValueOrParameter<f64>>,
+    pub probe_frequency: Option<ValueOrParameter<f64>>,
+    pub cancellation_phase: Option<ValueOrParameter<f64>>,
+    pub cancellation_attenuation: Option<ValueOrParameter<f64>>,
+}
+
+impl AmplifierPump {
+    pub fn values_or_parameters(&self) -> impl Iterator<Item = &Option<ValueOrParameter<f64>>> {
+        [
+            &self.pump_power,
+            &self.pump_frequency,
+            &self.probe_power,
+            &self.probe_frequency,
+            &self.cancellation_phase,
+            &self.cancellation_attenuation,
+        ]
+        .into_iter()
+    }
+}
 
 pub struct AmplifierPumpBuilder {
     inner: AmplifierPump,
@@ -59,55 +81,5 @@ impl AmplifierPumpBuilder {
 
     pub fn build(self) -> AmplifierPump {
         self.inner
-    }
-}
-
-pub struct SweepBuilder {
-    inner: Sweep,
-}
-
-impl SweepBuilder {
-    pub fn new(uid: SectionUid, parameters: Vec<ParameterUid>, count: u32) -> Self {
-        Self {
-            inner: Sweep {
-                uid,
-                parameters,
-                count,
-                alignment: SectionAlignment::Left,
-                reset_oscillator_phase: false,
-                chunking: None,
-            },
-        }
-    }
-
-    pub fn alignment(mut self, alignment: SectionAlignment) -> Self {
-        self.inner.alignment = alignment;
-        self
-    }
-
-    pub fn reset_oscillator_phase(mut self) -> Self {
-        self.inner.reset_oscillator_phase = true;
-        self
-    }
-
-    pub fn chunking(mut self, chunking: Chunking) -> Self {
-        self.inner.chunking = Some(chunking);
-        self
-    }
-
-    pub fn build(self) -> Sweep {
-        self.inner
-    }
-}
-
-impl Reserve {
-    pub fn new(signal: SignalUid) -> Self {
-        Self { signal }
-    }
-}
-
-impl ResetOscillatorPhase {
-    pub fn new(signals: Vec<SignalUid>) -> Self {
-        Self { signals }
     }
 }

@@ -1,7 +1,8 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::experiment::types::{SectionUid, SignalUid};
+use laboneq_dsl::types::{SectionUid, SignalUid};
+
 use crate::ir::{PrngSetup, Section, Trigger};
 
 pub(crate) struct SectionBuilder {

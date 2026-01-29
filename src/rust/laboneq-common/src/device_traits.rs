@@ -16,6 +16,9 @@ pub struct DeviceTraits {
     pub oscillator_reset_duration: Duration<Second>,
     pub lo_frequency_granularity: Option<Frequency<Hertz>>,
     pub lo_frequency_range: Option<RangeInclusive<Frequency<Hertz>>>,
+    pub integration_dsp_latency: Option<Duration<Second>>,
+    /// Granularity of port delay settings in number of samples
+    pub port_delay_granularity: u8,
 }
 
 impl DeviceTraits {
@@ -47,6 +50,8 @@ pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     oscillator_reset_duration: seconds(80e-9),
     lo_frequency_granularity: None,
     lo_frequency_range: None,
+    integration_dsp_latency: None,
+    port_delay_granularity: 1,
 };
 
 pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -58,6 +63,8 @@ pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     oscillator_reset_duration: seconds(40e-9),
     lo_frequency_granularity: None,
     lo_frequency_range: None,
+    integration_dsp_latency: None,
+    port_delay_granularity: 4,
 };
 
 pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
@@ -69,6 +76,8 @@ pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     oscillator_reset_duration: seconds(56e-9),
     lo_frequency_granularity: Some(hertz(100e6)),
     lo_frequency_range: Some(hertz(1e9)..=hertz(8.5e9)),
+    integration_dsp_latency: None,
+    port_delay_granularity: 1,
 };
 
 pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -80,6 +89,8 @@ pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     oscillator_reset_duration: seconds(56e-9),
     lo_frequency_granularity: Some(hertz(100e6)),
     lo_frequency_range: Some(hertz(1e9)..=hertz(8.5e9)),
+    integration_dsp_latency: Some(seconds(212e-9)),
+    port_delay_granularity: 4,
 };
 
 pub const PRETTYPRINTERDEVICE_TRAITS: DeviceTraits = DeviceTraits {
@@ -91,4 +102,6 @@ pub const PRETTYPRINTERDEVICE_TRAITS: DeviceTraits = DeviceTraits {
     oscillator_reset_duration: seconds(32e-9),
     lo_frequency_granularity: None,
     lo_frequency_range: None,
+    integration_dsp_latency: None,
+    port_delay_granularity: 0, // Not applicable
 };

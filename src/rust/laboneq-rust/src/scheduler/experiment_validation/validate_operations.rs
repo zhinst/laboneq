@@ -1,14 +1,13 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_dsl::ExperimentNode;
+use laboneq_dsl::operation::{Acquire, Operation, PlayPulse};
+use laboneq_dsl::types::{ComplexOrFloat, MarkerSelector, SectionUid, ValueOrParameter};
 use pyo3::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use laboneq_common::types::DeviceKind;
-use laboneq_scheduler::experiment::ExperimentNode;
-use laboneq_scheduler::experiment::types::{
-    Acquire, ComplexOrFloat, MarkerSelector, Operation, PlayPulse, SectionUid, ValueOrParameter,
-};
 use numeric_array::NumericArray;
 
 use crate::error::{Error, Result};

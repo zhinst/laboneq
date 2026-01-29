@@ -37,6 +37,10 @@ impl<S, T> Node<S, T> {
         &mut self.offset
     }
 
+    pub fn data_and_offset_mut(&mut self) -> (&mut T, &mut S) {
+        (&mut self.data, &mut self.offset)
+    }
+
     pub fn iter_children(&self) -> impl DoubleEndedIterator<Item = &Node<S, T>> {
         self.children.iter()
     }

@@ -33,8 +33,8 @@ pub(super) fn load_module<'py>(py: Python<'py>, module_contents: &CStr) -> Bound
     let py_modules = py.import("sys").unwrap().getattr("modules").unwrap();
     py_modules
         .set_item(
-            "laboneq._rust.test_scheduler",
-            create_py_module(py, "scheduler").unwrap(),
+            "laboneq._rust.test_compiler",
+            create_py_module(py, "test_compiler").unwrap(),
         )
         .unwrap();
     let module: Bound<'_, PyModule> =

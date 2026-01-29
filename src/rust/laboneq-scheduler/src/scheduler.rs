@@ -3,23 +3,29 @@
 
 use std::collections::HashMap;
 
+use laboneq_common::named_id::resolve_ids;
+use laboneq_dsl::ExperimentNode;
+use laboneq_dsl::operation::Operation;
+use laboneq_dsl::types::AcquisitionType;
+use laboneq_dsl::types::ParameterUid;
+use laboneq_dsl::types::SweepParameter;
+use laboneq_log::warn;
+
 use crate::ChunkingInfo;
 use crate::ExperimentContext;
+use crate::FeedbackCalculator;
 use crate::ScheduledNode;
 use crate::adjust_acquire_lengths::adjust_acquisition_lengths;
 use crate::analysis::validate_ir;
 use crate::chunk_experiment::chunk_experiment;
 use crate::error::Result;
-use crate::experiment::ExperimentNode;
-use crate::experiment::sweep_parameter::SweepParameter;
-use crate::experiment::types::AcquisitionType;
-use crate::experiment::types::{Operation, ParameterUid};
 use crate::ir_unroll::unroll_loops;
 use crate::lower_experiment::lower_to_ir;
 use crate::parameter_store::ParameterStore;
 use crate::resolve_parameters::resolve_parameters;
 use crate::resolve_repetition_mode::resolve_repetition_mode;
 use crate::signal_info::SignalInfo;
+use crate::timing_resolver::calculate_timing;
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ScheduledExperiment {
@@ -36,6 +42,7 @@ pub fn schedule_experiment<T: SignalInfo>(
     mut context: ExperimentContext<T>,
     near_time_parameters: &ParameterStore,
     chunking_info: Option<ChunkingInfo>,
+    feedback_calculator: Option<&impl FeedbackCalculator>,
 ) -> Result<ScheduledExperiment> {
     let real_time_root = find_real_time_root(root);
     if real_time_root.is_none() {
@@ -64,6 +71,16 @@ pub fn schedule_experiment<T: SignalInfo>(
         &context.parameters,
         near_time_parameters,
     )?;
+    // Calculate the timing of the scheduled experiment
+    let mut timing_result = calculate_timing(&mut scheduled_node, feedback_calculator)?;
+    if timing_result.has_warnings() {
+        timing_result.deduplicate_warnings();
+        warn!(
+            "{}",
+            resolve_ids(&timing_result.to_string(), context.id_store)
+        );
+    }
+
     let exp = ScheduledExperiment {
         root: Some(scheduled_node),
         parameters: context.parameters.clone(),

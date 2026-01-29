@@ -4,9 +4,6 @@
 use std::collections::HashSet;
 
 use crate::error::{Error, Result};
-use crate::experiment::types::{self as experiment_types};
-use crate::experiment::types::{Operation, SignalUid};
-use crate::experiment::{ExperimentNode, NodeChild};
 
 use crate::experiment_context::ExperimentContext;
 use crate::ir::builders::SectionBuilder;
@@ -16,6 +13,12 @@ use crate::schedule_info::{RepetitionMode, ScheduleInfoBuilder};
 
 use crate::utils::{compute_grid, lcm, round_to_grid};
 use crate::{ParameterStore, ScheduledNode, SignalInfo};
+use laboneq_dsl::operation::{
+    Acquire as AcquireDsl, Delay as DelayDsl, LoopInfo, Operation, PlayPulse as PlayPulseDsl,
+    PrngSetup as PrngSetupDsl, Section as SectionDsl,
+};
+use laboneq_dsl::types::{RepetitionMode as RepetitionModeDsl, SignalUid, ValueOrParameter};
+use laboneq_dsl::{ExperimentNode, NodeChild};
 use laboneq_units::tinysample::{TinySamples, seconds_to_tinysamples, tiny_samples};
 
 mod local_context;
@@ -223,7 +226,7 @@ fn lower_sweep<T: SignalInfo + Sized>(
 fn create_loop_preamble<T: SignalInfo>(
     loop_signals: &HashSet<SignalUid>,
     reserved_signals: &HashSet<SignalUid>,
-    loop_info: &experiment_types::LoopInfo,
+    loop_info: &LoopInfo,
     ctx: &ExperimentContext<T>,
     local_ctx: &LocalContext,
 ) -> Result<ScheduledNode> {
@@ -287,7 +290,7 @@ fn create_loop_preamble<T: SignalInfo>(
 fn create_loop_iteration(
     preamble: ScheduledNode,
     children: Vec<ScheduledNode>,
-    loop_info: &experiment_types::LoopInfo,
+    loop_info: &LoopInfo,
     local_ctx: &mut LocalContext,
     loop_signals: &HashSet<SignalUid>,
 ) -> Result<ScheduledNode> {
@@ -321,7 +324,7 @@ fn create_loop_iteration(
 fn create_root_loop(
     node: &ExperimentNode,
     iteration: ScheduledNode,
-    loop_info: &experiment_types::LoopInfo,
+    loop_info: &LoopInfo,
 ) -> Result<ScheduledNode> {
     let loop_kind = match &node.kind {
         Operation::AveragingLoop(obj) => LoopKind::Averaging {
@@ -360,18 +363,18 @@ fn create_root_loop(
     Ok(root)
 }
 
-fn transform_repetition_mode(mode: &experiment_types::RepetitionMode) -> RepetitionMode {
+fn transform_repetition_mode(mode: &RepetitionModeDsl) -> RepetitionMode {
     match mode {
-        experiment_types::RepetitionMode::Auto => RepetitionMode::Auto,
-        experiment_types::RepetitionMode::Constant { time } => RepetitionMode::Constant {
+        RepetitionModeDsl::Auto => RepetitionMode::Auto,
+        RepetitionModeDsl::Constant { time } => RepetitionMode::Constant {
             time: seconds_to_tinysamples(*time),
         },
-        experiment_types::RepetitionMode::Fastest => RepetitionMode::Fastest,
+        RepetitionModeDsl::Fastest => RepetitionMode::Fastest,
     }
 }
 
 fn lower_section(
-    section: &experiment_types::Section,
+    section: &SectionDsl,
     children: &[NodeChild],
     ctx: &ExperimentContext<impl SignalInfo>,
     local_ctx: &mut LocalContext,
@@ -413,7 +416,7 @@ fn lower_section(
     Ok(root)
 }
 
-fn lower_play_pulse(obj: &experiment_types::PlayPulse, ctx: &LocalContext) -> ScheduledNode {
+fn lower_play_pulse(obj: &PlayPulseDsl, ctx: &LocalContext) -> ScheduledNode {
     let (grid, _) = ctx.signal_grids(&obj.signal);
     if let Some(pulse) = obj.pulse {
         let ir = IrKind::PlayPulse(PlayPulse {
@@ -431,11 +434,11 @@ fn lower_play_pulse(obj: &experiment_types::PlayPulse, ctx: &LocalContext) -> Sc
         schedule = schedule.grid(grid);
         if let Some(length) = obj.length {
             match length {
-                experiment_types::ValueOrParameter::Value(v) => {
+                ValueOrParameter::Value(v) => {
                     let length = seconds_to_tinysamples(v);
                     schedule = schedule.length(round_to_grid(length.value(), grid.value()));
                 }
-                experiment_types::ValueOrParameter::Parameter(p) => {
+                ValueOrParameter::Parameter(p) => {
                     schedule = schedule.length_param(p);
                 }
                 _ => {}
@@ -452,7 +455,7 @@ fn lower_play_pulse(obj: &experiment_types::PlayPulse, ctx: &LocalContext) -> Sc
     }
 }
 
-fn lower_acquire(obj: &experiment_types::Acquire, ctx: &LocalContext) -> ScheduledNode {
+fn lower_acquire(obj: &AcquireDsl, ctx: &LocalContext) -> ScheduledNode {
     let integration_length =
         seconds_to_tinysamples(obj.length.expect("Expected Acquire to have length"));
     let (grid, _) = ctx.signal_grids(&obj.signal);
@@ -474,17 +477,17 @@ fn lower_acquire(obj: &experiment_types::Acquire, ctx: &LocalContext) -> Schedul
     )
 }
 
-fn lower_delay(obj: &experiment_types::Delay, ctx: &LocalContext) -> ScheduledNode {
+fn lower_delay(obj: &DelayDsl, ctx: &LocalContext) -> ScheduledNode {
     let ir = IrKind::Delay { signal: obj.signal };
     let (grid, _) = ctx.signal_grids(&obj.signal);
     let mut schedule = ScheduleInfoBuilder::new();
     match obj.time {
-        experiment_types::ValueOrParameter::Value(v) => {
+        ValueOrParameter::Value(v) => {
             let length = seconds_to_tinysamples(v);
             let length_tinysample = round_to_grid(length.value(), grid.value());
             schedule = schedule.length(length_tinysample);
         }
-        experiment_types::ValueOrParameter::Parameter(p) => {
+        ValueOrParameter::Parameter(p) => {
             schedule = schedule.length_param(p);
         }
         _ => {}
@@ -501,7 +504,7 @@ fn create_precompensation_node(signal: SignalUid, ctx: &LocalContext) -> Schedul
 }
 
 fn lower_prng_setup(
-    section: &experiment_types::PrngSetup,
+    section: &PrngSetupDsl,
     children: &[NodeChild],
     ctx: &ExperimentContext<impl SignalInfo>,
     local_ctx: &mut LocalContext,

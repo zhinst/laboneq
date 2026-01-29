@@ -81,10 +81,15 @@ impl PlayPulseSlot<'_> {
 }
 
 /// Assign and collect play wave nodes
-/// Adds an empty play node for each signal contained in an empty
-/// match case.
+/// Handles zero-length match-cases by adding an empty play node
+/// for each of their contained signals, and adjusting their length
+/// to that of the parent match node.
 /// Returns nodes pointing to the play nodes in the tree.
-fn assign_pulse_slots(node: &mut ir::IrNode, state: Option<u16>) -> Vec<PlayPulseSlot<'_>> {
+fn assign_pulse_slots(
+    node: &mut ir::IrNode,
+    state: Option<u16>,
+    nop_length: Option<i64>,
+) -> Result<Vec<PlayPulseSlot<'_>>, anyhow::Error> {
     match node.data() {
         ir::NodeKind::FrameChange(ob) => {
             let signal = Arc::clone(&ob.signal);
@@ -93,12 +98,13 @@ fn assign_pulse_slots(node: &mut ir::IrNode, state: Option<u16>) -> Vec<PlayPuls
                 state,
                 signal,
             };
-            vec![slot]
+            Ok(vec![slot])
         }
         ir::NodeKind::PlayPulse(ob) => {
-            // Ignore frame change and zero length pulse
-            if ob.pulse_def.is_none() || ob.length == 0 {
-                return vec![];
+            // Ignore i) zero-length or ii) undefined pulses (e.g. delays) without state
+            // so as to provide waveform placeholders for case-branches with no defined pulses
+            if (ob.pulse_def.is_none() && state.is_none()) || ob.length == 0 {
+                return Ok(vec![]);
             }
             let signal = Arc::clone(&ob.signal);
             let slot = PlayPulseSlot {
@@ -106,40 +112,50 @@ fn assign_pulse_slots(node: &mut ir::IrNode, state: Option<u16>) -> Vec<PlayPuls
                 state,
                 signal,
             };
-            vec![slot]
+            Ok(vec![slot])
         }
         ir::NodeKind::Case(ob) => {
             let state = Some(ob.state);
-            if (ob.length == 0) || node.has_children() {
-                let mut out = vec![];
-                for child in node.iter_children_mut() {
-                    out.extend(assign_pulse_slots(child, state));
-                }
-                return out;
-            }
-            // Populate the empty case with placeholders which are
-            // meant to be replaced by waveforms.
-            let len = ob.length;
+            let mut out = vec![];
             let signals = ob.signals.clone();
-            for _ in 0..signals.len() {
-                node.add_child(*node.offset(), ir::NodeKind::Nop { length: len });
+            let op_children = node.iter_children().count();
+            if ob.length == 0 {
+                // For a zero-length case, push back placeholders meant to be replaced by waveforms
+                // and set their length to that of the parent match-block.
+                let length = nop_length.expect("Internal error: undefined match-block length.");
+                if length == 0 {
+                    anyhow::bail!("Unable to process match-block with zero length.");
+                };
+                for _ in 0..signals.len() {
+                    node.add_child(*node.offset(), ir::NodeKind::Nop { length });
+                }
             }
-            let mut out: Vec<PlayPulseSlot<'_>> = vec![];
-            for (idx, ch) in node.iter_children_mut().enumerate() {
-                out.push(PlayPulseSlot {
-                    node: ch,
-                    state,
-                    signal: Arc::clone(&signals[idx]),
-                })
+            for (idx, child) in node.iter_children_mut().enumerate() {
+                match child.data() {
+                    ir::NodeKind::Nop { length: _ } => out.push(PlayPulseSlot {
+                        node: child,
+                        state,
+                        signal: Arc::clone(&signals[idx - op_children]),
+                    }),
+                    _ => out.extend(assign_pulse_slots(child, state, None)?),
+                }
             }
-            out
+            Ok(out)
+        }
+        ir::NodeKind::Match(ob) => {
+            let mut out = vec![];
+            let nop_length = Some(ob.length);
+            for child in node.iter_children_mut() {
+                out.extend(assign_pulse_slots(child, state, nop_length)?);
+            }
+            Ok(out)
         }
         _ => {
             let mut out = vec![];
             for child in node.iter_children_mut() {
-                out.extend(assign_pulse_slots(child, state));
+                out.extend(assign_pulse_slots(child, state, None)?);
             }
-            out
+            Ok(out)
         }
     }
 }
@@ -306,7 +322,7 @@ fn create_waveform_slots(
     signal: &VirtualSignal,
 ) -> (Vec<WaveformSlot>, Option<ir::Samples>) {
     // First frame change that happens after the last pulse is a hard cut point.
-    // Every frame change after that are handled as oscillator phase increment.
+    // Every frame change after that is handled as an oscillator phase increment.
     let mut frame_change_cut_point = None;
     let mut waveform_slots: Vec<WaveformSlot> = vec![];
     for (node_id, pulse_slot) in pulses.iter().enumerate() {
@@ -353,6 +369,46 @@ where
     None
 }
 
+fn group_waveforms_by_state<'a>(
+    wave_range: &Interval<i64>,
+    signatures: &'a [WaveformSlot],
+    signal_events: &[PlayPulseSlot],
+) -> HashMap<Option<u16>, Vec<&'a WaveformSlot>> {
+    struct StateWaveforms<'a> {
+        wf_slots: Vec<&'a WaveformSlot>,
+        has_defined: bool,
+    }
+    let mut wf_per_state: HashMap<Option<u16>, StateWaveforms> = HashMap::new();
+    // Group by state
+    for idx in wave_range.data.iter() {
+        let waveform_slot = &signatures[*idx];
+        let pulse_slot = &signal_events[waveform_slot.node];
+        let entry = wf_per_state
+            .entry(pulse_slot.state)
+            .or_insert(StateWaveforms {
+                wf_slots: Vec::new(),
+                has_defined: false,
+            });
+
+        match signal_events[waveform_slot.node].kind() {
+            ir::NodeKind::PlayPulse(ob) if ob.pulse_def.is_some() => {
+                if !entry.has_defined {
+                    entry.wf_slots.clear();
+                    entry.has_defined = true;
+                }
+                entry.wf_slots.push(waveform_slot);
+            }
+            _ if !entry.has_defined => entry.wf_slots.push(waveform_slot),
+            _ => {}
+        }
+    }
+
+    wf_per_state
+        .into_iter()
+        .map(|(k, v)| (k, v.wf_slots))
+        .collect()
+}
+
 /// Transform play wave nodes into waveforms.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_plays(
@@ -375,7 +431,7 @@ pub(crate) fn handle_plays(
         .collect();
     // Group nodes by signal
     let mut plays_by_signal: HashMap<String, Vec<_>> = HashMap::new();
-    for node in assign_pulse_slots(program, None) {
+    for node in assign_pulse_slots(program, None, None)? {
         if let Some(entry) = plays_by_signal.get_mut(node.signal.uid.as_str()) {
             entry.push(node);
         } else {
@@ -463,15 +519,9 @@ pub(crate) fn handle_plays(
         for wave_range in compacted_intervals.into_iter() {
             let waveform_start = wave_range.start();
             let waveform_length = wave_range.length();
-            let mut iv_per_state: HashMap<Option<u16>, Vec<&WaveformSlot>> = HashMap::new();
             // Group by state
-            for idx in wave_range.data.iter() {
-                let waveform_slot = &signatures[*idx];
-                iv_per_state
-                    .entry(signal_events[waveform_slot.node].state)
-                    .or_default()
-                    .push(waveform_slot);
-            }
+            let iv_per_state = group_waveforms_by_state(&wave_range, &signatures, &signal_events);
+
             for merged_pulses in iv_per_state.into_values() {
                 // Double can have multiple HW oscillators active, but we don't support oscillator switching.
                 // In that case the shared HW oscillator must be set to None I guess?

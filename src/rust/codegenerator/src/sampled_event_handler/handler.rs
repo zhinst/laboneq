@@ -1029,7 +1029,7 @@ impl<'a> SampledEventHandler<'a> {
                 .seqc_tracker
                 .pop_loop_stack_generators()
                 .expect("Internal error: No open loop generators found.");
-            let loop_body = merge_generators(open_generators, true);
+            let loop_body = merge_generators(open_generators);
             loop_generator.add_repeat(data.num_repeats, loop_body);
             if self.emit_timing_comments {
                 loop_generator.add_comment(format!("Loop for {data:?}"))
@@ -1562,7 +1562,7 @@ impl<'a> SampledEventHandler<'a> {
                 self.match_parent_event = Some(sampled_event);
             }
             EventType::ChangeHwOscPhase(ref data) => {
-                self.handle_change_hw_oscillator_phase(data)?
+                self.handle_change_hw_oscillator_phase(data)?;
             }
             EventType::ResetPrecompensationFilters { ref signature } => {
                 self.handle_reset_precompensation_filters(start, end, signature)?
@@ -1666,7 +1666,7 @@ impl<'a> SampledEventHandler<'a> {
             seq_c_generators.extend(part.into_iter().rev());
         }
         seq_c_generators.reverse();
-        let main_generator = merge_generators(seq_c_generators, true);
+        let main_generator = merge_generators(seq_c_generators);
         let mut seq_c_generator = self.create_seqc_generator();
         if self.function_defs_generator.num_statements() > 0 {
             seq_c_generator.append_statements_from(&self.function_defs_generator);

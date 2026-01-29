@@ -1,9 +1,9 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_dsl::types::{NumericLiteral, PulseUid};
 use pyo3::prelude::*;
 
-use laboneq_scheduler::experiment::types::{NumericLiteral, PulseUid};
 use laboneq_units::duration::{Duration, Second};
 
 pub(crate) struct PulseDef {

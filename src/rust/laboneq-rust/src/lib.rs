@@ -19,14 +19,15 @@ fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // - https://github.com/PyO3/pyo3/issues/759
     // - https://docs.python.org/3/tutorial/modules.html#packages
     let modules = py.import("sys")?.getattr("modules")?;
-    modules.set_item(
-        "laboneq._rust.codegenerator",
-        codegenerator_py::create_py_module(m.py(), "codegenerator")?,
-    )?;
-    modules.set_item(
-        "laboneq._rust.scheduler",
-        scheduler::create_py_module(m.py(), "scheduler")?,
-    )?;
+
+    let codegenerator = codegenerator_py::create_py_module(m.py(), "codegenerator")?;
+    modules.set_item("laboneq._rust.codegenerator", &codegenerator)?;
+    m.add_submodule(&codegenerator)?;
+
+    let compiler = scheduler::create_py_module(m.py(), "compiler")?;
+    modules.set_item("laboneq._rust.compiler", &compiler)?;
+    m.add_submodule(&compiler)?;
+
     m.add_function(wrap_pyfunction!(logging::init_logging_py, m)?)?;
     Ok(())
 }

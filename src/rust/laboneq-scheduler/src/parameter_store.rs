@@ -1,7 +1,8 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::experiment::types::{NumericLiteral, ParameterUid};
+use laboneq_dsl::types::{NumericLiteral, ParameterUid};
+
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 

@@ -1,0 +1,21 @@
+[package]
+name = "laboneq-dsl"
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+num-complex = { workspace = true }
+num-traits = { workspace = true }
+
+numeric-array = { path = "../numeric-array" }
+laboneq-common = { path = "../laboneq-common" }
+laboneq-units = { path = "../laboneq-units" }
+
+[lints]
+workspace = true

@@ -254,7 +254,7 @@ fn collect_osc_parameters(
 
 /// Pass to handle  and calculate software oscillator parameters.
 ///
-/// Consumes [`NodeKind::PlayPulse`] which the are used only for phase increments.
+/// Consumes [`NodeKind::PlayPulse`] which are used only for phase increments.
 /// Tiny sample is used to avoid potential rounding errors when calculating phase increments.
 ///
 /// # Returns

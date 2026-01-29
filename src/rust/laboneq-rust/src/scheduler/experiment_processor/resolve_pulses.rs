@@ -8,10 +8,9 @@ use crate::scheduler::experiment::Experiment;
 use crate::scheduler::pulse::{PulseDef, PulseKind};
 use crate::scheduler::signal_view::SignalView;
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_scheduler::experiment::ExperimentNode;
-use laboneq_scheduler::experiment::types::{
-    Acquire, Marker, Operation, PlayPulse, PulseUid, SignalUid, ValueOrParameter,
-};
+use laboneq_dsl::ExperimentNode;
+use laboneq_dsl::operation::{Acquire, Operation, PlayPulse};
+use laboneq_dsl::types::{Marker, PulseUid, SignalUid, ValueOrParameter};
 use laboneq_units::duration::{Duration, Second, seconds};
 
 /// Resolve missing pulses.

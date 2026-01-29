@@ -63,7 +63,10 @@ from laboneq.data.recipe import Recipe
 from laboneq.data.scheduled_experiment import ResultShapeInfo, ScheduledExperiment
 from laboneq.executor.executor import Statement
 
+from .compat import build_rs_experiment
+
 if TYPE_CHECKING:
+    from laboneq._rust import compiler as compiler_rs
     from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
 
 
@@ -555,10 +558,14 @@ class Compiler:
         self._has_uhfqa = has_uhfqa
 
     def _compile_whole_or_with_chunks(
-        self, chunk_count: int | None
+        self, experiment: compiler_rs.ExperimentInfo, chunk_count: int | None
     ) -> CompiledExperiment:
         rt_compiler = RealtimeCompiler(
-            self._experiment_dao,
+            experiment,
+            [
+                self._experiment_dao.signal_info(uid)
+                for uid in self._experiment_dao.signals()
+            ],
             self._sampling_rate_tracker,
             self._signal_objects,
             self._feedback_register_layout,
@@ -568,8 +575,9 @@ class Compiler:
         executor.run(self._execution)
 
         combined_compiler_output = executor.combined_compiler_output()
-        if combined_compiler_output is None:
-            raise LabOneQException("Experiment has no real-time averaging loop")
+        assert combined_compiler_output is not None, (
+            "Internal error: missing real-time compiler output"
+        )
 
         rt_loop_properties = executor.rt_loop_properties()
 
@@ -636,6 +644,11 @@ class Compiler:
         self._feedback_register_layout = calculate_feedback_register_layout(
             self._integration_unit_allocation
         )
+        experiment = build_rs_experiment(
+            experiment_dao=dao,
+            sampling_rate_tracker=self._sampling_rate_tracker,
+            signal_objects=self._signal_objects,
+        )
 
         chunking = self._chunking_info
         if chunking is None or not chunking.auto:
@@ -659,7 +672,7 @@ class Compiler:
 
             try:
                 self._compiler_output = self._compile_whole_or_with_chunks(
-                    chunk_count=chunk_count
+                    experiment=experiment, chunk_count=chunk_count
                 )
             except ResourceLimitationError as err:
                 msg = (
@@ -681,7 +694,7 @@ class Compiler:
                 try:
                     _logger.debug("Attempting to compile with %s chunks", chunk_count)
                     self._compiler_output = self._compile_whole_or_with_chunks(
-                        chunk_count=chunk_count
+                        experiment=experiment, chunk_count=chunk_count
                     )
                     _logger.info(
                         "Auto-chunked sweep divided into %s chunks", chunk_count
@@ -754,14 +767,6 @@ class Compiler:
 
     def _generate_signal_objects(self):
         signal_objects: dict[str, SignalObj] = {}
-
-        @dataclass
-        class DelayInfo:
-            port_delay_gen: float | None = None
-            delay_signal_gen: float | None = None
-
-        delay_measure_acquire: dict[AwgKey, DelayInfo] = {}
-
         awgs_by_signal_id = {
             signal_id: awg for awg in self._awgs for signal_id, _ in awg.signal_channels
         }
@@ -853,11 +858,6 @@ class Compiler:
             port_delay = self._experiment_dao.port_delay(signal_id)
             local_oscillator_frequency = self._experiment_dao.lo_frequency(signal_id)
 
-            if signal_type != "integration":
-                delay_info = delay_measure_acquire.setdefault(awg.key, DelayInfo())
-                delay_info.port_delay_gen = port_delay
-                delay_info.delay_signal_gen = delay_signal
-
             signal_obj = SignalObj(
                 id=signal_id,
                 start_delay=start_delay,
@@ -878,14 +878,6 @@ class Compiler:
             )
             signal_objects[signal_id] = signal_obj
             awg.signals.append(signal_obj)
-
-        for s in signal_objects.values():
-            delay_info = delay_measure_acquire.get(s.awg.key, None)
-            if delay_info is None:
-                _logger.debug("No measurement pulse signal for acquire signal %s", s.id)
-                continue
-            s.base_port_delay = delay_info.port_delay_gen
-            s.base_delay_signal = delay_info.delay_signal_gen
         return signal_objects
 
     def run(self, data: CompilationJob) -> CompiledExperiment:

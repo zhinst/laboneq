@@ -3,11 +3,9 @@
 
 //! This module defines signal information that is required by
 //! the Scheduler.
-use crate::{
-    experiment::types::{AmplifierPump, Oscillator, SignalUid, ValueOrParameter},
-    utils::SignalGridInfo,
-};
+use crate::utils::SignalGridInfo;
 use laboneq_common::{device_traits::DeviceTraits, types::AwgKey};
+use laboneq_dsl::types::{AmplifierPump, Oscillator, SignalUid, ValueOrParameter};
 
 pub trait SignalInfo {
     fn uid(&self) -> SignalUid;

@@ -1,16 +1,23 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_log::warn;
+use laboneq_log::diagnostic;
 
 use super::seqc_generator::SeqCGenerator;
 use super::seqc_statements::SeqCStatement;
 use crate::ir::compilation_job::DeviceKind;
 use std::{
+    collections::HashMap,
     hash::{Hash, Hasher},
     num::NonZero,
     rc::Rc,
 };
+
+// This a number chosen by hunch to allow compression improvements that can be done
+// for common experiments with up to 2 nested sweeps, while also preventing the
+// compressor to do too many rounds for pathological cases.
+// If you have found a worthwile example/motivation, feel free to change this number.
+const HASH_COMPRESSION_MAX_ROUNDS: usize = 3;
 
 #[derive(PartialEq, Clone, Debug)]
 enum HashOrRun {
@@ -37,23 +44,43 @@ trait CostFunction {
 }
 
 struct StatementCostFunction<'a> {
-    statement_by_hash: &'a std::collections::HashMap<u64, Rc<SeqCStatement>>,
+    statement_by_hash: &'a HashMap<u64, Rc<SeqCStatement>>,
+}
+impl StatementCostFunction<'_> {
+    fn calculate_complexity(&self, item: &HashOrRun) -> u64 {
+        match item {
+            HashOrRun::Hash(hash) => self.statement_by_hash.get(hash).unwrap().complexity(),
+            HashOrRun::Run(run) => {
+                run.word
+                    .iter()
+                    .map(|x| self.calculate_complexity(x))
+                    .sum::<u64>()
+                    + 2 // add 2 for the Run loop itself
+            }
+        }
+    }
 }
 impl CostFunction for StatementCostFunction<'_> {
     fn cost_function(&self, run: &Run) -> i64 {
         let mut complexity: i64 = 0;
-        for h in run.word.iter() {
-            let HashOrRun::Hash(hash) = h else {
-                unreachable!();
-            };
-            let statement = self.statement_by_hash.get(hash).unwrap();
-            complexity += statement.complexity() as i64;
+        for item in run.word.iter() {
+            complexity += self.calculate_complexity(item) as i64;
         }
         let cost = -((run.count as i64) - 1) * complexity + 2;
-        let HashOrRun::Hash(hash) = run.word[0] else {
-            unreachable!();
-        };
-        let first_statement = self.statement_by_hash.get(&hash).unwrap();
+
+        fn get_first_statement(
+            run: &Run,
+            statement_by_hash: &HashMap<u64, Rc<SeqCStatement>>,
+        ) -> Rc<SeqCStatement> {
+            assert!(!run.word.is_empty());
+            let first_item = &run.word[0];
+            match first_item {
+                HashOrRun::Hash(hash) => Rc::clone(statement_by_hash.get(hash).unwrap()),
+                HashOrRun::Run(run) => get_first_statement(run, statement_by_hash),
+            }
+        }
+
+        let first_statement = get_first_statement(run, self.statement_by_hash);
         if let SeqCStatement::FunctionCall { name, .. } = first_statement.as_ref()
             && name == "startQA"
         {
@@ -65,17 +92,31 @@ impl CostFunction for StatementCostFunction<'_> {
 }
 
 struct GeneratorCostFunction<'a> {
-    generator_by_hash: &'a std::collections::HashMap<u64, &'a SeqCGenerator>,
+    generator_by_hash: &'a HashMap<u64, &'a SeqCGenerator>,
+}
+impl GeneratorCostFunction<'_> {
+    fn calculate_complexity(&self, item: &HashOrRun) -> u64 {
+        match item {
+            HashOrRun::Hash(hash) => self
+                .generator_by_hash
+                .get(hash)
+                .unwrap()
+                .estimate_complexity(),
+            HashOrRun::Run(run) => {
+                run.word
+                    .iter()
+                    .map(|x| self.calculate_complexity(x))
+                    .sum::<u64>()
+                    + 2 // add 2 for the Run loop itself
+            }
+        }
+    }
 }
 impl CostFunction for GeneratorCostFunction<'_> {
     fn cost_function(&self, run: &Run) -> i64 {
         let mut complexity: i64 = 0;
-        for h in run.word.iter() {
-            let HashOrRun::Hash(hash) = h else {
-                unreachable!();
-            };
-            let generator = self.generator_by_hash.get(hash).unwrap();
-            complexity += generator.estimate_complexity() as i64;
+        for item in run.word.iter() {
+            complexity += self.calculate_complexity(item) as i64;
         }
         -((run.count as i64) - 1) * complexity + 2
     }
@@ -98,6 +139,30 @@ impl Run {
     }
 }
 
+impl Hash for Run {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.word.hash(state);
+        self.count.hash(state);
+    }
+}
+
+fn compress_hashes<T: CostFunction>(
+    input_hashes: Vec<HashOrRun>,
+    cost_function: &T,
+    max_rounds: usize,
+) -> Vec<HashOrRun> {
+    let mut compression_result = input_hashes;
+    for _ in 0..max_rounds {
+        let compression_result_next_round =
+            _compress_hashes_one_round(&compression_result, cost_function);
+        match compression_result_next_round {
+            None => break,
+            Some(compressed) => compression_result = compressed,
+        }
+    }
+    compression_result
+}
+
 // Note that we only aim for a reasonable compression, not for "the optimal" one.
 // We try to find some good ones quickly, balancing compression efficiency for runtime and memory complexity.
 //
@@ -109,32 +174,29 @@ impl Run {
 //     compute max repeat of this word as current best
 //     check until the end of the current best if there is an overlapping even better possibility
 //     when reaching the end of the current best, compress away
-fn compress_hashes<T: CostFunction>(
-    input_hashes: &[u64],
+//
+// Returns the compression result, or None if any compression was not found/done.
+fn _compress_hashes_one_round<T: CostFunction>(
+    hashes: &[HashOrRun],
     cost_function: &T,
-) -> Result<Vec<HashOrRun>, String> {
-    // todo: This can be optimized by avoiding the clone during `to_vec()` as
-    // noted in the comment below. Consider working with ranges/start and end of
-    // original list.
-
-    let mut hashes: Vec<HashOrRun> = input_hashes.iter().map(|h| HashOrRun::Hash(*h)).collect();
-
-    let mut retval = Vec::new();
+) -> Option<Vec<HashOrRun>> {
     if hashes.len() <= 1 {
-        retval.extend(hashes);
-        return Ok(retval);
+        return None;
     }
+
+    let mut compressed = Vec::new();
 
     // first, we compute `offsets`, which, for each hash in the list, gives
     // the relative position to the next place the same hash appears again
     let offsets: Vec<Option<NonZero<usize>>> = {
         let mut offsets = vec![None; hashes.len()];
-        let mut next_seen_map = std::collections::HashMap::<u64, usize>::new();
-        for (i, hash) in hashes.iter().enumerate().rev() {
-            let HashOrRun::Hash(hash) = hash else {
-                unreachable!();
+        let mut next_seen_map = HashMap::<u64, usize>::new();
+        for (i, hash_or_run) in hashes.iter().enumerate().rev() {
+            let hash = match hash_or_run {
+                HashOrRun::Hash(h) => *h,
+                HashOrRun::Run(r) => to_hash(r),
             };
-            if let Some(offs) = next_seen_map.insert(*hash, i) {
+            if let Some(offs) = next_seen_map.insert(hash, i) {
                 offsets[i] = NonZero::new(offs - i);
             }
         }
@@ -146,7 +208,7 @@ fn compress_hashes<T: CostFunction>(
     // We sacrifice finding anything better than this.
     const GOOD_ENOUGH_COST: i64 = -10000;
 
-    let mut runs = std::collections::HashMap::<u64, Vec<(usize, Run)>>::new(); // hash -> vec[(start, Run)]
+    let mut runs = HashMap::<u64, Vec<(usize, Run)>>::new(); // hash -> vec[(start, Run)]
     let mut best_run: Option<Run> = None;
     let mut best_run_start: Option<usize> = None;
     let mut best_run_end: Option<usize> = None;
@@ -160,8 +222,8 @@ fn compress_hashes<T: CostFunction>(
         {
             // We've reached the end of the current best_run, without finding anything better.
             // Emit uncompressed items before this run, then emit this run, and reset our state tracking.
-            retval.extend_from_slice(&hashes[uncompressed_start..best_run_start_unwrapped]);
-            retval.push(HashOrRun::Run(best_run.unwrap()));
+            compressed.extend_from_slice(&hashes[uncompressed_start..best_run_start_unwrapped]);
+            compressed.push(HashOrRun::Run(best_run.unwrap()));
             uncompressed_start = best_run_end.unwrap();
             runs.clear();
             best_run = None;
@@ -184,7 +246,8 @@ fn compress_hashes<T: CostFunction>(
         if let Some(runs_for_hash) = run
             && runs_for_hash.iter().any(|(_, r)| r.word != word)
         {
-            panic!("hash collision detected");
+            diagnostic!("hash collision detected, skipping compression round");
+            return None;
         }
         if let Some(runs_for_hash) = runs.get(&first_hash)
             && runs_for_hash
@@ -214,147 +277,146 @@ fn compress_hashes<T: CostFunction>(
         runs.entry(first_hash).or_default().push((index, this_run));
     }
     if let Some(best_run) = best_run {
-        retval.extend_from_slice(&hashes[uncompressed_start..best_run_start.unwrap()]);
-        retval.push(HashOrRun::Run(best_run));
+        compressed.extend_from_slice(&hashes[uncompressed_start..best_run_start.unwrap()]);
+        compressed.push(HashOrRun::Run(best_run));
         uncompressed_start = best_run_end.unwrap();
     }
-    retval.extend(hashes.drain(uncompressed_start..));
-    Ok(retval)
+    if uncompressed_start == 0 {
+        // Have not compressed anything
+        None
+    } else {
+        compressed.extend_from_slice(&hashes[uncompressed_start..]);
+        Some(compressed)
+    }
 }
 
 pub(crate) fn compress_generator(generator: SeqCGenerator) -> SeqCGenerator {
-    let mut statement_hashes: Vec<u64> = Vec::new();
-    let mut statement_by_hash = std::collections::HashMap::<u64, Rc<SeqCStatement>>::new();
+    let mut statement_hashes: Vec<HashOrRun> = Vec::new();
+    let mut statement_by_hash = HashMap::<u64, Rc<SeqCStatement>>::new();
 
     for statement in generator.statements() {
         let hash = statement.to_hash();
         if let Some(old_value) = statement_by_hash.insert(hash, Rc::clone(statement))
             && &old_value != statement
         {
-            warn!("hash collision detected, skipping code compression");
+            diagnostic!("hash collision detected, skipping code compression");
             return generator;
         }
-        statement_hashes.push(hash);
+        statement_hashes.push(HashOrRun::Hash(hash));
     }
     let mut compressed_gen = generator.create();
-    // Possible optimization: it might make sense to repeatedly call compress_hashes() until no more optimizations are found
     let compressed_statements = compress_hashes(
-        &statement_hashes,
+        statement_hashes,
         &StatementCostFunction {
             statement_by_hash: &statement_by_hash,
         },
+        HASH_COMPRESSION_MAX_ROUNDS,
     );
-    match compressed_statements {
-        Err(e) => {
-            warn!("{e}");
-            return generator;
-        }
-        Ok(compressed_statesments) => {
-            for cs in compressed_statesments {
-                match cs {
-                    HashOrRun::Hash(hash) => {
-                        let statement = statement_by_hash.get(&hash).unwrap();
-                        compressed_gen.add_statement(Rc::clone(statement));
-                    }
-                    HashOrRun::Run(run) => {
-                        let mut body = generator.create();
-                        for hash in &run.word {
-                            let HashOrRun::Hash(hash) = hash else {
-                                unreachable!();
-                            };
-                            let statement = statement_by_hash.get(hash).unwrap();
-                            body.add_statement(Rc::clone(statement));
-                        }
-                        compressed_gen.add_repeat(run.count as u64, body);
-                    }
+
+    fn handle_compressed_item(
+        item: &HashOrRun,
+        statement_by_hash: &HashMap<u64, Rc<SeqCStatement>>,
+        generator: &SeqCGenerator,
+    ) -> Rc<SeqCStatement> {
+        match item {
+            HashOrRun::Hash(hash) => Rc::clone(statement_by_hash.get(hash).unwrap()),
+            HashOrRun::Run(run) => {
+                let mut body = generator.create();
+                for item in &run.word {
+                    let statement = handle_compressed_item(item, statement_by_hash, generator);
+                    body.add_statement(statement);
                 }
+                let mut loop_gen = generator.create();
+                loop_gen.add_repeat(run.count as u64, body);
+                Rc::clone(&loop_gen.statements()[0])
             }
         }
     }
+
+    for cs in compressed_statements.iter() {
+        let statement = handle_compressed_item(cs, &statement_by_hash, &generator);
+        compressed_gen.add_statement(statement);
+    }
+
     compressed_gen
 }
 
-pub(crate) fn merge_generators(
-    generators: Vec<SeqCGenerator>,
-    compress: bool, // defaults to True
-) -> SeqCGenerator {
-    let mut compress = compress;
+pub(crate) fn merge_generators(generators: Vec<SeqCGenerator>) -> SeqCGenerator {
     if generators.is_empty() {
         // Create an empty generator of arbitrary type
         return SeqCGenerator::new(DeviceKind::SHFQA.traits(), true);
     }
 
-    let mut retval = generators[0].create();
+    let mut generator_hashes: Vec<HashOrRun> = Vec::new();
+    let mut generator_by_hash = HashMap::<u64, &SeqCGenerator>::new();
+    let mut collision_detected = false;
 
-    if compress {
-        let mut statement_hashes: Vec<u64> = Vec::new();
-        let mut generator_by_hash = std::collections::HashMap::<u64, &SeqCGenerator>::new();
-
-        for generator in &generators {
-            let hash = to_hash(generator);
-            if let Some(old_value) = generator_by_hash.insert(hash, generator)
-                && old_value != generator
-            {
-                compress = false;
-            }
-            statement_hashes.push(hash);
+    for generator in &generators {
+        let hash = to_hash(generator);
+        if let Some(old_value) = generator_by_hash.insert(hash, generator)
+            && old_value != generator
+        {
+            collision_detected = true;
         }
-        if !compress {
-            warn!("hash collision detected, skipping code compression");
-        } else {
-            let compressed_generators = compress_hashes(
-                &statement_hashes,
-                &GeneratorCostFunction {
-                    generator_by_hash: &generator_by_hash,
-                },
-            );
-            match compressed_generators {
-                Err(error) => {
-                    warn!("{}", error);
+        generator_hashes.push(HashOrRun::Hash(hash));
+    }
+    if collision_detected {
+        diagnostic!("hash collision detected, merging generators without compression");
+        let mut retval = generators[0].create();
+        for g in generators.iter() {
+            retval.append_statements_from(g);
+        }
+        return retval;
+    }
+
+    let compressed_generators = compress_hashes(
+        generator_hashes,
+        &GeneratorCostFunction {
+            generator_by_hash: &generator_by_hash,
+        },
+        HASH_COMPRESSION_MAX_ROUNDS,
+    );
+
+    fn handle_compressed_item(
+        item: &HashOrRun,
+        generator_by_hash: &HashMap<u64, &SeqCGenerator>,
+        generator: &SeqCGenerator,
+    ) -> SeqCGenerator {
+        match item {
+            HashOrRun::Hash(hash) => {
+                // TODO: Consider using shared pointers here instead of cloning
+                (*generator_by_hash.get(hash).unwrap()).clone()
+            }
+            HashOrRun::Run(run) => {
+                let mut body = generator.create();
+                for item in run.word.iter() {
+                    body.append_statements_from(&handle_compressed_item(
+                        item,
+                        generator_by_hash,
+                        generator,
+                    ));
                 }
-                Ok(cgs) => {
-                    let mut did_compress = false;
-                    for cg in cgs {
-                        match cg {
-                            HashOrRun::Run(run) => {
-                                let body = if run.word.len() == 1 {
-                                    let HashOrRun::Hash(first_hash) = &run.word[0] else {
-                                        unreachable!();
-                                    };
-                                    // TODO: Consider using shared pointers here instead of cloning
-                                    (*generator_by_hash.get(first_hash).unwrap()).clone()
-                                } else {
-                                    did_compress = true;
-                                    let mut body = retval.create();
-                                    for gen_hash in &run.word {
-                                        let HashOrRun::Hash(hash) = gen_hash else {
-                                            unreachable!();
-                                        };
-                                        let generator = generator_by_hash.get(hash).unwrap();
-                                        body.append_statements_from(generator);
-                                    }
-                                    body
-                                };
-                                retval.add_repeat(run.count as u64, compress_generator(body));
-                            }
-                            HashOrRun::Hash(hash) => {
-                                retval
-                                    .append_statements_from(generator_by_hash.get(&hash).unwrap());
-                            }
-                        }
-                    }
-                    if did_compress {
-                        // 2nd pass on the merged generator, finding patterns that partially span across
-                        // multiple of the original parts.
-                        retval = compress_generator(retval);
-                    }
-                    return retval;
-                }
+                let mut retval: SeqCGenerator = generator.create();
+                retval.add_repeat(run.count as u64, compress_generator(body));
+                retval
             }
         }
     }
-    for g in generators {
-        retval.append_statements_from(&g);
+
+    let mut retval = generators[0].create();
+    let mut did_compress = false;
+    for item in compressed_generators.iter() {
+        retval.append_statements_from(&handle_compressed_item(item, &generator_by_hash, &retval));
+        if let HashOrRun::Run(run) = item
+            && run.count > 1
+        {
+            did_compress = true;
+        }
+    }
+    if did_compress {
+        // 2nd pass on the merged generator, finding patterns that partially span across
+        // multiple of the original parts.
+        retval = compress_generator(retval);
     }
     retval
 }
@@ -384,10 +446,11 @@ mod tests {
     #[test]
     fn test_compress_hashes_cost_functions() {
         // Verifies that different cost functions lead to different compression results
-        let hashes = vec![1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2];
-        let compressed = compress_hashes(&hashes, &TestCostFunctionDefault {});
-        assert!(compressed.is_ok());
-        let compressed = compressed.unwrap();
+        let hashes = vec![1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2]
+            .into_iter()
+            .map(HashOrRun::Hash)
+            .collect::<Vec<_>>();
+        let compressed = compress_hashes(hashes.clone(), &TestCostFunctionDefault {}, 1);
         assert_eq!(compressed.len(), 3);
 
         assert_eq!(
@@ -400,9 +463,7 @@ mod tests {
         assert_eq!(compressed[1], HashOrRun::Hash(1));
         assert_eq!(compressed[2], HashOrRun::Hash(2));
 
-        let compressed = compress_hashes(&hashes, &TestCostFunction2 {});
-        assert!(compressed.is_ok());
-        let compressed = compressed.unwrap();
+        let compressed = compress_hashes(hashes, &TestCostFunction2 {}, 1);
         assert_eq!(compressed.len(), 3);
         assert_eq!(compressed[0], HashOrRun::Hash(1));
         assert_eq!(
@@ -420,18 +481,20 @@ mod tests {
         // Checks that repeated long list are compressed away
         let mut hashes = Vec::new();
         for _ in 0..10 {
-            hashes.extend_from_slice(&[1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]);
+            hashes.extend(
+                vec![1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3]
+                    .into_iter()
+                    .map(HashOrRun::Hash),
+            );
         }
-        let compressed = compress_hashes(&hashes, &TestCostFunctionDefault {});
-        assert!(compressed.is_ok());
-        let compressed = compressed.unwrap();
+        let compressed = compress_hashes(hashes.clone(), &TestCostFunctionDefault {}, 1);
         assert_eq!(compressed.len(), 10 * 3); // each slice has three runs, and there are 10 slices
         for (i, h) in compressed.iter().enumerate() {
             match h {
                 HashOrRun::Run(run) => {
                     assert_eq!(run.count, 4);
                     assert_eq!(run.word.len(), 1);
-                    assert_eq!(run.word[0], HashOrRun::Hash(hashes[i * 4]));
+                    assert_eq!(run.word[0], hashes[i * 4]);
                 }
                 HashOrRun::Hash(_) => {
                     panic!("unexpected Hash in compressed result");
@@ -443,10 +506,11 @@ mod tests {
     #[test]
     fn test_compress_hashes_hbar_2384() {
         // Demonstrates that https://zhinst.atlassian.net/browse/HBAR-2384 is fixed.
-        let hashes = vec![42, 42, 42, 42, 13, 13, 13, 13, 13];
-        let compressed = compress_hashes(&hashes, &TestCostFunctionDefault {});
-        assert!(compressed.is_ok());
-        let compressed = compressed.unwrap();
+        let hashes = vec![42, 42, 42, 42, 13, 13, 13, 13, 13]
+            .into_iter()
+            .map(HashOrRun::Hash)
+            .collect::<Vec<_>>();
+        let compressed = compress_hashes(hashes, &TestCostFunctionDefault {}, 1);
 
         assert_eq!(compressed.len(), 2);
         assert_eq!(
@@ -461,6 +525,64 @@ mod tests {
                     word: vec![HashOrRun::Hash(13)]
                 }),
             ]
+        );
+    }
+
+    #[test]
+    fn test_compress_hashes_2_rounds() {
+        let hashes = [1, 1, 1, 1, 2, 2, 2, 2]
+            .repeat(3)
+            .into_iter()
+            .map(HashOrRun::Hash)
+            .collect::<Vec<_>>();
+        let compressed_1_round = compress_hashes(hashes.clone(), &TestCostFunctionDefault {}, 1);
+        let compressed_2_rounds = compress_hashes(hashes, &TestCostFunctionDefault {}, 2);
+
+        assert_eq!(
+            compressed_1_round,
+            vec![
+                HashOrRun::Run(Run {
+                    word: vec![HashOrRun::Hash(1)],
+                    count: 4
+                }),
+                HashOrRun::Run(Run {
+                    word: vec![HashOrRun::Hash(2)],
+                    count: 4
+                }),
+                HashOrRun::Run(Run {
+                    word: vec![HashOrRun::Hash(1)],
+                    count: 4
+                }),
+                HashOrRun::Run(Run {
+                    word: vec![HashOrRun::Hash(2)],
+                    count: 4
+                }),
+                HashOrRun::Run(Run {
+                    word: vec![HashOrRun::Hash(1)],
+                    count: 4
+                }),
+                HashOrRun::Run(Run {
+                    word: vec![HashOrRun::Hash(2)],
+                    count: 4
+                }),
+            ]
+        );
+
+        assert_eq!(
+            compressed_2_rounds,
+            vec![HashOrRun::Run(Run {
+                word: vec![
+                    HashOrRun::Run(Run {
+                        word: vec![HashOrRun::Hash(1)],
+                        count: 4
+                    }),
+                    HashOrRun::Run(Run {
+                        word: vec![HashOrRun::Hash(2)],
+                        count: 4
+                    }),
+                ],
+                count: 3
+            })]
         );
     }
 
@@ -493,13 +615,11 @@ mod tests {
         let mut hashes = Vec::new();
         for i in 0..MANY_LOOPS {
             for _ in 0..4 {
-                hashes.push(i);
+                hashes.push(HashOrRun::Hash(i));
             }
         }
         let cost_counter = CountingCostFunction::new();
-        let compressed = compress_hashes(&hashes, &cost_counter);
-        assert!(compressed.is_ok());
-        let compressed = compressed.unwrap();
+        let compressed = compress_hashes(hashes, &cost_counter, 1);
         assert_eq!(compressed.len(), MANY_LOOPS as usize);
         assert_eq!(*cost_counter.cumulative_costs.borrow(), MANY_LOOPS as usize);
     }
@@ -512,13 +632,11 @@ mod tests {
         let mut hashes = Vec::new();
         for _ in 0..4 {
             for i in 0..MANY_HASHES {
-                hashes.push(i);
+                hashes.push(HashOrRun::Hash(i));
             }
         }
         let cost_counter = CountingCostFunction::new();
-        let compressed = compress_hashes(&hashes, &cost_counter);
-        assert!(compressed.is_ok());
-        let compressed = compressed.unwrap();
+        let compressed = compress_hashes(hashes, &cost_counter, 1);
         assert_eq!(compressed.len(), 1);
         assert_eq!(
             *cost_counter.cumulative_costs.borrow(),

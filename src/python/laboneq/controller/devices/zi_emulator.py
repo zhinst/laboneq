@@ -278,9 +278,10 @@ class DevEmu(ABC):
             )
         return node
 
-    def set(self, dev_path: str, value: Any):
+    def set(self, dev_path: str, value: Any) -> NodeBase:
         node = self._set_val(dev_path, value)
         node.call_handler()
+        return node
 
     def subscribe(self, dev_path: str):
         node = self._get_node(dev_path)
@@ -877,6 +878,13 @@ class DevEmuQHUB(DevEmuLeader):
 class DevEmuSHFBase(Gen2Base):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        default_devtype, default_options = self.default_dev_opts()
+        self.devtype: str = self._dev_opts.get("features/devtype", default_devtype)
+        self.options: str = self._dev_opts.get("features/options", default_options)
+        self.options_list = self.options.split("\n")
+
+    @abstractmethod
+    def default_dev_opts(self) -> tuple[str, str]: ...
 
     def _int_trig_execute(self, node: NodeBase):
         if node.value != 0:
@@ -1136,6 +1144,17 @@ class DevEmuSHFQABase(DevEmuSHFBase):
     def _node_def_qa(self) -> dict[str, NodeInfo]:
         nd = self._qa_pipeliner._node_def_pipeliner()
         for channel in range(4):
+            if "LRT" not in self.options_list:
+                nd[f"qachannels/{channel}/modulation/enable"] = NodeInfo(
+                    type=NodeType.EXCLUDED
+                )
+                for wave in range(16):
+                    nd[
+                        f"qachannels/{channel}/generator/waveforms/{wave}/hold/enable"
+                    ] = NodeInfo(type=NodeType.EXCLUDED)
+                nd[f"qachannels/{channel}/readout/integration/downsampling/factor"] = (
+                    NodeInfo(type=NodeType.EXCLUDED)
+                )
             nd[f"qachannels/{channel}/mode"] = NodeInfo(type=NodeType.INT, default=0)
             nd[f"qachannels/{channel}/generator/enable"] = NodeInfo(
                 type=NodeType.INT,
@@ -1232,16 +1251,13 @@ class DevEmuSHFQABase(DevEmuSHFBase):
 
 
 class DevEmuSHFQA(DevEmuSHFQABase):
+    def default_dev_opts(self) -> tuple[str, str]:
+        return "SHFQA4", ""
+
     def _node_def(self) -> dict[str, NodeInfo]:
         nd = {
-            "features/devtype": NodeInfo(
-                type=NodeType.STR,
-                default=self._dev_opts.get("features/devtype", "SHFQA4"),
-            ),
-            "features/options": NodeInfo(
-                type=NodeType.STR,
-                default=self._dev_opts.get("features/options", ""),
-            ),
+            "features/devtype": NodeInfo(type=NodeType.STR, default=self.devtype),
+            "features/options": NodeInfo(type=NodeType.STR, default=self.options),
         }
         nd.update(self._node_def_shf())
         nd.update(self._node_def_qa())
@@ -1258,10 +1274,6 @@ class DevEmuSHFSGBase(DevEmuSHFBase):
         )
         self._armed_sg_awgs: set[int] = set()
 
-        default_devtype, default_options = self.default_dev_opts()
-        self.devtype = self._dev_opts.get("features/devtype", default_devtype)
-        self.options = self._dev_opts.get("features/options", default_options)
-
         if self.devtype == "SHFSG8":
             self._output_to_synth_map = [0, 0, 1, 1, 2, 2, 3, 3]
         elif self.devtype == "SHFSG4":
@@ -1269,22 +1281,17 @@ class DevEmuSHFSGBase(DevEmuSHFBase):
         elif self.devtype == "SHFSG2":
             self._output_to_synth_map = [0, 1]
         elif self.devtype == "SHFQC":
-            assert isinstance(self.options, str)
-            options_list = self.options.split("\n")
             # Different numbering on SHFQC - index 0 are QA synths
-            if "QC2CH" in options_list:
+            if "QC2CH" in self.options_list:
                 self._output_to_synth_map = [1, 1]
-            elif "QC4CH" in options_list:
+            elif "QC4CH" in self.options_list:
                 self._output_to_synth_map = [1, 1, 2, 2]
-            elif "QC6CH" in options_list:
+            elif "QC6CH" in self.options_list:
                 self._output_to_synth_map = [1, 1, 2, 2, 3, 3]
             else:
                 raise AssertionError("Invalid SHFQC options")
         else:
             raise AssertionError("Invalid device type")
-
-    @abstractmethod
-    def default_dev_opts(self) -> tuple[str, str]: ...
 
     def trigger(self):
         super().trigger()
@@ -1940,7 +1947,9 @@ class KernelSessionEmulator:
             )
         ):
             raise ValueError(f"Unsupported data type: {type(value.value)}")
-        self._device.set(self.dev_path(value.path), value.value)
+        node = self._device.set(self.dev_path(value.path), value.value)
+        if isinstance(node, NodeExcluded):
+            raise ValueError(f"Cannot set value for path {value.path}.")
         return value
 
     async def set_with_expression(

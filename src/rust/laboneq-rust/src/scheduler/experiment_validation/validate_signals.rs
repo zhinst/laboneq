@@ -4,7 +4,8 @@
 use anyhow::Context;
 use laboneq_common::device_traits::DeviceTraits;
 use laboneq_common::types::DeviceKind;
-use laboneq_scheduler::experiment::types::{AveragingLoop, ValueOrParameter};
+use laboneq_dsl::operation::AveragingLoop;
+use laboneq_dsl::types::ValueOrParameter;
 use numeric_array::NumericArray;
 
 use crate::error::{Error, Result};

@@ -3,10 +3,10 @@
 
 use std::collections::{HashMap, HashSet};
 
+use laboneq_dsl::types::{NumericLiteral, ParameterUid, SweepParameter};
+
 use crate::ParameterStore;
 use crate::error::{Error, Result};
-use crate::experiment::sweep_parameter::SweepParameter;
-use crate::experiment::types::{NumericLiteral, ParameterUid};
 
 pub(crate) struct ParameterResolver<'a> {
     parameters: &'a HashMap<ParameterUid, SweepParameter>,

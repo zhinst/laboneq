@@ -54,7 +54,11 @@ class TargetSetupGenerator:
             for instrument in setup.instruments
             for d in cls._target_devices_from_instrument(
                 instrument,
-                server_lookup[instrument.server.uid],
+                (
+                    server_lookup[instrument.server.uid]
+                    if instrument.server is not None
+                    else None
+                ),
                 setup,
                 with_calibration=with_calibration,
             )

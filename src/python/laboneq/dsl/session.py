@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 import warnings
 from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Callable, Dict, NoReturn, Union
@@ -325,7 +326,16 @@ class Session:
         """
         self._connection_state.connected = False
         if self._controller is not None:
-            self._controller.disconnect()
+            if sys.is_finalizing():
+                # logging is not available anymore, using plain print.
+                print("""
+======================================================================================
+Warning: attempted to disconnect a LabOneQ session during Python interpreter shutdown.
+To avoid this warning, ensure the session is properly disconnected in your program.
+======================================================================================
+""")
+            else:
+                self._controller.disconnect()
         self._controller = None
         self._toolkit_devices = ToolkitDevices()
         return self._connection_state

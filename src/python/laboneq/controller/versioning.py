@@ -46,9 +46,7 @@ class LabOneVersion:
         )
 
 
-RECOMMENDED_MINIMUM_LABONE_VERSION = LabOneVersion(
-    year=25, month=10, patch=0, build=271
-)
+RECOMMENDED_MINIMUM_LABONE_VERSION = LabOneVersion(year=26, month=1, patch=0, build=357)
 """This variable holds the L1 version where the latest stable release of LabOne Q was fully tested against."""
 
 MIN_LABONE_VERSION_SHF_BUSY = LabOneVersion(year=25, month=4, patch=0, build=0)

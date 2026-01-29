@@ -25,8 +25,12 @@ thiserror = { workspace = true }
 smallvec = { workspace = true }
 
 laboneq-common = { path = "../laboneq-common" }
+laboneq-dsl = { path = "../laboneq-dsl" }
 codegenerator-py = { path = "../codegenerator-py" }
 laboneq-scheduler = { path = "../laboneq-scheduler" }
 numeric-array = { path = "../numeric-array", features = ["pyo3"] }
 laboneq-units = { path = "../laboneq-units" }
 laboneq-log = { path = "../laboneq-log" }
+
+[dev-dependencies]
+approx = { workspace = true }

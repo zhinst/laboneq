@@ -1,9 +1,9 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_dsl::{ExperimentNode, operation::Operation};
+
 use crate::error::{Error, Result};
-use laboneq_scheduler::experiment::ExperimentNode;
-use laboneq_scheduler::experiment::types::Operation;
 
 /// Resolve real-time and near-time boundaries in the IR tree.
 ///
@@ -46,7 +46,9 @@ fn resolve_timing_boundary_impl(node: &mut ExperimentNode) -> Result<usize> {
 
 /// Validate that all nodes under a real-time boundary are compatible with real-time execution.
 fn validate_real_time_boundary_nodes(node: &ExperimentNode) -> Result<()> {
-    node.kind.validate_real_time_compatible()?;
+    node.kind
+        .validate_real_time_compatible()
+        .map_err(Error::new)?;
     for child in &node.children {
         validate_real_time_boundary_nodes(child)?
     }
@@ -57,11 +59,11 @@ fn validate_real_time_boundary_nodes(node: &ExperimentNode) -> Result<()> {
 mod tests {
     use super::*;
     use laboneq_common::named_id::NamedIdStore;
-    use laboneq_scheduler::experiment::types::{
-        AcquisitionType, AveragingLoop, AveragingMode, Operation, RepetitionMode, SectionAlignment,
-        SectionUid,
+    use laboneq_dsl::{
+        node_structure,
+        operation::{AveragingLoop, Operation},
+        types::{AcquisitionType, AveragingMode, RepetitionMode, SectionAlignment, SectionUid},
     };
-    use laboneq_scheduler::node_structure;
 
     fn make_acquire_rt(store: &mut NamedIdStore) -> AveragingLoop {
         AveragingLoop {
