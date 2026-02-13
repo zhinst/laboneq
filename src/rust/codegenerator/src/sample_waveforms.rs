@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::ir::compilation_job::{AwgCore, DeviceKind, Signal, SignalKind};
 use crate::ir::experiment::PulseParametersId;
-use crate::ir::{IrNode, NodeKind, PlayAcquire, PlayHold, Samples};
+use crate::ir::{IrNode, NodeKind, PlayAcquire, PlayHold, Samples, SignalUid};
 use crate::signature::{Uid, WaveformSignature};
 use crate::{Error, Result};
 use indexmap::{IndexMap, IndexSet};
@@ -76,7 +76,7 @@ impl Hash for KernelProperties<'_> {
 #[derive(Clone, Debug)]
 pub struct IntegrationKernel<'a> {
     properties: KernelProperties<'a>,
-    signals: Vec<&'a str>,
+    signals: Vec<SignalUid>,
 }
 
 impl IntegrationKernel<'_> {
@@ -92,7 +92,7 @@ impl IntegrationKernel<'_> {
         self.properties.oscillator_frequency
     }
 
-    pub fn signals(&self) -> &Vec<&str> {
+    pub fn signals(&self) -> &Vec<SignalUid> {
         &self.signals
     }
 }
@@ -123,7 +123,7 @@ pub trait SampleWaveforms {
 /// Represents output of an AWG waveform sampling.
 #[derive(Debug)]
 pub struct SampledWaveform<T: SampledWaveformSignature> {
-    pub signals: HashSet<String>,
+    pub signals: HashSet<SignalUid>,
     pub signature_string: Arc<String>,
     pub signature: T,
 }
@@ -187,7 +187,7 @@ impl<T: SampledWaveformSignature> SampledWaveformCollection<T> {
 
 pub struct WaveformSamplingCandidate<'a> {
     pub waveform: &'a WaveformSignature,
-    pub signals: HashSet<&'a str>,
+    pub signals: HashSet<SignalUid>,
 }
 
 fn update_waveform_candidates<'a>(
@@ -199,14 +199,11 @@ fn update_waveform_candidates<'a>(
         // If the waveform is already in the candidates, we can just update the signals.
         candidate
             .signals
-            .extend(signals.iter().map(|rc_signal| rc_signal.uid.as_str()));
+            .extend(signals.iter().map(|rc_signal| rc_signal.uid));
     } else {
         let candidate = WaveformSamplingCandidate {
             waveform,
-            signals: signals
-                .iter()
-                .map(|rc_signal| rc_signal.uid.as_str())
-                .collect(),
+            signals: signals.iter().map(|rc_signal| rc_signal.uid).collect(),
         };
         candidates.insert(waveform, candidate);
     }
@@ -387,14 +384,14 @@ impl<T: SampledWaveformSignature> PassContext<T> {
             let sampled_waveform = &mut self.sampled_waveforms[*wave_index];
             sampled_waveform
                 .signals
-                .extend(signals.iter().map(|s| s.uid.clone()));
+                .extend(signals.iter().map(|s| s.uid));
             return;
         }
         let sampled_waveform = self.sampled_waveform_signatures.remove(&waveform_uid);
         // Split waveform signature into sampled waveform and wave declaration.
         if let Some(sampled_waveform) = sampled_waveform {
             let signature_string = Arc::new(waveform.signature_string());
-            let signals: HashSet<String> = signals.iter().map(|s| s.uid.clone()).collect();
+            let signals: HashSet<SignalUid> = signals.iter().map(|s| s.uid).collect();
 
             let wave_declaration = WaveDeclaration {
                 length: waveform.length(),
@@ -444,11 +441,11 @@ fn generate_output<T: SampledWaveformSignature>(
 
 fn validate_waveforms(waveforms: &[&WaveformSamplingCandidate<'_>], awg: &AwgCore) -> Result<()> {
     if &DeviceKind::SHFQA == awg.device.kind() && waveforms.len() > 1 {
-        let mut signal_to_pulses: HashMap<&str, HashSet<&WaveformSignature>> = HashMap::new();
+        let mut signal_to_pulses: HashMap<SignalUid, HashSet<&WaveformSignature>> = HashMap::new();
         for waveform in waveforms.iter() {
             for signal in waveform.signals.iter() {
                 signal_to_pulses
-                    .entry(signal)
+                    .entry(*signal)
                     .or_default()
                     .insert(waveform.waveform);
             }
@@ -457,16 +454,18 @@ fn validate_waveforms(waveforms: &[&WaveformSamplingCandidate<'_>], awg: &AwgCor
             // Ensure that there is only one unique waveform per signal
             if waveforms.len() > 1 {
                 return Err(Error::new(format!(
-                    "Too many unique pulses on signal '{signal}'. Using more than one unique pulse on a SHFQA generator channel is not supported. \
+                    "Too many unique pulses on signal '{}'. Using more than one unique pulse on a SHFQA generator channel is not supported. \
                     Sweeping a SHFQA generator channel is not supported in real-time. Ensure each real-time loop uses the same pulse on a given signal.",
+                    signal.0,
                 )));
             } else if waveforms.len() == 1 {
                 // Ensure that there is only one unique pulse per signal
                 let waveform = waveforms.iter().next().unwrap();
                 if waveform.pulses().iter().len() > 1 {
                     return Err(Error::new(format!(
-                        "Too many unique pulses on signal '{signal}'. Using more than one unique pulse on a SHFQA generator channel is not supported. \
+                        "Too many unique pulses on signal '{}'. Using more than one unique pulse on a SHFQA generator channel is not supported. \
                         Sweeping a SHFQA generator channel is not supported in real-time. Ensure each real-time loop uses the same pulse on a given signal.",
+                        signal.0,
                     )));
                 }
             }
@@ -526,16 +525,16 @@ fn collect_kernel_properties(event: &PlayAcquire) -> IndexSet<KernelProperties<'
 }
 
 fn update_kernel_properties<'a>(
-    properties: &mut IndexMap<&'a str, IndexSet<KernelProperties<'a>>>,
-    key: &'a str,
+    properties: &mut IndexMap<SignalUid, IndexSet<KernelProperties<'a>>>,
+    key: SignalUid,
     weights: IndexSet<KernelProperties<'a>>,
 ) -> Result<()> {
-    if let Some(weight_properties) = properties.get_mut(key) {
+    if let Some(weight_properties) = properties.get_mut(&key) {
         if weight_properties != &weights {
-            return Err(Error::new(
-                format!(
-                    "Using different integration kernels on a single signal '{key}' is unsupported. They either differ on the pulse definitions or on the oscillator frequency.",
-                ).as_str()));
+            return Err(Error::new(format!(
+                "Using different integration kernels on a single signal '{}' is unsupported. They either differ on the pulse definitions or on the oscillator frequency.",
+                key.0
+            )));
         }
     } else {
         properties.insert(key, weights);
@@ -545,17 +544,17 @@ fn update_kernel_properties<'a>(
 
 fn collect_integration_weights_properties<'a>(
     node: &'a IrNode,
-    properties: &mut IndexMap<&'a str, IndexSet<KernelProperties<'a>>>,
+    properties: &mut IndexMap<SignalUid, IndexSet<KernelProperties<'a>>>,
 ) -> Result<()> {
     match node.data() {
         NodeKind::Acquire(ob) => {
             let weights: IndexSet<KernelProperties<'_>> = collect_kernel_properties(ob);
-            update_kernel_properties(properties, ob.signal().uid.as_str(), weights)?;
+            update_kernel_properties(properties, ob.signal().uid, weights)?;
         }
         NodeKind::QaEvent(ob) => {
             for acquire in ob.acquires() {
                 let weights = collect_kernel_properties(acquire);
-                update_kernel_properties(properties, acquire.signal().uid.as_str(), weights)?;
+                update_kernel_properties(properties, acquire.signal().uid, weights)?;
             }
         }
         _ => {
@@ -591,10 +590,10 @@ pub(crate) fn collect_integration_kernels<'a>(
         let mut unique_pulse_ids = IndexSet::new();
         for weight in weight_properties {
             if unique_pulse_ids.contains(weight.pulse_id) {
-                return Err(Error::new(
-                    format!(
-                        "Using different integration kernels on a single signal '{signal_uid}' is unsupported. They either differ on the pulse definitions or on the oscillator frequency.",
-                    ).as_str()));
+                return Err(Error::new(format!(
+                    "Using different integration kernels on a single signal '{}' is unsupported. They either differ on the pulse definitions or on the oscillator frequency.",
+                    signal_uid.0
+                )));
             }
             unique_pulse_ids.insert(weight.pulse_id);
             unique_weights

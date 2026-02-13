@@ -21,7 +21,7 @@ use super::{AwgEventList, FeedbackRegisterIndex, Result, Samples, SeqcResults};
 use crate::device_traits::{self};
 use crate::ir::compilation_job::{AwgKey, AwgKind, ChannelIndex, DeviceKind, TriggerMode};
 use crate::ir::experiment::{AcquisitionType, Handle, SweepCommand};
-use crate::ir::{OscillatorFrequencySweepStep, ParameterOperation};
+use crate::ir::{OscillatorFrequencySweepStep, ParameterOperation, SignalUid};
 use crate::sample_waveforms::WaveDeclaration;
 use core::str;
 use indexmap::IndexMap;
@@ -339,7 +339,7 @@ struct SampledEventHandler<'a> {
     declarations_generator: SeqCGenerator,
     function_defs_generator: SeqCGenerator,
     wave_indices: WaveIndexTracker,
-    qa_signals_by_handle: &'a HashMap<Handle, (String, AwgKey)>,
+    qa_signals_by_handle: &'a HashMap<Handle, (SignalUid, AwgKey)>,
     feedback_register: Option<FeedbackRegisterIndex>,
     feedback_register_layout: &'a FeedbackRegisterLayout,
     feedback_register_config: FeedbackRegisterConfig,
@@ -362,7 +362,7 @@ struct SampledEventHandler<'a> {
 impl<'a> SampledEventHandler<'a> {
     pub(crate) fn new(
         awg: &'a Awg,
-        qa_signals_by_handle: &'a HashMap<Handle, (String, AwgKey)>,
+        qa_signals_by_handle: &'a HashMap<Handle, (SignalUid, AwgKey)>,
         feedback_register: Option<FeedbackRegisterIndex>,
         feedback_register_layout: &'a FeedbackRegisterLayout,
         emit_timing_comments: bool,
@@ -1252,11 +1252,11 @@ impl<'a> SampledEventHandler<'a> {
     fn register_bitshift(
         &self,
         register: &FeedbackRegister,
-        qa_signal: &str,
+        qa_signal: &SignalUid,
         force_local_alignment: bool, // default false
     ) -> (u8, u8, u16) {
         let mut register_bitshift = 0;
-        let qa_signal_opt = Some(qa_signal.to_string());
+        let qa_signal_opt = Some(*qa_signal);
         let mut found_width: Option<u8> = None;
         for register_item in &self.feedback_register_layout[register] {
             if register_item.signal == qa_signal_opt {
@@ -1271,7 +1271,10 @@ impl<'a> SampledEventHandler<'a> {
             }
         }
         let width = found_width.unwrap_or_else(|| {
-            panic!("Internal error: Signal {qa_signal} not found in register {register:?}")
+            panic!(
+                "Internal error: Signal {} not found in feedback register",
+                qa_signal.0
+            )
         });
         let mask = (1 << width) - 1;
         (register_bitshift, width, mask)
@@ -1705,7 +1708,7 @@ impl<'a> SampledEventHandler<'a> {
 pub(crate) fn handle_sampled_events(
     awg_events: AwgEventList,
     awg: &Awg,
-    qa_signals_by_handle: &HashMap<Handle, (String, AwgKey)>,
+    qa_signals_by_handle: &HashMap<Handle, (SignalUid, AwgKey)>,
     wave_declarations: &[WaveDeclaration],
     feedback_register: Option<FeedbackRegisterIndex>,
     feedback_register_layout: &FeedbackRegisterLayout,

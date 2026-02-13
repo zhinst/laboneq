@@ -1,6 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod builders;
 pub mod compilation_job;
 pub mod experiment;
 
@@ -13,3 +14,6 @@ pub use experiment::{
     QaEvent, ResetPrecompensationFilters, Section, SectionId, SectionInfo, SetOscillatorFrequency,
     SetOscillatorFrequencySweep, SignalFrequency, TriggerBitData,
 };
+
+// Re-exports
+pub use laboneq_dsl::types::SignalUid;

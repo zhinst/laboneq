@@ -23,6 +23,7 @@ from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.types.numpy_support import NumPyArray
 from laboneq.data.awg_info import AWGInfo, AwgKey
 from laboneq.data.compilation_job import DeviceInfo
+from laboneq.data.recipe import IntegratorAllocation
 from laboneq.data.scheduled_experiment import (
     HandleResultShape,
     ResultShapeInfo,
@@ -309,6 +310,7 @@ def construct_result_shape_info(
     combined_compiler_output: CombinedOutput,
     device_infos: list[DeviceInfo],
     compiler_settings: CompilerSettings,
+    integration_unit_allocation: list[IntegratorAllocation],
 ) -> ResultShapeInfo:
     extractor = _ResultShapeExtractor(rt_loop_properties, combined_compiler_output)
     extractor.run(execution)
@@ -320,6 +322,7 @@ def construct_result_shape_info(
         combined_compiler_output,
         compiler_settings,
         {di.uid: di for di in device_infos},
+        integration_unit_allocation,
     )
 
     return ResultShapeInfo(
@@ -334,6 +337,7 @@ def _calculate_result_lengths(
     combined_compiler_output: CombinedOutput,
     compiler_settings: CompilerSettings,
     device_infos: dict[str, DeviceInfo],
+    integration_unit_allocation: list[IntegratorAllocation],
 ) -> dict[AwgKey, int]:
     """Calculate the result length for each AWG core.
 
@@ -346,12 +350,17 @@ def _calculate_result_lengths(
     res_usage_collector = ResourceUsageCollector()
     for awg in awgs:
         for sig in awg.signals:
-            integrator_idx = (
-                sig.channels[0]
-                if rt_loop_properties.acquisition_type is not AcquisitionType.RAW
-                else None
-            )
-            result_source = ResultSource(awg.device_id, awg.awg_id, integrator_idx)
+            integration_unit = None
+            if rt_loop_properties.acquisition_type != AcquisitionType.RAW:
+                integration_unit = next(
+                    (u for u in integration_unit_allocation if u.signal_id == sig.id),
+                    None,
+                )
+                if integration_unit is None:
+                    continue
+                integration_unit = integration_unit.channels[0]
+
+            result_source = ResultSource(awg.device_id, awg.awg_id, integration_unit)
             # NOTE: the mapping comes from a single RT artifact, hence it is already
             # adjusted for chunking. The result_length calculated below is basically
             # the result length for a single chunk of the experiment.

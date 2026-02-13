@@ -1,9 +1,14 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::{HashMap, HashSet};
+
+use laboneq_units::tinysample::tinysamples_to_samples;
+
 use crate::Result;
 use crate::awg_delays::calculate_awg_delays;
 use crate::ir;
+use crate::ir::SignalUid;
 use crate::ir::compilation_job::{AwgCore, DeviceKind};
 use crate::passes::{
     handle_acquire, handle_amplitude_registers, handle_frame_changes, handle_hw_phase_resets,
@@ -12,8 +17,6 @@ use crate::passes::{
     handle_triggers, lower_for_awg,
 };
 use crate::virtual_signal::create_virtual_signals;
-use laboneq_units::tinysample::tinysamples_to_samples;
-use std::collections::{HashMap, HashSet};
 
 /// Transform the IR program into a AWG events for the target AWG.
 ///
@@ -24,7 +27,7 @@ pub(crate) fn transform_ir_to_awg_events(
     program: ir::IrNode,
     awg: &AwgCore,
     settings: &crate::CodeGeneratorSettings,
-    signal_delays: &HashMap<&str, ir::Samples>,
+    signal_delays: &HashMap<SignalUid, ir::Samples>,
 ) -> Result<ir::IrNode> {
     let awg_timing: crate::awg_delays::AwgTiming = calculate_awg_delays(awg, signal_delays)?;
     let mut program = program;

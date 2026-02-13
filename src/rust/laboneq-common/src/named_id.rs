@@ -60,6 +60,15 @@ impl NamedIdStore {
     pub fn resolve(&self, uid: impl Into<NamedId>) -> Option<&str> {
         self.interner.resolve(Into::<NamedId>::into(uid).uid)
     }
+
+    /// Resolve a unique ID to its original string.
+    ///
+    /// The function will panic if the ID is not found.
+    pub fn resolve_unchecked(&self, uid: impl Into<NamedId>) -> &str {
+        self.interner
+            .resolve(Into::<NamedId>::into(uid).uid)
+            .expect("ID not found")
+    }
 }
 
 /// Create a new message with resolved named IDs.

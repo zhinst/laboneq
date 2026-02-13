@@ -1,3 +1,26 @@
+# LabOne Q 26.4.0b1 (2026-02-12)
+
+## Features
+
+- Session now supports automatic system profile fetching and caching when connecting to hardware. Use the new `system_profile` parameter in the Session constructor to explicitly provide a profile, or let it auto-load from cache when needed.
+- Ported event list generation (required for Pulse Sheet Viewer) from Python to Rust for improved performance.
+
+## Bug Fixes
+
+- Fixed a bug where a read timeout occurred when running LRT after non-LRT, due to LabOne Q enabling MSD by default even for two states for non-LRT experiments. MSD is now explicitly disabled for LRT.
+- Fixed a bug where hardware modulation was not applied when using a short readout on SHFQA with the LRT option.
+- Fixed a bug where OutputSimulator did not properly decompress long readout (LRT) waveforms on SHFQA, so that simulated output did not match the full hardware playback.
+- Fixed a bug where PSV crashed if a zero-length trigger was present.
+- Fixed a bug where automatic measure section length in QPU did not take readout pulse into account.
+- Fixed a bug where creating an experiment in a different thread than where LabOne Q was originally imported caused a crash.
+
+## Removals from the Codebase
+
+- Removed the `update_qubits` and `update_quantum_elements` methods, which were deprecated in LabOne Q 26.1. Please use the `update` method instead.
+- Removed the following methods from the `QPU` class: `copy_qubits` (deprecated in v2.52.0, please use `copy_quantum_elements` instead), `override_qubits` (deprecated in v2.52.0, please use `override_quantum_elements` instead), `qubit_by_uid` (deprecated in v2.52.0, please use `__getitem__` instead), `quantum_element_by_uid` (deprecated in v2.55.0, please use `__getitem__` instead). Removed the following attributes from the `QPU` class: `qubits` (deprecated in v2.52.0, please use `quantum_elements` instead), `_qubit_map` (deprecated in v2.52.0, please use `_quantum_element_map` instead).
+- Removed the deprecated DataStore class and associated SQLite-based data storage functionality.
+
+
 # LabOne Q 26.1.0 (2026-01-30)
 
 ## Features

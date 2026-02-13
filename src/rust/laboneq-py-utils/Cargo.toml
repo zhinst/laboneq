@@ -1,0 +1,22 @@
+[package]
+name = "laboneq-py-utils"
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+pyo3 = { workspace = true }
+
+laboneq-dsl = { workspace = true }
+laboneq-units = { workspace = true }
+laboneq-common = { workspace = true }
+laboneq-ir = { workspace = true }
+numeric-array = { workspace = true, features = ["pyo3"] }
+
+[lints]
+workspace = true

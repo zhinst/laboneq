@@ -2,15 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use crate::scheduler::experiment::Experiment;
-use crate::scheduler::pulse::{PulseDef, PulseKind};
 use crate::scheduler::signal_view::SignalView;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::{Acquire, Operation, PlayPulse};
 use laboneq_dsl::types::{Marker, PulseUid, SignalUid, ValueOrParameter};
+use laboneq_py_utils::pulse::{PulseDef, PulseKind};
 use laboneq_units::duration::{Duration, Second, seconds};
 
 /// Resolve missing pulses.
@@ -28,7 +29,7 @@ pub(super) fn resolve_pulses(
     signals: &HashMap<SignalUid, SignalView>,
 ) -> Result<()> {
     let mut ctx = Context {
-        id_store: &mut experiment.id_store,
+        id_store: Arc::get_mut(&mut experiment.id_store).unwrap(),
         pulses: &mut experiment.pulses,
         signals,
     };

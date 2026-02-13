@@ -1,10 +1,13 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::ir::compilation_job::{AwgCore, AwgKey, Signal};
+use crate::ir::compilation_job::{AwgCore, AwgKey, DeviceUid, Signal};
 use crate::ir::experiment::Handle;
-use crate::ir::{IrNode, NodeKind, Samples};
-use crate::{Error, Result};
+use crate::ir::{IrNode, NodeKind, Samples, SignalUid};
+use crate::result::IntegrationUnitAllocation;
+use crate::{
+    Error, FeedbackRegister, FeedbackRegisterLayout, Result, SingleFeedbackRegisterLayoutItem,
+};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
@@ -15,8 +18,8 @@ pub(crate) enum FeedbackRegisterAllocation {
 }
 
 #[derive(Debug, Clone)]
-struct HandleInfo<'a> {
-    signal: &'a str,
+struct HandleInfo {
+    signal: SignalUid,
     global: bool,
     // Whether the handle is used for feedback or not
     is_feedback: bool,
@@ -24,10 +27,10 @@ struct HandleInfo<'a> {
     timestamps: Vec<Samples>,
 }
 
-fn collect_handles<'a>(
-    node: &'a IrNode,
+fn collect_handles(
+    node: &IrNode,
     offset: &Samples,
-    handles: &mut HashMap<Handle, HandleInfo<'a>>,
+    handles: &mut HashMap<Handle, HandleInfo>,
 ) -> Result<()> {
     match node.data() {
         NodeKind::AcquirePulse(ob) => {
@@ -37,7 +40,7 @@ fn collect_handles<'a>(
                 handles.insert(
                     ob.handle.clone(),
                     HandleInfo {
-                        signal: ob.signal.uid.as_str(),
+                        signal: ob.signal.uid,
                         global: false,
                         is_feedback: false,
                         timestamps: vec![offset + *node.offset()],
@@ -113,9 +116,9 @@ fn collect_handles<'a>(
 ///
 /// The maximum number of feedback registers is 32, when exceeding this limit,
 /// an error is returned.
-fn allocate_feedback_registers<'a>(
-    awgs: &[&'a AwgCore],
-    handles: &HashMap<Handle, HandleInfo<'a>>,
+fn allocate_feedback_registers(
+    awgs: &[AwgCore],
+    handles: &HashMap<Handle, HandleInfo>,
 ) -> Result<HashMap<AwgKey, FeedbackRegisterAllocation>> {
     let mut signal_to_handle = HashMap::new();
     for info in handles.values() {
@@ -129,7 +132,7 @@ fn allocate_feedback_registers<'a>(
     let mut target_feedback_registers: HashMap<AwgKey, FeedbackRegisterAllocation> = HashMap::new();
     for awg in awgs.iter() {
         for signal in &awg.signals {
-            if let Some(handle) = signal_to_handle.get(signal.uid.as_str()) {
+            if let Some(handle) = signal_to_handle.get(&signal.uid) {
                 if target_feedback_registers.contains_key(&awg.key()) {
                     continue;
                 }
@@ -166,7 +169,7 @@ fn evaluate_simultaneous_acquires(
                 .entry(*timestamp)
                 .or_default()
                 .push(Acquisition {
-                    signal: info.signal.to_string(),
+                    signal: info.signal,
                     handle: handle.clone(),
                 });
         }
@@ -174,26 +177,26 @@ fn evaluate_simultaneous_acquires(
     Ok(sim_acquires.into_values().collect())
 }
 
-pub(crate) struct FeedbackSource<'a> {
-    pub signal: &'a Signal,
+pub(crate) struct FeedbackSource {
+    pub signal: SignalUid,
     pub awg_key: AwgKey,
 }
 
 pub struct Acquisition {
     pub handle: Handle,
-    pub signal: String,
+    pub signal: SignalUid,
 }
 
-pub(crate) struct FeedbackConfig<'a> {
+pub(crate) struct FeedbackConfig {
     target_feedback_registers: HashMap<AwgKey, FeedbackRegisterAllocation>,
-    feedback_sources: HashMap<Handle, FeedbackSource<'a>>,
+    feedback_sources: HashMap<Handle, FeedbackSource>,
     acquisitions: Vec<Vec<Acquisition>>,
 }
 
-impl<'a> FeedbackConfig<'a> {
+impl FeedbackConfig {
     fn new(
         target_feedback_registers: HashMap<AwgKey, FeedbackRegisterAllocation>,
-        feedback_sources: HashMap<Handle, FeedbackSource<'a>>,
+        feedback_sources: HashMap<Handle, FeedbackSource>,
         acquisitions: Vec<Vec<Acquisition>>,
     ) -> Self {
         Self {
@@ -212,7 +215,7 @@ impl<'a> FeedbackConfig<'a> {
     }
 
     /// Feedback source information for the given handle (QA signal information).
-    pub(crate) fn feedback_source(&self, handle: &Handle) -> Option<&FeedbackSource<'a>> {
+    pub(crate) fn feedback_source(&self, handle: &Handle) -> Option<&FeedbackSource> {
         self.feedback_sources.get(handle)
     }
 
@@ -221,8 +224,8 @@ impl<'a> FeedbackConfig<'a> {
         self.feedback_sources.keys()
     }
 
-    pub(crate) fn into_acquisitions(self) -> Vec<Vec<Acquisition>> {
-        self.acquisitions
+    pub(crate) fn take_acquisitions(&mut self) -> Vec<Vec<Acquisition>> {
+        std::mem::take(&mut self.acquisitions)
     }
 }
 
@@ -230,33 +233,276 @@ impl<'a> FeedbackConfig<'a> {
 ///
 /// The function assigns feedback registers to the AWGs, where the assignment is based on the
 /// order of the AWGs. It will also collect the signal information associated with each measurement handle.
-pub(crate) fn collect_feedback_config<'a>(
-    node: &IrNode,
-    awgs: &[&'a AwgCore],
-) -> Result<FeedbackConfig<'a>> {
+pub(crate) fn collect_feedback_config(node: &IrNode, awgs: &[AwgCore]) -> Result<FeedbackConfig> {
     let mut handle_to_signal = HashMap::new();
     collect_handles(node, node.offset(), &mut handle_to_signal)?;
     let target_feedback_registers = allocate_feedback_registers(awgs, &handle_to_signal)?;
     let acquisitions = evaluate_simultaneous_acquires(&handle_to_signal)?;
-    let mut signal_lookup: HashMap<&str, (&Signal, AwgKey)> = HashMap::new();
+    let mut signal_lookup: HashMap<SignalUid, (&Signal, AwgKey)> = HashMap::new();
     for awg in awgs.iter() {
         for signal in &awg.signals {
-            signal_lookup.insert(signal.uid.as_str(), (signal, awg.key()));
+            signal_lookup.insert(signal.uid, (signal, awg.key()));
         }
     }
     let mut feedback_sources = HashMap::new();
     for (handle, handle_info) in handle_to_signal {
         let signal_info = signal_lookup
-            .get(handle_info.signal)
+            .get(&handle_info.signal)
             .expect("Internal error: Expected signal for handle");
         feedback_sources.insert(
             handle,
             FeedbackSource {
-                signal: signal_info.0,
+                signal: signal_info.0.uid,
                 awg_key: signal_info.1.clone(),
             },
         );
     }
     let config = FeedbackConfig::new(target_feedback_registers, feedback_sources, acquisitions);
     Ok(config)
+}
+
+/// Calculate the feedback register layout based on the integration unit allocations and
+/// the feedback configuration.
+pub(crate) fn calculate_feedback_register_layout(
+    awgs: &[AwgCore],
+    integration_unit_alloc: &[IntegrationUnitAllocation],
+    feedback_config: &FeedbackConfig,
+) -> FeedbackRegisterLayout {
+    let mut feedback_register_alloc = Vec::new();
+    for awg in awgs.iter() {
+        if let Some(reg) = feedback_config.target_feedback_register(&awg.key()) {
+            for signal in &awg.signals {
+                feedback_register_alloc.push(FeedbackRegisterAlloc {
+                    signal: signal.uid,
+                    awg: awg.key(),
+                    device: awg.device.uid().clone(),
+                    is_local: matches!(reg, FeedbackRegisterAllocation::Local),
+                });
+            }
+        }
+    }
+    calculate_feedback_register_layout_impl(integration_unit_alloc, &feedback_register_alloc)
+}
+
+struct FeedbackRegisterAlloc {
+    signal: SignalUid,
+    awg: AwgKey,
+    device: DeviceUid,
+    is_local: bool,
+}
+
+fn calculate_feedback_register_layout_impl(
+    integration_unit_alloc: &[IntegrationUnitAllocation],
+    feedback_register_alloc: &[FeedbackRegisterAlloc],
+) -> FeedbackRegisterLayout {
+    let mut integration_unit_alloc = integration_unit_alloc.iter().collect::<Vec<_>>();
+    // Sort by channels to have a deterministic allocation order
+    integration_unit_alloc.sort_by_key(|k| &k.channels);
+
+    let mut feedback_register_layout = FeedbackRegisterLayout::default();
+    for alloc in integration_unit_alloc {
+        let Some(feedback_alloc) = feedback_register_alloc
+            .iter()
+            .find(|a| a.signal == alloc.signal)
+        else {
+            continue;
+        };
+        let register = if feedback_alloc.is_local {
+            FeedbackRegister::Local {
+                device: feedback_alloc.device.clone(),
+            }
+        } else {
+            FeedbackRegister::Global {
+                awg_key: feedback_alloc.awg.clone(),
+            }
+        };
+
+        let bit_width = if feedback_alloc.is_local || alloc.kernel_count > 1 {
+            2
+        } else {
+            1
+        };
+
+        let item = SingleFeedbackRegisterLayoutItem {
+            width: bit_width,
+            signal: Some(alloc.signal),
+        };
+        feedback_register_layout
+            .entry(register.clone())
+            .or_default()
+            .push(item);
+
+        if (bit_width as usize) < alloc.channels.len() {
+            // On UHFQA, with `AcquisitionType.INTEGRATION`, we have
+            // 2 integrators per signal. For discrimination, that 2nd integrator is irrelevant, so
+            // we mark that bit as a 'dummy' field.
+            feedback_register_layout.get_mut(&register).unwrap().push(
+                SingleFeedbackRegisterLayoutItem {
+                    width: 1,
+                    signal: None,
+                },
+            );
+        }
+    }
+    feedback_register_layout
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_integration_unit_alloc(
+        signal: SignalUid,
+        channels: Vec<u8>,
+        kernel_count: u8,
+    ) -> IntegrationUnitAllocation {
+        IntegrationUnitAllocation {
+            signal,
+            channels,
+            kernel_count,
+        }
+    }
+
+    fn create_feedback_register_alloc(
+        signal: SignalUid,
+        device: &str,
+        awg_index: u16,
+        is_local: bool,
+    ) -> FeedbackRegisterAlloc {
+        FeedbackRegisterAlloc {
+            signal,
+            awg: AwgKey::new(device.into(), awg_index),
+            device: device.into(),
+            is_local,
+        }
+    }
+
+    #[test]
+    fn test_empty_inputs() {
+        let layout = calculate_feedback_register_layout_impl(&[], &[]);
+        assert!(layout.is_empty());
+    }
+
+    #[test]
+    fn test_single_local_feedback_register() {
+        let integration_allocs = vec![create_integration_unit_alloc(0.into(), vec![0], 1)];
+        let feedback_allocs = vec![create_feedback_register_alloc(0.into(), "dev1", 0, true)];
+
+        let layout = calculate_feedback_register_layout_impl(&integration_allocs, &feedback_allocs);
+
+        assert_eq!(layout.len(), 1);
+        let local_register = FeedbackRegister::Local {
+            device: "dev1".into(),
+        };
+        let items = layout.get(&local_register).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].width, 2); // Local feedback always gets width 2
+        assert_eq!(items[0].signal, Some(0.into()));
+    }
+
+    #[test]
+    fn test_single_global_feedback_register() {
+        let integration_allocs = vec![create_integration_unit_alloc(0.into(), vec![0], 1)];
+        let feedback_allocs = vec![create_feedback_register_alloc(0.into(), "dev1", 0, false)];
+
+        let layout = calculate_feedback_register_layout_impl(&integration_allocs, &feedback_allocs);
+
+        assert_eq!(layout.len(), 1);
+        let global_register = FeedbackRegister::Global {
+            awg_key: AwgKey::new("dev1".into(), 0),
+        };
+        let items = layout.get(&global_register).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].width, 1); // Global with single kernel gets width 1
+        assert_eq!(items[0].signal, Some(0.into()));
+    }
+
+    #[test]
+    fn test_multiple_kernel_case() {
+        let integration_allocs = vec![create_integration_unit_alloc(0.into(), vec![0, 1], 2)];
+        let feedback_allocs = vec![create_feedback_register_alloc(0.into(), "dev1", 0, false)];
+
+        let layout = calculate_feedback_register_layout_impl(&integration_allocs, &feedback_allocs);
+
+        let global_register = FeedbackRegister::Global {
+            awg_key: AwgKey::new("dev1".into(), 0),
+        };
+        let items = layout.get(&global_register).unwrap();
+        assert_eq!(items[0].width, 2); // Multiple kernels get width 2 even if global
+    }
+
+    #[test]
+    fn test_uhfqa_case_with_dummy_field() {
+        // UHFQA case: bit_width (1) < channels.len() (2) should add dummy field
+        let integration_allocs = vec![
+            create_integration_unit_alloc(0.into(), vec![0, 1], 1), // 2 channels, 1 kernel
+        ];
+        let feedback_allocs = vec![
+            create_feedback_register_alloc(0.into(), "dev1", 0, false), // global, single kernel -> width 1
+        ];
+
+        let layout = calculate_feedback_register_layout_impl(&integration_allocs, &feedback_allocs);
+
+        let global_register = FeedbackRegister::Global {
+            awg_key: AwgKey::new("dev1".into(), 0),
+        };
+        let items = layout.get(&global_register).unwrap();
+        assert_eq!(items.len(), 2); // Original item + dummy field
+        assert_eq!(items[0].width, 1);
+        assert_eq!(items[0].signal, Some(0.into()));
+        assert_eq!(items[1].width, 1); // Dummy field
+        assert_eq!(items[1].signal, None); // Dummy has no signal
+    }
+
+    #[test]
+    fn test_signal_without_feedback_allocation() {
+        let integration_allocs = vec![
+            create_integration_unit_alloc(0.into(), vec![0], 1),
+            create_integration_unit_alloc(1.into(), vec![1], 1), // No feedback allocation for sig2
+        ];
+        let feedback_allocs = vec![create_feedback_register_alloc(0.into(), "dev1", 0, true)];
+
+        let layout = calculate_feedback_register_layout_impl(&integration_allocs, &feedback_allocs);
+
+        // Only sig1 should be in the layout, sig2 should be skipped
+        assert_eq!(layout.len(), 1);
+        let local_register = FeedbackRegister::Local {
+            device: "dev1".into(),
+        };
+        let items = layout.get(&local_register).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].signal, Some(0.into()));
+    }
+
+    #[test]
+    fn test_multiple_signals_mixed_registers() {
+        let integration_allocs = vec![
+            create_integration_unit_alloc(0.into(), vec![0], 1),
+            create_integration_unit_alloc(1.into(), vec![1], 1),
+        ];
+        let feedback_allocs = vec![
+            create_feedback_register_alloc(0.into(), "dev1", 0, true), // local
+            create_feedback_register_alloc(1.into(), "dev2", 0, false), // global
+        ];
+
+        let layout = calculate_feedback_register_layout_impl(&integration_allocs, &feedback_allocs);
+
+        assert_eq!(layout.len(), 2); // Two different registers
+
+        // Check local register
+        let local_register = FeedbackRegister::Local {
+            device: "dev1".into(),
+        };
+        let local_items = layout.get(&local_register).unwrap();
+        assert_eq!(local_items[0].signal, Some(0.into()));
+        assert_eq!(local_items[0].width, 2);
+
+        // Check global register
+        let global_register = FeedbackRegister::Global {
+            awg_key: AwgKey::new("dev2".into(), 0),
+        };
+        let global_items = layout.get(&global_register).unwrap();
+        assert_eq!(global_items[0].signal, Some(1.into()));
+        assert_eq!(global_items[0].width, 1);
+    }
 }

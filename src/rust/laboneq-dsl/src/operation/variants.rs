@@ -1,13 +1,15 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
+use std::num::NonZeroU32;
+
 use crate::types::{
     AcquisitionType, AveragingMode, ComplexOrFloat, ExternalParameterUid, HandleUid, Marker,
     MatchTarget, NumericLiteral, ParameterUid, PrngSampleUid, PulseParameterUid, PulseUid,
     RepetitionMode, SectionAlignment, SectionUid, SignalUid, Trigger, ValueOrParameter,
 };
 use laboneq_units::duration::{Duration, Second};
-use std::collections::HashMap;
 
 impl Reserve {
     pub fn new(signal: SignalUid) -> Self {
@@ -81,7 +83,7 @@ pub struct PrngSetup {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PrngLoop {
     pub uid: SectionUid,
-    pub count: u32,
+    pub count: NonZeroU32,
     pub sample_uid: PrngSampleUid,
 }
 
@@ -98,7 +100,7 @@ pub struct ResetOscillatorPhase {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Chunking {
-    Count { count: usize },
+    Count { count: NonZeroU32 },
     Auto,
 }
 
@@ -106,7 +108,7 @@ pub enum Chunking {
 pub struct Sweep {
     pub uid: SectionUid,
     pub parameters: Vec<ParameterUid>,
-    pub count: u32,
+    pub count: NonZeroU32,
     pub alignment: SectionAlignment,
     pub reset_oscillator_phase: bool,
     pub chunking: Option<Chunking>,
@@ -129,7 +131,7 @@ pub struct Match {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AveragingLoop {
     pub uid: SectionUid,
-    pub count: u32,
+    pub count: NonZeroU32,
     pub acquisition_type: AcquisitionType,
     pub averaging_mode: AveragingMode,
     pub repetition_mode: RepetitionMode,
@@ -164,7 +166,7 @@ pub struct SectionInfo<'a> {
 
 pub struct LoopInfo<'a> {
     pub uid: &'a SectionUid,
-    pub count: u32,
+    pub count: NonZeroU32,
     pub parameters: &'a [ParameterUid],
     pub reset_oscillator_phase: bool,
     pub alignment: &'a SectionAlignment,

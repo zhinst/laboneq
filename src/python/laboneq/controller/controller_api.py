@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from enum import Enum, auto
 from typing import TYPE_CHECKING
 
@@ -21,6 +22,12 @@ class SubmissionHandle:
     all interactions are done via the ControllerAPI methods.
     """
 
+    def __init__(self, handle_id: int | None = None):
+        self.id = id(self) if handle_id is None else handle_id
+
+    def __hash__(self) -> int:
+        return self.id
+
 
 class SubmissionStatus(Enum):
     """The status of an experiment submission."""
@@ -37,6 +44,13 @@ class ControllerAPI(ABC):
     @abstractmethod
     async def shutdown(self):
         """Shut down the controller and release all resources."""
+
+    @abstractmethod
+    async def update_neartime_callbacks(self, neartime_callbacks: dict[str, Callable]):
+        """Update the neartime callbacks used by the controller.
+
+        This is only present to support the legacy session, don't use it in new code.
+        """
 
     @abstractmethod
     async def submit_experiment(

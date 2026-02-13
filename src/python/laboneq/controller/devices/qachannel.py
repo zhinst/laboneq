@@ -99,6 +99,13 @@ def ch_uses_lrt(device_uid: str, channel: int, recipe_data: RecipeData) -> bool:
     )
 
 
+def ch_hw_modulated(device_uid: str, channel: int, recipe_data: RecipeData) -> bool:
+    for o in recipe_data.recipe.oscillator_params:
+        if o.device_id == device_uid and o.channel == channel:
+            return True
+    return False
+
+
 def _calc_theoretical_assignment_vec(num_weights: int) -> np.ndarray:
     """Calculates the theoretical assignment vector, assuming that
     zhinst.utils.QuditSettings ws used to calculate the weights
@@ -413,7 +420,12 @@ class QAChannel(SHFChannelBase):
         if measurement is not None:
             uses_lrt = ch_uses_lrt(self._device_uid, self._core_index, recipe_data)
             if self._long_readout_available:
-                nc.add("modulation/enable", 1 if uses_lrt else 0)
+                nc.add(
+                    "modulation/enable",
+                    1
+                    if ch_hw_modulated(self._device_uid, self._core_index, recipe_data)
+                    else 0,
+                )
 
             if is_spectroscopy(acquisition_type):
                 nc.add("spectroscopy/trigger/channel", 36 + self._core_index)
@@ -423,6 +435,7 @@ class QAChannel(SHFChannelBase):
                 nc.add("readout/multistate/qudits/*/enable", 0, cache=False)
                 nc.barrier()
 
+                nc.add("readout/multistate/enable", 0 if uses_lrt else 1)
                 if not uses_lrt:
                     for (
                         integrator_allocation
@@ -441,7 +454,6 @@ class QAChannel(SHFChannelBase):
                         )
                         integration_unit_index = integrator_allocation.channels[0]
 
-                        nc.add("readout/multistate/enable", 1)
                         nc.add("readout/multistate/zsync/packed", 1)
                         qudit_path = (
                             f"readout/multistate/qudits/{integration_unit_index}"

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::Operation;
@@ -15,24 +16,26 @@ pub struct ChunkingInfo {
     /// Current chunking index (0-based).
     pub index: usize,
     /// Total number of chunks.
-    pub count: usize,
+    pub count: NonZeroU32,
 }
 
 impl ChunkingInfo {
-    fn current_chunk_range(&self, total_iterations: usize) -> std::ops::Range<usize> {
-        let chunk_size = total_iterations / self.count;
-        let start = self.index * chunk_size;
-        let end = ((self.index + 1) * chunk_size).min(total_iterations);
+    fn current_chunk_range(&self, total_iterations: NonZeroU32) -> std::ops::Range<usize> {
+        let chunk_size = total_iterations.get() / self.count.get();
+        let start = self.index * chunk_size as usize;
+        let end = ((self.index + 1) * chunk_size as usize).min(total_iterations.get() as usize);
         start..end
     }
 
-    fn chunk_size(&self, total_iterations: usize) -> usize {
-        let chunk_size = total_iterations / self.count;
+    fn chunk_size(&self, total_iterations: NonZeroU32) -> NonZeroU32 {
+        let chunk_size = total_iterations.get() / self.count.get();
         assert!(
-            total_iterations.is_multiple_of(chunk_size),
+            total_iterations.get().is_multiple_of(chunk_size),
             "sweep is not evenly divided into chunks"
         );
         chunk_size
+            .try_into()
+            .expect("Expected chunk size to be non-zero and fit into u32")
     }
 }
 
@@ -62,11 +65,10 @@ fn chunk_experiment_impl(
             }
             for param in obj.parameters.iter() {
                 let old_param = parameters.get(param).unwrap();
-                let new_param =
-                    old_param.slice(chunking_info.current_chunk_range(obj.count as usize));
+                let new_param = old_param.slice(chunking_info.current_chunk_range(obj.count));
                 parameters.insert(old_param.uid, new_param);
             }
-            obj.count = chunking_info.chunk_size(obj.count as usize) as u32;
+            obj.count = chunking_info.chunk_size(obj.count);
             obj.chunking = None;
             Ok(true)
         }
@@ -92,19 +94,22 @@ mod tests {
     use laboneq_dsl::types::{ParameterUid, SectionUid, SweepParameter};
     use numeric_array::NumericArray;
     use std::collections::HashMap;
+    use std::num::NonZeroU32;
     use std::vec;
 
     #[test]
     fn test_chunk_experiment_first_chunk() {
         let parameter0 =
-            SweepParameter::new(ParameterUid(NamedId::debug_id(1)), Vec::from_iter(0..12));
+            SweepParameter::new(ParameterUid(NamedId::debug_id(1)), Vec::from_iter(0..12)).unwrap();
         let target_loop_uid = SectionUid(NamedId::debug_id(1));
         let chunked_sweep = SweepBuilder::new(
             target_loop_uid,
             vec![parameter0.uid],
-            parameter0.len() as u32,
+            (parameter0.len() as u32).try_into().unwrap(),
         )
-        .chunking(Chunking::Count { count: 3 })
+        .chunking(Chunking::Count {
+            count: NonZeroU32::new(3).unwrap(),
+        })
         .build();
         let mut root = node_structure!(Operation::Root, [(Operation::Sweep(chunked_sweep), [])]);
 
@@ -113,7 +118,10 @@ mod tests {
         chunk_experiment(
             &mut root,
             &mut parameters,
-            &ChunkingInfo { index: 0, count: 3 },
+            &ChunkingInfo {
+                index: 0,
+                count: 3.try_into().unwrap(),
+            },
         )
         .unwrap();
 
@@ -125,7 +133,7 @@ mod tests {
         );
 
         let chunked_sweep_expected =
-            SweepBuilder::new(target_loop_uid, vec![parameter0.uid], 4).build();
+            SweepBuilder::new(target_loop_uid, vec![parameter0.uid], 4.try_into().unwrap()).build();
 
         let root_expected = node_structure!(
             Operation::Root,
@@ -137,14 +145,16 @@ mod tests {
     #[test]
     fn test_chunk_experiment_last_chunk() {
         let parameter0 =
-            SweepParameter::new(ParameterUid(NamedId::debug_id(1)), Vec::from_iter(0..12));
+            SweepParameter::new(ParameterUid(NamedId::debug_id(1)), Vec::from_iter(0..12)).unwrap();
         let target_loop_uid = SectionUid(NamedId::debug_id(1));
         let chunked_sweep = SweepBuilder::new(
             target_loop_uid,
             vec![parameter0.uid],
-            parameter0.len() as u32,
+            (parameter0.len() as u32).try_into().unwrap(),
         )
-        .chunking(Chunking::Count { count: 3 })
+        .chunking(Chunking::Count {
+            count: NonZeroU32::new(3).unwrap(),
+        })
         .build();
 
         // Source experiment
@@ -156,7 +166,10 @@ mod tests {
         chunk_experiment(
             &mut root,
             &mut parameters,
-            &ChunkingInfo { index: 2, count: 3 },
+            &ChunkingInfo {
+                index: 2,
+                count: 3.try_into().unwrap(),
+            },
         )
         .unwrap();
 
@@ -168,7 +181,7 @@ mod tests {
         );
 
         let chunked_sweep_expected =
-            SweepBuilder::new(target_loop_uid, vec![parameter0.uid], 4).build();
+            SweepBuilder::new(target_loop_uid, vec![parameter0.uid], 4.try_into().unwrap()).build();
 
         let root_expected = node_structure!(
             Operation::Root,

@@ -17,6 +17,7 @@ from laboneq.workflow.blocks import (
 )
 from laboneq.workflow.core import (
     Workflow,
+    WorkflowBuilder,
     workflow,
 )
 from laboneq.workflow.exceptions import WorkflowError
@@ -47,6 +48,7 @@ __all__ = [  # noqa: RUF022
     "workflow",
     # Core
     "Workflow",
+    "WorkflowBuilder",
     "WorkflowResult",
     "TaskResult",
     # Options

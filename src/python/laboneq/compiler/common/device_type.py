@@ -28,7 +28,6 @@ class DeviceTraits:
     channels_per_awg: int
     is_qa_device: bool
     sampling_rate_2GHz: float = None
-    num_integration_units_per_acquire_signal: int = None
     oscillator_set_latency: float = 0.0
     reset_osc_duration: float = 0.0
     lo_frequency_granularity: Optional[float] = None
@@ -102,7 +101,6 @@ class DeviceType(DeviceTraits, Enum):
         supports_complex_waves=False,
         supports_precompensation=False,
         channels_per_awg=2,
-        num_integration_units_per_acquire_signal=2,
         # Verified by PW (2022-10-13) on dev2086, rev 68366. Observed ~25 ns.
         reset_osc_duration=40e-9,
         is_qa_device=True,
@@ -128,7 +126,6 @@ class DeviceType(DeviceTraits, Enum):
         supports_complex_waves=True,
         supports_precompensation=False,
         channels_per_awg=1,
-        num_integration_units_per_acquire_signal=1,
         oscillator_set_latency=88e-9,
         # Verified by PW (2022-10-13) on dev12093, rev 68689. Observed ~50 ns.
         reset_osc_duration=56e-9,
@@ -175,7 +172,6 @@ class DeviceType(DeviceTraits, Enum):
         device_class=0x1,
         oscillator_set_latency=36e-9,
         reset_osc_duration=32e-9,
-        num_integration_units_per_acquire_signal=1,
     )
 
     def __repr__(self):

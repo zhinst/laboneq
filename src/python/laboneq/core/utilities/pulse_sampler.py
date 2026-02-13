@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, cast
+from typing import Any, Callable, Literal
 
 import numpy as np
 
@@ -13,6 +13,14 @@ from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.data.compilation_job import PulseDef
 
 _logger = logging.getLogger(__name__)
+
+
+class Marker:
+    selector: Literal["marker1", "marker2"]
+    enable: bool
+    start: float | None
+    length: float | None
+    pulse: PulseDef | None
 
 
 def length_to_samples(length, sampling_rate) -> int:
@@ -102,8 +110,8 @@ def sample_pulse(
     samples: np.ndarray | None = None,
     mixer_type: MixerType | None = MixerType.IQ,
     pulse_parameters: dict[str, Any] | None = None,
-    markers: list[dict[str, Any]] | None = None,
-    pulse_defs: dict[str, PulseDef] | None = None,
+    markers: list[Marker] | None = None,
+    subslice: tuple[int, int] | None = None,
 ):
     """Create a waveform from a pulse definition.
 
@@ -124,6 +132,8 @@ def sample_pulse(
           together with samples.
         sampling_rate: Sampling rate of the device the pulse is played on.
         length: Pulse length in seconds
+        subslice: The (start, end) indices of the part of the pulse that actually should
+          be sampled. Defaults to (0, length).
         amplitude: Magnitude of the amplitude to multiply with the given pulse
         pulse_function: In case of a functional pulse, the function to sample
         modulation_frequency: The oscillator frequency (for software modulation if
@@ -133,7 +143,7 @@ def sample_pulse(
         mixer_type: Type of the mixer after the AWG. Only effective for IQ signals.
         pulse_parameters: Extra pulse parameters, passed to the sampler,
         markers: Configuration of the markers,
-        pulse_defs: Definitions of other pulses (may be referenced by marker spec),
+        pulse_defs: Definitions of other pulses (maybe referenced by marker spec),
     Returns:
         A dict with one ("samples_i", real case) or two ("samples_i" and
         "samples_q", complex case) ndarrays representing the sampled, scaled and
@@ -143,9 +153,7 @@ def sample_pulse(
     Raises:
         ValueError: Invalid combination of arguments
     """
-    markers = cast(
-        list, {} if markers is None else markers
-    )  # Better to never be None, but here we are.
+    markers = markers or []
     if pulse_function == "":
         pulse_function = None
 
@@ -153,8 +161,10 @@ def sample_pulse(
         raise ValueError(
             "Only one of samples or pulse_function may be given at the same time."
         )
-
-    num_samples = length_to_samples(length, sampling_rate)
+    length_samples = length_to_samples(length, sampling_rate)
+    (slice_start, slice_end) = subslice or (0, length_samples)
+    assert 0 <= slice_start < slice_end <= length_samples
+    num_samples = slice_end - slice_start
     pulse_parameters = pulse_parameters or {}
     if "amplitude" in pulse_parameters:
         amplitude *= pulse_parameters["amplitude"]
@@ -167,8 +177,9 @@ def sample_pulse(
             raise LabOneQException(
                 f"Function '{pulse_function}' is not registered in the library of pulse functions."
             )
+        eval_points = np.arange(slice_start, slice_end) / length_samples * 2.0 - 1.0
         samples = pulse_function_library[pulse_function](
-            np.linspace(-1, 1, num_samples, endpoint=False),
+            eval_points,
             length=length,
             amplitude=amplitude,
             sampling_rate=sampling_rate,
@@ -229,10 +240,9 @@ def sample_pulse(
     retval = {"samples_i": samples.real, "samples_q": samples.imag}
 
     for m in markers:
-        marker_pulse_id = m.get("pulse_id")
-        if marker_pulse_id is not None:
-            marker_pulse_def = pulse_defs[marker_pulse_id]
-            if m.get("length") is not None:
+        if m.pulse is not None:
+            marker_pulse_def = m.pulse
+            if m.length is not None:
                 raise LabOneQException(
                     "Specifying both waveform and length for the markers is not "
                     "supported. Please set markers either via "
@@ -248,18 +258,18 @@ def sample_pulse(
                 )
         else:
             marker_pulse_def = None
-            if (marker_length := m.get("length")) is None:
+            if (marker_length := m.length) is None:
                 marker_length = length
         m_sampled = sample_marker(
             len(samples),
             sampling_rate=sampling_rate,
-            enable=m.get("enable"),
-            start=m.get("start"),
+            enable=m.enable,
+            start=m.start,
             length=marker_length,
             pulse_def=marker_pulse_def,
         )
         if m_sampled is not None:
-            marker_selector = m["marker_selector"]
+            marker_selector = m.marker_selector
             retval[f"samples_{marker_selector}"] = m_sampled
 
     return retval

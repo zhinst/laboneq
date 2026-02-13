@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod error;
-pub mod ir;
 pub mod parameter_store;
 
 mod adjust_acquire_lengths;
@@ -16,6 +15,7 @@ mod resolve_parameters;
 mod resolve_repetition_mode;
 mod schedule_info;
 mod scheduled_node;
+mod scheduled_to_ir;
 mod scheduler;
 mod signal_info;
 mod timing_resolver;
@@ -26,7 +26,8 @@ pub use crate::experiment_context::ExperimentContext;
 pub use crate::parameter_store::{ParameterStore, ParameterStoreBuilder};
 pub use crate::scheduler::{ScheduledExperiment, schedule_experiment};
 pub use crate::signal_info::SignalInfo;
-pub use schedule_info::RepetitionMode;
-pub(crate) use schedule_info::ScheduleInfo;
-pub use scheduled_node::Node as ScheduledNode;
 pub use timing_resolver::FeedbackCalculator;
+
+pub(crate) use schedule_info::RepetitionMode;
+pub(crate) use schedule_info::ScheduleInfo;
+pub(crate) use scheduled_node::Node as ScheduledNode;

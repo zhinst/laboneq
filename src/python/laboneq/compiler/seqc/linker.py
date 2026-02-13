@@ -72,6 +72,12 @@ class CombinedRTOutputSeqC(CombinedOutput):
     measurements: list[codegen_rs.Measurement] = field(default_factory=list)
     total_execution_time: float = 0
     max_execution_time_per_step: float = 0
+    integration_unit_allocations: list[codegen_rs.IntegrationUnitAllocation] = field(
+        default_factory=list
+    )
+    channel_properties: dict[str, list[codegen_rs.ChannelProperties]] = field(
+        default_factory=dict
+    )
 
     def get_artifacts(self) -> CompilerArtifact:
         src: list[dict[str, str | bytes]] = []
@@ -134,9 +140,15 @@ class SeqCGenOutput(RTCompilerOutput):
     shfppc_sweep_configurations: dict[AwgKey, dict[str, object]]
     total_execution_time: float = 0
     measurements: list[codegen_rs.Measurement] = field(default_factory=list)
+    integration_unit_allocations: list[codegen_rs.IntegrationUnitAllocation] = field(
+        default_factory=list
+    )
+    channel_properties: dict[str, list[codegen_rs.ChannelProperties]] = field(
+        default_factory=dict
+    )
 
 
-def _check_compatibility(this, new):
+def _check_compatibility(this: SeqCGenOutput, new: SeqCGenOutput):
     if this.feedback_connections != new.feedback_connections:
         raise LabOneQException(
             "Feedback connections do not match between real-time iterations"
@@ -160,6 +172,10 @@ def _check_compatibility(this, new):
     if this.shfppc_sweep_configurations != new.shfppc_sweep_configurations:
         raise LabOneQException(
             "SHFPPC sweep configurations do not match between real-time iterations"
+        )
+    if set(this.integration_unit_allocations) != set(new.integration_unit_allocations):
+        raise LabOneQException(
+            "Integration unit allocations do not match between real-time iterations"
         )
 
 
@@ -238,6 +254,8 @@ class SeqCLinker(ILinker):
             parameter_phase_increment_map=parameter_phase_increment_map,
             shfppc_sweep_configurations=output.shfppc_sweep_configurations,
             measurements=output.measurements,
+            integration_unit_allocations=output.integration_unit_allocations,
+            channel_properties=output.channel_properties,
         )
 
     @staticmethod

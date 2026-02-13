@@ -127,6 +127,8 @@ fn insert_to_innermost_sweep(
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use super::*;
     use laboneq_common::named_id::NamedIdStore;
     use laboneq_dsl::{
@@ -141,7 +143,7 @@ mod tests {
             parameters: vec![],
             alignment: SectionAlignment::Right,
             reset_oscillator_phase: false,
-            count: 0,
+            count: NonZeroU32::new(1).unwrap(),
             chunking: None,
         }
     }
@@ -154,7 +156,7 @@ mod tests {
         AveragingLoop {
             uid: SectionUid(store.get_or_insert("shots")),
             acquisition_type: AcquisitionType::Spectroscopy,
-            count: 1,
+            count: NonZeroU32::new(1).unwrap(),
             averaging_mode,
             repetition_mode: RepetitionMode::Fastest,
             reset_oscillator_phase: false,

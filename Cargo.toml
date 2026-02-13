@@ -1,5 +1,5 @@
 [workspace.package]
-version = "26.1.0"
+version = "26.4.0-b1"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
 edition = "2024"
 publish = false
@@ -16,9 +16,9 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
+# 3rd party crates
 anyhow = "1.0"
 approx = "0.5.1"
-askama = "0.15.0"
 bitvec = "1.0"
 clap = "4.5.38"
 criterion = "0.8"
@@ -48,6 +48,21 @@ sha1 = "0.10.6"
 smallvec = "1.15.1"
 string-interner = "0.19.0"
 thiserror = "2.0"
+
+# 1st party
+codegenerator = { path = "src/rust/codegenerator" }
+interval-calculator = { path = "src/rust/interval-calculator" }
+laboneq-dsl = { path = "src/rust/laboneq-dsl" }
+laboneq-ir = { path = "src/rust/laboneq-ir" }
+laboneq-log = { path = "src/rust/laboneq-log" }
+laboneq-scheduler = { path = "src/rust/laboneq-scheduler" }
+numeric-array = { path = "src/rust/numeric-array" }
+codegenerator-py = { path = "src/rust/codegenerator-py" }
+codegenerator-utils = { path = "src/rust/codegenerator-utils" }
+laboneq-common = { path = "src/rust/laboneq-common" }
+laboneq-units = { path = "src/rust/laboneq-units" }
+laboneq-py-utils = { path = "src/rust/laboneq-py-utils" }
+rccow = { path = "src/rust/rccow" }
 
 [workspace.lints.rust]
 ambiguous_negative_literals = "warn"

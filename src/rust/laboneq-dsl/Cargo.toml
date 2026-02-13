@@ -13,9 +13,12 @@ version.workspace = true
 num-complex = { workspace = true }
 num-traits = { workspace = true }
 
-numeric-array = { path = "../numeric-array" }
-laboneq-common = { path = "../laboneq-common" }
-laboneq-units = { path = "../laboneq-units" }
+numeric-array = { workspace = true }
+laboneq-common = { workspace = true }
+laboneq-units = { workspace = true }
+
+[features]
+test_utils = ["laboneq-common/test_utils"]
 
 [lints]
 workspace = true

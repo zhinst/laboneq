@@ -56,7 +56,6 @@ class PPCConnection:
 
 class SetupHelper:
     def __init__(self, setup: Setup):
-        # TODO: `Setup` is not hashable, thus cannot use `cached_method()` decorator
         self._setup = setup
         self._instrument_helper = InstrumentHelper(setup.instruments)
         self._calibration_helper = CalibrationHelper(setup.calibration)

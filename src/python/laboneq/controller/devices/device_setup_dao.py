@@ -127,9 +127,9 @@ def _make_device_qualifier(
 
     return DeviceQualifier(
         uid=target_device.uid,
-        server_uid=target_device.server.uid
-        if target_device.server is not None
-        else None,
+        server_uid=""
+        if target_device.server is None or target_device.server.uid is None
+        else target_device.server.uid,
         driver=driver,
         options=options,
     )

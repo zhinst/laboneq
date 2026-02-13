@@ -164,7 +164,7 @@ impl<'a> FrameChangeTracker<'a> {
             }
             let msg = format!(
                 "Cannot increment oscillator '{}' of signal '{}': the line is occupied by '{}'",
-                uid, signal.uid, wf_osc
+                uid, signal.uid.0, wf_osc
             );
             anyhow::bail!(msg);
         }
@@ -294,13 +294,12 @@ mod tests {
     #[test]
     fn test_frame_change_tracker_increment_phase() {
         let signal = Arc::new(cjob::Signal {
-            uid: "test".to_string(),
+            uid: 0.into(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
             signal_delay: 0,
             start_delay: 0,
             oscillator: None,
-            mixer_type: None,
             automute: false,
         });
         let mut tracker = FrameChangeTracker::new();
@@ -329,13 +328,12 @@ mod tests {
     #[test]
     fn test_frame_change_tracker_increment_phase_parameters() {
         let signal = Arc::new(cjob::Signal {
-            uid: "test".to_string(),
+            uid: 0.into(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
             signal_delay: 0,
             start_delay: 0,
             oscillator: None,
-            mixer_type: None,
             automute: false,
         });
         let mut tracker = FrameChangeTracker::new();
@@ -354,13 +352,12 @@ mod tests {
     #[test]
     fn test_frame_change_not_inserted() {
         let signal = Arc::new(cjob::Signal {
-            uid: "test".to_string(),
+            uid: 0.into(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
             signal_delay: 0,
             start_delay: 0,
             oscillator: None,
-            mixer_type: None,
             automute: false,
         });
         let mut tracker = FrameChangeTracker::new();
@@ -393,7 +390,7 @@ mod tests {
         tracker.set_active_waveform(0, 10, None, Some("osc0"), &mut signatures);
 
         let signal_fc = Arc::new(cjob::Signal {
-            uid: "test".to_string(),
+            uid: 0.into(),
             kind: cjob::SignalKind::IQ,
             channels: vec![0],
             signal_delay: 0,
@@ -402,7 +399,6 @@ mod tests {
                 uid: "osc1".to_string(),
                 kind: cjob::OscillatorKind::HARDWARE,
             }),
-            mixer_type: None,
             automute: false,
         });
         // Test error when frame change inside waveform, start/end exclusive

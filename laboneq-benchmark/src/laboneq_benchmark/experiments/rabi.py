@@ -90,7 +90,7 @@ def amplitude_rabi_parallel(
                             exp_rabi.acquire(
                                 signal=f"acquire_{qubit.uid}",
                                 handle=f"{qubit.uid}_rabi",
-                                length=integration_kernel(qubit).length,
+                                kernel=integration_kernel(qubit),
                             )
                         with exp_rabi.section(
                             uid=f"readout_delay_{qubit.uid}",

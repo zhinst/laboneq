@@ -31,56 +31,56 @@ fn resolve_match_impl(
     context: &ExperimentContext,
     seen_acquisitions: &mut HashSet<HandleUid>,
 ) -> Result<()> {
-    if let Operation::Match(obj) = &mut node.kind {
-        if node.children.is_empty() {
-            return Err(Error::new(
-                "Match operation must have at least one branch.".to_string(),
-            ));
-        }
-        if let MatchTarget::Handle(handle) = obj.target {
-            if !seen_acquisitions.contains(&handle) {
-                return Err(Error::new(format!(
-                    "No acquisition found for handle '{}' used in match operation.",
-                    handle.0
-                )));
-            }
-            // Collect all signals used in the match branches to determine devices involved
-            let mut contained_signals: HashSet<SignalUid> = HashSet::new();
-            for child in node.children.iter() {
-                collect_signals_in_node(child, &mut contained_signals);
-            }
-            let match_devices =
-                collect_devices(contained_signals.iter().map(|s| signals.get(s).unwrap()));
-            let feedback_device = &signals
-                .get(context.signal_by_handle(&handle).unwrap())
-                .unwrap()
-                .device();
-            let local_feedback_allowed = local_feedback_possible(feedback_device, &match_devices);
-            if let Some(local) = obj.local {
-                if local && !local_feedback_allowed {
-                    let msg = format!(
-                        "Local feedback not possible across devices: '{}' and '{}'.",
-                        feedback_device.uid.0,
-                        match_devices
-                            .iter()
-                            .map(|d| d.uid.0.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                    return Err(Error::new(msg));
-                }
-            } else {
-                // Set local feedback based on device capabilities if left unspecified
-                obj.local = Some(local_feedback_allowed);
-            }
-        }
-    } else {
+    let Operation::Match(obj) = &mut node.kind else {
         for child in node.children.iter_mut() {
             if let Operation::Acquire(acq) = &child.kind {
                 seen_acquisitions.insert(acq.handle);
             }
             resolve_match_impl(child.make_mut(), signals, context, seen_acquisitions)?;
         }
+        return Ok(());
+    };
+    if node.children.is_empty() {
+        return Err(Error::new(
+            "Match operation must have at least one branch.".to_string(),
+        ));
+    }
+    let MatchTarget::Handle(handle) = obj.target else {
+        return Ok(());
+    };
+    if !seen_acquisitions.contains(&handle) {
+        return Err(Error::new(format!(
+            "No acquisition found for handle '{}' used in match operation.",
+            handle.0
+        )));
+    }
+    // Collect all signals used in the match branches to determine devices involved
+    let mut contained_signals: HashSet<SignalUid> = HashSet::new();
+    for child in node.children.iter() {
+        collect_signals_in_node(child, &mut contained_signals);
+    }
+    let match_devices = collect_devices(contained_signals.iter().map(|s| signals.get(s).unwrap()));
+    let feedback_device = &signals
+        .get(context.signal_by_handle(&handle).unwrap())
+        .unwrap()
+        .device();
+    let local_feedback_allowed = local_feedback_possible(feedback_device, &match_devices);
+    if let Some(local) = obj.local {
+        if local && !local_feedback_allowed {
+            let msg = format!(
+                "Local feedback not possible across devices: '{}' and '{}'.",
+                feedback_device.uid.0,
+                match_devices
+                    .iter()
+                    .map(|d| d.uid.0.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            return Err(Error::new(msg));
+        }
+    } else {
+        // Set local feedback based on device capabilities if left unspecified
+        obj.local = Some(local_feedback_allowed);
     }
     Ok(())
 }

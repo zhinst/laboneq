@@ -272,7 +272,7 @@ mod tests {
         // Build the tree
         let parameter = Arc::new(SweepParameter {
             uid: "test".to_string(),
-            values: numeric_array::NumericArray::Float64(vec![0.0, 1.0]),
+            values: numeric_array::NumericArray::Float64(vec![0.0, 1.0]).into(),
         });
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
 
@@ -365,7 +365,7 @@ mod tests {
         // Build the tree
         let parameter = Arc::new(SweepParameter {
             uid: "test".to_string(),
-            values: numeric_array::NumericArray::Float64(vec![1.0]),
+            values: numeric_array::NumericArray::Float64(vec![1.0]).into(),
         });
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
 

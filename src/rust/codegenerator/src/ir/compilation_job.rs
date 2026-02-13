@@ -1,14 +1,16 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::device_traits;
-use crate::utils::normalize_f64;
 use anyhow::anyhow;
 use numeric_array::NumericArray;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::Deref;
 use std::sync::Arc;
+
+use crate::device_traits;
+use crate::ir::SignalUid;
+use crate::utils::normalize_f64;
 
 pub type Samples = i64;
 pub type ChannelIndex = u8;
@@ -96,11 +98,10 @@ pub enum SignalKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Signal {
-    pub uid: String,
+    pub uid: SignalUid,
     pub kind: SignalKind,
     pub channels: Vec<ChannelIndex>,
     pub oscillator: Option<Oscillator>,
-    pub mixer_type: Option<MixerType>,
     /// The delay from the trigger to the start of the sequence (lead time).
     /// Includes lead time and precompensation
     pub start_delay: Samples,
@@ -231,13 +232,13 @@ impl AwgCore {
     }
 
     /// A mapping from signal UID to the index of the oscillator in the `osc_allocation` map.
-    pub fn oscillator_index_by_signal_uid(&self) -> HashMap<&str, u16> {
+    pub fn oscillator_index_by_signal_uid(&self) -> HashMap<SignalUid, u16> {
         let mut index_map = HashMap::new();
         for signal in self.signals.iter() {
             if let Some(osc) = &signal.oscillator
                 && let Some(osc_index) = self.osc_allocation.get(&osc.uid)
             {
-                index_map.insert(signal.uid.as_str(), *osc_index);
+                index_map.insert(signal.uid, *osc_index);
             }
         }
         index_map
@@ -362,7 +363,7 @@ pub struct SweepParameter {
     /// UID of the parameter
     pub uid: String,
     /// Values of the parameter
-    pub values: NumericArray,
+    pub values: Arc<NumericArray>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]

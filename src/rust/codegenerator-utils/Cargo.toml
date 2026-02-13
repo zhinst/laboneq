@@ -1,0 +1,17 @@
+[package]
+name = "codegenerator-utils"
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+laboneq-ir = { workspace = true }
+laboneq-dsl = { workspace = true }
+
+[lints]
+workspace = true

@@ -9,9 +9,13 @@ Builder plugins register themselves when their modules are imported.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, TypeVar
+
+from laboneq.controller import Controller
 
 if TYPE_CHECKING:
+    from typing import Any, Callable
+
     from laboneq.dsl.device import DeviceSetup, SystemProfile
 
 # Builder plugin registry
@@ -34,14 +38,22 @@ def register_profile_builder(
     _builder_registry[system_type] = builder_func
 
 
+_SessionClass = TypeVar("_SessionClass")
+
+
 def build_profile(
-    system_type: str, device_setup: DeviceSetup, *args: Any, **kwargs: Any
+    system_type: str,
+    device_setup: DeviceSetup,
+    controller: Controller[_SessionClass] | None,
+    *args: Any,
+    **kwargs: Any,
 ) -> SystemProfile:
     """Build a system profile using a registered builder.
 
     Args:
         system_type: The type of system profile to build (e.g., "QCCS")
         device_setup: The device setup to build the profile for
+        controller: The controller for hardware queries, or None for demo profiles
         args: Additional positional arguments for the builder
         kwargs: Additional keyword arguments for the builder
     Returns:
@@ -54,7 +66,7 @@ def build_profile(
         raise ValueError(
             f"Internal error: System profile builder for system type '{system_type}' not registered."
         )
-    return builder(device_setup, *args, **kwargs)
+    return builder(device_setup, controller, *args, **kwargs)
 
 
 def build_demo_profile(
@@ -76,4 +88,4 @@ def build_demo_profile(
     Raises:
         ValueError: If the builder is not registered
     """
-    return build_profile(system_type, device_setup, *args, demo=True, **kwargs)
+    return build_profile(system_type, device_setup, None, *args, demo=True, **kwargs)

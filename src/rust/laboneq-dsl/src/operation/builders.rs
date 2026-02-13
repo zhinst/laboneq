@@ -1,6 +1,8 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::num::NonZeroU32;
+
 use crate::types::{ParameterUid, SectionAlignment, SectionUid};
 
 use crate::operation::{Chunking, Sweep};
@@ -10,7 +12,7 @@ pub struct SweepBuilder {
 }
 
 impl SweepBuilder {
-    pub fn new(uid: SectionUid, parameters: Vec<ParameterUid>, count: u32) -> Self {
+    pub fn new(uid: SectionUid, parameters: Vec<ParameterUid>, count: NonZeroU32) -> Self {
         Self {
             sweep: Sweep {
                 uid,

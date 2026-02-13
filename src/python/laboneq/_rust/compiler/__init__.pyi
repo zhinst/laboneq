@@ -5,7 +5,6 @@ from typing import Literal
 
 from numpy.typing import ArrayLike
 
-from laboneq.compiler.ir import RootScheduleIR
 from laboneq.core.types.enums.port_mode import PortMode
 from laboneq.data.experiment_description import Experiment
 
@@ -49,6 +48,9 @@ class Signal:
         channels: list[int],
         port_mode: PortMode | None,
         automute: bool,
+        signal_delay: float,
+        port_delay: float | SweepParameter,
+        start_delay: float,
     ):
         """A representation of signal properties."""
 
@@ -62,33 +64,39 @@ class Device:
     ):
         """A representation of device properties."""
 
-def build_experiment(experiment: Experiment, signals: list[Signal]) -> ExperimentInfo:
+def build_experiment(
+    experiment: Experiment, signals: list[Signal], devices: list[Device]
+) -> ExperimentInfo:
     """Build a scheduled experiment.
 
     Args:
         experiment: Experiment description.
         signals: List of signals.
+        devices: List of devices.
 
     Returns:
         An object containing the Rust experiment
     """
 
-class ScheduledExperiment:
+class ExperimentIr:
+    """A representation of the experiment IR."""
+
+class ScheduleResult:
     """Result of an experiment scheduling.
 
     Attributes:
         used_parameters: Used near-time parameters in the experiment.
-        root: Root IR node.
+        experiment_ir: Experiment IR.
     """
 
+    experiment_ir: ExperimentIr
     used_parameters: set[str]
-    root: RootScheduleIR
 
 def schedule_experiment(
     experiment: ExperimentInfo,
     parameters: dict[str, float],
     chunking_info: tuple[int, int] | None,
-) -> ScheduledExperiment:
+) -> ScheduleResult:
     """Schedule an experiment.
 
     Args:
@@ -98,4 +106,28 @@ def schedule_experiment(
 
     Returns:
         Scheduled experiment.
+    """
+
+def generate_schedule(
+    ir_py: ExperimentIr,
+    expand_loops: bool,
+    max_events: int,
+) -> dict:
+    """Generate a schedule (event list + metadata) from an IR tree.
+
+    This function is used by the Python compiler to generate the event list
+    for the Pulse Sheet Viewer (PSV).
+
+    Args:
+        ir_py: The experiment IR from Python.
+        expand_loops: Whether to expand compressed loops (EXPAND_LOOPS_FOR_SCHEDULE flag).
+        max_events: Maximum number of events to generate (MAX_EVENTS_TO_PUBLISH setting).
+
+    Returns:
+        A Python dict containing:
+        - event_list: List of scheduler events
+        - section_info: Section metadata with preorder map
+        - section_signals_with_children: Signal hierarchy per section
+
+        Note: sampling_rates should be added separately by Python (depends on SamplingRateTracker).
     """

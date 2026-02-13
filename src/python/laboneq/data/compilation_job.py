@@ -6,18 +6,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from laboneq.data import EnumReprMixin
 from laboneq.data.calibration import CancellationSource
-from laboneq.data.experiment_description import (
-    AveragingMode,
-    ExecutionType,
-    RepetitionMode,
-    SectionAlignment,
-)
 
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
@@ -209,45 +203,6 @@ class PRNGInfo:
 
 
 @dataclass
-class SectionInfo:
-    uid: str = None
-    length: float = None
-    alignment: SectionAlignment | None = None
-    on_system_grid: bool = None
-
-    children: list[SectionInfo] = field(default_factory=list)
-    pulses: list[SectionSignalPulse] = field(default_factory=list)
-
-    signals: list[SignalInfo] = field(default_factory=list)
-
-    match_handle: str | None = None
-    match_user_register: int | None = None
-    match_prng_sample: str | None = None
-    match_sweep_parameter: ParameterInfo | None = None
-    local: bool | None = None
-    state: int | None = None
-    prng: PRNGInfo | None = None
-    prng_sample: str | None = None
-
-    count: int | None = None  # 'None' means 'not a loop'
-    chunked: bool = False
-    execution_type: ExecutionType | None = None
-    averaging_mode: AveragingMode | None = None
-    repetition_mode: RepetitionMode | None = None
-    repetition_time: float | None = None
-
-    acquisition_type: AcquisitionType | None = None
-    reset_oscillator_phase: bool = False
-    triggers: list[dict[str, Any]] = field(default_factory=list)
-    parameters: list[ParameterInfo] = field(default_factory=list)
-    play_after: list[str] = field(default_factory=list)
-    # Whether this section is reused many times in the experiment.
-    is_reused: bool = False
-    # Original UID
-    original_uid: str = None
-
-
-@dataclass
 class MixerCalibrationInfo:
     voltage_offsets: tuple[float | ParameterInfo, float | ParameterInfo] = (0.0, 0.0)
     correction_matrix: (
@@ -336,28 +291,8 @@ class SignalInfo:
     threshold: float | list[float] | None = None
     amplitude: float | ParameterInfo | None = None
     amplifier_pump: AmplifierPumpInfo | None = None
-    kernel_count: int | None = None
     output_routing: list[OutputRoute] | None = field(default_factory=list)
     automute: bool = False
-
-
-@dataclass
-class SectionSignalPulse:
-    signal: SignalInfo = None
-    pulse: PulseDef | None = None
-    length: float | ParameterInfo | None = None
-    offset: float | ParameterInfo | None = None
-    amplitude: float | ParameterInfo | None = None
-    phase: float | ParameterInfo | None = None
-    increment_oscillator_phase: float | ParameterInfo | None = None
-    set_oscillator_phase: float | ParameterInfo | None = None
-    precompensation_clear: bool | None = None
-    play_pulse_parameters: dict = field(default_factory=dict)
-    pulse_pulse_parameters: dict = field(default_factory=dict)
-    acquire_params: AcquireInfo = None
-    markers: list[Marker] = field(default_factory=list)
-    pulse_group: str | None = None
-    reset_oscillator_phase: bool = False
 
 
 @dataclass
@@ -381,7 +316,7 @@ class ExperimentInfo:
     device_setup_fingerprint: str
     devices: list[DeviceInfo]
     signals: list[SignalInfo]
-    sections: list[SectionInfo]
+    acquisition_type: AcquisitionType
     global_leader_device: DeviceInfo | None  # todo: remove
     chunking: ChunkingInfo | None
     # Scheduler Rust integration fields

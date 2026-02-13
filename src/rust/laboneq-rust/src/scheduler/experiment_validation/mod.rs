@@ -5,10 +5,10 @@ use crate::{
     error::Result,
     scheduler::{
         experiment::{DeviceSetup, Experiment},
-        pulse::PulseDef,
         signal_view::{SignalView, signal_views},
     },
 };
+use laboneq_py_utils::pulse::PulseDef;
 use std::collections::{HashMap, HashSet};
 
 mod validate_parameters;

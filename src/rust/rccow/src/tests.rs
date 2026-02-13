@@ -261,7 +261,7 @@ fn test_refcount_after_promote() {
     let _backup = Rc::clone(&root);
 
     let mut cow = RcCow::root(&mut root);
-    cow.promote();
+    let _ = cow.promote();
 
     // After promotion, root should have refcount 1 (backup still has old root)
     assert_eq!(Rc::strong_count(&root), 1);

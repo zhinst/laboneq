@@ -6,6 +6,8 @@ use std::{collections::HashMap, sync::Arc};
 use indexmap::IndexMap;
 
 pub use crate::handle_feedback_registers::Acquisition;
+use crate::ir::SignalUid;
+use crate::ir::compilation_job::ChannelIndex;
 use crate::ir::compilation_job::DeviceUid;
 pub use crate::sample_waveforms::SampledWaveform;
 pub use crate::sampled_event_handler::ParameterPhaseIncrement;
@@ -23,6 +25,7 @@ pub struct SeqCGenOutput<T: SampleWaveforms> {
     pub total_execution_time: f64,
     pub result_handle_maps: HashMap<ResultSource, Vec<Vec<String>>>,
     pub measurements: Vec<Measurement>,
+    pub integration_unit_allocations: Vec<IntegrationUnitAllocation>,
 }
 
 pub struct AwgCodeGenerationResult<T: SampleWaveforms> {
@@ -32,10 +35,11 @@ pub struct AwgCodeGenerationResult<T: SampleWaveforms> {
     pub shf_sweeper_config: Option<ShfPpcSweepJson>,
     pub sampled_waveforms: Vec<SampledWaveform<T::Signature>>,
     pub integration_weights: Vec<T::IntegrationWeight>,
-    pub signal_delays: HashMap<String, f64>,
-    pub integration_lengths: HashMap<String, SignalIntegrationInfo>,
+    pub signal_delays: HashMap<SignalUid, f64>,
+    pub integration_lengths: HashMap<SignalUid, SignalIntegrationInfo>,
     pub parameter_phase_increment_map: Option<HashMap<String, Vec<ParameterPhaseIncrement>>>,
     pub feedback_register_config: FeedbackRegisterConfig,
+    pub channel_properties: Vec<ChannelProperties>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,4 +79,23 @@ pub struct ResultSource {
     pub device_id: String,
     pub awg_id: u16,
     pub integrator_idx: Option<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IntegrationUnitAllocation {
+    pub signal: SignalUid,
+    pub channels: Vec<u8>,
+    pub kernel_count: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MarkerMode {
+    Trigger,
+    Marker,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChannelProperties {
+    pub channel: ChannelIndex,
+    pub marker_mode: Option<MarkerMode>,
 }

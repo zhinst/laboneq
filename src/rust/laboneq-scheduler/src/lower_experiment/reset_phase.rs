@@ -10,10 +10,10 @@ use num_traits::Inv;
 
 use crate::error::Result;
 use crate::experiment_context::ExperimentContext;
-use crate::ir::IrKind;
 use crate::schedule_info::ScheduleInfoBuilder;
 use crate::utils::{ceil_to_grid, lcm};
 use crate::{ScheduleInfo, ScheduledNode, SignalInfo};
+use laboneq_ir::IrKind;
 
 /// Creates a [ScheduledNode] that represents a [IrKind::ResetOscillatorPhase] for the given signals.
 ///

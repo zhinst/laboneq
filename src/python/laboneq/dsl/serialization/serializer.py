@@ -13,7 +13,6 @@ from laboneq.core.serialization.simple_serialization import (
 )
 from laboneq.dsl.serialization.class_config import (
     classes_by_short_name,
-    classes_by_short_name_ir,
     entity_config,
 )
 
@@ -81,9 +80,7 @@ class Serializer:
 
             obj = deserialize_from_dict_with_ref(
                 serialized_form,
-                classes_by_short_name_ir()
-                if type_hint is not None and type_hint.__name__ == "IR"
-                else classes_by_short_name(),
+                classes_by_short_name(),
                 entity_classes,
                 entity_mapper,
             )

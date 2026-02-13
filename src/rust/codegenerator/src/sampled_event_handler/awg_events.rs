@@ -9,7 +9,7 @@ use crate::ir::Samples;
 use crate::ir::compilation_job::ChannelIndex;
 use crate::{
     ir::{
-        Match, OscillatorFrequencySweepStep, ParameterOperation, PlayAcquire,
+        Match, OscillatorFrequencySweepStep, ParameterOperation,
         experiment::{Handle, SweepCommand},
     },
     signature::WaveformSignature,
@@ -101,13 +101,6 @@ impl Hash for PlayWaveEvent {
 #[derive(Debug)]
 pub(crate) struct AcquireEvent {
     pub channels: Vec<u8>,
-}
-
-impl AcquireEvent {
-    pub(crate) fn from_ir(event: PlayAcquire) -> Self {
-        let channels = event.signal().channels.to_vec();
-        AcquireEvent { channels }
-    }
 }
 
 #[derive(Debug)]

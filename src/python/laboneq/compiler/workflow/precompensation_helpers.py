@@ -67,11 +67,8 @@ def _adapt_precompensations_of_awg(signal_ids, precompensations):
             has_high_pass = hp
         else:
             if hp != has_high_pass:
-                raise RuntimeError(
-                    "All precompensation settings for "
-                    + "outputs of the same AWG must have the high pass "
-                    + f"filter enabled or disabled; see signal {signal_id}"
-                )
+                msg = f"All precompensation settings for the same AWG must have the high pass filter enabled or disabled: '{', '.join(sorted(signal_ids))}'."
+                raise LabOneQException(msg)
         exp = precompensation.exponential
         if exp is not None and number_of_exponentials < len(exp):
             number_of_exponentials = len(exp)
@@ -85,11 +82,11 @@ def _adapt_precompensations_of_awg(signal_ids, precompensations):
             if number_of_exponentials:
                 exp = new_pc.exponential = new_pc.exponential or []
                 exp.extend(
-                    [ExponentialCompensation(amplitude=0, timeconstant=10e-9)]
+                    [ExponentialCompensation(amplitude=0.0, timeconstant=10e-9)]
                     * (number_of_exponentials - len(exp))
                 )
             if has_bounce and not new_pc.bounce:
-                new_pc.bounce = BounceCompensation(delay=10e-9, amplitude=0)
+                new_pc.bounce = BounceCompensation(delay=10e-9, amplitude=0.0)
             if has_FIR and not new_pc.FIR:
                 new_pc.FIR = FIRCompensation(coefficients=[1.0])
             precompensations[signal_id] = new_pc

@@ -57,6 +57,8 @@ fn validate_real_time_boundary_nodes(node: &ExperimentNode) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use super::*;
     use laboneq_common::named_id::NamedIdStore;
     use laboneq_dsl::{
@@ -69,7 +71,7 @@ mod tests {
         AveragingLoop {
             uid: SectionUid(store.get_or_insert("shots")),
             acquisition_type: AcquisitionType::Spectroscopy,
-            count: 1,
+            count: NonZeroU32::new(1).unwrap(),
             averaging_mode: AveragingMode::Cyclic,
             repetition_mode: RepetitionMode::Fastest,
             reset_oscillator_phase: false,

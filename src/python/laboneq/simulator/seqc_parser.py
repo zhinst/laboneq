@@ -1231,6 +1231,33 @@ def preprocess_source(text):
     return source
 
 
+def _expand_compressed_wave(
+    samples: npt.NDArray, hold_start: int, hold_length: int
+) -> npt.NDArray:
+    """Reconstruct a full waveform from a compressed SHFQA readout pulse.
+
+    Compressed pulses store only the variable parts (lead + padding + tail)
+    and metadata describing the constant hold region. This function expands
+    the compressed samples back to the full waveform by inserting the held
+    constant value.
+
+    Args:
+        samples: Compressed waveform samples
+            ``[lead(hold_start)] + [padding(4)] + [tail]``.
+        hold_start: Index in ``samples`` where the hold region begins
+            (i.e. the length of the lead portion).
+        hold_length: Number of samples in the hold region.
+    """
+    hold_value = samples[hold_start - 1]
+    return np.concatenate(
+        [
+            samples[:hold_start],
+            np.full(hold_length, hold_value),
+            samples[hold_start:],
+        ]
+    )
+
+
 def _analyze_compiled(
     compiled: CompiledExperiment,
 ) -> tuple[list[SeqCDescriptor], dict[str, npt.ArrayLike]]:
@@ -1253,10 +1280,14 @@ def _analyze_compiled(
         recipe, artifacts.src, artifacts.wave_indices, artifacts.command_tables
     )
 
-    waves = {
-        n: w.samples if w.samples.ndim == 1 else np.array([[s] for s in w.samples])
-        for n, w in artifacts.waves.items()
-    }
+    waves: dict[str, npt.ArrayLike] = {}
+    for n, w in artifacts.waves.items():
+        samples = w.samples
+        if w.hold_start is not None and w.hold_length is not None:
+            samples = _expand_compressed_wave(samples, w.hold_start, w.hold_length)
+        if samples.ndim != 1:
+            samples = np.array([[s] for s in samples])
+        waves[n] = samples
     return seqc_descriptors, waves
 
 

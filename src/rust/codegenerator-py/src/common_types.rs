@@ -54,8 +54,8 @@ pub(crate) enum MixerTypePy {
     UhfqaEnvelope,
 }
 
-impl MixerTypePy {
-    pub(crate) fn from_mixer_type(mixer_type: &MixerType) -> Self {
+impl From<MixerType> for MixerTypePy {
+    fn from(mixer_type: MixerType) -> Self {
         match mixer_type {
             MixerType::IQ => MixerTypePy::IQ,
             MixerType::UhfqaEnvelope => MixerTypePy::UhfqaEnvelope,

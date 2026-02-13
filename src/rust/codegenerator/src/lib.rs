@@ -15,12 +15,16 @@ pub mod signature;
 pub mod utils;
 pub(crate) mod virtual_signal;
 pub use settings::CodeGeneratorSettings;
+mod context;
 mod event_list;
 mod generator;
+mod integration_units;
+mod ir_adapter;
 pub mod result;
 mod triggers;
 
 pub use generator::generate_code;
+pub use ir_adapter::ir_to_codegen_ir;
 
 // Re-export for easier access
 pub use crate::sampled_event_handler::FeedbackRegister;

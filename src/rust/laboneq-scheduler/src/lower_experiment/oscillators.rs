@@ -7,12 +7,12 @@ use laboneq_units::tinysample::{TinySamples, seconds_to_tinysamples, tiny_sample
 use std::collections::HashSet;
 
 use crate::error::{Error, Result};
-use crate::ir::{
-    InitialLocalOscillatorFrequency, InitialOscillatorFrequency, IrKind, SetOscillatorFrequency,
-};
 use crate::schedule_info::ScheduleInfoBuilder;
 use crate::utils::ceil_to_grid;
 use crate::{ParameterStore, ScheduledNode, SignalInfo};
+use laboneq_ir::{
+    InitialLocalOscillatorFrequency, InitialOscillatorFrequency, IrKind, SetOscillatorFrequency,
+};
 
 pub(super) fn handle_initial_oscillator_frequency<T: SignalInfo + Sized>(
     signals: &[&T],
@@ -139,6 +139,7 @@ pub(super) fn handle_set_oscillator_frequency<T: SignalInfo + Sized>(
     let node = ScheduledNode::new(
         IrKind::SetOscillatorFrequency(SetOscillatorFrequency {
             values: signal_osc_value,
+            oscillator_is_hardware: matches!(oscillator_type, Some(OscillatorKind::Hardware)),
         }),
         ScheduleInfoBuilder::new()
             .grid(system_grid)

@@ -92,7 +92,7 @@ def ramsey_parallel(
                             exp_ramsey.acquire(
                                 signal=f"acquire_{qubit.uid}",
                                 handle=f"{qubit.uid}_rabi",
-                                length=integration_kernel(qubit).length,
+                                kernel=integration_kernel(qubit),
                             )
                         with exp_ramsey.section(
                             uid=f"readout_delay_{qubit.uid}",
