@@ -146,13 +146,16 @@ pub(super) fn validate_chunked_sweep(sweep: &Sweep, ctx_params: &mut ParamsConte
     };
 
     if let Some(count) = chunk_count
-        && count < 1
+        && count.get() < 1
     {
-        let err_msg = format!("Chunk count must be >= 1, but {} was provided.", count,);
+        let err_msg = format!(
+            "Chunk count must be >= 1, but {} was provided.",
+            count.get(),
+        );
         return Err(Error::new(&err_msg));
     }
 
-    if matches!(chunk_info, Chunking::Auto) || chunk_count.is_some_and(|c| c > 1) {
+    if matches!(chunk_info, Chunking::Auto) || chunk_count.is_some_and(|c| c.get() > 1) {
         if !ctx_params.inside_rt_bound {
             let err_msg = "Sweeps that are not inside real-time execution cannot be chunked.";
             return Err(Error::new(err_msg));

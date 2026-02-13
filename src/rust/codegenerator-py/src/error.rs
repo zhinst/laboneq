@@ -6,55 +6,36 @@
 //! into Python exceptions.
 
 use codegenerator::Error as CodeGeneratorError;
+use laboneq_common::named_id::NamedIdStore;
+use laboneq_common::named_id::resolve_ids;
 use pyo3::import_exception;
 use pyo3::prelude::*;
 
 import_exception!(laboneq.core.exceptions, LabOneQException);
 
-/// Base error for Python bindings.
+pub(crate) type Result<T> = std::result::Result<T, CodeGeneratorError>;
+
+/// Formatter for Python error.
 ///
-/// The error type is used to wrap Rust errors and convert them into Python exceptions.
+/// The function is used to wrap Rust errors and convert them into Python exceptions.
 /// If the root error is a Python exception, it will be extracted and set as the cause of the `LabOneQException`,
 /// to enable full traceback in Python.
 ///
 /// The messages in the error chain is converted into a string message that is included in the Python exception as
-/// an additional context.
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error(transparent)]
-    Anyhow(#[from] anyhow::Error),
-    #[error(transparent)]
-    CodeGenerator(#[from] CodeGeneratorError),
-}
-
-impl Error {
-    pub fn new(msg: &str) -> Self {
-        Error::Anyhow(anyhow::anyhow!(msg.to_string()))
+/// an additional context and all of the UIDs are resolved using the provided [`NamedIdStore`].
+pub(crate) fn error_to_pyerr(error: CodeGeneratorError, id_store: &NamedIdStore) -> PyErr {
+    let err_message = create_python_error_message(&error);
+    let err_message = resolve_ids(&err_message, id_store);
+    if let Some(py_err) = find_python_root_cause(&error) {
+        let error = LabOneQException::new_err(err_message);
+        Python::attach(|py| {
+            error.set_cause(py, Some(py_err.clone_ref(py)));
+            error
+        })
+    } else {
+        LabOneQException::new_err(err_message)
     }
 }
-
-impl From<Error> for PyErr {
-    fn from(error: Error) -> Self {
-        let err_message = create_python_error_message(&error);
-        if let Some(py_err) = find_python_root_cause(&error) {
-            let error = LabOneQException::new_err(err_message);
-            Python::attach(|py| {
-                error.set_cause(py, Some(py_err.clone_ref(py)));
-                error
-            })
-        } else {
-            LabOneQException::new_err(err_message)
-        }
-    }
-}
-
-impl From<PyErr> for Error {
-    fn from(error: PyErr) -> Self {
-        Error::Anyhow(error.into())
-    }
-}
-
-pub(crate) type Result<T> = std::result::Result<T, Error>;
 
 /// Collect the source errors and format them into a string.
 ///
@@ -74,24 +55,21 @@ fn create_context_message(error: &anyhow::Error) -> Option<String> {
     Some(msg)
 }
 
-fn get_anyhow_error(error: &Error) -> &anyhow::Error {
+fn get_anyhow_error(error: &CodeGeneratorError) -> &anyhow::Error {
     match error {
-        Error::Anyhow(e) => e,
-        Error::CodeGenerator(e) => match e {
-            CodeGeneratorError::Anyhow(e) => e,
-        },
+        CodeGeneratorError::Anyhow(e) => e,
     }
 }
 
 /// Format the error message for Python exceptions.
-fn create_python_error_message(error: &Error) -> String {
+fn create_python_error_message(error: &CodeGeneratorError) -> String {
     if let Some(error_context) = create_context_message(get_anyhow_error(error)) {
         return format!("{error}\n{error_context}");
     }
     format!("{error}")
 }
 
-fn find_python_root_cause(error: &Error) -> Option<&PyErr> {
+fn find_python_root_cause(error: &CodeGeneratorError) -> Option<&PyErr> {
     let err = get_anyhow_error(error).root_cause();
     if let Some(py_err) = err.downcast_ref::<PyErr>() {
         return Some(py_err);
@@ -115,16 +93,16 @@ mod tests {
     #[test]
     fn test_python_error_message() {
         // Test error without context
-        let msg = create_python_error_message(&Error::new("root"));
+        let msg = create_python_error_message(&CodeGeneratorError::new("root"));
         let expected = "root";
         assert_eq!(msg, expected);
 
         // Test error with context
-        let res = Err::<(), _>(Error::new("root"));
+        let res = Err::<(), _>(CodeGeneratorError::new("root"));
         let res: Result<_> = res.context("mid").map_err(Into::into);
         let res: Result<_> = res.context("top").map_err(Into::into);
         let res: Result<_> = res.context("The most top level").map_err(Into::into);
-        let err: Error = res.unwrap_err();
+        let err: CodeGeneratorError = res.unwrap_err();
         let msg = create_python_error_message(&err);
         let expected = "\
 The most top level

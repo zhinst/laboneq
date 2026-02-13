@@ -1,6 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::context::CodeGenContext;
 use crate::ir::PlayWave;
 use crate::ir::compilation_job::AwgCore;
 use crate::sampled_event_handler::AwgEventList;
@@ -17,14 +18,18 @@ use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
-pub(crate) fn generate_event_list(node: IrNode, awg: &AwgCore) -> Result<AwgEventList> {
+pub(crate) fn generate_event_list(
+    node: IrNode,
+    awg: &AwgCore,
+    ctx: &CodeGenContext,
+) -> Result<AwgEventList> {
     let mut state = GeneratorState {
         loop_step_starts_added: HashMap::new(),
         loop_step_ends_added: HashMap::new(),
         state: None,
         waveforms: HashMap::new(),
     };
-    let mut awg_events = generate_output_recursive(node, awg, &mut state)?;
+    let mut awg_events = generate_output_recursive(node, awg, &mut state, ctx)?;
     awg_events.sort_by_key(|event| event.start);
     generate_trigger_states(&mut awg_events);
     Ok(awg_events
@@ -83,6 +88,7 @@ fn generate_output_recursive(
     mut node: IrNode,
     awg: &AwgCore,
     state: &mut GeneratorState,
+    ctx: &CodeGenContext,
 ) -> Result<Vec<AwgEvent>> {
     match node.swap_data(NodeKind::Nop { length: 0 }) {
         NodeKind::PhaseReset(_) => {
@@ -116,7 +122,7 @@ fn generate_output_recursive(
             };
             let mut out = vec![event];
             for child in node.take_children() {
-                out.extend(generate_output_recursive(child, awg, state)?);
+                out.extend(generate_output_recursive(child, awg, state, ctx)?);
             }
             Ok(out)
         }
@@ -161,7 +167,7 @@ fn generate_output_recursive(
             state.state = Some(ob.state);
             let mut out = vec![];
             for child in node.take_children() {
-                out.extend(generate_output_recursive(child, awg, state)?);
+                out.extend(generate_output_recursive(child, awg, state, ctx)?);
             }
             state.state = None;
             Ok(out)
@@ -313,7 +319,7 @@ fn generate_output_recursive(
                         kind: EventType::PrngSample(),
                     });
                 }
-                events.extend(generate_output_recursive(child, awg, state)?);
+                events.extend(generate_output_recursive(child, awg, state, ctx)?);
                 if draw_prng_sample {
                     events.push(AwgEvent {
                         start: end,
@@ -354,13 +360,25 @@ fn generate_output_recursive(
         NodeKind::QaEvent(ob) => {
             let length = ob.length();
             let (acquires, waveforms) = ob.into_parts();
-            let e = QaEvent {
-                acquire_events: acquires.into_iter().map(AcquireEvent::from_ir).collect(),
-                play_wave_events: waveforms
-                    .into_iter()
-                    .map(|wf| playwave_to_event(wf, awg, state))
-                    .collect(),
-            };
+            let e =
+                QaEvent {
+                    acquire_events: acquires
+                        .into_iter()
+                        .map(|acq| {
+                            let integration_channels = ctx
+                        .integration_units_for_signal(acq.signal().uid)
+                        .cloned()
+                        .expect("Internal error: Missing integration unit allocation for signal");
+                            AcquireEvent {
+                                channels: integration_channels,
+                            }
+                        })
+                        .collect(),
+                    play_wave_events: waveforms
+                        .into_iter()
+                        .map(|wf| playwave_to_event(wf, awg, state))
+                        .collect(),
+                };
             let event = AwgEvent {
                 start: *node.offset(),
                 end: *node.offset() + length,
@@ -385,7 +403,7 @@ fn generate_output_recursive(
         _ => {
             let mut out = vec![];
             for child in node.take_children() {
-                out.extend(generate_output_recursive(child, awg, state)?);
+                out.extend(generate_output_recursive(child, awg, state, ctx)?);
             }
             Ok(out)
         }

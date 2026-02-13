@@ -7,6 +7,7 @@ import warnings
 
 from laboneq._version import get_version
 from laboneq.core.types.compiled_experiment import CompiledExperiment
+from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.serializers.base import LabOneQClassicSerializer, VersionedClassSerializer
 from laboneq.serializers.core import from_dict, to_dict
 from laboneq.serializers.implementations._models._compiled_experiment import (
@@ -104,3 +105,60 @@ class CompiledExperimentSerializer(VersionedClassSerializer[CompiledExperiment])
     ) -> CompiledExperiment:
         cls._check_laboneq_version(serialized_data.get("__laboneq_version__"), options)
         return LabOneQClassicSerializer.from_dict_v1(serialized_data, options)
+
+
+@serializer(types=ScheduledExperiment, public=True)
+class ScheduledExperimentSerializer(VersionedClassSerializer[ScheduledExperiment]):
+    SERIALIZER_ID = "laboneq.serializers.implementations.ScheduledExperimentSerializer"
+    VERSION = 1
+
+    @classmethod
+    def to_dict(
+        cls, obj: ScheduledExperiment, options: SerializationOptions | None = None
+    ) -> JsonSerializableType:
+        scheduled_experiment = _converter.unstructure(obj, ScheduledExperimentModel)
+        return {
+            "__serializer__": cls.serializer_id(),
+            "__version__": cls.version(),
+            "__laboneq_version__": get_version(),
+            "__data__": scheduled_experiment,
+        }
+
+    @classmethod
+    def _check_laboneq_version(
+        cls,
+        serialized_laboneq_version: str | None,
+        options: DeserializationOptions | None = None,
+    ) -> None:
+        check_version = options is None or not options.force
+        _not_found = "Could not find LabOne Q version in serialized data."
+        _mismatch = (
+            f"LabOne Q version mismatch. Check out the Labone Q with correct version "
+            f"{serialized_laboneq_version} to load the serialized data. Otherwise, set "
+            f"the `force` option to True to skip the version check."
+        )
+        if serialized_laboneq_version is None:
+            if check_version:
+                raise ValueError(_not_found)
+            else:
+                warnings.warn(_not_found, UserWarning, stacklevel=2)
+        elif serialized_laboneq_version != get_version():
+            if check_version:
+                raise ValueError(_mismatch)
+            else:
+                warnings.warn(_mismatch, UserWarning, stacklevel=2)
+
+    @classmethod
+    def from_dict_v2(
+        cls,
+        serialized_data: JsonSerializableType,
+        options: DeserializationOptions | None = None,
+    ) -> ScheduledExperiment:
+        assert isinstance(serialized_data, dict)
+        cls._check_laboneq_version(serialized_data.get("__laboneq_version__"), options)
+
+        scheduled_experiment = _converter.structure(
+            serialized_data["__data__"],
+            ScheduledExperimentModel,
+        )
+        return scheduled_experiment

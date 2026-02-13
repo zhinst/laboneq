@@ -3,7 +3,7 @@
 
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::{Acquire, Operation, PlayPulse};
-use laboneq_dsl::types::{ComplexOrFloat, MarkerSelector, SectionUid, ValueOrParameter};
+use laboneq_dsl::types::{ComplexOrFloat, MarkerSelector, SectionUid, Trigger, ValueOrParameter};
 use pyo3::prelude::*;
 use std::collections::{HashMap, HashSet};
 
@@ -18,10 +18,10 @@ use crate::scheduler::{
         ExperimentContext, ParamsContext, ValidationContext, validate_parameters::*,
         validate_pulses::*, validate_signals::*,
     },
-    pulse::{PulseFunction, PulseKind},
 };
+use laboneq_py_utils::pulse::{PulseFunction, PulseKind};
 
-/// Validates [Operation::_]s in an experiment.
+/// Validates [Operation] variants in an experiment.
 pub(super) fn validate_experiment_operations(ctx: &ExperimentContext) -> Result<()> {
     let mut ctx_validator = ValidationContext {
         amplitude_check_done: Vec::with_capacity(ctx.pulses.len()),
@@ -91,6 +91,7 @@ fn visit_node<'a>(
         }
         Operation::Section(op) => {
             digest_awg_triggers(op, ctx, ctx_params);
+            validate_triggers(&op.triggers, ctx)?;
         }
         Operation::Sweep(op) => {
             digest_sweep_parameters(op, ctx_params);
@@ -214,6 +215,15 @@ fn check_markers(
             has markers but is to be played on a QA device. QA \
             devices do not support markers.",
             pulse_uid.0, section_uid.0,
+        );
+        return Err(Error::new(&err_msg));
+    }
+
+    // Check for marker / automute conflicts
+    if !pulse.markers.is_empty() && signal.automute() {
+        let err_msg = format!(
+            "Automute cannot be used with markers on same signal: '{}'.",
+            signal.uid().0
         );
         return Err(Error::new(&err_msg));
     }
@@ -424,4 +434,19 @@ impl RealTimeSiblingOperationChecker {
         }
         Ok(())
     }
+}
+
+fn validate_triggers(triggers: &[Trigger], ctx: &ExperimentContext) -> Result<()> {
+    for trigger in triggers.iter() {
+        if let Some(signal_info) = ctx.signals.get(&trigger.signal)
+            && signal_info.automute()
+        {
+            let err_msg = format!(
+                "Automute cannot be used with triggers on same signal: '{}'.",
+                signal_info.uid().0
+            );
+            return Err(Error::new(&err_msg));
+        }
+    }
+    Ok(())
 }

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::ir::compilation_job::{DeviceKind, Signal};
-use crate::ir::{IrNode, NodeKind, Samples, SectionId, SectionInfo};
+use crate::ir::{IrNode, NodeKind, Samples, SectionId, SectionInfo, SignalUid};
 use crate::utils::{samples_to_grid, samples_to_length};
 use crate::{Error, Result};
 use anyhow::Context as AnyhowContext;
@@ -30,25 +30,25 @@ impl SampleToSecondsConverter {
 }
 
 #[derive(Debug, Clone)]
-struct PlayInfo<'a> {
+struct PlayInfo {
     start: Samples,
     end: Samples,
-    signals: HashSet<&'a str>,
+    signals: HashSet<SignalUid>,
 }
 
 #[derive(Debug, Clone)]
-struct AcquireInfo<'a> {
+struct AcquireInfo {
     start: Samples,
     end: Samples,
-    signals: HashSet<&'a str>,
+    signals: HashSet<SignalUid>,
 }
 
 #[derive(Debug, Clone)]
 struct MeasurementInfo<'a> {
     section_info: &'a SectionInfo,
     section_start: Samples,
-    play: PlayInfo<'a>,
-    acquire: AcquireInfo<'a>,
+    play: PlayInfo,
+    acquire: AcquireInfo,
 }
 
 impl MeasurementInfo<'_> {
@@ -248,18 +248,19 @@ fn validate_measurements(
 }
 
 fn insert_ensure_unique_delays(
-    delays: &mut HashMap<String, SignalDelay>,
-    signal: &str,
+    delays: &mut HashMap<SignalUid, SignalDelay>,
+    signal: SignalUid,
     delay: SignalDelay,
     sample_converter: &SampleToSecondsConverter,
 ) -> Result<()> {
-    if let Some(existing) = delays.get(signal) {
+    if let Some(existing) = delays.get(&signal) {
         if existing.delay_sequencer != delay.delay_sequencer {
             let mut delays = [existing.delay_sequencer, delay.delay_sequencer];
             delays.sort();
             return Err(Error::new(format!(
-                "Cannot resolve measure timing on a signal {signal} \
+                "Cannot resolve measure timing on a signal {} \
                 as it would result in two different delays: {} and {}",
+                signal.0,
                 sample_converter.to_seconds(delays[0]),
                 sample_converter.to_seconds(delays[1])
             )));
@@ -267,13 +268,13 @@ fn insert_ensure_unique_delays(
             let mut delays = [existing.delay_port, delay.delay_port];
             delays.sort();
             return Err(Error::new(format!(
-                "Cannot resolve measure timing on a signal {signal} \
+                "Cannot resolve measure timing on a signal {} \
                 as it would result in two different delays: {} and {}",
-                delays[0], delays[1]
+                signal.0, delays[0], delays[1]
             )));
         }
     } else {
-        delays.insert(signal.to_string(), delay);
+        delays.insert(signal, delay);
     }
     Ok(())
 }
@@ -282,7 +283,7 @@ fn calculate_measurement_delays(
     measurements: Vec<SectionMeasurement<'_>>,
     device: &DeviceKind,
     sample_converter: &SampleToSecondsConverter,
-) -> Result<HashMap<String, SignalDelay>> {
+) -> Result<HashMap<SignalUid, SignalDelay>> {
     if measurements.is_empty() {
         return Ok(HashMap::new());
     }
@@ -306,7 +307,7 @@ fn calculate_measurement_delays(
                             sample_converter.sampling_rate(),
                         ),
                     );
-                    insert_ensure_unique_delays(&mut delays, signal, delay, sample_converter)
+                    insert_ensure_unique_delays(&mut delays, *signal, delay, sample_converter)
                         .context(format!(
                             "Failed to adjust measurement timing in signal {}",
                             info.section_info.name
@@ -314,7 +315,7 @@ fn calculate_measurement_delays(
                 }
                 for signal in &play_info.signals {
                     let delay = SignalDelay::new(0, 0.0);
-                    insert_ensure_unique_delays(&mut delays, signal, delay, sample_converter)
+                    insert_ensure_unique_delays(&mut delays, *signal, delay, sample_converter)
                         .context(format!(
                             "Failed to adjust measurement timing in signal {}",
                             info.section_info.name
@@ -335,7 +336,7 @@ fn calculate_measurement_delays(
                             sample_converter.sampling_rate(),
                         ),
                     );
-                    insert_ensure_unique_delays(&mut delays, signal, delay, sample_converter)
+                    insert_ensure_unique_delays(&mut delays, *signal, delay, sample_converter)
                         .context(format!(
                             "Failed to adjust measurement timing in signal {}",
                             info.section_info.name
@@ -346,7 +347,7 @@ fn calculate_measurement_delays(
                         delay_play,
                         samples_to_length(-delay_play, sample_converter.sampling_rate()),
                     );
-                    insert_ensure_unique_delays(&mut delays, signal, delay, sample_converter)
+                    insert_ensure_unique_delays(&mut delays, *signal, delay, sample_converter)
                         .context(format!(
                             "Failed to adjust measurement timing in signal {}",
                             info.section_info.name
@@ -364,22 +365,22 @@ fn build_play_operations<'a>(
     play_operations: &[PlayOperation<'a>],
     has_acquires: bool,
     sample_converter: &SampleToSecondsConverter,
-) -> Result<Option<PlayInfo<'a>>> {
+) -> Result<Option<PlayInfo>> {
     if play_operations.is_empty() || !has_acquires {
         return Ok(None);
     }
     const OPERATION: &str = "play";
-    let mut signals: HashSet<&'a str> = HashSet::new();
+    let mut signals: HashSet<SignalUid> = HashSet::new();
     let first_op = play_operations.first().unwrap();
-    signals.insert(first_op.signal.uid.as_str());
+    signals.insert(first_op.signal.uid);
     let first_start = first_op.start;
     let mut total_end = first_op.end();
     for op in play_operations.iter().skip(1) {
-        if signals.contains(op.signal.uid.as_str()) {
+        if signals.contains(&op.signal.uid) {
             let msg = format!(
                 "There are multiple '{OPERATION}' operations in section '{}' on signal '{}'. \
                 A section with acquire signals may only contain a single '{OPERATION}' operation per signal.",
-                section_info.name, &op.signal.uid
+                section_info.name, &op.signal.uid.0
             );
             return Err(Error::new(&msg));
         }
@@ -390,11 +391,11 @@ fn build_play_operations<'a>(
                 Signal '{}' starts at {}. \
                 This conflicts with the signals '{}' that start at {}.",
                 section_info.name,
-                &op.signal.uid,
+                &op.signal.uid.0,
                 sample_converter.to_seconds(op.start),
                 signals
                     .iter()
-                    .map(|s| s.to_string())
+                    .map(|s| s.0.to_string())
                     .collect::<Vec<_>>()
                     .join(", "),
                 sample_converter.to_seconds(first_start)
@@ -402,7 +403,7 @@ fn build_play_operations<'a>(
             return Err(Error::new(&msg));
         }
         total_end = total_end.max(op.end());
-        signals.insert(op.signal.uid.as_str());
+        signals.insert(op.signal.uid);
     }
     let op = PlayInfo {
         start: first_start,
@@ -416,22 +417,22 @@ fn build_acquire_operations<'a>(
     section_info: &'a SectionInfo,
     operations: &[AcquireOperation<'a>],
     sample_converter: &SampleToSecondsConverter,
-) -> Result<Option<AcquireInfo<'a>>> {
+) -> Result<Option<AcquireInfo>> {
     if operations.is_empty() {
         return Ok(None);
     }
     const OPERATION: &str = "acquire";
-    let mut signals: HashSet<&'a str> = HashSet::new();
+    let mut signals: HashSet<SignalUid> = HashSet::new();
     let first_op = operations.first().unwrap();
-    signals.insert(first_op.signal.uid.as_str());
+    signals.insert(first_op.signal.uid);
     let first_start = first_op.start;
     let mut total_end = first_op.end();
     for op in operations.iter().skip(1) {
-        if signals.contains(op.signal.uid.as_str()) {
+        if signals.contains(&op.signal.uid) {
             let msg = format!(
                 "There are multiple '{OPERATION}' operations in section '{}' on signal '{}'. \
                 A section with acquire signals may only contain a single '{OPERATION}' operation per signal.",
-                section_info.name, &op.signal.uid
+                section_info.name, &op.signal.uid.0
             );
             return Err(Error::new(&msg));
         }
@@ -442,11 +443,11 @@ fn build_acquire_operations<'a>(
                 Signal '{}' starts at {}. \
                 This conflicts with the signals '{}' that start at {}.",
                 section_info.name,
-                &op.signal.uid,
+                &op.signal.uid.0,
                 sample_converter.to_seconds(op.start),
                 signals
                     .iter()
-                    .map(|s| s.to_string())
+                    .map(|s| s.0.to_string())
                     .collect::<Vec<_>>()
                     .join(", "),
                 sample_converter.to_seconds(first_start)
@@ -454,7 +455,7 @@ fn build_acquire_operations<'a>(
             return Err(Error::new(&msg));
         }
         total_end = total_end.max(op.end());
-        signals.insert(op.signal.uid.as_str());
+        signals.insert(op.signal.uid);
     }
     let op = AcquireInfo {
         start: first_start,
@@ -499,13 +500,13 @@ fn create_measurements<'a>(
 }
 
 pub(crate) struct IntegrationLength {
-    signal: String,
+    signal: SignalUid,
     duration: Samples,
     is_play: bool,
 }
 
 impl IntegrationLength {
-    pub(crate) fn signal(&self) -> &str {
+    pub(crate) fn signal(&self) -> &SignalUid {
         &self.signal
     }
 
@@ -522,20 +523,20 @@ fn calculate_integration_times(
     measurements: &Vec<SectionMeasurement<'_>>,
     sample_converter: &SampleToSecondsConverter,
 ) -> Result<Vec<IntegrationLength>> {
-    let mut integration_lengths: HashMap<&str, IntegrationLength> = HashMap::new();
+    let mut integration_lengths: HashMap<SignalUid, IntegrationLength> = HashMap::new();
     for measurement in measurements.iter() {
         if measurement.acquire_operations.is_empty() {
             continue;
         }
         for play_op in measurement.play_operations.iter() {
             let play_length = play_op.end() - play_op.start;
-            if let Some(previous) = integration_lengths.get(play_op.signal.uid.as_str())
+            if let Some(previous) = integration_lengths.get(&play_op.signal.uid)
                 && previous.duration != play_length
             {
                 let msg = format!(
                     "Signal '{}' has two different integration lengths: \
                         '{}' from section '{}' and '{}' from earlier section.",
-                    &play_op.signal.uid,
+                    &play_op.signal.uid.0,
                     play_length,
                     measurement.section_info.name,
                     previous.duration
@@ -543,21 +544,21 @@ fn calculate_integration_times(
                 return Err(Error::new(&msg));
             }
             let integration = IntegrationLength {
-                signal: play_op.signal.uid.to_string(),
+                signal: play_op.signal.uid,
                 duration: play_length,
                 is_play: true,
             };
-            integration_lengths.insert(play_op.signal.uid.as_str(), integration);
+            integration_lengths.insert(play_op.signal.uid, integration);
         }
         for acquire_op in measurement.acquire_operations.iter() {
             let length = acquire_op.end() - acquire_op.start;
-            if let Some(previous) = integration_lengths.get(acquire_op.signal.uid.as_str())
+            if let Some(previous) = integration_lengths.get(&acquire_op.signal.uid)
                 && previous.duration != length
             {
                 let msg = format!(
                     "Signal '{}' has two different integration lengths: \
                         '{}' from section '{}' and '{}' from earlier section.",
-                    acquire_op.signal.uid,
+                    &acquire_op.signal.uid.0,
                     sample_converter.to_seconds(length),
                     measurement.section_info.name,
                     sample_converter.to_seconds(previous.duration),
@@ -565,11 +566,11 @@ fn calculate_integration_times(
                 return Err(Error::new(&msg));
             }
             let integration = IntegrationLength {
-                signal: acquire_op.signal.uid.to_string(),
+                signal: acquire_op.signal.uid,
                 duration: length,
                 is_play: false,
             };
-            integration_lengths.insert(acquire_op.signal.uid.as_str(), integration);
+            integration_lengths.insert(acquire_op.signal.uid, integration);
         }
     }
     Ok(integration_lengths.into_values().collect())
@@ -579,7 +580,7 @@ fn calculate_integration_times(
 pub(crate) struct MeasurementAnalysis {
     /// A map of signal names to their respective delays, which include both the sequencer
     /// delay and the port delay
-    pub delays: HashMap<String, SignalDelay>,
+    pub delays: HashMap<SignalUid, SignalDelay>,
     /// A list of integration lengths for signals, which includes both play and acquire signals.
     pub integration_lengths: Vec<IntegrationLength>,
 }
@@ -714,15 +715,14 @@ mod tests {
         }
     }
 
-    fn create_signal(uid: &str, delay: Samples) -> Signal {
+    fn create_signal(uid: u32, delay: Samples) -> Signal {
         Signal {
-            uid: uid.to_string(),
+            uid: uid.into(),
             kind: SignalKind::IQ,
             signal_delay: delay,
             start_delay: 0,
             channels: vec![],
             oscillator: None,
-            mixer_type: None,
             automute: false,
         }
     }
@@ -734,8 +734,8 @@ mod tests {
         let srate = device.traits().sampling_rate;
 
         let signals = HashMap::from([
-            ("acquire".to_string(), (create_signal("acquire", 0))),
-            ("measure".to_string(), (create_signal("measure", 0))),
+            ("acquire".to_string(), (create_signal(0, 0))),
+            ("measure".to_string(), (create_signal(1, 0))),
         ]);
 
         let mut builder = IrBuilder::new();
@@ -759,8 +759,8 @@ mod tests {
             .delays;
 
         // Test that measure and acquire are adjusted to start at the same time for sequencer
-        let measure = result.get("measure").unwrap();
-        let acquire = result.get("acquire").unwrap();
+        let measure = result.get(&1.into()).unwrap();
+        let acquire = result.get(&0.into()).unwrap();
         assert_eq!(measure.delay_sequencer(), 0);
         assert_eq!(acquire.delay_sequencer(), -16);
         assert_eq!(Into::<f64>::into(measure.delay_port()), 0.0);
@@ -780,11 +780,8 @@ mod tests {
         let signal_delay = 24;
 
         let signals = HashMap::from([
-            (
-                "acquire".to_string(),
-                (create_signal("acquire", signal_delay)),
-            ),
-            ("measure".to_string(), (create_signal("measure", 0))),
+            ("acquire".to_string(), (create_signal(0, signal_delay))),
+            ("measure".to_string(), (create_signal(1, 0))),
         ]);
 
         let mut builder = IrBuilder::new();
@@ -806,8 +803,8 @@ mod tests {
         let result = analyze_measurements(&builder.build(), &DeviceKind::SHFQA, srate)
             .unwrap()
             .delays;
-        let measure = result.get("measure").unwrap();
-        let acquire = result.get("acquire").unwrap();
+        let measure = result.get(&1.into()).unwrap();
+        let acquire = result.get(&0.into()).unwrap();
         assert_eq!(measure.delay_sequencer(), 0);
         assert_eq!(Into::<f64>::into(measure.delay_port()), 0.0);
 
@@ -825,8 +822,8 @@ mod tests {
         let srate = device.traits().sampling_rate;
 
         let signals = HashMap::from([
-            ("acquire".to_string(), (create_signal("acquire", 0))),
-            ("measure".to_string(), (create_signal("measure", 0))),
+            ("acquire".to_string(), (create_signal(0, 0))),
+            ("measure".to_string(), (create_signal(1, 0))),
         ]);
         let s0_offset = 0;
         let s0_offset_ts = samples_to_tinysamples(s0_offset, srate);
@@ -873,8 +870,8 @@ mod tests {
             .unwrap()
             .delays;
 
-        let measure = result.get("measure").unwrap();
-        let acquire = result.get("acquire").unwrap();
+        let measure = result.get(&1.into()).unwrap();
+        let acquire = result.get(&0.into()).unwrap();
 
         let expected_delay = 32;
         assert_eq!(measure.delay_sequencer(), 0);

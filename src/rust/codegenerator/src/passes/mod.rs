@@ -20,4 +20,4 @@ mod handle_measure_times;
 pub(crate) mod handle_signatures;
 pub(crate) mod handle_triggers;
 pub(crate) mod lower_for_awg;
-pub(crate) use handle_measure_times::analyze_measurements;
+pub(crate) use handle_measure_times::{MeasurementAnalysis, analyze_measurements};

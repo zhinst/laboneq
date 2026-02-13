@@ -3,6 +3,7 @@
 
 use crate::Result;
 use crate::ir;
+use crate::ir::SignalUid;
 use crate::ir::compilation_job::{self as cjob};
 use crate::passes::handle_frame_changes::insert_frame_changes;
 use crate::passes::handle_oscillators::SoftwareOscillatorParameters;
@@ -88,7 +89,6 @@ impl PlayPulseSlot<'_> {
 fn assign_pulse_slots(
     node: &mut ir::IrNode,
     state: Option<u16>,
-    nop_length: Option<i64>,
 ) -> Result<Vec<PlayPulseSlot<'_>>, anyhow::Error> {
     match node.data() {
         ir::NodeKind::FrameChange(ob) => {
@@ -117,43 +117,26 @@ fn assign_pulse_slots(
         ir::NodeKind::Case(ob) => {
             let state = Some(ob.state);
             let mut out = vec![];
-            let signals = ob.signals.clone();
-            let op_children = node.iter_children().count();
-            if ob.length == 0 {
-                // For a zero-length case, push back placeholders meant to be replaced by waveforms
-                // and set their length to that of the parent match-block.
-                let length = nop_length.expect("Internal error: undefined match-block length.");
-                if length == 0 {
-                    anyhow::bail!("Unable to process match-block with zero length.");
-                };
-                for _ in 0..signals.len() {
-                    node.add_child(*node.offset(), ir::NodeKind::Nop { length });
-                }
-            }
-            for (idx, child) in node.iter_children_mut().enumerate() {
-                match child.data() {
-                    ir::NodeKind::Nop { length: _ } => out.push(PlayPulseSlot {
-                        node: child,
-                        state,
-                        signal: Arc::clone(&signals[idx - op_children]),
-                    }),
-                    _ => out.extend(assign_pulse_slots(child, state, None)?),
-                }
+            for child in node.iter_children_mut() {
+                out.extend(assign_pulse_slots(child, state)?);
             }
             Ok(out)
         }
         ir::NodeKind::Match(ob) => {
             let mut out = vec![];
-            let nop_length = Some(ob.length);
+            let match_length = ob.length;
             for child in node.iter_children_mut() {
-                out.extend(assign_pulse_slots(child, state, nop_length)?);
+                if match_length == 0 && child.data().length() == 0 {
+                    anyhow::bail!("Unable to process match-block with zero length.");
+                }
+                out.extend(assign_pulse_slots(child, state)?);
             }
             Ok(out)
         }
         _ => {
             let mut out = vec![];
             for child in node.iter_children_mut() {
-                out.extend(assign_pulse_slots(child, state, None)?);
+                out.extend(assign_pulse_slots(child, state)?);
             }
             Ok(out)
         }
@@ -228,9 +211,9 @@ where
                     then LabOne Q must fit an oscillator switch in between them.\n\
                     Either add a delay, or ensure the 2nd pulse starts on the system grid.",
                     s0.oscillator.as_ref().unwrap().uid,
-                    s0.uid,
+                    s0.uid.0,
                     s1.oscillator.as_ref().unwrap().uid,
-                    s1.uid
+                    s1.uid.0
                 );
                 return Err(anyhow!(msg).into());
             }
@@ -255,7 +238,7 @@ fn create_pulse_signature(
     } else {
         Some(
             virtual_signal
-                .get_channel_by_signal(&node.signal.uid)
+                .get_channel_by_signal(node.signal.uid)
                 .expect("Invalid signal"),
         )
     };
@@ -326,7 +309,7 @@ fn create_waveform_slots(
     let mut frame_change_cut_point = None;
     let mut waveform_slots: Vec<WaveformSlot> = vec![];
     for (node_id, pulse_slot) in pulses.iter().enumerate() {
-        if !signal.contains_signal(&pulse_slot.signal.uid) {
+        if !signal.contains_signal(pulse_slot.signal.uid) {
             continue;
         }
         match pulse_slot.kind() {
@@ -430,18 +413,18 @@ pub(crate) fn handle_plays(
         .map(|(start, end)| OrderedRange(start..end))
         .collect();
     // Group nodes by signal
-    let mut plays_by_signal: HashMap<String, Vec<_>> = HashMap::new();
-    for node in assign_pulse_slots(program, None, None)? {
-        if let Some(entry) = plays_by_signal.get_mut(node.signal.uid.as_str()) {
+    let mut plays_by_signal: HashMap<SignalUid, Vec<_>> = HashMap::new();
+    for node in assign_pulse_slots(program, None)? {
+        if let Some(entry) = plays_by_signal.get_mut(&node.signal.uid) {
             entry.push(node);
         } else {
-            plays_by_signal.insert(node.signal.uid.clone(), vec![node]);
+            plays_by_signal.insert(node.signal.uid, vec![node]);
         }
     }
     for signal in virtual_signals.iter() {
         let mut signal_events: Vec<PlayPulseSlot> = signal
             .signals()
-            .filter_map(|ch| plays_by_signal.remove(ch.uid.as_str()))
+            .filter_map(|ch| plays_by_signal.remove(&ch.uid))
             .flatten()
             .collect();
         if signal_events.is_empty() {

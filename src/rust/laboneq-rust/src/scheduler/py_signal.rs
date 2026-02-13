@@ -259,7 +259,7 @@ fn extract_value_or_parameter<'py, T: FromPyObjectOwned<'py, Error = PyErr>>(
         let values = NumericArray::from_py(parameter.values.bind(py))?;
         builder
             .parameters
-            .insert(uid, SweepParameter::new(uid, values));
+            .insert(uid, SweepParameter::new(uid, values).map_err(Error::new)?);
         parameter.driven_by.iter().for_each(|p_uid| {
             let p_uid = ParameterUid(builder.register_uid(p_uid));
             builder

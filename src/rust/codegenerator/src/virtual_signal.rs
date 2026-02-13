@@ -1,13 +1,14 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use anyhow::anyhow;
+use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::Result;
+use crate::ir::SignalUid;
 use crate::ir::compilation_job::{AwgCore, AwgKind, DeviceKind, Signal, SignalKind};
-use anyhow::anyhow;
-use indexmap::IndexMap;
 
 #[derive(Debug)]
 struct Channel {
@@ -17,13 +18,13 @@ struct Channel {
 
 #[derive(Debug)]
 pub(crate) struct VirtualSignal {
-    signals: IndexMap<String, Channel>,
+    signals: IndexMap<SignalUid, Channel>,
     subchannel: Option<u8>,
 }
 
 impl VirtualSignal {
     fn new(channels: Vec<Channel>, subchannel: Option<u8>) -> Self {
-        let signals = channels.into_iter().map(|x| (x.signal.uid.clone(), x));
+        let signals = channels.into_iter().map(|x| (x.signal.uid, x));
         VirtualSignal {
             signals: signals.collect(),
             subchannel,
@@ -38,16 +39,16 @@ impl VirtualSignal {
         self.subchannel
     }
 
-    pub(crate) fn contains_signal(&self, uid: &str) -> bool {
-        self.signals.contains_key(uid)
+    pub(crate) fn contains_signal(&self, uid: SignalUid) -> bool {
+        self.signals.contains_key(&uid)
     }
 
     pub(crate) fn is_multiplexed(&self) -> bool {
         self.signals.keys().len() > 1
     }
 
-    pub(crate) fn get_channel_by_signal(&self, uid: &str) -> Option<u16> {
-        self.signals.get(uid).map(|x| x.id)
+    pub(crate) fn get_channel_by_signal(&self, uid: SignalUid) -> Option<u16> {
+        self.signals.get(&uid).map(|x| x.id)
     }
 }
 
@@ -63,8 +64,8 @@ fn validate_signal_oscillators(signal: &VirtualSignal, awg: &AwgCore) -> Result<
     if !signal.is_multiplexed() {
         return Ok(());
     }
-    let mut hw_modulated_signals: HashMap<u8, Vec<&str>> = HashMap::new();
-    let mut sw_modulated_signals: HashMap<u8, Vec<&str>> = HashMap::new();
+    let mut hw_modulated_signals: HashMap<u8, Vec<SignalUid>> = HashMap::new();
+    let mut sw_modulated_signals: HashMap<u8, Vec<SignalUid>> = HashMap::new();
     for channel in signal.signals() {
         let subchannel = if awg.kind == AwgKind::DOUBLE {
             channel.channels.first().unwrap_or(&0)
@@ -79,28 +80,28 @@ fn validate_signal_oscillators(signal: &VirtualSignal, awg: &AwgCore) -> Result<
                 signals.sort();
                 let err_msg = format!(
                     "Attempting to multiplex HW-modulated signal(s) ({}) with signal that is not HW modulated ({}).",
-                    signals[0], channel.uid
+                    signals[0].0, channel.uid.0
                 );
                 return Err(anyhow!(err_msg).into());
             }
             sw_modulated_signals
                 .entry(*subchannel)
                 .or_default()
-                .push(&channel.uid);
+                .push(channel.uid);
         } else if channel.is_hw_modulated() {
             if sw_modulated_signals.contains_key(subchannel)
                 && let Some(sw_modulated_signal) = sw_modulated_signals[subchannel].first()
             {
                 let err_msg = format!(
                     "Attempting to multiplex SW-modulated signal(s) ({}) with signal that is not SW modulated ({}).",
-                    channel.uid, sw_modulated_signal
+                    channel.uid.0, sw_modulated_signal.0
                 );
                 return Err(anyhow!(err_msg).into());
             }
             hw_modulated_signals
                 .entry(*subchannel)
                 .or_default()
-                .push(&channel.uid);
+                .push(channel.uid);
         }
     }
     if awg.device_kind().traits().supports_oscillator_switching {
@@ -116,21 +117,22 @@ fn validate_signal_oscillators(signal: &VirtualSignal, awg: &AwgCore) -> Result<
             .expect("Internal error: Expected at least one HW-modulated signal")
             .clone()
     } else {
-        let hw_modulated_signals: Vec<&&str> =
-            hw_modulated_signals.values().flatten().collect::<Vec<_>>();
+        let hw_modulated_signals: Vec<SignalUid> =
+            hw_modulated_signals.values().flatten().copied().collect();
         if hw_modulated_signals.len() <= 1 {
             return Ok(());
         }
         hw_modulated_signals
-            .into_iter()
-            .copied()
-            .collect::<Vec<_>>()
     };
     signals.sort();
     let msg = format!(
         "Attempting to multiplex several hardware-modulated signals: \
                 '{}' on device '{}', which does not support oscillator switching.",
-        signals.join(", "),
+        signals
+            .iter()
+            .map(|s| s.0.to_string())
+            .collect::<Vec<_>>()
+            .join(", "),
         awg.device_kind().as_str()
     );
     Err(anyhow!(msg).into())

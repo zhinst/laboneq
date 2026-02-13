@@ -12,7 +12,7 @@ use laboneq_units::tinysample::{tiny_samples, tinysamples_to_seconds};
 use crate::ir::compilation_job::{self as cjob, AwgCore, DeviceKind};
 use crate::ir::{
     FrequencySweepParameterInfo, IrNode, LinearParameterInfo, NodeKind, NonLinearParameterInfo,
-    OscillatorFrequencySweepStep, Samples, SetOscillatorFrequencySweep,
+    OscillatorFrequencySweepStep, Samples, SetOscillatorFrequencySweep, SignalUid,
 };
 use crate::{Error, Result};
 
@@ -23,8 +23,8 @@ struct SignalPhaseTracker {
 }
 
 struct PhaseTracker {
-    trackers: HashMap<String, SignalPhaseTracker>,
-    global_reset_time: HashMap<String, Samples>,
+    trackers: HashMap<SignalUid, SignalPhaseTracker>,
+    global_reset_time: HashMap<SignalUid, Samples>,
 }
 
 impl PhaseTracker {
@@ -32,7 +32,7 @@ impl PhaseTracker {
         let mut trackers = HashMap::new();
         for sig in signals.iter() {
             trackers.insert(
-                sig.uid.clone(),
+                sig.uid,
                 SignalPhaseTracker {
                     cumulative: 0.0,
                     reference_time: 0,
@@ -61,7 +61,7 @@ impl PhaseTracker {
             tracker.cumulative = 0.0;
         }
         for signal in signals.iter() {
-            self.global_reset_time.insert(signal.uid.clone(), ts); // Updated to use cloned String
+            self.global_reset_time.insert(signal.uid, ts);
         }
     }
 
@@ -83,15 +83,15 @@ impl PhaseTracker {
 }
 
 pub(crate) struct SoftwareOscillatorParameters {
-    active_osc_freq: HashMap<String, Vec<f64>>,
-    pulse_osc_freq: HashMap<(String, Samples), f64>,
-    sw_osc_phases: HashMap<(String, Samples), f64>,
+    active_osc_freq: HashMap<SignalUid, Vec<f64>>,
+    pulse_osc_freq: HashMap<(SignalUid, Samples), f64>,
+    sw_osc_phases: HashMap<(SignalUid, Samples), f64>,
 }
 
 impl SoftwareOscillatorParameters {
     fn set_osc_freq(&mut self, signal: &cjob::Signal, value: f64) {
         self.active_osc_freq
-            .entry(signal.uid.to_owned())
+            .entry(signal.uid)
             .or_default()
             .push(value);
     }
@@ -101,22 +101,17 @@ impl SoftwareOscillatorParameters {
             .active_osc_freq
             .get(&signal.uid)
             .map_or(&0.0, |x| x.last().unwrap_or(&0.0));
-        self.pulse_osc_freq
-            .insert((signal.uid.to_owned(), time), *freq);
+        self.pulse_osc_freq.insert((signal.uid, time), *freq);
     }
 
     /// Frequency for selected signal at given timestamp
     pub(crate) fn freq_at(&self, signal: &cjob::Signal, ts: Samples) -> Option<f64> {
-        self.pulse_osc_freq
-            .get(&(signal.uid.to_owned(), ts))
-            .copied()
+        self.pulse_osc_freq.get(&(signal.uid, ts)).copied()
     }
 
     /// Phase for selected signal at given timestamp
     pub(crate) fn phase_at(&self, signal: &cjob::Signal, ts: Samples) -> Option<f64> {
-        self.sw_osc_phases
-            .get(&(signal.uid.to_owned(), ts))
-            .copied()
+        self.sw_osc_phases.get(&(signal.uid, ts)).copied()
     }
 }
 
@@ -124,7 +119,7 @@ fn collect_osc_parameters(
     node: &mut IrNode,
     state: &mut SoftwareOscillatorParameters,
     phase_tracker: &mut Option<PhaseTracker>,
-    func: &impl Fn(&str, Samples) -> Samples,
+    func: &impl Fn(SignalUid, Samples) -> Samples,
     in_branch: bool,
     device: &DeviceKind,
 ) -> Result<()> {
@@ -151,14 +146,14 @@ fn collect_osc_parameters(
                 if ob.signal.is_hw_modulated() {
                     let msg = format!(
                         "Cannot use 'set_oscillator_phase' of hardware modulated signal: {}",
-                        &ob.signal.uid
+                        &ob.signal.uid.0
                     );
                     return Err(Error::new(&msg));
                 }
                 if in_branch && ob.signal.is_sw_modulated() {
                     let msg = format!(
                         "Conditional 'set_oscillator_phase' of software modulated signal '{}' is not supported",
-                        &ob.signal.uid
+                        &ob.signal.uid.0
                     );
                     return Err(Error::new(&msg));
                 }
@@ -168,7 +163,7 @@ fn collect_osc_parameters(
                 if device.is_qa_device() {
                     let msg = format!(
                         "Conditional 'increment_oscillator_phase' of signal '{}' is not supported on device type '{}'",
-                        &ob.signal.uid,
+                        &ob.signal.uid.0,
                         device.as_str()
                     );
                     return Err(Error::new(&msg));
@@ -176,7 +171,7 @@ fn collect_osc_parameters(
                 if ob.signal.is_sw_modulated() {
                     let msg = format!(
                         "Conditional 'increment_oscillator_phase' of software modulated signal '{}' is not supported",
-                        &ob.signal.uid
+                        &ob.signal.uid.0
                     );
                     return Err(Error::new(&msg));
                 }
@@ -186,14 +181,14 @@ fn collect_osc_parameters(
                 {
                     let msg = format!(
                         "Signal {}: phase increments are only supported on IQ signals, or on RF signals with SW modulation",
-                        &ob.signal.uid,
+                        &ob.signal.uid.0,
                     );
                     return Err(Error::new(&msg));
                 }
                 return Ok(());
             }
             // TODO: More elegant way to map to the node than a timestamp
-            let offset = func(&ob.signal.uid, node_offset);
+            let offset = func(ob.signal.uid, node_offset);
             state.timestamp_osc_freq(&ob.signal, offset);
             if let Some(tracker) = phase_tracker {
                 // Set oscillator phase priority over incrementing
@@ -215,19 +210,15 @@ fn collect_osc_parameters(
                     state.freq_at(&ob.signal, offset).unwrap_or(0.0),
                     node_offset,
                 );
-                state
-                    .sw_osc_phases
-                    .insert((ob.signal.uid.clone(), offset), phase);
+                state.sw_osc_phases.insert((ob.signal.uid, offset), phase);
             } else {
-                state
-                    .sw_osc_phases
-                    .insert((ob.signal.uid.clone(), offset), 0.0);
+                state.sw_osc_phases.insert((ob.signal.uid, offset), 0.0);
             }
             Ok(())
         }
         NodeKind::AcquirePulse(ob) => {
             // TODO: More elegant way to map to the node than a timestamp
-            let offset = func(&ob.signal.uid, node_offset);
+            let offset = func(ob.signal.uid, node_offset);
             state.timestamp_osc_freq(&ob.signal, offset);
             Ok(())
         }
@@ -265,7 +256,7 @@ pub(crate) fn handle_oscillator_parameters(
     node: &mut IrNode,
     signals: &[Arc<cjob::Signal>],
     device_kind: &DeviceKind,
-    timestamp_shifting_function: impl Fn(&str, Samples) -> Samples,
+    timestamp_shifting_function: impl Fn(SignalUid, Samples) -> Samples,
 ) -> Result<SoftwareOscillatorParameters> {
     let mut state = SoftwareOscillatorParameters {
         active_osc_freq: HashMap::new(),
@@ -345,7 +336,7 @@ fn is_linear_sweep(frequencies: &[f64]) -> bool {
 
 fn evaluate_sweep_properties(
     nodes: &Vec<(usize, &mut IrNode)>,
-    osc_allocation: &HashMap<&str, u16>,
+    osc_allocation: &HashMap<SignalUid, u16>,
 ) -> Result<SweepInfo> {
     let mut node_id_to_osc_index: HashMap<usize, Vec<OscillatorIteration>> = HashMap::new();
     let mut osc_sweep_info = HashMap::new();
@@ -355,7 +346,7 @@ fn evaluate_sweep_properties(
     for (iteration, node) in nodes.iter() {
         if let NodeKind::SetOscillatorFrequency(ob) = node.data() {
             for signal_freq in ob.iter() {
-                if let Some(osc_index) = osc_allocation.get(signal_freq.signal.uid.as_str()) {
+                if let Some(osc_index) = osc_allocation.get(&signal_freq.signal.uid) {
                     let entry = osc_max_iteration.entry(*osc_index).or_insert(0);
                     if *entry < *iteration {
                         *entry = *iteration;
@@ -369,7 +360,7 @@ fn evaluate_sweep_properties(
         if let NodeKind::SetOscillatorFrequency(ob) = node.data() {
             let mut osc_frequencies = BTreeMap::new();
             for signal_freq in ob.iter() {
-                if let Some(osc_index) = osc_allocation.get(signal_freq.signal.uid.as_str()) {
+                if let Some(osc_index) = osc_allocation.get(&signal_freq.signal.uid) {
                     osc_frequencies
                         .insert(*osc_index, (signal_freq.frequency, &signal_freq.signal));
                 }
@@ -544,9 +535,9 @@ mod tests {
 
     use super::*;
 
-    fn make_signal(uid: &str, kind: cjob::OscillatorKind) -> Arc<cjob::Signal> {
+    fn make_signal(uid: u32, kind: cjob::OscillatorKind) -> Arc<cjob::Signal> {
         let sig = cjob::Signal {
-            uid: uid.to_string(),
+            uid: uid.into(),
             kind: cjob::SignalKind::IQ,
             channels: vec![],
             oscillator: Some(cjob::Oscillator {
@@ -555,7 +546,6 @@ mod tests {
             }),
             signal_delay: 0,
             start_delay: 0,
-            mixer_type: None,
             automute: false,
         };
         Arc::new(sig)
@@ -590,7 +580,7 @@ mod tests {
 
     #[test]
     fn test_phase_increment() {
-        let signal = make_signal("test", cjob::OscillatorKind::SOFTWARE);
+        let signal = make_signal(0, cjob::OscillatorKind::SOFTWARE);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
         root.add_child(0, make_reset());
         root.add_child(1, make_pulse(Arc::clone(&signal), None, Some(0.5)));
@@ -616,7 +606,7 @@ mod tests {
 
     #[test]
     fn test_phase_increment_no_sw_reset() {
-        let signal = make_signal("test", cjob::OscillatorKind::SOFTWARE);
+        let signal = make_signal(0, cjob::OscillatorKind::SOFTWARE);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
         root.add_child(0, make_pulse(Arc::clone(&signal), None, Some(0.5)));
         root.add_child(3, make_pulse(Arc::clone(&signal), None, Some(0.5)));
@@ -634,7 +624,7 @@ mod tests {
 
     #[test]
     fn test_phase_increment_hw_osc() {
-        let signal = make_signal("test", cjob::OscillatorKind::HARDWARE);
+        let signal = make_signal(0, cjob::OscillatorKind::HARDWARE);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
         root.add_child(0, make_pulse(Arc::clone(&signal), None, Some(0.5)));
         root.add_child(1, make_pulse(Arc::clone(&signal), None, Some(0.5)));
@@ -652,7 +642,7 @@ mod tests {
 
     #[test]
     fn test_set_phase() {
-        let signal = make_signal("test", cjob::OscillatorKind::SOFTWARE);
+        let signal = make_signal(0, cjob::OscillatorKind::SOFTWARE);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
         root.add_child(0, make_pulse(Arc::clone(&signal), Some(1.0), Some(0.5)));
         root.add_child(1, make_pulse(Arc::clone(&signal), None, Some(0.5)));
@@ -675,13 +665,12 @@ mod tests {
     #[test]
     fn test_set_phase_no_osc() {
         let sig = cjob::Signal {
-            uid: "test".to_string(),
+            uid: 0.into(),
             kind: cjob::SignalKind::IQ,
             channels: vec![],
             oscillator: None,
             signal_delay: 0,
             start_delay: 0,
-            mixer_type: None,
             automute: false,
         };
         let signal = Arc::new(sig);
@@ -726,12 +715,12 @@ mod tests {
             }
         }
 
-        fn make_set_oscillator_frequency(values: Vec<(String, f64)>) -> NodeKind {
+        fn make_set_oscillator_frequency(values: Vec<(u32, f64)>) -> NodeKind {
             let values = values
                 .into_iter()
                 .map(|(signal_uid, frequency)| SignalFrequency {
                     signal: Arc::new(Signal {
-                        uid: signal_uid,
+                        uid: signal_uid.into(),
                         kind: SignalKind::IQ,
                         channels: vec![],
                         oscillator: Some(Oscillator {
@@ -740,7 +729,6 @@ mod tests {
                         }),
                         signal_delay: 0,
                         start_delay: 0,
-                        mixer_type: None,
                         automute: false,
                     }),
                     frequency,
@@ -778,7 +766,7 @@ mod tests {
                 0,
                 cjob::AwgKind::IQ,
                 vec![Arc::new(Signal {
-                    uid: "test".to_string(),
+                    uid: 0.into(),
                     kind: SignalKind::IQ,
                     channels: vec![],
                     oscillator: Some(Oscillator {
@@ -787,7 +775,6 @@ mod tests {
                     }),
                     signal_delay: 0,
                     start_delay: 0,
-                    mixer_type: None,
                     automute: false,
                 })],
                 1e9,
@@ -809,10 +796,7 @@ mod tests {
                 let mut iteration = IrNode::new(make_loop_iteration(), 0);
                 iteration.add_child(
                     (i * 32) as Samples,
-                    make_set_oscillator_frequency(vec![(
-                        "test".to_string(),
-                        start_freq + (i as f64) * freq_step,
-                    )]),
+                    make_set_oscillator_frequency(vec![(0, start_freq + (i as f64) * freq_step)]),
                 );
                 loop_root.add_child_node(iteration);
             }

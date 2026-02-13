@@ -6,10 +6,10 @@ use std::collections::HashSet;
 use crate::error::{Error, Result};
 
 use crate::experiment_context::ExperimentContext;
-use crate::ir::builders::SectionBuilder;
-use crate::ir::{Acquire, ChangeOscillatorPhase, IrKind, Loop, LoopKind, PlayPulse};
 use crate::lower_experiment::local_context::LocalContext;
 use crate::schedule_info::{RepetitionMode, ScheduleInfoBuilder};
+use laboneq_ir::builders::SectionBuilder;
+use laboneq_ir::{Acquire, ChangeOscillatorPhase, IrKind, Loop, LoopKind, PlayPulse};
 
 use crate::utils::{compute_grid, lcm, round_to_grid};
 use crate::{ParameterStore, ScheduledNode, SignalInfo};
@@ -50,7 +50,14 @@ pub(crate) fn lower_to_ir<T: SignalInfo + Sized>(
 
     let mut root = ScheduledNode::new(IrKind::Root, ScheduleInfoBuilder::new().grid(1).build());
 
-    let concrete_signals: Vec<_> = ctx.signals().collect();
+    // Collect and sort signals by name to ensure deterministic ordering
+    let mut concrete_signals: Vec<_> = ctx.signals().collect();
+    concrete_signals.sort_by_key(|sig| {
+        ctx.id_store
+            .resolve(sig.uid().0)
+            .unwrap_or("unknown")
+            .to_string()
+    });
     setup_initial_conditions(&mut root, &concrete_signals, nt_parameters, system_grid)?;
 
     let (children, reserved_signals) = lower_children(&node.children, ctx, &mut local_ctx)?;
@@ -341,7 +348,7 @@ fn create_root_loop(
 
     let loop_ir = Loop {
         uid: *loop_info.uid,
-        iterations: loop_info.count as usize,
+        iterations: loop_info.count,
         kind: loop_kind,
     };
 

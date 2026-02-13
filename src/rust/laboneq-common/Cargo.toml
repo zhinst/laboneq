@@ -12,7 +12,7 @@ version.workspace = true
 [dependencies]
 string-interner = { workspace = true }
 regex = { workspace = true }
-laboneq-units = { path = "../laboneq-units" }
+laboneq-units = { workspace = true }
 
 [lints]
 workspace = true

@@ -43,13 +43,13 @@ fn adjust_sequence_end_point(
 fn apply_delays(node: &mut ir::IrNode, delays: &AwgTiming) {
     match node.data() {
         NodeKind::PlayPulse(ob) => {
-            *node.offset_mut() += delays.signal_delay(ob.signal.uid.as_str());
+            *node.offset_mut() += delays.signal_delay(ob.signal.uid);
         }
         NodeKind::AcquirePulse(ob) => {
-            *node.offset_mut() += delays.signal_delay(ob.signal.uid.as_str());
+            *node.offset_mut() += delays.signal_delay(ob.signal.uid);
         }
         NodeKind::TriggerSet(ob) => {
-            *node.offset_mut() += delays.signal_delay(ob.signal.uid.as_str());
+            *node.offset_mut() += delays.signal_delay(ob.signal.uid);
         }
         _ => {
             *node.offset_mut() += delays.delay();

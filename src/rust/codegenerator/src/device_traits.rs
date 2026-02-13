@@ -38,6 +38,7 @@ pub struct DeviceTraits {
     pub is_qa_device: bool,
     pub number_of_trigger_bits: u8,
     pub ct_schema_version: Option<&'static str>,
+    pub num_integration_units_per_acquire_signal: u8,
 }
 
 pub(crate) const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
@@ -62,6 +63,7 @@ pub(crate) const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     is_qa_device: false,
     number_of_trigger_bits: 4,
     ct_schema_version: Some("hd_1.1.0"),
+    num_integration_units_per_acquire_signal: 0,
 };
 
 pub(crate) const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -86,6 +88,7 @@ pub(crate) const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     is_qa_device: true,
     number_of_trigger_bits: 4,
     ct_schema_version: None,
+    num_integration_units_per_acquire_signal: 2,
 };
 
 pub(crate) const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
@@ -114,6 +117,7 @@ pub(crate) const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     // todo: The documentation states 4 trigger bits, but the LabOne Q code only allows 1.
     number_of_trigger_bits: 1,
     ct_schema_version: Some("sg_1.2.0"),
+    num_integration_units_per_acquire_signal: 0,
 };
 
 pub(crate) const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -143,4 +147,5 @@ pub(crate) const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     // todo: The documentation states 2 trigger bits, but the LabOne Q code only allows 1.
     number_of_trigger_bits: 1,
     ct_schema_version: None,
+    num_integration_units_per_acquire_signal: 1,
 };

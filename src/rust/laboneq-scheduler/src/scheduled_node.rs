@@ -3,16 +3,16 @@
 
 use std::rc::Rc;
 
-use crate::{ir::IrKind, schedule_info::ScheduleInfo};
-
+use crate::schedule_info::ScheduleInfo;
+use laboneq_ir::IrKind;
 pub(crate) type NodeRef = Rc<Node>;
 
 /// A node that hold the scheduling information of an IR node and its children.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Node {
+pub(crate) struct Node {
     pub kind: IrKind,
-    pub(crate) schedule: ScheduleInfo,
+    pub schedule: ScheduleInfo,
     pub children: Vec<NodeChild>,
 }
 
@@ -39,29 +39,17 @@ impl Node {
     }
 
     /// Returns the length of the node.
-    pub fn length(&self) -> TinySamples {
+    pub(crate) fn length(&self) -> TinySamples {
         self.schedule
             .try_length()
             .expect("Expected node to have length")
     }
-
-    /// Returns an iterator over the signals used in this node and its children.
-    pub fn signals(&self) -> impl Iterator<Item = &SignalUid> {
-        self.schedule.signals.iter()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct NodeChild {
-    pub(crate) offset: TinySamples,
+pub(crate) struct NodeChild {
+    pub offset: TinySamples,
     pub node: NodeRef,
-}
-
-impl NodeChild {
-    /// Returns the relative offset from the parent node.
-    pub fn offset(&self) -> TinySamples {
-        self.offset
-    }
 }
 
 #[cfg(test)]
@@ -98,7 +86,6 @@ macro_rules! ir_node_structure {
     }
 #[cfg(test)]
 pub(crate) use ir_node_structure;
-use laboneq_dsl::types::SignalUid;
 use laboneq_units::tinysample::TinySamples;
 
 #[cfg(test)]

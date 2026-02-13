@@ -18,14 +18,15 @@ num-traits = { workspace = true }
 num-integer = { workspace = true }
 smallvec = { workspace = true }
 
-laboneq-common = { path = "../laboneq-common" }
-laboneq-dsl = { path = "../laboneq-dsl" }
-laboneq-units = { path = "../laboneq-units" }
-laboneq-log = { path = "../laboneq-log" }
-numeric-array = { path = "../numeric-array" }
+laboneq-common = { workspace = true }
+laboneq-dsl = { workspace = true }
+laboneq-ir = { workspace = true }
+laboneq-units = { workspace = true }
+laboneq-log = { workspace = true }
+numeric-array = { workspace = true }
 
 [dev-dependencies]
-laboneq-common = { path = "../laboneq-common", features = ["test_utils"] }
+laboneq-common = { workspace = true, features = ["test_utils"] }
 
 [lints]
 workspace = true

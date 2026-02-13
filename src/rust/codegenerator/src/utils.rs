@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use core::f64;
+// re-export for convenience
+pub(crate) use codegenerator_utils::normalize_f64;
 
 pub fn floor_to_grid(value: i64, grid: i64) -> i64 {
     value - value % grid
@@ -31,17 +33,6 @@ pub fn samples_to_length(t: i64, sampling_rate: f64) -> f64 {
 
 fn normalize_zero(value: f64) -> f64 {
     if value == 0.0 { 0.0 } else { value }
-}
-
-/// Utility function to normalize f64 value to bits, normalizing NaN and -0.0 to 0.0
-pub fn normalize_f64(value: f64) -> u64 {
-    if value.is_nan() {
-        f64::NAN.to_bits()
-    } else if value == 0.0 {
-        0.0_f64.to_bits()
-    } else {
-        value.to_bits()
-    }
 }
 
 pub fn normalize_phase(value: f64) -> f64 {
@@ -126,16 +117,6 @@ mod tests {
         assert_eq!(normalize_phase(-0.0).to_bits(), 0.0_f64.to_bits());
         assert_eq!(normalize_phase(f64::consts::PI), f64::consts::PI);
         assert_eq!(normalize_phase(f64::NAN), 0.0);
-    }
-
-    #[test]
-    fn test_hash_f64() {
-        assert_eq!(normalize_f64(0.0), normalize_f64(0.0));
-        assert_eq!(normalize_f64(-0.0), normalize_f64(0.0));
-        assert_eq!(normalize_f64(f64::NAN), normalize_f64(f64::NAN));
-        assert_eq!(normalize_f64(-1.0), normalize_f64(-1.0));
-
-        assert_ne!(normalize_f64(-1.0), normalize_f64(1.0));
     }
 
     #[test]

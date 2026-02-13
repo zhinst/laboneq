@@ -5,8 +5,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
+
+from zhinst.core import __version__ as zhinst_version
 
 from laboneq.dsl.device.instruments import (
     HDAWG,
@@ -22,6 +23,7 @@ from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInst
 from laboneq.dsl.device.system_profile_builder import register_profile_builder
 
 if TYPE_CHECKING:
+    from laboneq.controller import Controller
     from laboneq.controller.devices.device_zi import DeviceZI
     from laboneq.dsl.device import DeviceSetup, Instrument
     from laboneq.dsl.device.system_profile_qccs import SystemProfile
@@ -36,17 +38,21 @@ _DEVICE_DEMO_DATA: dict[type, tuple[str, list[str]]] = {
     UHFQA: ("UHFQA", ["AWG", "DIG", "QA"]),
 }
 
+_SessionClass = TypeVar("_SessionClass")
+
 
 def _build_from_devices(
     device_setup: DeviceSetup,
-    devices: Mapping[str, DeviceZI] | None = None,
+    controller: Controller[_SessionClass] | None,
+    *,
     demo: bool = False,
 ) -> SystemProfile:
     """Build QCCS system profile from connected devices.
 
     Args:
-        device_setup: User's device setup
-        devices: List of connected QCCS devices
+        device_setup: Device setup to build profile for
+        controller: Controller for hardware queries; required if demo is False
+        demo: If True, build a demo profile without querying hardware
 
     Returns:
         System profile with device capabilities
@@ -63,9 +69,12 @@ def _build_from_devices(
         server_address=server.host,
         server_port=int(server.port),
     )
+    if not device_setup.instruments:
+        # Happens during some tests
+        return profile
 
     if demo:
-        profile.server_version = "25.10.0.274"
+        profile.server_version = zhinst_version
         instrument: Instrument
         for instrument in device_setup.instruments:
             if not isinstance(instrument, ZIStandardInstrument):
@@ -89,7 +98,8 @@ def _build_from_devices(
                 )
         return profile
 
-    assert devices is not None
+    assert controller is not None
+    devices = controller.devices
 
     device: DeviceZI
     for device in devices.values():

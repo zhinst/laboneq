@@ -7,14 +7,10 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Display;
+use std::num::NonZeroU32;
+use std::sync::Arc;
 
 use crate::error::{Error, Result};
-use crate::scheduler::pulse::PulseDef;
-use crate::scheduler::pulse::PulseFunction;
-use crate::scheduler::pulse::PulseFunctional;
-use crate::scheduler::pulse::PulseKind;
-use crate::scheduler::pulse::PulseSampled;
-use crate::scheduler::py_object_interner::PyObjectInterner;
 use anyhow::Context;
 use laboneq_common::named_id::{NamedId, NamedIdStore};
 use laboneq_dsl::ExperimentNode;
@@ -41,6 +37,8 @@ use laboneq_dsl::types::SignalUid;
 use laboneq_dsl::types::SweepParameter;
 use laboneq_dsl::types::Trigger;
 use laboneq_dsl::types::ValueOrParameter;
+use laboneq_py_utils::pulse::{FunctionalPulse, PulseDef, PulseFunction, PulseKind, SampledPulse};
+use laboneq_py_utils::py_object_interner::PyObjectInterner;
 use laboneq_units::duration::seconds;
 use num_complex::Complex64;
 use numeric_array::NumericArray;
@@ -357,15 +355,12 @@ fn extract_parameter(
                 NumericArray::linspace_complex(start, stop, count)
             }
         };
-        let parameter = SweepParameter::new(uid, values);
+        let parameter = SweepParameter::new(uid, values).map_err(Error::new)?;
         builder.parameters.insert(parameter.uid, parameter);
         return Ok(uid);
     } else if obj.is_instance(sweep_parameter_py)? {
         let values = NumericArray::from_py(&obj.getattr(intern!(py, "values"))?)?;
-        let parameter = SweepParameter {
-            uid,
-            values: values.into(),
-        };
+        let parameter = SweepParameter::new(uid, values).map_err(Error::new)?;
         builder.parameters.insert(parameter.uid, parameter);
         register_driving_parameters(uid, obj, builder)?;
         return Ok(uid);
@@ -454,7 +449,7 @@ fn extract_sweep(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Res
         .extract::<bool>()?;
     let chunking = if auto_chunking {
         Some(Chunking::Auto)
-    } else if chunk_count > 1 {
+    } else if chunk_count.get() > 1 {
         // Chunk count 1 is the same no chunking at all.
         Some(Chunking::Count { count: chunk_count })
     } else {
@@ -465,14 +460,15 @@ fn extract_sweep(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Res
         parameters: parameters.into_iter().collect(),
         alignment,
         reset_oscillator_phase,
-        count: count as u32,
+        count: NonZeroU32::new(count as u32)
+            .ok_or_else(|| Error::new("'count' must be a positive integer."))?,
         chunking,
     };
     Ok(obj)
 }
 
-fn extract_chunk_count(obj: &Bound<'_, PyAny>) -> PyResult<usize> {
-    obj.extract::<usize>().map_err(|e| {
+fn extract_chunk_count(obj: &Bound<'_, PyAny>) -> PyResult<NonZeroU32> {
+    obj.extract::<NonZeroU32>().map_err(|e| {
         if let Ok(v) = obj.extract::<i64>()
             && v < 1
         {
@@ -557,13 +553,19 @@ fn extract_pulse(
         return Ok((uid, pulse_parameters));
     }
     let pulse = if obj.is_instance(builder.dsl_types.laboneq_type(DslType::PulseFunctional))? {
+        let function_py = obj.getattr(intern!(py, "function"))?;
+        let function = function_py.extract::<&str>()?;
+        let pulse_function = match function {
+            "const" => PulseFunction::Constant,
+            _ => PulseFunction::Custom {
+                function: function.to_owned(),
+            },
+        };
         PulseDef {
             uid,
-            kind: PulseKind::Functional(PulseFunctional {
+            kind: PulseKind::Functional(FunctionalPulse {
                 length: seconds(obj.getattr(intern!(py, "length"))?.extract::<f64>()?),
-                function: PulseFunction::Custom {
-                    function: obj.getattr(intern!(py, "function"))?.extract::<String>()?,
-                },
+                function: pulse_function,
             }),
             amplitude: extract_amplitude(&obj.getattr(intern!(py, "amplitude"))?)?
                 .unwrap_or(1.0.into()),
@@ -576,8 +578,8 @@ fn extract_pulse(
         let length = samples_py_arr.len()?;
         PulseDef {
             uid,
-            kind: PulseKind::Sampled(PulseSampled {
-                samples: samples_py_arr.into(),
+            kind: PulseKind::Sampled(SampledPulse {
+                samples: Arc::new(samples_py_arr.into()),
                 length,
             }),
             amplitude: 1.0.into(),
@@ -616,9 +618,7 @@ fn extract_acquire(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> R
             pulse_parameters.push(parameters);
         }
     }
-    let length = obj
-        .getattr(intern!(py, "length"))?
-        .extract::<Option<f64>>()?;
+
     let play_parameters = obj.getattr(intern!(py, "pulse_parameters"))?;
     let mut parameters = vec![];
     if play_parameters.is_instance(&py.get_type::<PyList>())? {
@@ -634,17 +634,35 @@ fn extract_acquire(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> R
         // Pad kernels to match the kernel count
         parameters.resize_with(kernels.len(), HashMap::new);
     }
+
     let out = Acquire {
-        signal: builder.register_signal(obj.getattr(intern!(py, "signal"))?.extract::<&str>()?)?,
-        handle: HandleUid(
-            builder.register_uid(obj.getattr(intern!(py, "handle"))?.extract::<&str>()?),
-        ),
+        signal: builder.register_signal(
+            obj.getattr(intern!(py, "signal"))?
+                .extract::<&str>()
+                .with_context(|| make_invalid_field_value_error("signal"))?,
+        )?,
+        handle: builder
+            .register_uid(
+                obj.getattr(intern!(py, "handle"))?
+                    .extract::<&str>()
+                    .with_context(|| make_invalid_field_value_error("handle"))?,
+            )
+            .into(),
         kernel: kernels,
-        length: length.map(seconds),
+        length: obj
+            .getattr(intern!(py, "length"))?
+            .extract::<Option<f64>>()
+            .with_context(|| make_invalid_field_value_error("length"))?
+            .map(seconds),
         parameters,
         pulse_parameters,
     };
     Ok(out)
+}
+
+fn make_invalid_field_value_error(field: &str) -> Error {
+    let msg = format!("Invalid type for field '{field}'");
+    Error::new(msg)
 }
 
 /// Convert dictionary specifying one of two markers
@@ -775,6 +793,17 @@ fn extract_match(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Res
     let sweep_parameter = obj.getattr(intern!(py, "sweep_parameter"))?;
     let prng_sample = obj.getattr(intern!(py, "prng_sample"))?;
 
+    // Check that only one target field is set
+    if [&handle, &user_register, &sweep_parameter, &prng_sample]
+        .into_iter()
+        .filter(|opt| !opt.is_none())
+        .count()
+        != 1
+    {
+        return Err(Error::new(
+            "Match must have exactly one of handle, user_register, sweep_parameter, or prng_sample defined",
+        ));
+    }
     let match_target = if !handle.is_none() {
         MatchTarget::Handle(HandleUid(
             builder.register_uid(obj.getattr(intern!(py, "handle"))?.extract::<&str>()?),
@@ -935,14 +964,15 @@ fn extract_averaging_loop(
 ) -> Result<AveragingLoop> {
     // Currently DSL supports `count` to be a floating point number, but it must be integral
     let count_py = obj.getattr(intern!(obj.py(), "count"))?;
-    let count = if let Ok(count) = count_py.extract::<u32>() {
+    let count = if let Ok(count) = count_py.extract::<NonZeroU32>() {
         count
     } else {
         let count = count_py.extract::<f64>()?;
         if count.fract() != 0.0 {
             return Err(Error::new("Sweep 'count' must be a positive integer"));
         }
-        count as u32
+        NonZeroU32::new(count as u32)
+            .ok_or_else(|| Error::new("Sweep 'count' must be a positive integer"))?
     };
     let reset_oscillator_phase = obj
         .getattr(intern!(obj.py(), "reset_oscillator_phase"))?
@@ -1016,7 +1046,7 @@ fn extract_prng_loop(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) ->
     );
     let count = prng_sample_py
         .getattr(intern!(py, "count"))?
-        .extract::<u32>()?;
+        .extract::<NonZeroU32>()?;
     let obj = PrngLoop {
         uid: uid.into(),
         count,

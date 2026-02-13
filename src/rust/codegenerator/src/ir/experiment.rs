@@ -1,12 +1,12 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_dsl::types::SignalUid;
 use num_complex::Complex;
 
 use crate::node;
 use crate::signature::WaveformSignature;
 use crate::{ir::compilation_job as cjob, utils::normalize_f64};
-use core::panic;
 use std::sync::Arc;
 
 use super::compilation_job::{PulseDef, Samples, Signal};
@@ -18,7 +18,7 @@ pub type ParameterRef = Arc<cjob::SweepParameter>;
 pub struct PulseParametersId(pub u64);
 
 #[allow(non_camel_case_types)]
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub enum AcquisitionType {
     INTEGRATION,
     SPECTROSCOPY_IQ,
@@ -104,7 +104,6 @@ pub struct SectionInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Case {
     pub section_info: Arc<SectionInfo>,
-    pub signals: Vec<Arc<Signal>>,
     pub length: Samples,
     pub state: u16,
 }
@@ -593,6 +592,52 @@ impl NodeKind {
             NodeKind::Nop { .. } => None,
             NodeKind::SetTrigger(_) => None,
             NodeKind::LoopIteration(_) => None,
+        }
+    }
+
+    /// Returns a vector of signal UIDs associated with the variant.
+    pub fn signals(&self) -> Vec<SignalUid> {
+        match self {
+            NodeKind::PlayPulse(x) => vec![x.signal.uid],
+            NodeKind::FrameChange(x) => vec![x.signal.uid],
+            NodeKind::AcquirePulse(x) => vec![x.signal.uid],
+            NodeKind::PpcSweepStep(x) => vec![x.signal.uid],
+            NodeKind::SetTrigger(x) => vec![x.signal.uid],
+            NodeKind::Acquire(x) => vec![x.signal.uid],
+            NodeKind::PpcStep(x) => vec![x.signal.uid],
+            NodeKind::InitialOscillatorFrequency(x) => x.iter().map(|sf| sf.signal.uid).collect(),
+            NodeKind::SetOscillatorFrequency(x) => x.iter().map(|sf| sf.signal.uid).collect(),
+            NodeKind::PhaseReset(x) => x.signals.iter().map(|s| s.uid).collect(),
+            NodeKind::TriggerSet(x) => vec![x.signal.uid],
+            NodeKind::PrecompensationFilterReset { signal } => vec![signal.uid],
+            NodeKind::PlayWave(x) => x.signals.iter().map(|s| s.uid).collect(),
+            NodeKind::QaEvent(x) => {
+                let mut v = Vec::new();
+                for acq in x.acquires() {
+                    v.push(acq.signal().uid);
+                }
+                for pw in x.play_waves() {
+                    for s in &pw.signals {
+                        v.push(s.uid);
+                    }
+                }
+                v
+            }
+            NodeKind::Section(x) => x.trigger_output.iter().map(|(s, _)| s.uid).collect(),
+            NodeKind::Case(_)
+            | NodeKind::Loop(_)
+            | NodeKind::LoopIteration(_)
+            | NodeKind::Match(_)
+            | NodeKind::InitialResetPhase()
+            | NodeKind::ResetPhase()
+            | NodeKind::InitAmplitudeRegister(_)
+            | NodeKind::ResetPrecompensationFilters(_)
+            | NodeKind::SetupPrng(_)
+            | NodeKind::DropPrngSetup
+            | NodeKind::SamplePrng(_)
+            | NodeKind::PlayHold(_)
+            | NodeKind::SetOscillatorFrequencySweep(_)
+            | NodeKind::Nop { .. } => vec![],
         }
     }
 }

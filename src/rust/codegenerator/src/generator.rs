@@ -3,31 +3,39 @@
 
 use crate::CodeGeneratorSettings;
 use crate::Result;
+use crate::context::CodeGenContext;
 use crate::event_list::generate_event_list;
 use crate::generate_awg_events::transform_ir_to_awg_events;
+use crate::handle_feedback_registers::FeedbackConfig;
 use crate::handle_feedback_registers::FeedbackRegisterAllocation;
-use crate::handle_feedback_registers::{FeedbackConfig, collect_feedback_config};
+use crate::handle_feedback_registers::calculate_feedback_register_layout;
+use crate::handle_feedback_registers::collect_feedback_config;
+use crate::integration_units::allocate_integration_units;
 use crate::ir::IrNode;
+use crate::ir::SignalUid;
 use crate::ir::compilation_job::AwgCore;
 use crate::ir::compilation_job::AwgKey;
 use crate::ir::compilation_job::SignalKind;
 use crate::ir::experiment::AcquisitionType;
 use crate::ir::experiment::Handle;
+use crate::passes::MeasurementAnalysis;
+use crate::passes::analyze_awg::AwgCompilationInfo;
 use crate::passes::analyze_awg::analyze_awg_ir;
 use crate::passes::analyze_measurements;
 use crate::passes::fanout_awg::fanout_for_awg;
 use crate::result::Acquisition;
 use crate::result::AwgCodeGenerationResult;
+use crate::result::ChannelProperties;
 use crate::result::FeedbackRegisterConfig;
 use crate::result::Measurement;
 use crate::result::ResultSource;
+use crate::result::SampledWaveform;
 use crate::result::SeqCGenOutput;
 use crate::result::ShfPpcSweepJson;
 use crate::result::SignalIntegrationInfo;
 use crate::sample_waveforms::{
     AwgWaveforms, WaveDeclaration, collect_and_finalize_waveforms, collect_integration_kernels,
 };
-use crate::sampled_event_handler::FeedbackRegisterLayout;
 use crate::sampled_event_handler::SeqcResults;
 use crate::sampled_event_handler::handle_sampled_events;
 use crate::sampled_event_handler::seqc_tracker::FeedbackRegisterIndex;
@@ -45,16 +53,14 @@ fn generate_output(
     node: IrNode,
     awg: &AwgCore,
     wave_declarations: &[WaveDeclaration],
-    qa_signals_by_handle: &HashMap<Handle, (String, AwgKey)>,
+    qa_signals_by_handle: &HashMap<Handle, (SignalUid, AwgKey)>,
     emit_timing_comments: bool,
     shf_output_mute_min_duration: Option<f64>,
     has_readout_feedback: bool,
     feedback_register: &Option<FeedbackRegisterIndex>,
-    feedback_register_layout: &FeedbackRegisterLayout,
-    acquisition_type: &AcquisitionType,
-    is_reference_clock_internal: bool,
+    ctx: &CodeGenContext,
 ) -> Result<SeqcResults> {
-    let sampled_events = generate_event_list(node, awg)?;
+    let sampled_events = generate_event_list(node, awg, ctx)?;
     let awg = Awg {
         signal_kind: awg.kind,
         awg_key: awg.key(),
@@ -67,7 +73,7 @@ fn generate_output(
         sampling_rate: awg.sampling_rate,
         shf_output_mute_min_duration,
         trigger_mode: awg.trigger_mode,
-        is_reference_clock_internal,
+        is_reference_clock_internal: awg.is_reference_clock_internal,
     };
     let seqc_results = handle_sampled_events(
         sampled_events,
@@ -75,36 +81,31 @@ fn generate_output(
         qa_signals_by_handle,
         wave_declarations,
         *feedback_register,
-        feedback_register_layout,
+        &ctx.feedback_register_layout,
         emit_timing_comments,
         has_readout_feedback,
-        acquisition_type,
+        &ctx.acquisition_type,
     )?;
     Ok(seqc_results)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn generate_code_for_awg<T: SampleWaveforms>(
     root: &IrNode,
     awg: &AwgCore,
-    settings: &CodeGeneratorSettings,
-    acquisition_type: &AcquisitionType,
-    acquisition_config: &FeedbackConfig<'_>,
-    feedback_register_layout: &FeedbackRegisterLayout,
-    is_reference_clock_internal: bool,
+    ctx: &CodeGenContext,
     sampler: &T,
 ) -> Result<AwgCodeGenerationResult<T>> {
     let root = fanout_for_awg(root, awg);
-    let awg_info = analyze_awg_ir(&root);
+    let awg_info = analyze_awg_ir(&root, awg)?;
     let measurement_info = analyze_measurements(&root, awg.device_kind(), awg.sampling_rate)?;
     let mut awg_node = transform_ir_to_awg_events(
         root,
         awg,
-        settings,
+        &ctx.settings,
         &measurement_info
             .delays
             .iter()
-            .map(|(signal, delay)| (signal.as_str(), delay.delay_sequencer()))
+            .map(|(signal, delay)| (*signal, delay.delay_sequencer()))
             .collect(),
     )?;
     let waveforms = if T::supports_waveform_sampling(awg) {
@@ -115,18 +116,17 @@ fn generate_code_for_awg<T: SampleWaveforms>(
     let integration_kernels = collect_integration_kernels(&awg_node, awg)?;
     let integration_weights =
         sampler.batch_calculate_integration_weights(awg, integration_kernels)?;
-    let qa_signals_by_handle: HashMap<Handle, (String, AwgKey)> = acquisition_config
+    let qa_signals_by_handle: HashMap<Handle, (SignalUid, AwgKey)> = ctx
+        .feedback_config
         .handles()
         .map(|handle| {
-            let signal_info = acquisition_config
+            let signal_info = ctx
+                .feedback_config
                 .feedback_source(handle)
                 .expect("Internal Error: Missing feedback source for handle");
             (
                 handle.clone(),
-                (
-                    signal_info.signal.uid.to_string(),
-                    signal_info.awg_key.clone(),
-                ),
+                (signal_info.signal, signal_info.awg_key.clone()),
             )
         })
         .collect();
@@ -134,29 +134,15 @@ fn generate_code_for_awg<T: SampleWaveforms>(
     let (sampled_waveforms, wave_declarations) = waveforms.into_inner();
 
     // Feedback registers
-    let target_feedback_register = acquisition_config.target_feedback_register(&awg.key());
-
+    let target_feedback_register = ctx.feedback_config.target_feedback_register(&awg.key());
     let global_feedback_register = match target_feedback_register {
         Some(FeedbackRegisterAllocation::Global { register }) => (*register as u32).into(),
         _ => None,
     };
-    let feedback_register = match target_feedback_register {
-        Some(FeedbackRegisterAllocation::Global { register }) => (*register as i64).into(),
-        Some(FeedbackRegisterAllocation::Local) => (-1).into(),
-        None => None,
-    };
-    let source_feedback_register = if let Some(handle) = awg_info.feedback_handles().first() {
-        let source = acquisition_config
-            .feedback_source(handle)
-            .expect("Internal Error: Missing feedback source for handle");
-        acquisition_config.target_feedback_register(&source.awg_key)
-    } else {
-        None
-    };
 
     let use_automute_playzeros = awg.signals.iter().any(|s| s.automute);
     let shf_output_mute_min_duration = if use_automute_playzeros {
-        Some(settings.shf_output_mute_min_duration)
+        Some(ctx.settings.shf_output_mute_min_duration)
     } else {
         None
     };
@@ -165,15 +151,66 @@ fn generate_code_for_awg<T: SampleWaveforms>(
         awg,
         &wave_declarations,
         &qa_signals_by_handle,
-        settings.emit_timing_comments,
+        ctx.settings.emit_timing_comments,
         shf_output_mute_min_duration,
         awg_info.has_readout_feedback(),
         &global_feedback_register,
-        feedback_register_layout,
-        acquisition_type,
-        is_reference_clock_internal,
+        ctx,
     )?;
-    let output = AwgCodeGenerationResult {
+    let output = construct_awg_result(
+        awg,
+        awg_events,
+        sampled_waveforms,
+        integration_weights,
+        measurement_info,
+        &awg_info,
+        &ctx.feedback_config,
+    );
+    Ok(output)
+}
+
+fn construct_awg_result<T>(
+    awg: &AwgCore,
+    awg_events: SeqcResults,
+    sampled_waveforms: Vec<SampledWaveform<T::Signature>>,
+    integration_weights: Vec<T::IntegrationWeight>,
+    measurement_info: MeasurementAnalysis,
+    awg_info: &AwgCompilationInfo,
+    feedback_config: &FeedbackConfig,
+) -> AwgCodeGenerationResult<T>
+where
+    T: SampleWaveforms,
+{
+    let target_feedback_register = feedback_config.target_feedback_register(&awg.key());
+    let feedback_register = match target_feedback_register {
+        Some(FeedbackRegisterAllocation::Global { register }) => (*register as i64).into(),
+        Some(FeedbackRegisterAllocation::Local) => (-1).into(),
+        None => None,
+    };
+    let source_feedback_register = if let Some(handle) = awg_info.feedback_handles().first() {
+        let source = feedback_config
+            .feedback_source(handle)
+            .expect("Internal Error: Missing feedback source for handle");
+        feedback_config.target_feedback_register(&source.awg_key)
+    } else {
+        None
+    };
+
+    // Construct channel properties
+    let mut channel_properties = vec![];
+    for generator_channel in awg
+        .signals
+        .iter()
+        .filter(|s| s.kind != SignalKind::INTEGRATION)
+        .flat_map(|s| s.channels.clone())
+    {
+        channel_properties.push(ChannelProperties {
+            channel: generator_channel,
+            marker_mode: awg_info.marker_modes.get(&generator_channel).cloned(),
+        });
+    }
+
+    AwgCodeGenerationResult {
         seqc: awg_events.seqc,
         wave_indices: awg_events.wave_indices,
         command_table: awg_events
@@ -190,14 +227,14 @@ fn generate_code_for_awg<T: SampleWaveforms>(
         signal_delays: measurement_info
             .delays
             .iter()
-            .map(|(k, v)| (k.to_string(), v.delay_port().into()))
+            .map(|(k, v)| (*k, v.delay_port().into()))
             .collect(),
         integration_lengths: measurement_info
             .integration_lengths
             .into_iter()
             .map(|x| {
                 (
-                    x.signal().to_string(),
+                    *x.signal(),
                     SignalIntegrationInfo {
                         is_play: x.is_play(),
                         length: x.duration(),
@@ -221,38 +258,25 @@ fn generate_code_for_awg<T: SampleWaveforms>(
             command_table_offset: awg_events.feedback_register_config.command_table_offset,
             target_feedback_register: feedback_register,
         },
-    };
-    Ok(output)
+        channel_properties,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn generate_code_for_multiple_awgs<T: SampleWaveforms + Sync + Send>(
     root: &IrNode,
     awgs: &[AwgCore],
-    settings: &CodeGeneratorSettings,
+    ctx: &CodeGenContext,
     waveform_sampler: &T,
-    acquisition_type: &AcquisitionType,
-    acquisition_config: &FeedbackConfig<'_>,
-    feedback_register_layout: &FeedbackRegisterLayout,
 ) -> Result<Vec<AwgCodeGenerationResult<T>>> {
     let awg_results: Vec<AwgCodeGenerationResult<T>> = awgs
         .par_iter()
         .map(|awg| -> Result<AwgCodeGenerationResult<T>> {
-            let code = generate_code_for_awg(
-                root,
-                awg,
-                settings,
-                acquisition_type,
-                acquisition_config,
-                feedback_register_layout,
-                awg.is_reference_clock_internal,
-                waveform_sampler,
-            )
-            .context(format!(
+            let code = generate_code_for_awg(root, awg, ctx, waveform_sampler).context(format!(
                 "Error while generating code for signals: {}",
                 &awg.signals
                     .iter()
-                    .map(|s| s.uid.to_string())
+                    .map(|s| s.uid.0.to_string())
                     .collect::<Vec<_>>()
                     .join(", ")
             ))?;
@@ -269,7 +293,7 @@ fn estimate_total_execution_time(root: &IrNode) -> f64 {
 fn construct_result_handle_maps(
     simultaneous_acquires: Vec<Vec<Acquisition>>,
     awgs: &[AwgCore],
-    acquisition_type: &AcquisitionType,
+    ctx: &CodeGenContext,
 ) -> HashMap<ResultSource, Vec<Vec<String>>> {
     fn _awg_has_acquires(awg: &AwgCore, acquires: &[Acquisition]) -> bool {
         for acq in acquires {
@@ -293,9 +317,14 @@ fn construct_result_handle_maps(
                 if !matches!(sig.kind, SignalKind::INTEGRATION) {
                     continue;
                 }
-                let integrator_idx = match acquisition_type {
+                let integrator_idx = match ctx.acquisition_type {
                     AcquisitionType::RAW => None,
-                    _ => Some(sig.channels[0]),
+                    _ => {
+                        let channels = ctx
+                            .integration_units_for_signal(sig.uid)
+                            .expect("Internal Error: Missing integrator allocation for signal");
+                        Some(channels[0])
+                    }
                 };
                 let result_source = ResultSource {
                     device_id: awg.device.uid().to_string(),
@@ -330,9 +359,8 @@ fn construct_result_handle_maps(
 
 pub fn generate_code<T: SampleWaveforms + Sync + Send>(
     root: &IrNode,
-    awgs: &[AwgCore],
-    acquisition_type: &AcquisitionType,
-    feedback_register_layout: &FeedbackRegisterLayout,
+    awgs: Vec<AwgCore>,
+    acquisition_type: AcquisitionType,
     mut settings: CodeGeneratorSettings,
     sampler: &T,
 ) -> Result<SeqCGenOutput<T>> {
@@ -345,27 +373,34 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
             msg.reason
         );
     }
-    let total_execution_time = estimate_total_execution_time(root);
-    let awg_refs: Vec<&AwgCore> = awgs.iter().collect();
-    let feedback_config: FeedbackConfig<'_> = collect_feedback_config(root, &awg_refs)
+    // Context construction
+    let mut feedback_config = collect_feedback_config(root, &awgs)
         .context("Error while processing feedback configuration")?;
-    let awg_results = generate_code_for_multiple_awgs(
-        root,
-        awgs,
-        &settings,
-        sampler,
+    let integration_unit_allocation = allocate_integration_units(root, &awgs, &acquisition_type)?;
+    let feedback_register_layout =
+        calculate_feedback_register_layout(&awgs, &integration_unit_allocation, &feedback_config);
+    let simulaneous_acquires = feedback_config.take_acquisitions();
+    let ctx = CodeGenContext {
         acquisition_type,
-        &feedback_config,
         feedback_register_layout,
-    )?;
-    let measurements = evaluate_measurement_per_device(awgs, &awg_results);
-    let result_handle_maps =
-        construct_result_handle_maps(feedback_config.into_acquisitions(), awgs, acquisition_type);
+        feedback_config,
+        integration_unit_allocation,
+        settings,
+    };
+
+    // Code generation per AWG
+    let awg_results = generate_code_for_multiple_awgs(root, &awgs, &ctx, sampler)?;
+
+    // Result construction
+    let total_execution_time = estimate_total_execution_time(root);
+    let measurements = evaluate_measurement_per_device(&awgs, &awg_results);
+    let result_handle_maps = construct_result_handle_maps(simulaneous_acquires, &awgs, &ctx);
     let result = SeqCGenOutput {
         awg_results,
         total_execution_time,
         result_handle_maps,
         measurements,
+        integration_unit_allocations: ctx.integration_unit_allocation,
     };
     Ok(result)
 }

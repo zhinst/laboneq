@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use laboneq_dsl::types::{ParameterUid, SectionUid, SweepParameter};
 
 use crate::error::{Error, Result};
-use crate::ir::builders::SectionBuilder;
-use crate::ir::{IrKind, MatchTarget};
 use crate::parameter_resolver::ParameterResolver;
 use crate::{ParameterStore, ScheduledNode};
+use laboneq_ir::builders::SectionBuilder;
+use laboneq_ir::{IrKind, MatchTarget};
 
 /// This function modifies the IR to unroll all sweep unconditionally.
 ///
@@ -31,7 +31,7 @@ fn unroll_loops_impl(node: &mut ScheduledNode, resolver: &ParameterResolver) -> 
         IrKind::Loop(obj) => {
             let parameters = &obj.parameters();
             let mut resolver = resolver.child_scope(parameters)?;
-            if parameters.is_empty() || obj.iterations == node.children.len() {
+            if parameters.is_empty() || obj.iterations.get() as usize == node.children.len() {
                 // Loop is already unrolled
                 for (iteration, child) in node.children.iter_mut().enumerate() {
                     for param in parameters.iter() {
@@ -47,10 +47,10 @@ fn unroll_loops_impl(node: &mut ScheduledNode, resolver: &ParameterResolver) -> 
                 "Loop must have exactly one child to unroll."
             );
             let prototype = node.children.pop().unwrap();
-            node.children = Vec::with_capacity(obj.iterations);
-            for iteration in 0..obj.iterations {
+            node.children = Vec::with_capacity(obj.iterations.get() as usize);
+            for iteration in 0..obj.iterations.get() {
                 for param in parameters.iter() {
-                    resolver.set_iteration(*param, iteration)?;
+                    resolver.set_iteration(*param, iteration as usize)?;
                 }
                 let mut proto = prototype.clone();
                 unroll_loops_impl(proto.node.make_mut(), &resolver)?;
@@ -99,25 +99,25 @@ fn create_section_kind(uid: SectionUid) -> IrKind {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroU32;
+
     use super::*;
 
     use crate::ParameterStoreBuilder;
-    use crate::ir::{Case, IrKind, Loop, LoopKind, Match};
     use crate::scheduled_node::ir_node_structure;
-    use laboneq_common::named_id::NamedId;
+    use laboneq_ir::{Case, IrKind, Loop, LoopKind, Match};
 
     #[test]
     fn test_unroll_loop() {
-        let parameter0 =
-            SweepParameter::new(ParameterUid(NamedId::debug_id(1)), Vec::from_iter(0..4));
+        let parameter0 = SweepParameter::new(1.into(), Vec::from_iter(0..4)).unwrap();
         let loop_top = Loop {
-            uid: SectionUid(NamedId::debug_id(0)),
-            iterations: 8,
+            uid: 0.into(),
+            iterations: NonZeroU32::new(8).unwrap(),
             kind: LoopKind::Sweeping { parameters: vec![] },
         };
         let loop_to_unroll = Loop {
-            uid: SectionUid(NamedId::debug_id(1)),
-            iterations: parameter0.len(),
+            uid: 1.into(),
+            iterations: NonZeroU32::new(parameter0.len() as u32).unwrap(),
             kind: LoopKind::Sweeping {
                 parameters: vec![parameter0.uid],
             },
@@ -171,19 +171,18 @@ mod tests {
     /// Test that unrolling a loop containing a match on a sweep parameter works correctly.
     #[test]
     fn test_unroll_loop_parameter_match_handling() {
-        let parameter0 =
-            SweepParameter::new(ParameterUid(NamedId::debug_id(1)), Vec::from_iter(0..2));
+        let parameter0 = SweepParameter::new(1.into(), Vec::from_iter(0..2)).unwrap();
         let loop_to_unroll = Loop {
-            uid: SectionUid(NamedId::debug_id(1)),
-            iterations: parameter0.len(),
+            uid: 1.into(),
+            iterations: NonZeroU32::new(parameter0.len() as u32).unwrap(),
             kind: LoopKind::Sweeping {
                 parameters: vec![parameter0.uid],
             },
         };
 
-        let section_match_uid = SectionUid(NamedId::debug_id(2));
-        let section_case_0_uid = SectionUid(NamedId::debug_id(3));
-        let section_case_1_uid = SectionUid(NamedId::debug_id(4));
+        let section_match_uid = 2.into();
+        let section_case_0_uid = 3.into();
+        let section_case_1_uid = 4.into();
 
         let match_ = Match {
             uid: section_match_uid,
@@ -225,9 +224,9 @@ mod tests {
         // Expected structure after unrolling:
         // The match should be replaced by sections corresponding to the selected case
         // for each iteration of the loop.
-        let section_match_uid = SectionUid(NamedId::debug_id(2));
-        let section_case_0_uid = SectionUid(NamedId::debug_id(3));
-        let section_case_1_uid = SectionUid(NamedId::debug_id(4));
+        let section_match_uid = 2.into();
+        let section_case_0_uid = 3.into();
+        let section_case_1_uid = 4.into();
         let root_expected = ir_node_structure!(
             IrKind::Root,
             [(

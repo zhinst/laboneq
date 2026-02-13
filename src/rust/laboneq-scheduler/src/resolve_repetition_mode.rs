@@ -4,9 +4,9 @@
 use laboneq_dsl::types::SectionUid;
 
 use crate::error::{Error, Result};
-use crate::ir::IrKind;
 use crate::schedule_info::RepetitionMode;
 use crate::{ScheduleInfo, ScheduledNode};
+use laboneq_ir::IrKind;
 
 /// Assign the repetition mode to the loop that corresponds to the "shot boundary".
 ///

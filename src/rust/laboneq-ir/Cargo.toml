@@ -1,0 +1,24 @@
+[package]
+name = "laboneq-ir"
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+num-complex = { workspace = true }
+num-traits = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+numeric-array = { workspace = true }
+laboneq-common = { workspace = true }
+laboneq-units = { workspace = true }
+laboneq-dsl = { workspace = true }
+
+[lints]
+workspace = true

@@ -26,8 +26,14 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 rayon = { workspace = true }
 
-interval-calculator = { path = "../interval-calculator" }
-numeric-array = { path = "../numeric-array" }
-laboneq-units = { path = "../laboneq-units" }
-laboneq-common = { path = "../laboneq-common" }
-laboneq-log = { path = "../laboneq-log" }
+interval-calculator = { workspace = true }
+numeric-array = { workspace = true }
+laboneq-units = { workspace = true }
+laboneq-common = { workspace = true }
+laboneq-log = { workspace = true }
+laboneq-ir = { workspace = true }
+laboneq-dsl = { workspace = true }
+codegenerator-utils = { workspace = true }
+
+[dev-dependencies]
+laboneq-dsl = { workspace = true, features = ["test_utils"] }

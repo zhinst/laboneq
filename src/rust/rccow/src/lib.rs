@@ -82,6 +82,7 @@ impl<'a, T: Clone + GetChildren> RcCow<'a, T> {
         RcCow::Root(inner)
     }
 
+    #[must_use]
     pub fn promote(&mut self) -> &mut T {
         match self {
             RcCow::Root(node) => Rc::make_mut(node),

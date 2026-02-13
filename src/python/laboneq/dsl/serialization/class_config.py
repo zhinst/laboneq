@@ -86,7 +86,6 @@ def classes_by_short_name() -> OrderedDict[str, type]:
     ]
     schedule_modules = [
         "laboneq.compiler.scheduler.scheduler",
-        "laboneq.compiler.ir.ir",
     ]
     _, classes_by_short_name = module_classes(dsl_modules + schedule_modules)
     # TODO: remove this after migration to new data types is complete (?)
@@ -112,29 +111,3 @@ def classes_by_short_name() -> OrderedDict[str, type]:
             classes_by_short_name_compilation_job.items(),
         )
     )
-
-
-# NOTE(mr): This can be removed after the legacy adapters have been removed, or, conversely after class names are unique in LabOne Q once more
-def classes_by_short_name_ir() -> OrderedDict[str, type]:
-    _, classes_by_short_name = module_classes(
-        [
-            "laboneq.compiler.ir.ir",
-            "laboneq.compiler.ir.acquire_group_ir",
-            "laboneq.compiler.ir.case_ir",
-            "laboneq.compiler.ir.interval_ir",
-            "laboneq.compiler.ir.loop_ir",
-            "laboneq.compiler.ir.loop_iteration_ir",
-            "laboneq.compiler.ir.match_ir",
-            "laboneq.compiler.ir.oscillator_ir",
-            "laboneq.compiler.ir.phase_reset_ir",
-            "laboneq.compiler.ir.pulse_ir",
-            "laboneq.compiler.ir.reserve_ir",
-            "laboneq.compiler.ir.root_ir",
-            "laboneq.compiler.ir.section_ir",
-            "laboneq.data.compilation_job",
-            "laboneq.data.calibration",
-            "laboneq.core.types.enums",
-            "laboneq._utils",
-        ]
-    )
-    return OrderedDict(classes_by_short_name.items())

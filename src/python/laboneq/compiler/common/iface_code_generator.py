@@ -5,20 +5,21 @@ from __future__ import annotations
 
 import abc
 from abc import abstractmethod
+from typing import TYPE_CHECKING
 
-from laboneq.compiler.common.compiler_settings import CompilerSettings
-from laboneq.compiler.common.iface_compiler_output import RTCompilerOutput
-from laboneq.compiler.common.signal_obj import SignalObj
-from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
+if TYPE_CHECKING:
+    from laboneq._rust import compiler as compiler_rs
+    from laboneq.compiler.common.compiler_settings import CompilerSettings
+    from laboneq.compiler.common.iface_compiler_output import RTCompilerOutput
+    from laboneq.compiler.common.signal_obj import SignalObj
 
 
 class ICodeGenerator(abc.ABC):
     @abstractmethod
     def __init__(
         self,
-        ir,
+        experiment_ir: compiler_rs.ExperimentIr,
         signals: list[SignalObj],
-        feedback_register_layout: FeedbackRegisterLayout,
         settings: CompilerSettings | dict | None = None,
     ): ...
 

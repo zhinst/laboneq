@@ -49,7 +49,11 @@ fn validate_qa_event(event: &QaEvent, disallow_standalone_play: bool) -> Result<
             event
                 .play_waves()
                 .iter()
-                .map(|w| w.signals.iter().map(|s| s.uid.clone()).collect::<String>())
+                .map(|w| w
+                    .signals
+                    .iter()
+                    .map(|s| s.uid.0.to_string())
+                    .collect::<String>())
                 .collect::<Vec<_>>()
                 .join(", ")
         );

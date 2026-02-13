@@ -44,6 +44,13 @@ macro_rules! impl_from_named_id {
                 value.0
             }
         }
+
+        #[cfg(feature = "test_utils")]
+        impl From<u32> for $t {
+            fn from(value: u32) -> Self {
+                Self(laboneq_common::named_id::NamedId::debug_id(value))
+            }
+        }
     };
 }
 

@@ -7,17 +7,22 @@ use std::sync::Arc;
 use crate::types::{NumericLiteral, ParameterUid};
 
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct SweepParameter {
     pub uid: ParameterUid,
     pub values: Arc<NumericArray>,
 }
 
 impl SweepParameter {
-    pub fn new<T: Into<NumericArray>>(uid: ParameterUid, values: T) -> Self {
-        Self {
-            uid,
-            values: Arc::new(values.into()),
+    pub fn new<T: Into<NumericArray>>(uid: ParameterUid, values: T) -> Result<Self, &'static str> {
+        let values = values.into();
+        if values.is_empty() {
+            return Err("Sweep parameter length must be at least 1");
         }
+        Ok(Self {
+            uid,
+            values: Arc::new(values),
+        })
     }
 
     pub fn len(&self) -> usize {

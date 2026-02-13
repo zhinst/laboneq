@@ -3,16 +3,14 @@
 
 from __future__ import annotations
 
-import itertools
 import logging
 import re
 from collections import defaultdict
-from types import SimpleNamespace
 from typing import Dict, TypeVar
 
 import numpy as np
 
-from laboneq._utils import UIDReference, ensure_list, id_generator
+from laboneq._utils import UIDReference
 from laboneq.compiler import DeviceType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.path import LogicalSignalGroups_Path, insert_logical_signal_prefix
@@ -28,35 +26,29 @@ from laboneq.data.calibration import (
     SignalCalibration,
 )
 from laboneq.data.compilation_job import (
-    AcquireInfo,
     AmplifierPumpInfo,
     ChunkingInfo,
     DeviceInfo,
     DeviceInfoType,
     ExperimentInfo,
-    Marker,
     MixerCalibrationInfo,
     OscillatorInfo,
     OutputRoute,
     ParameterInfo,
     PrecompensationInfo,
-    PRNGInfo,
-    SectionInfo,
-    SectionSignalPulse,
     SignalInfo,
     SignalInfoType,
     SignalRange,
 )
 from laboneq.data.experiment_description import (
     Acquire,
+    AcquireLoopRt,
     Delay,
     ExecutionType,
     Experiment,
     ExperimentSignal,
-    Match,
+    PlayPulse,
     PrngLoop,
-    Reserve,
-    ResetOscillatorPhase,
     Section,
     SignalOperation,
     Sweep,
@@ -103,9 +95,8 @@ class ExperimentInfoBuilder:
 
         self._ppc_connections = self._setup_helper.ppc_connections()
 
-        self._parameter_parents: dict[str, list[str]] = {}
         self._sweep_params_min_maxes: dict[str, tuple[float, float]] = {}
-        self._acquisition_type = None
+        self._acquisition_type: acq_type.AcquisitionType | None = None
         # Rust migration helper fields:
         # Parameters defined in the experiment.
         self._dsl_parameters: dict[str, Parameter] = {}
@@ -117,22 +108,15 @@ class ExperimentInfoBuilder:
 
         section_uid_map: dict[str, Section] = {}
         for section in self._experiment.sections:
-            self._collect_section_uids(section, section_uid_map)
-        visit_count = {k: 0 for k in section_uid_map}
-        root_sections = [
-            self._walk_sections(section, section_uid_map, visit_count)
-            for section in self._experiment.sections
-        ]
-
-        self._sweep_all_derived_parameters(root_sections)
-        self._validate_realtime(root_sections)
+            self._walk_sections(section, section_uid_map)
+        self._validate_realtime(self._experiment.sections)
 
         experiment_info = ExperimentInfo(
             uid=self._experiment.uid,
             device_setup_fingerprint=device_setup_fingerprint(self._device_setup),
             devices=list(self._device_info.device_mapping.values()),
             signals=sorted(self._signal_infos.values(), key=lambda s: s.uid),
-            sections=root_sections,
+            acquisition_type=self._acquisition_type,
             global_leader_device=self._device_info.global_leader,
             chunking=self._chunking_info,
             src=self._experiment,
@@ -503,15 +487,6 @@ class ExperimentInfoBuilder:
             for parent_param in value.driven_by:
                 self._add_parameter(parent_param)
 
-            seen = set()
-            self._parameter_parents[value.uid] = []
-            for parent_param in value.driven_by:
-                uid = parent_param.uid
-                if uid in seen:
-                    continue
-                self._parameter_parents[value.uid].append(uid)
-                seen.add(uid)
-
         if value.uid not in self._params:
             self._params[value.uid] = param_info
         elif self._params[value.uid] != param_info:
@@ -546,299 +521,69 @@ class ExperimentInfoBuilder:
             return UIDReference(val_or_param_info.uid)
         return val_or_param_info
 
-    def _collect_section_uids(
+    def _walk_sections(
         self,
         section: Section,
         section_uid_map: dict[str, Section],
     ):
-        """Collects section UIDs and checks for duplicates.
-
-        Args:
-            section: The section to walk through.
-            section_uid_map: A map of section UIDs to their corresponding SectionInfo and index.
-
-        Raises:
-            LabOneQException: If a duplicate section UID is found.
-        """
-        assert section.uid is not None
-        if section.uid in section_uid_map and section != section_uid_map[section.uid]:
-            raise LabOneQException(
-                f"Duplicate section uid '{section.uid}' found in experiment"
-            )
-        section_uid_map[section.uid] = section
-        for child_section in section.children:
-            if not isinstance(child_section, Section):
-                continue
-            self._collect_section_uids(child_section, section_uid_map)
-
-    def _walk_sections(
-        self,
-        section: Section,
-        section_uid_map: Dict[str, Section],
-        visit_count: dict[str, int],
-    ) -> SectionInfo:
-        if hasattr(section, "acquisition_type"):
+        if isinstance(section, AcquireLoopRt):
             if self._acquisition_type is not None:
                 raise LabOneQException(
                     "Experiment must not contain multiple real-time averaging loops"
                 )
             self._acquisition_type = section.acquisition_type
 
-        section_info = self._load_section(
-            section,
-            self._acquisition_type,
-            visit_count,
-        )
-
-        _auto_pulse_id = (f"{section.uid}__auto_pulse_{i}" for i in itertools.count())
-        for child_operation in section.children:
-            if isinstance(child_operation, Section):
-                child_section = self._walk_sections(
-                    child_operation,
-                    section_uid_map,
-                    visit_count,
-                )
-                section_info.children.append(child_section)
-            elif (
-                isinstance(child_operation, SignalOperation)
-                and child_operation.signal is not None
-            ):
-                try:
-                    signal_info = self._signal_infos[child_operation.signal]
-                except KeyError as e:
-                    raise LabOneQException(
-                        f"Signal {child_operation.signal} not present in experiment."
-                        f" Available signal(s) are: {', '.join(self._signal_infos)}."
-                    ) from e
-                operations = self._load_ssp(
-                    child_operation,
-                    signal_info,
-                    _auto_pulse_id,
-                    self._acquisition_type,
-                    section_info,
-                )
-                section_info.pulses.extend(operations)
-        for trigger_signal in section.trigger:
-            try:
-                signal_info = self._signal_infos[trigger_signal]
-            except KeyError as e:
-                raise LabOneQException(
-                    f"Trigger on section {section.uid} played on signal"
-                    f" {trigger_signal} not present in experiment."
-                    f" Available signal(s) are: {', '.join(self._signal_infos)}."
-                ) from e
-            if signal_info not in section_info.signals:
-                section_info.signals.append(signal_info)
-        return section_info
-
-    def _load_markers(self, operation):
-        markers_raw = getattr(operation, "marker", None) or {}
-
-        markers = []
-        for k, v in markers_raw.items():
-            marker_pulse = v.get("waveform")
-            if marker_pulse is not None:
-                marker_pulse_id = marker_pulse.uid
-            else:
-                marker_pulse_id = None
-            markers.append(
-                Marker(
-                    k,
-                    enable=v.get("enable") or False,
-                    start=v.get("start"),
-                    length=v.get("length"),
-                    pulse_id=marker_pulse_id,
-                )
+        if section.uid in section_uid_map and section != section_uid_map[section.uid]:
+            raise LabOneQException(
+                f"Duplicate section uid '{section.uid}' found in experiment"
             )
-        return markers
+        section_uid_map[section.uid] = section
 
-    def _load_ssp(
+        self._load_section(section)
+        for child in section.children:
+            if isinstance(child, Section):
+                self._walk_sections(child, section_uid_map)
+            else:
+                self._visit_operation(child, section)
+
+    def _visit_operation(
         self,
         operation: SignalOperation,
-        signal_info: SignalInfo,
-        auto_pulse_id,
-        acquisition_type,
-        section: SectionInfo,
-    ) -> list[SectionSignalPulse]:
-        ssps = []
+        section: Section,
+    ):
+        """Visit a signal operation and extract parameter information."""
         if isinstance(operation, Delay):
-            pulse_offset = self.opt_param(operation.time)
-            precompensation_clear = operation.precompensation_clear
-            ssps.append(
-                SectionSignalPulse(
-                    signal=signal_info,
-                    pulse=None,
-                    length=pulse_offset,
-                    precompensation_clear=precompensation_clear,
-                )
+            self.opt_param(operation.time)
+
+        elif isinstance(operation, Acquire):
+            # Parametrized fields
+            pulse_params = (
+                operation.pulse_parameters
+                if isinstance(operation.pulse_parameters, list)
+                else [operation.pulse_parameters]
             )
-            if signal_info not in section.signals:
-                section.signals.append(signal_info)
-            return ssps
-        if isinstance(operation, Reserve):
-            if signal_info not in section.signals:
-                section.signals.append(signal_info)
-            return []
-        if isinstance(operation, ResetOscillatorPhase):
-            # NOTE: RF hardware oscillator phase reset is not supported,
-            # validated in Rust compiler.
-            ssps.append(
-                SectionSignalPulse(signal=signal_info, reset_oscillator_phase=True)
-            )
-            if signal_info not in section.signals:
-                section.signals.append(signal_info)
-            return ssps
+            for params in pulse_params:
+                for param_value in (params or {}).values():
+                    self.opt_param(param_value)
 
-        pulses = []
-        markers = self._load_markers(operation)
-        if signal_info.automute:
-            if markers:
-                msg = f"{signal_info.uid}: Automute cannot be used with markers on same signal."
-                raise LabOneQException(msg)
-            for trigger in section.triggers:
-                if trigger["signal_id"] == signal_info.uid:
-                    msg = f"{signal_info.uid}: Automute cannot be used with triggers on same signal."
-                    raise LabOneQException(msg)
-        length = getattr(operation, "length", None)
-        operation_length = self.opt_param(length)
-
-        if hasattr(operation, "pulse"):
-            pulses = ensure_list(operation.pulse)
-            if len(pulses) > 1:
-                raise RuntimeError(
-                    f"Only one pulse can be provided for pulse play command in section"
-                    f" {section.uid}."
-                )
-        if pulses == [None] and markers:
-            # Create a dummy pulse so this is registered as a pulse play operation
-            pulses = [pulse] = [SimpleNamespace()]
-            pulse.uid = next(auto_pulse_id)
-            pulse.function = "const"
-            pulse.amplitude = 0.0
-            pulse.length = 0.0
-
-        if hasattr(operation, "kernel"):
-            pulses = ensure_list(operation.kernel or [])
-            kernel_count = len(pulses)
-            if signal_info.kernel_count is None:
-                signal_info.kernel_count = kernel_count
-            elif signal_info.kernel_count != kernel_count:
-                raise LabOneQException(
-                    f"Inconsistent count of integration kernels on signal {signal_info.uid}"
-                )
-        if len(pulses) == 0 and length is not None:
-            # Acquisition without specific kernel, just length
-            # TODO: generate a proper constant pulse here
-            pulses = [pulse] = [SimpleNamespace()]
-            pulse.uid = next(auto_pulse_id)
-            pulse.length = length
-
-        assert pulses is not None and isinstance(pulses, list)
-
-        pulse_group = None if len(pulses) == 1 else id_generator("pulse_group")
-
-        if hasattr(operation, "handle") and len(pulses) == 0:
-            raise RuntimeError(
-                f"Either 'kernel' or 'length' must be provided for the acquire"
-                f" operation with handle '{operation.handle}'."
-            )
-
-        amplitude = self.opt_param(getattr(operation, "amplitude", None))
-        phase = self.opt_param(getattr(operation, "phase", None))
-        increment_oscillator_phase = self.opt_param(
-            getattr(operation, "increment_oscillator_phase", None)
-        )
-        set_oscillator_phase = self.opt_param(
-            getattr(operation, "set_oscillator_phase", None)
-        )
-
-        acquire_params = None
-        if hasattr(operation, "handle"):
-            acquire_params = AcquireInfo(
-                handle=operation.handle,
-                acquisition_type=acquisition_type.value,
-            )
-
-        operation_pulse_parameters = operation.pulse_parameters
-        if operation_pulse_parameters is not None:
-            operation_pulse_parameters_list = ensure_list(operation_pulse_parameters)
-            operation_pulse_parameters_list = [
-                {
-                    param: self.opt_param_ref(val)
-                    for param, val in operation_pulse_parameters.items()
-                }
-                if operation_pulse_parameters is not None
-                else {}
-                for operation_pulse_parameters in operation_pulse_parameters_list
-            ]
-        else:
-            operation_pulse_parameters_list = [None] * len(pulses)
-
-        for pulse, op_pars in zip(pulses, operation_pulse_parameters_list):
-            if pulse is not None:
-                pulse_pulse_parameters = getattr(pulse, "pulse_parameters", {})
-                if pulse_pulse_parameters is not None:
-                    pulse_pulse_parameters = {
-                        param: self.opt_param_ref(val)
-                        for param, val in pulse_pulse_parameters.items()
-                    }
-
-                ssps.append(
-                    SectionSignalPulse(
-                        signal=signal_info,
-                        pulse=None,
-                        length=operation_length,
-                        amplitude=amplitude,
-                        phase=phase,
-                        increment_oscillator_phase=increment_oscillator_phase,
-                        set_oscillator_phase=set_oscillator_phase,
-                        precompensation_clear=False,
-                        play_pulse_parameters=op_pars,
-                        pulse_pulse_parameters=pulse_pulse_parameters,
-                        acquire_params=acquire_params,
-                        markers=markers,
-                        pulse_group=pulse_group,
-                    )
-                )
-                if signal_info not in section.signals:
-                    section.signals.append(signal_info)
-
-            elif (
-                getattr(operation, "increment_oscillator_phase", None) is not None
-                or getattr(operation, "set_oscillator_phase", None) is not None
-                or getattr(operation, "phase", None) is not None
-            ):
-                # Virtual Z gate
-                ssps.append(
-                    SectionSignalPulse(
-                        signal=signal_info,
-                        precompensation_clear=False,
-                        set_oscillator_phase=set_oscillator_phase,
-                        increment_oscillator_phase=increment_oscillator_phase,
-                    )
-                )
-                if signal_info not in section.signals:
-                    section.signals.append(signal_info)
-        return ssps
+        elif isinstance(operation, PlayPulse):
+            # Parametrized fields
+            for param_value in (operation.pulse_parameters or {}).values():
+                self.opt_param(param_value)
+            self.opt_param(operation.length)
+            self.opt_param(operation.amplitude)
+            self.opt_param(operation.phase)
+            self.opt_param(operation.increment_oscillator_phase)
+            self.opt_param(operation.set_oscillator_phase)
 
     def _load_section(
         self,
         section: Section,
-        exp_acquisition_type,
-        visit_count: dict[str, int],
-    ) -> SectionInfo:
-        vc = visit_count[section.uid]
-        is_re_used = vc > 0
-        original_uid = section.uid
-        instance_id = section.uid + (f"_{vc}" if is_re_used else "")
-        visit_count[section.uid] += 1
-
+    ):
         count = None
 
         if hasattr(section, "count"):
             count = int(section.count)  # cast to int; user may provide float via pow()
-
-        section_parameters = []
 
         if isinstance(section, Sweep):
             sweep_params_equal_len = all(
@@ -850,65 +595,12 @@ class ExperimentInfoBuilder:
                     f"Error in experiment section '{section.uid}': Parallel executed sweep parameters must be of same length. {section.uid}"
                 )
             for parameter in section.parameters:
-                section_parameters.append(self._add_parameter(parameter))
+                self._add_parameter(parameter)
                 if isinstance(parameter, (SweepParameter, LinearSweepParameter)):
                     count = len(parameter)
-                if count < 1:
-                    raise ValueError(
-                        f"Repeat count must be at least 1, but section {section.uid} has count={count}"
-                    )
 
-        execution_type = section.execution_type
-        align = section.alignment
-        on_system_grid = section.on_system_grid
-        length = section.length
-        averaging_mode = getattr(section, "averaging_mode", None)
-        repetition_mode = getattr(section, "repetition_mode", None)
-        repetition_time = getattr(section, "repetition_time", None)
-        reset_oscillator_phase = (
-            getattr(section, "reset_oscillator_phase", None) or False
-        )
-
-        assert section.trigger is not None
-        triggers = [
-            {"signal_id": k, "state": v["state"]} for k, v in section.trigger.items()
-        ]
-
-        prng_setup_info = None
-        if hasattr(section, "prng"):
-            prng_setup_info = PRNGInfo(section.prng.range, section.prng.seed)
-            on_system_grid = True
-
-        prng_sample = None
         if isinstance(section, PrngLoop):
-            prng_sample = section.prng_sample.uid
             count = section.prng_sample.count
-
-        match_handle = None
-        local = None
-        match_user_register = None
-        match_prng_sample = None
-        match_sweep_parameter: ParameterInfo | None = None
-        if isinstance(section, Match):
-            match_handle = section.handle
-            local = section.local
-            match_user_register = section.user_register
-            match_prng_sample = (
-                section.prng_sample.uid if section.prng_sample is not None else None
-            )
-            match_sweep_parameter = self.opt_param(
-                section.sweep_parameter if section.sweep_parameter is not None else None
-            )
-            if (
-                match_handle is None
-                and match_user_register is None
-                and match_sweep_parameter is None
-                and match_prng_sample is None
-            ):
-                raise LabOneQException(
-                    f"Match section '{section.uid}' requires a target (measurement handle, sweep parameter, ...)"
-                )
-        state = getattr(section, "state", None)
 
         _auto_chunking = getattr(section, "auto_chunking", False)
         _chunk_count = getattr(section, "chunk_count", 1)
@@ -916,102 +608,7 @@ class ExperimentInfoBuilder:
         if chunked:
             self._chunking_info = ChunkingInfo(_auto_chunking, _chunk_count, count)
 
-        this_acquisition_type = None
-        if any(isinstance(operation, Acquire) for operation in section.children):
-            # an acquire event - add acquisition_types
-            this_acquisition_type = exp_acquisition_type
-
-        play_after = getattr(section, "play_after", None)
-        if play_after:
-            section_uid = lambda x: x.uid if hasattr(x, "uid") else x
-            play_after = section_uid(play_after)
-            if isinstance(play_after, list):
-                play_after = [section_uid(s) for s in play_after]
-        section_info = SectionInfo(
-            uid=instance_id,
-            length=length,
-            alignment=align,
-            count=count,
-            chunked=chunked,
-            match_handle=match_handle,
-            match_user_register=match_user_register,
-            match_prng_sample=match_prng_sample,
-            match_sweep_parameter=match_sweep_parameter,
-            state=state,
-            local=local,
-            execution_type=execution_type,
-            averaging_mode=averaging_mode,
-            acquisition_type=this_acquisition_type,
-            repetition_mode=repetition_mode,
-            repetition_time=repetition_time,
-            reset_oscillator_phase=reset_oscillator_phase,
-            on_system_grid=on_system_grid,
-            triggers=triggers,
-            play_after=play_after,
-            parameters=section_parameters,
-            prng=prng_setup_info,
-            prng_sample=prng_sample,
-            is_reused=is_re_used,
-            original_uid=original_uid,
-        )
-
-        return section_info
-
-    @staticmethod
-    def _find_sweeps_by_parameter(
-        root_sections: list[SectionInfo],
-    ) -> dict[str, list[SectionInfo]]:
-        sweeps_by_parameter = {}
-        sections_to_visit = root_sections[:]
-        while len(sections_to_visit):
-            section = sections_to_visit.pop()
-            for param in section.parameters:
-                sweeps_by_parameter.setdefault(param.uid, []).append(section)
-            sections_to_visit.extend(section.children)
-        return sweeps_by_parameter
-
-    def _sweep_derived_parameter(
-        self,
-        parameter: ParameterInfo,
-        sweeps_by_parameter: dict[str, list[SectionInfo]],
-    ):
-        if parameter.uid in sweeps_by_parameter:
-            return
-
-        # This parameter is not swept directly, but derived from a another parameter;
-        # we must add it to the corresponding loop.
-        parameter = self._params[parameter.uid]
-        parents = self._parameter_parents[parameter.uid]
-        for parent_id in parents:
-            parent = self._params.get(parent_id)
-            if parent is None:
-                raise LabOneQException(
-                    f"Parameter '{parameter.uid}' is driven by a parameter '{parent_id}' which is unknown."
-                )
-
-            self._sweep_derived_parameter(parent, sweeps_by_parameter)
-
-            # The parent should now have been added correctly. If it has not, than
-            # that means that the parent (or its parents in turn) are not used anywhere
-            # in the experiment. We can just ignore them.
-            if parent_id not in sweeps_by_parameter:
-                continue
-
-            for sweep in sweeps_by_parameter[parent_id]:
-                if parameter not in sweep.parameters:
-                    sweep.parameters.append(parameter)
-                    sweeps_by_parameter.setdefault(parameter.uid, []).append(sweep)
-
-    def _sweep_all_derived_parameters(
-        self,
-        root_sections: list[SectionInfo],
-    ):
-        sweeps_by_parameter = self._find_sweeps_by_parameter(root_sections)
-
-        for child in self._parameter_parents.keys():
-            self._sweep_derived_parameter(self._params[child], sweeps_by_parameter)
-
-    def _validate_realtime(self, root_sections: list[SectionInfo]):
+    def _validate_realtime(self, root_sections: list[Section]):
         """Verify that:
         - no near-time section is located inside a real-time section
         - there can be at most one AcquireLoopRt
@@ -1020,29 +617,24 @@ class ExperimentInfoBuilder:
         With these conditions, execution_type=None is resolved to either NT or RT.
         """
 
-        acquire_loop = None
-
         def traverse_set_execution_type_and_check_rt_loop(
-            section: SectionInfo, in_realtime: bool
+            section: Section, in_realtime: bool
         ):
-            if section.execution_type == ExecutionType.NEAR_TIME and in_realtime:
+            if not isinstance(section, Section):
+                return
+            if isinstance(section, AcquireLoopRt):
+                in_realtime = True
+            execution_type = getattr(section, "execution_type", None)
+            if execution_type == ExecutionType.NEAR_TIME and in_realtime:
                 raise LabOneQException(
                     f"Near-time section '{section.uid}' is nested inside a RT section"
                 )
-            elif section.execution_type == ExecutionType.REAL_TIME:
-                in_realtime = True
-            else:
-                section.execution_type = (
-                    ExecutionType.REAL_TIME if in_realtime else ExecutionType.NEAR_TIME
+            if execution_type == ExecutionType.REAL_TIME and not in_realtime:
+                raise LabOneQException(
+                    f"Section '{section.uid}' is marked as real-time, but it is"
+                    f" located outside the RT averaging loop"
                 )
-
-            if section.averaging_mode is not None:
-                nonlocal acquire_loop
-                # Note: this should have been checked earlier already, so we make it an
-                # assertion rather than a LabOneQException.
-                assert acquire_loop is None, "multiple AcquireLoopRt not permitted"
-                acquire_loop = section
-            if section.execution_type == ExecutionType.REAL_TIME:
+            if in_realtime and isinstance(section, Sweep):
                 for parameter in section.parameters:
                     if parameter.uid in self._nt_only_params:
                         raise LabOneQException(
@@ -1056,25 +648,6 @@ class ExperimentInfoBuilder:
             traverse_set_execution_type_and_check_rt_loop(
                 root_section, in_realtime=False
             )
-
-        def traverse_check_all_rt_inside_rt_loop(section: SectionInfo):
-            if section.averaging_mode is not None:
-                return
-            assert section.execution_type is not None, (
-                "should have been set in first traverse"
-            )
-            if section.execution_type == ExecutionType.REAL_TIME:
-                raise LabOneQException(
-                    f"Section '{section.uid}' is marked as real-time, but it is"
-                    f" located outside the RT averaging loop"
-                )
-            if section.execution_type is None:
-                section.execution_type = ExecutionType.NEAR_TIME
-            for child in section.children:
-                traverse_check_all_rt_inside_rt_loop(child)
-
-        for root_section in root_sections:
-            traverse_check_all_rt_inside_rt_loop(root_section)
 
     def _resolve_oscillator_modulation_type(self, experiment_info: ExperimentInfo):
         for signal in experiment_info.signals:

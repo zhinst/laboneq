@@ -22,8 +22,6 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING, Any, Sequence
 
-from typing_extensions import deprecated
-
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.quantum.qpu_topology import QPUTopology
 from laboneq.dsl.quantum.quantum_element import QuantumElement
@@ -338,18 +336,6 @@ class QPU:
         """Return new quantum elements that are a copy of the original quantum elements."""
         return [q.copy() for q in self.quantum_elements]
 
-    @deprecated(
-        "The .copy_qubits method is deprecated. Use `.copy_quantum_elements` instead.",
-        category=FutureWarning,
-    )
-    def copy_qubits(self) -> QuantumElements:
-        """Return new qubits that are a copy of the original qubits.
-
-        !!! version-changed "Deprecated in version 2.52.0."
-            The method `copy_qubits` was deprecated and replaced with the method `copy_quantum_elements`.
-        """
-        return self.copy_quantum_elements()
-
     @classmethod
     def _get_invalid_param_paths(
         cls, quantum_element, overrides: dict[str, Any]
@@ -415,39 +401,6 @@ class QPU:
         new_qpu.update(quantum_element_parameters)
         return new_qpu
 
-    @deprecated(
-        "The .override_qubits method is deprecated. Use `.override_quantum_elements` instead.",
-        category=FutureWarning,
-    )
-    def override_qubits(
-        self, qubit_parameters: dict[str, dict[str, int | float | str | dict | None]]
-    ) -> QPU:
-        """Override qubit parameters and return a new QPU.
-
-        !!! note
-            This method detaches the quantum operations from the QPU and attaches them to the new QPU.
-
-        !!! version-changed "Deprecated in version 2.52.0."
-            The method `override_qubits` was deprecated and replaced with the method `override_quantum_elements`.
-
-        Arguments:
-            qubit_parameters:
-                The qubits and their parameters that need to be updated passed a dict
-                of the form:
-                    ```python
-                    {qb_uid: {qb_param_name: qb_param_value}}
-                    ```
-
-        Returns:
-            A new QPU with overridden qubit parameters.
-
-        Raises:
-            ValueError:
-                If one of the qubits passed is not found in the qpu.
-                If one of the parameters passed is not found in the qubit.
-        """
-        return self.override_quantum_elements(qubit_parameters)
-
     def update(
         self,
         parameters: dict[
@@ -511,80 +464,6 @@ class QPU:
             elif isinstance(key, tuple):
                 self.topology.update_edge(*key, **params_dict)
 
-    @deprecated(
-        "The .update_quantum_elements method is deprecated. Use `.update` instead.",
-        category=FutureWarning,
-    )
-    def update_quantum_elements(
-        self,
-        quantum_element_parameters: dict[
-            str, dict[str, int | float | str | dict | None]
-        ],
-    ) -> None:
-        """Updates quantum element parameters.
-
-        !!! version-changed "Deprecated in version 2.60.0."
-            The method `update_quantum_elements` was deprecated and replaced with the
-            more general method `update`. The new method `update` works for both
-            quantum elements and topology edges.
-
-        Arguments:
-            quantum_element_parameters:
-                The quantum elements and their parameters that need to be updated passed a dict
-                of the form:
-                    ```python
-                    {qb_uid: {qb_param_name: qb_param_value}}
-                    ```
-        Raises:
-            ValueError:
-                If one of the quantum elements passed is not found in the qpu.
-                If one of the parameters passed is not found in the quantum element.
-        """
-        invalid_params = []
-        for qid, params_dict in quantum_element_parameters.items():
-            if qid not in self._quantum_element_map:
-                raise ValueError(f"Quantum element {qid} was not found in the QPU.")
-            quantum_element = self._quantum_element_map[qid]
-            invalid_params += self._get_invalid_param_paths(
-                quantum_element, params_dict
-            )
-        if invalid_params:
-            raise ValueError(
-                f"Update parameters do not match the quantum element "
-                f"parameters: {invalid_params}.",
-            )
-
-        for qid, params_dict in quantum_element_parameters.items():
-            self[qid].update(**params_dict)
-
-    @deprecated(
-        "The .update_qubits method is deprecated. Use `.update_quantum_elements` instead.",
-        category=FutureWarning,
-    )
-    def update_qubits(
-        self,
-        qubit_parameters: dict[str, dict[str, int | float | str | dict | None]],
-    ) -> None:
-        """Updates qubit parameters.
-
-        !!! version-changed "Deprecated in version 2.52.0."
-            The method `update_qubits` was deprecated and replaced with the method `update_quantum_elements`.
-
-        Arguments:
-            qubit_parameters:
-                The qubits and their parameters that need to be updated passed a dict
-                of the form:
-                    ```python
-                    {qb_uid: {qb_param_name: qb_param_value}}
-                    ```
-
-        Raises:
-            ValueError:
-                If one of the qubits passed is not found in the qpu.
-                If one of the parameters passed is not found in the qubit.
-        """
-        return self.update_quantum_elements(qubit_parameters)
-
     @staticmethod
     def measure_section_length(quantum_elements: QuantumElements) -> float:
         """Calculates the length of the measure section for multiplexed readout.
@@ -604,79 +483,8 @@ class QPU:
         #       currently.
         return max(
             [q.readout_integration_parameters()[1]["length"] for q in quantum_elements]
+            + [q.readout_parameters()[1]["length"] for q in quantum_elements]
         )
-
-    @deprecated(
-        "The .quantum_element_by_uid method is deprecated. Use `.__getitem__` instead.",
-        category=FutureWarning,
-    )
-    def quantum_element_by_uid(self, uid: str) -> QuantumElement:
-        """Returns quantum element by UID.
-
-        !!! version-changed "Deprecated in version 2.55.0."
-            The method `quantum_element_by_uid` was deprecated. Use `.__getitem__` instead.
-
-        Arguments:
-            uid: Unique identifier of the quantum element within the QPU.
-
-        Returns:
-            Quantum element with given `uid`.
-
-        Raises:
-            KeyError: Quantum element does not exist.
-        """
-        try:
-            return self._quantum_element_map[uid]
-        except KeyError:
-            msg = f"Quantum element {uid} does not exist in the QPU."
-            raise KeyError(msg) from None
-
-    @deprecated(
-        "The .qubit_by_uid method is deprecated. Use `.quantum_element_by_uid` instead.",
-        category=FutureWarning,
-    )
-    def qubit_by_uid(self, uid: str) -> QuantumElement:
-        """Returns qubit by UID.
-
-        !!! version-changed "Deprecated in version 2.52.0."
-            The method `qubit_by_uid` was deprecated and replaced with the method `quantum_element_by_uid`.
-
-        Arguments:
-            uid: Unique identifier of the qubit within the QPU.
-
-        Returns:
-            Qubit with given `uid`.
-
-        Raises:
-            KeyError: Qubit does not exist.
-        """
-        return self.quantum_element_by_uid(uid)
-
-    @property
-    @deprecated(
-        "The .qubits attribute is deprecated. Use `.quantum_elements` instead.",
-        category=FutureWarning,
-    )
-    def qubits(self) -> QuantumElements:
-        """Return qubits.
-
-        !!! version-changed "Deprecated in version 2.52.0."
-            The attribute `qubits` was deprecated and replaced with the attribute `quantum_elements`.
-        """
-        return self.quantum_elements
-
-    @property
-    @deprecated(
-        "The ._qubit_map attribute is deprecated. Use `._quantum_element_map` instead.",
-        category=FutureWarning,
-    )
-    def _qubit_map(self) -> dict[str, QuantumElement]:
-        """Return qubit map.
-
-        !!! version-changed "Deprecated in version 2.52.0."
-            The attribute `_qubit_map` was deprecated and replaced with the attribute `_quantum_element_map`.
-        """
-        return self._quantum_element_map
 
 
 @classformatter

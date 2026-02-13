@@ -16,7 +16,6 @@ if TYPE_CHECKING:
     from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
     from laboneq.compiler.workflow.compiler import (
         AWGMapping,
-        IntegrationUnitAllocation,
         LeaderProperties,
     )
     from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
@@ -32,7 +31,6 @@ class GenerateRecipeArgs:
     leader_properties: LeaderProperties
     clock_settings: dict[str, Any]
     sampling_rate_tracker: SamplingRateTracker
-    integration_unit_allocation: dict[str, IntegrationUnitAllocation]
     delays_by_signal: dict[str, OnDeviceDelayCompensation]
     precompensations: dict[str, PrecompensationInfo]
     combined_compiler_output: CombinedOutput
@@ -112,7 +110,6 @@ class CompilerHooksSeqC(CompilerHooks):
             args.leader_properties,
             args.clock_settings,
             args.sampling_rate_tracker,
-            args.integration_unit_allocation,
             args.delays_by_signal,
             args.precompensations,
             args.combined_compiler_output,

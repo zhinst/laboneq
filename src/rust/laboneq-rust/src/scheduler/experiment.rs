@@ -1,13 +1,13 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
 use std::str::FromStr;
+use std::{collections::HashMap, sync::Arc};
 
 use crate::error::Error;
 use crate::scheduler::NamedIdStore;
-use crate::scheduler::pulse::PulseDef;
-use crate::scheduler::py_object_interner::PyObjectInterner;
+use laboneq_py_utils::pulse::PulseDef;
+
 use laboneq_common::types::{AwgKey, DeviceKind, PhysicalDeviceUid};
 use laboneq_dsl::{
     ExperimentNode,
@@ -16,16 +16,19 @@ use laboneq_dsl::{
         SignalUid, SweepParameter, ValueOrParameter,
     },
 };
+use laboneq_py_utils::py_object_interner::PyObjectInterner;
 use laboneq_units::duration::{Duration, Second};
 use smallvec::SmallVec;
 
 pub(crate) struct Experiment {
     /// Root node of the experiment tree
     pub root: ExperimentNode,
-    pub id_store: NamedIdStore,
+    // NOTE: The usage of Arc here is to allow sharing the id_store across Python bindings
+    // Remove when Python bindings are no longer needed
+    pub id_store: Arc<NamedIdStore>,
     pub parameters: HashMap<ParameterUid, SweepParameter>,
     pub pulses: HashMap<PulseUid, PulseDef>,
-    pub py_object_store: PyObjectInterner<ExternalParameterUid>,
+    pub py_object_store: Arc<PyObjectInterner<ExternalParameterUid>>,
 }
 
 /// Device and signal setup used in the experiment.

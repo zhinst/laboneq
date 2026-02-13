@@ -6,8 +6,8 @@ use std::collections::HashSet;
 use laboneq_dsl::types::SectionAlignment;
 
 use crate::error::{Error, Result};
-use crate::ir::{IrKind, Match, MatchTarget};
 use crate::{RepetitionMode, ScheduledNode};
+use laboneq_ir::{IrKind, Match, MatchTarget};
 
 /// Validate the IR for correctness.
 ///

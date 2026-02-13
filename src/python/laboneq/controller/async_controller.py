@@ -13,10 +13,10 @@ from laboneq.controller.controller_api import (
     SubmissionStatus,
 )
 from laboneq.controller.devices.device_collection import DEFAULT_TIMEOUT_S
+from laboneq.controller.utilities.exception import LabOneQControllerException
 
 if TYPE_CHECKING:
     from laboneq.controller.controller import ControllerSubmission
-    from laboneq.controller.utilities.exception import LabOneQControllerException
     from laboneq.data.execution_payload import TargetSetup
     from laboneq.data.experiment_results import ExperimentResults
     from laboneq.data.scheduled_experiment import ScheduledExperiment
@@ -64,10 +64,10 @@ class AsyncController(ControllerAPI):
         # Keep reference to avoid garbage collection
         self._async_session = async_session
         self._controller = controller
-        self._submissions: dict[SubmissionHandle, ControllerSubmission] = {}
+        self._submissions: dict[int, ControllerSubmission] = {}
 
     def _submission(self, handle: SubmissionHandle) -> ControllerSubmission:
-        submission = self._submissions.get(handle)
+        submission = self._submissions.get(handle.id)
         if submission is None:
             raise LabOneQControllerException("Invalid submission handle.")
         return submission
@@ -77,15 +77,18 @@ class AsyncController(ControllerAPI):
         return self._controller.submission_results(submission)
 
     async def shutdown(self):
-        for handle in self._submissions.keys():
-            await self.cancel_submission(handle)
+        for handle_id in self._submissions.keys():
+            await self.cancel_submission(SubmissionHandle(handle_id))
         await self._controller._disconnect_async()
+
+    async def update_neartime_callbacks(self, neartime_callbacks: dict[str, Callable]):
+        self._controller._neartime_callbacks.update(neartime_callbacks)
 
     async def submit_experiment(
         self, scheduled_experiment: ScheduledExperiment
     ) -> SubmissionHandle:
         handle = SubmissionHandle()
-        self._submissions[handle] = await self._controller._submit_compiled_async(
+        self._submissions[handle.id] = await self._controller._submit_compiled_async(
             scheduled_experiment=scheduled_experiment,
         )
         return handle
@@ -120,4 +123,4 @@ class AsyncController(ControllerAPI):
 
     async def close_submission(self, handle: SubmissionHandle):
         await self.cancel_submission(handle)
-        self._submissions.pop(handle)
+        self._submissions.pop(handle.id)

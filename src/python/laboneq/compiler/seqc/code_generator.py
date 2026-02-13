@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from itertools import groupby
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import orjson
@@ -24,10 +24,7 @@ from laboneq.compiler.common.integration_times import (
 )
 from laboneq.compiler.common.resource_usage import ResourceUsage, ResourceUsageCollector
 from laboneq.compiler.common.signal_obj import SignalObj
-from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
-from laboneq.compiler.ir import IRTree
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput, SeqCProgram
-from laboneq.core.types.enums import AcquisitionType
 from laboneq.core.types.enums.awg_signal_type import AWGSignalType
 from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.data.awg_info import AWGInfo, AwgKey
@@ -40,7 +37,9 @@ from laboneq.data.scheduled_experiment import (
 )
 
 from .types import SignalDelay, SignalDelays
-from .waveform_sampler import WaveformSampler
+
+if TYPE_CHECKING:
+    from laboneq._rust import compiler as compiler_rs
 
 _SEQUENCER_TYPES = {DeviceType.SHFQA: "qa", DeviceType.SHFSG: "sg"}
 
@@ -52,9 +51,8 @@ class CodeGenerator(ICodeGenerator):
 
     def __init__(
         self,
-        ir: IRTree,
+        experiment_ir: compiler_rs.ExperimentIr,
         signals: list[SignalObj],
-        feedback_register_layout: FeedbackRegisterLayout,
         settings: CompilerSettings | dict | None = None,
     ):
         if settings is not None:
@@ -64,8 +62,7 @@ class CodeGenerator(ICodeGenerator):
                 self._settings = CompilerSettings(**settings)
         else:
             self._settings = CompilerSettings()
-
-        self._ir = ir
+        self._experiment_ir = experiment_ir
         self._awgs: dict[AwgKey, AWGInfo] = {
             signal.awg.key: signal.awg for signal in signals
         }
@@ -86,7 +83,6 @@ class CodeGenerator(ICodeGenerator):
             defaultdict(dict)
         )
         self._result_handle_maps: dict[ResultSource, list[set[str]]] = {}
-        self._feedback_register_layout = feedback_register_layout
         self._feedback_register_config: dict[
             AwgKey, codegen_rs.FeedbackRegisterConfig
         ] = {}
@@ -94,6 +90,13 @@ class CodeGenerator(ICodeGenerator):
         self._shfppc_sweep_configs: dict[AwgKey, dict[str, object]] = {}
         self._total_execution_time: float | None = None
         self._measurements: list[codegen_rs.Measurement] = []
+        self._integration_unit_allocations: list[
+            codegen_rs.IntegrationUnitAllocation
+        ] = []
+        # Channel properties by device UID
+        self._channel_properties: dict[str, list[codegen_rs.ChannelProperties]] = (
+            defaultdict(list)
+        )
 
     def get_output(self):
         return SeqCGenOutput(
@@ -113,6 +116,8 @@ class CodeGenerator(ICodeGenerator):
             feedback_register_configurations=self.feedback_register_config(),
             shfppc_sweep_configurations=self.shfppc_sweep_configs(),
             measurements=self._measurements,
+            integration_unit_allocations=self._integration_unit_allocations,
+            channel_properties=self._channel_properties,
         )
 
     @staticmethod
@@ -346,11 +351,11 @@ class CodeGenerator(ICodeGenerator):
             assert all(np.all(group[0][1] == g[1]) for g in group[1:])
 
     def generate_code(self):
-        pulse_defs = {p.uid: p for p in self._ir.pulse_defs}
         awgs_sorted = sorted(
             self._awgs.values(),
             key=lambda item: item.key,
         )
+
         settings: dict[str, bool | int | float] = {
             "HDAWG_MIN_PLAYWAVE_HINT": self._settings.HDAWG_MIN_PLAYWAVE_HINT,
             "HDAWG_MIN_PLAYZERO_HINT": self._settings.HDAWG_MIN_PLAYZERO_HINT,
@@ -367,12 +372,8 @@ class CodeGenerator(ICodeGenerator):
             "EMIT_TIMING_COMMENTS": self._settings.EMIT_TIMING_COMMENTS,
         }
         codegen_result = codegen_rs.generate_code(
-            ir=self._ir,
+            ir_experiment=self._experiment_ir,
             awgs=awgs_sorted,
-            waveform_sampler=WaveformSampler(pulse_defs=pulse_defs),
-            feedback_register_layout=self._feedback_register_layout,
-            acquisition_type=self._ir.root.acquisition_type
-            or AcquisitionType.INTEGRATION,  # Any default if no acquire
             settings=settings,
         )
         self._total_execution_time = codegen_result.total_execution_time
@@ -383,10 +384,15 @@ class CodeGenerator(ICodeGenerator):
             for k, v in codegen_result.result_handle_maps.items()
         }
         self._measurements = codegen_result.measurements
+        self._integration_unit_allocations = codegen_result.integration_unit_allocations
+
         res_usage_collector: ResourceUsageCollector = ResourceUsageCollector()
         for idx, awg in enumerate(awgs_sorted):
             awg_key = awg.key
             awg_code_output = codegen_result.awg_results[idx]
+            self._channel_properties[awg.device_id].extend(
+                awg_code_output.channel_properties
+            )
             for signal, delay in awg_code_output.signal_delays.items():
                 self._signal_delays[signal] = SignalDelay(on_device=delay)
             for signal, integration_time in awg_code_output.integration_lengths.items():

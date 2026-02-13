@@ -1,19 +1,17 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use core::panic;
-
 use crate::error::{Error, Result};
 
 use crate::experiment_context::ExperimentContext;
-use crate::ir::{Case, IrKind, Match};
 use crate::lower_experiment::local_context::LocalContext;
 use crate::lower_experiment::{adjust_node_grids, lower_children};
 use crate::schedule_info::ScheduleInfoBuilder;
+use laboneq_ir::{Case, IrKind, Match};
 
 use crate::{ScheduledNode, SignalInfo};
 use laboneq_dsl::operation::{Case as CaseDsl, Match as MatchDsl, Operation};
-use laboneq_dsl::types::{MatchTarget, NumericLiteral, SectionAlignment, SweepParameter};
+use laboneq_dsl::types::{MatchTarget, NumericLiteral, SweepParameter};
 use laboneq_dsl::{ExperimentNode, NodeChild};
 use laboneq_units::tinysample::{seconds_to_tinysamples, tiny_samples};
 
@@ -129,29 +127,9 @@ pub(super) fn lower_match(
             adjust_node_grids(&mut case_node);
             root.add_child(tiny_samples(0), case_node);
         }
-        process_empty_branches(&mut root);
     }
     adjust_node_grids(&mut root);
     Ok(root)
-}
-
-/// For each case branch that is empty, assign it a schedule that
-/// has length equal to the parent's grid.
-///
-/// The branch covers all signals of the parent as well.
-fn process_empty_branches(parent: &mut ScheduledNode) {
-    for child in &mut parent.children {
-        if child.node.children.is_empty() {
-            let schedule = ScheduleInfoBuilder::new()
-                .grid(parent.schedule.grid)
-                .length(0)
-                .sequencer_grid(parent.schedule.grid)
-                .alignment_mode(SectionAlignment::Left)
-                .signals(parent.schedule.signals.clone())
-                .build();
-            child.node.make_mut().schedule = schedule;
-        }
-    }
 }
 
 /// Find the cases that match the values of a sweep parameter.

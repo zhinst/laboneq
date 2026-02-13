@@ -100,13 +100,12 @@ mod tests {
 
         let pulse = AcquirePulse {
             signal: Signal {
-                uid: "".to_string(),
+                uid: 0.into(),
                 kind: SignalKind::INTEGRATION,
                 signal_delay: 0,
                 start_delay: 0,
                 channels: vec![0],
                 oscillator: None,
-                mixer_type: None,
                 automute: false,
             }
             .into(),

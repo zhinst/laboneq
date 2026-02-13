@@ -5,19 +5,20 @@
 //!
 //! This module defines the [`AwgCodeGenerationResultPy`] class, which is used to
 //! represent the result of the code generation process for an AWG.
+use laboneq_common::named_id::NamedIdStore;
 use pyo3::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
+use codegenerator::ir::compilation_job::ChannelIndex;
 use codegenerator::ir::compilation_job::DeviceUid;
 use codegenerator::ir::{Samples, compilation_job::AwgKind};
-use codegenerator::result::AwgCodeGenerationResult;
 use codegenerator::result::ParameterPhaseIncrement;
-use codegenerator::result::SampledWaveform;
 use codegenerator::result::SeqCGenOutput;
 use codegenerator::result::ShfPpcSweepJson;
 use codegenerator::result::SignalType;
+use codegenerator::result::{AwgCodeGenerationResult, MarkerMode};
 
-use crate::waveform_sampler::SampledWaveformSignaturePy;
 use crate::waveform_sampler::WaveformSamplerPy;
 
 #[pyo3::pyclass(name = "FeedbackRegisterConfig")]
@@ -57,24 +58,29 @@ impl FeedbackRegisterConfigPy {
 #[pyclass(name = "SampledWaveform")]
 #[derive(Debug)]
 pub struct SampledWaveformPy {
-    pub obj: SampledWaveform<SampledWaveformSignaturePy>,
+    #[pyo3(get)]
+    signals: HashSet<String>,
+    signature_string: Arc<String>,
+    signature: Arc<Py<PyAny>>,
 }
+
+// SAFETY: Safe to Send/Sync across threads.
+// - Py<T> fields use PyO3's delayed reference count mechanism for thread-safe drops
+// - Other fields (HashSet<String>, Arc<String>) are inherently Send/Sync
+// - No thread-local storage or thread-specific state
+unsafe impl Send for SampledWaveformPy {}
+unsafe impl Sync for SampledWaveformPy {}
 
 #[pymethods]
 impl SampledWaveformPy {
     #[getter]
-    pub fn signals(&self) -> &HashSet<String> {
-        &self.obj.signals
-    }
-
-    #[getter]
     pub fn signature_string(&self) -> &str {
-        &self.obj.signature_string
+        &self.signature_string
     }
 
     #[getter]
-    pub fn signature(&self, py: Python) -> Py<PyAny> {
-        self.obj.signature.signature.clone_ref(py)
+    pub fn signature(&self) -> &Py<PyAny> {
+        &self.signature
     }
 }
 
@@ -92,6 +98,13 @@ pub(crate) struct IntegrationWeightPy {
     #[pyo3(get)]
     pub basename: String,
 }
+
+// SAFETY: Safe to Send/Sync across threads.
+// - Py<PyAny> fields (samples_i, samples_q) use PyO3's thread-safe drop mechanism
+// - Other fields (HashSet, String, Option<usize>) are inherently Send/Sync
+// - No thread-local storage or thread-specific state
+unsafe impl Send for IntegrationWeightPy {}
+unsafe impl Sync for IntegrationWeightPy {}
 
 #[pyclass(name = "SignalIntegrationInfo")]
 #[derive(Debug)]
@@ -147,18 +160,45 @@ pub struct AwgCodeGenerationResultPy {
     parameter_phase_increment_map: Option<HashMap<String, Vec<i64>>>,
     #[pyo3(get)]
     feedback_register_config: FeedbackRegisterConfigPy,
+    #[pyo3(get)]
+    channel_properties: Vec<ChannelPropertiesPy>,
 }
+
+// SAFETY: Safe to Send/Sync across threads.
+// - All Py<T> fields rely on PyO3's delayed reference count mechanism for safe
+//   cross-thread drops (see https://docs.rs/pyo3/0.28.0/pyo3/struct.Py.html#impl-Drop-for-Py%3CT%3E)
+// - SampledWaveformPy and IntegrationWeightPy are themselves Send/Sync
+// - All other fields are standard Send/Sync types (String, Vec, HashMap, Option, etc.)
+// - No thread-local storage or thread-specific state
+// This enables passing compiled results to async executors and background threads.
+unsafe impl Send for AwgCodeGenerationResultPy {}
+unsafe impl Sync for AwgCodeGenerationResultPy {}
 
 impl AwgCodeGenerationResultPy {
     #[allow(clippy::too_many_arguments)]
     pub fn create(
         py: Python,
         result: AwgCodeGenerationResult<WaveformSamplerPy>,
+        id_store: &NamedIdStore,
     ) -> PyResult<Self> {
         let sampled_waveforms: Vec<Py<SampledWaveformPy>> = result
             .sampled_waveforms
             .into_iter()
-            .map(|sampled| Py::new(py, SampledWaveformPy { obj: sampled }).unwrap())
+            .map(|sampled| {
+                Py::new(
+                    py,
+                    SampledWaveformPy {
+                        signals: sampled
+                            .signals
+                            .iter()
+                            .map(|s| id_store.resolve_unchecked(*s).to_string())
+                            .collect(),
+                        signature_string: Arc::clone(&sampled.signature_string),
+                        signature: sampled.signature.signature,
+                    },
+                )
+                .unwrap()
+            })
             .collect();
         let integration_weights: Vec<Py<IntegrationWeightPy>> = result
             .integration_weights
@@ -167,7 +207,11 @@ impl AwgCodeGenerationResultPy {
                 Py::new(
                     py,
                     IntegrationWeightPy {
-                        signals: weight.signals.iter().map(|s| s.to_string()).collect(),
+                        signals: weight
+                            .signals
+                            .iter()
+                            .map(|s| id_store.resolve_unchecked(*s).to_string())
+                            .collect(),
                         samples_i: weight.samples_i,
                         samples_q: weight.samples_q,
                         downsampling_factor: weight.downsampling_factor,
@@ -182,7 +226,7 @@ impl AwgCodeGenerationResultPy {
             .into_iter()
             .map(|(k, v)| {
                 (
-                    k,
+                    id_store.resolve_unchecked(k).to_string(),
                     Py::new(
                         py,
                         SignalIntegrationInfoPy {
@@ -214,7 +258,11 @@ impl AwgCodeGenerationResultPy {
                 })
                 .collect()
         });
-        let signal_delays = result.signal_delays;
+        let signal_delays = result
+            .signal_delays
+            .into_iter()
+            .map(|(k, v)| (id_store.resolve_unchecked(k).to_string(), v))
+            .collect();
         // We take a detour via a Vec to ensure the order of wave indices is preserved
         let wave_indices = result
             .wave_indices
@@ -246,6 +294,17 @@ impl AwgCodeGenerationResultPy {
             command_table_offset: result.feedback_register_config.command_table_offset,
             target_feedback_register: result.feedback_register_config.target_feedback_register,
         };
+        let channel_properties = result
+            .channel_properties
+            .into_iter()
+            .map(|properties| ChannelPropertiesPy {
+                channel: properties.channel,
+                marker_mode: properties.marker_mode.map(|marker_mode| match marker_mode {
+                    MarkerMode::Trigger => "TRIGGER".to_string(),
+                    MarkerMode::Marker => "MARKER".to_string(),
+                }),
+            })
+            .collect();
         let output = AwgCodeGenerationResultPy {
             seqc: result.seqc,
             wave_indices,
@@ -257,6 +316,7 @@ impl AwgCodeGenerationResultPy {
             integration_lengths,
             parameter_phase_increment_map,
             feedback_register_config,
+            channel_properties,
         };
         Ok(output)
     }
@@ -281,6 +341,7 @@ impl AwgCodeGenerationResultPy {
                 command_table_offset: None,
                 target_feedback_register: None,
             },
+            channel_properties: vec![],
         }
     }
 }
@@ -307,16 +368,25 @@ pub struct SeqCGenOutputPy {
     result_handle_maps: HashMap<ResultSourcePy, Vec<Vec<String>>>,
     #[pyo3(get)]
     measurements: Vec<MeasurementPy>,
+    #[pyo3(get)]
+    integration_unit_allocations: Vec<IntegrationUnitAllocationPy>,
 }
 
 impl SeqCGenOutputPy {
-    pub fn new(py: Python, results: SeqCGenOutput<WaveformSamplerPy>) -> Self {
+    pub fn new(
+        py: Python,
+        results: SeqCGenOutput<WaveformSamplerPy>,
+        id_store: &NamedIdStore,
+    ) -> Self {
         let awg_results: Vec<Py<AwgCodeGenerationResultPy>> = results
             .awg_results
             .into_iter()
             .map(|result| {
-                Py::new(py, AwgCodeGenerationResultPy::create(py, result).unwrap())
-                    .expect("Failed to create AwgCodeGenerationResultPy")
+                Py::new(
+                    py,
+                    AwgCodeGenerationResultPy::create(py, result, id_store).unwrap(),
+                )
+                .expect("Failed to create AwgCodeGenerationResultPy")
             })
             .collect();
         let result_handle_maps = results
@@ -342,11 +412,20 @@ impl SeqCGenOutputPy {
                 length: m.length,
             })
             .collect();
+        let mut integration_unit_allocations = Vec::new();
+        for alloc in results.integration_unit_allocations {
+            integration_unit_allocations.push(IntegrationUnitAllocationPy {
+                signal: id_store.resolve_unchecked(alloc.signal).to_string(),
+                integrator_channels: alloc.channels.into_iter().map(|c| c as i64).collect(),
+                kernel_count: alloc.kernel_count,
+            });
+        }
         SeqCGenOutputPy {
             awg_results,
             total_execution_time: results.total_execution_time,
             result_handle_maps,
             measurements,
+            integration_unit_allocations,
         }
     }
 }
@@ -386,4 +465,24 @@ pub(crate) struct ResultSourcePy {
     pub awg_id: u16,
     #[pyo3(get)]
     pub integrator_idx: Option<u8>,
+}
+
+#[pyclass(name = "IntegrationUnitAllocation", eq, hash, frozen)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct IntegrationUnitAllocationPy {
+    #[pyo3(get)]
+    pub signal: String,
+    #[pyo3(get)]
+    pub integrator_channels: Vec<i64>,
+    #[pyo3(get)]
+    pub kernel_count: u8,
+}
+
+#[pyclass(name = "ChannelProperties")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct ChannelPropertiesPy {
+    #[pyo3(get)]
+    pub channel: ChannelIndex,
+    #[pyo3(get)]
+    pub marker_mode: Option<String>,
 }

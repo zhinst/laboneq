@@ -3,11 +3,6 @@
 
 use std::fmt::Display;
 
-use crate::named_id::NamedId;
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct DeviceUid(pub NamedId);
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct PhysicalDeviceUid(pub u16);
 

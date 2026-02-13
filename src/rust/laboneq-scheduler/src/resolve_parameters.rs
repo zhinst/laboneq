@@ -9,10 +9,10 @@ use laboneq_dsl::types::{ParameterUid, SweepParameter, ValueOrParameter};
 use laboneq_units::tinysample::seconds_to_tinysamples;
 
 use crate::error::{Error, Result};
-use crate::ir::IrKind;
 use crate::parameter_resolver::ParameterResolver;
 use crate::utils::round_to_grid;
 use crate::{ParameterStore, ScheduledNode};
+use laboneq_ir::IrKind;
 
 /// This function modifies the IR in place to resolve all real-time parameter references to their concrete values.
 ///
@@ -32,10 +32,10 @@ fn resolve_parameters_impl(ir: &mut ScheduledNode, resolver: &ParameterResolver)
             let parameters = &obj.parameters();
             let mut resolver = resolver.child_scope(parameters)?;
             // Check whether the loops are fully unrolled. Currently partial unrolling is not supported.
-            if !parameters.is_empty() && ir.children.len() != obj.iterations {
+            if !parameters.is_empty() && ir.children.len() != obj.iterations.get() as usize {
                 return Err(Error::new(format!(
                     "Expected loop to be unrolled. Mismatch between loop iterations ({}) and number of children ({})",
-                    obj.iterations,
+                    obj.iterations.get(),
                     ir.children.len()
                 )));
             }

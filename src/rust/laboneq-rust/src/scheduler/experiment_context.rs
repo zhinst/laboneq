@@ -9,7 +9,8 @@ use laboneq_dsl::{
     types::{AcquisitionType, HandleUid, SignalUid},
 };
 
-use crate::scheduler::experiment::Experiment;
+use crate::error::Result;
+use crate::{error::Error, scheduler::experiment::Experiment};
 
 /// Immutable lookup/index data derived from the experiment
 ///
@@ -28,30 +29,41 @@ impl ExperimentContext {
 }
 
 /// Create an [`ExperimentContext`] from an [`Experiment`].
-pub(crate) fn experiment_context_from_experiment(experiment: &Experiment) -> ExperimentContext {
+pub(crate) fn experiment_context_from_experiment(
+    experiment: &Experiment,
+) -> Result<ExperimentContext> {
     let mut context = ExperimentContext {
         handle_to_signal: HashMap::new(),
         acquisition_type: AcquisitionType::Integration,
     };
-    visit_node(&experiment.root, &mut context);
-    context
+    visit_node(&experiment.root, &mut context)?;
+    Ok(context)
 }
 
-fn visit_node(node: &ExperimentNode, context: &mut ExperimentContext) {
+fn visit_node(node: &ExperimentNode, context: &mut ExperimentContext) -> Result<()> {
     match &node.kind {
         Operation::Acquire(obj) => {
+            if let Some(existing_signal) = context.handle_to_signal.get(&obj.handle)
+                && existing_signal != &obj.signal
+            {
+                return Err(Error::new(format!(
+                    "Acquisition handle '{}' is associated with multiple signals, only one allowed.",
+                    obj.handle.0
+                )));
+            }
             context.handle_to_signal.insert(obj.handle, obj.signal);
         }
         Operation::AveragingLoop(obj) => {
             context.acquisition_type = obj.acquisition_type;
             for child in &node.children {
-                visit_node(child, context);
+                visit_node(child, context)?;
             }
         }
         _ => {
             for child in &node.children {
-                visit_node(child, context);
+                visit_node(child, context)?;
             }
         }
     }
+    Ok(())
 }

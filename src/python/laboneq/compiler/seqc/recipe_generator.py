@@ -52,9 +52,13 @@ from laboneq.data.recipe import (
 )
 
 if TYPE_CHECKING:
-    from laboneq._rust.codegenerator import FeedbackRegisterConfig
+    from laboneq._rust.codegenerator import (
+        FeedbackRegisterConfig,
+    )
+    from laboneq._rust.codegenerator import (
+        IntegrationUnitAllocation as IntegrationUnitAllocationCodeGen,
+    )
     from laboneq.compiler.workflow.compiler import (
-        IntegrationUnitAllocation,
         LeaderProperties,
     )
     from laboneq.data.compilation_job import OutputRoute as CompilerOutputRoute
@@ -110,24 +114,31 @@ class RecipeGenerator:
 
     def add_integrator_allocations(
         self,
-        integration_unit_allocation: dict[str, IntegrationUnitAllocation],
+        integration_unit_allocation: list[IntegrationUnitAllocationCodeGen],
         experiment_dao: ExperimentDAO,
+        awgs: list[AWGInfo],
     ):
-        for signal_id, integrator in integration_unit_allocation.items():
-            thresholds = experiment_dao.threshold(signal_id)
-            n = max(1, integrator.kernel_count or 0)
-            if not thresholds or thresholds == [None]:
-                thresholds = [0.0] * (n * (n + 1) // 2)
-
-            integrator_allocation = IntegratorAllocation(
-                signal_id=signal_id,
-                device_id=integrator.device_id,
-                awg=integrator.awg_nr,
-                channels=integrator.channels,
-                thresholds=ensure_list(thresholds),
-                kernel_count=n,
-            )
-            self._recipe.integrator_allocations.append(integrator_allocation)
+        for awg in awgs:
+            for signal in awg.signals:
+                signal_uid = signal.id
+                if alloc := next(
+                    (x for x in integration_unit_allocation if x.signal == signal_uid),
+                    None,
+                ):
+                    signal = experiment_dao.signal_info(signal_uid)
+                    thresholds = experiment_dao.threshold(signal_uid)
+                    n = max(1, alloc.kernel_count or 0)
+                    if not thresholds or thresholds == [None]:
+                        thresholds = [0.0] * (n * (n + 1) // 2)
+                    integrator_allocation = IntegratorAllocation(
+                        signal_id=signal_uid,
+                        device_id=signal.device.uid,
+                        awg=awg.awg_id,
+                        channels=alloc.integrator_channels,
+                        thresholds=ensure_list(thresholds),
+                        kernel_count=n,
+                    )
+                    self._recipe.integrator_allocations.append(integrator_allocation)
 
     def add_acquire_lengths(self, integration_times: IntegrationTimes):
         self._recipe.acquire_lengths.extend(
@@ -492,7 +503,7 @@ class RecipeGenerator:
 
 def calc_outputs(
     experiment_dao: ExperimentDAO,
-    signal_delays: SignalDelays,
+    combined_compiler_output: CombinedRTOutputSeqC,
     sampling_rate_tracker: SamplingRateTracker,
     delays_by_signal: dict[str, OnDeviceDelayCompensation],
     precompensations: dict[str, PrecompensationInfo],
@@ -523,15 +534,15 @@ def calc_outputs(
         port_delay = experiment_dao.port_delay(signal_id)
 
         scheduler_port_delay: float = 0.0
+        signal_delays = combined_compiler_output.signal_delays
         if signal_id in signal_delays:
             scheduler_port_delay += signal_delays[signal_id].on_device
         scheduler_port_delay += delays_by_signal[signal_id].on_port
 
         base_channel = min(signal_info.channels)
-
-        markers = experiment_dao.markers_on_signal(signal_id)
-
-        triggers = experiment_dao.triggers_on_signal(signal_id)
+        device_channel_properties = combined_compiler_output.channel_properties.get(
+            signal_info.device.uid, []
+        )
         precompensation = precompensations[signal_id]
         for channel in signal_info.channels:
             output = {
@@ -550,7 +561,15 @@ def calc_outputs(
                     if router.to_channel == channel
                 ],
                 "enable_output_mute": signal_info.automute,
+                "marker_mode": None,
             }
+            channel_properties = next(
+                (cp for cp in device_channel_properties if cp.channel == channel),
+                None,
+            )
+            if channel_properties:
+                output["marker_mode"] = channel_properties.marker_mode
+
             signal_is_modulated = signal_info.oscillator is not None
 
             if oscillator_is_hardware and signal_is_modulated:
@@ -592,11 +611,6 @@ def calc_outputs(
                 signal_info.device.device_type
             )
             if precompensation_is_nonzero(precompensation):
-                if not device_type.supports_precompensation:
-                    raise RuntimeError(
-                        f"Device {signal_info.device.uid} does not"
-                        + " support precompensation"
-                    )
                 warnings = verify_precompensation_parameters(
                     precompensation,
                     sampling_rate_tracker.sampling_rate_for_device(
@@ -607,52 +621,6 @@ def calc_outputs(
                 if warnings:
                     _logger.warning(warnings)
                 output["precompensation"] = precompensation
-            if markers is not None:
-                if signal_info.type == SignalInfoType.IQ:
-                    if device_type == DeviceType.HDAWG:
-                        marker_key = channel % 2 + 1
-                        if f"marker{marker_key}" in markers:
-                            output["marker_mode"] = "MARKER"
-                    elif device_type == DeviceType.SHFSG:
-                        if "marker1" in markers:
-                            output["marker_mode"] = "MARKER"
-                        if "marker2" in markers:
-                            raise RuntimeError("Only marker1 supported on SHFSG")
-                if signal_info.type == SignalInfoType.RF:
-                    if device_type == DeviceType.HDAWG:
-                        if "marker1" in markers:
-                            output["marker_mode"] = "MARKER"
-            if triggers is not None:
-                if signal_info.type == SignalInfoType.IQ:
-                    if device_type == DeviceType.HDAWG:
-                        trigger_bit = 2 ** (channel % 2)
-                        if triggers & trigger_bit:
-                            if (
-                                "marker_mode" in output
-                                and output["marker_mode"] == "MARKER"
-                            ):
-                                raise RuntimeError(
-                                    f"Trying to use marker and trigger on the same"
-                                    f" output channel {channel} with signal"
-                                    f" {signal_id} on device {signal_info.device.uid}"
-                                )
-                            else:
-                                output["marker_mode"] = "TRIGGER"
-                    elif device_type == DeviceType.SHFSG:
-                        if triggers & 2:
-                            raise RuntimeError("Only trigger 1 supported on SHFSG")
-                        if triggers & 1:
-                            if (
-                                "marker_mode" in output
-                                and output["marker_mode"] == "MARKER"
-                            ):
-                                raise RuntimeError(
-                                    f"Trying to use marker and trigger on the same SG"
-                                    f" output channel {channel} with signal"
-                                    f" {signal_id} on device {signal_info.device.uid}"
-                                )
-                            else:
-                                output["marker_mode"] = "TRIGGER"
 
             output["oscillator_frequency"] = oscillator_frequency
             channel_key = (signal_info.device.uid, channel)
@@ -727,7 +695,6 @@ def generate_recipe(
     leader_properties: LeaderProperties,
     clock_settings: dict[str, Any],
     sampling_rate_tracker: SamplingRateTracker,
-    integration_unit_allocation: dict[str, IntegrationUnitAllocation],
     delays_by_signal: dict[str, OnDeviceDelayCompensation],
     precompensations: dict[str, PrecompensationInfo],
     combined_compiler_output: CombinedRTOutputSeqC,
@@ -735,11 +702,21 @@ def generate_recipe(
     recipe_generator = RecipeGenerator()
     recipe_generator.from_experiment(experiment_dao, leader_properties, clock_settings)
 
+    for signal in experiment_dao.signals():
+        signal_info = experiment_dao.signal_info(signal)
+        device_type = DeviceType.from_device_info_type(signal_info.device.device_type)
+        if not device_type.supports_precompensation and precompensation_is_nonzero(
+            signal_info.precompensation
+        ):
+            raise LabOneQException(
+                f"Precompensation is not supported on device {device_type.name.upper()}"
+            )
+
     recipe_generator.add_oscillator_params(awgs, experiment_dao)
 
     for output in calc_outputs(
         experiment_dao,
-        combined_compiler_output.signal_delays,
+        combined_compiler_output,
         sampling_rate_tracker,
         delays_by_signal,
         precompensations,
@@ -759,7 +736,7 @@ def generate_recipe(
             output_range_unit=output["range_unit"],
             port_delay=output["port_delay"],
             scheduler_port_delay=output["scheduler_port_delay"],
-            marker_mode=output.get("marker_mode"),
+            marker_mode=output["marker_mode"],
             amplitude=output["amplitude"],
             output_routers=output["output_routers"],
             enable_output_mute=output["enable_output_mute"],
@@ -803,8 +780,7 @@ def generate_recipe(
         )
 
     recipe_generator.add_integrator_allocations(
-        integration_unit_allocation,
-        experiment_dao,
+        combined_compiler_output.integration_unit_allocations, experiment_dao, awgs
     )
 
     recipe_generator.add_acquire_lengths(combined_compiler_output.integration_times)

@@ -22,10 +22,6 @@ from laboneq.compiler.common.resource_usage import ResourceLimitationError
 from laboneq.compiler.common.result_shape import construct_result_shape_info
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-from laboneq.compiler.feedback_router.feedback_router import (
-    FeedbackRegisterLayout,
-    calculate_feedback_register_layout,
-)
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.workflow import on_device_delays
 from laboneq.compiler.workflow.compiler_hooks import (
@@ -42,9 +38,7 @@ from laboneq.compiler.workflow.precompensation_helpers import (
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.compiled_experiment import CompiledExperiment
-from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
 from laboneq.core.types.enums.awg_signal_type import AWGSignalType
-from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.core.types.enums.trigger_mode import TriggerMode
 from laboneq.data.awg_info import AWGInfo, AwgKey
 from laboneq.data.compilation_job import (
@@ -60,7 +54,10 @@ from laboneq.data.compilation_job import (
     SignalInfoType,
 )
 from laboneq.data.recipe import Recipe
-from laboneq.data.scheduled_experiment import ResultShapeInfo, ScheduledExperiment
+from laboneq.data.scheduled_experiment import (
+    ResultShapeInfo,
+    ScheduledExperiment,
+)
 from laboneq.executor.executor import Statement
 
 from .compat import build_rs_experiment
@@ -253,13 +250,6 @@ class LeaderProperties:
 
 
 @dataclass
-class _ShfqaGeneratorAllocation:
-    device_id: str
-    awg_nr: int
-    channels: list[int]
-
-
-@dataclass
 class IntegrationUnitAllocation:
     device_id: str
     awg_nr: int
@@ -290,91 +280,6 @@ def get_total_rounded_delay(delay, signal_id, device_type, sampling_rate):
     return delay_rounded
 
 
-def calc_integration_unit_allocation(
-    dao: ExperimentDAO,
-) -> dict[str, IntegrationUnitAllocation]:
-    integration_unit_allocation: dict[str, IntegrationUnitAllocation] = {}
-
-    integration_signals: list[SignalInfo] = [
-        signal_info
-        for signal in dao.signals()
-        if (signal_info := dao.signal_info(signal)).type == SignalInfoType.INTEGRATION
-    ]
-
-    # For alignment in feedback register, place qudits before qubits
-    integration_signals.sort(key=lambda s: (s.kernel_count or 0) <= 1)
-
-    for signal_info in integration_signals:
-        device_type = DeviceType.from_device_info_type(signal_info.device.device_type)
-        if device_type.device_class != 0:
-            continue
-        awg_nr = calc_awg_number(signal_info.channels[0], device_type)
-        num_acquire_signals = len(
-            [
-                x
-                for x in integration_unit_allocation.values()
-                if x.device_id == signal_info.device.uid and x.awg_nr == awg_nr
-            ]
-        )
-        if dao.acquisition_type == AcquisitionType.SPECTROSCOPY_PSD:
-            if device_type == device_type.UHFQA:
-                raise LabOneQException(
-                    "`AcquisitionType` `SPECTROSCOPY_PSD` not allowed on UHFQA"
-                )
-        integrators_per_signal = (
-            device_type.num_integration_units_per_acquire_signal
-            if dao.acquisition_type
-            in [
-                AcquisitionType.RAW,
-                AcquisitionType.INTEGRATION,
-            ]
-            or is_spectroscopy(dao.acquisition_type)
-            else 1
-        )
-        integration_unit_allocation[signal_info.uid] = IntegrationUnitAllocation(
-            device_id=signal_info.device.uid,
-            awg_nr=awg_nr,
-            channels=[
-                integrators_per_signal * num_acquire_signals + i
-                for i in range(integrators_per_signal)
-            ],
-            kernel_count=signal_info.kernel_count,
-            has_local_bus=signal_info.device.is_qc,
-        )
-    return integration_unit_allocation
-
-
-def calc_shfqa_generator_allocation(
-    dao: ExperimentDAO,
-) -> dict[str, _ShfqaGeneratorAllocation]:
-    shfqa_generator_allocation: dict[str, _ShfqaGeneratorAllocation] = {}
-    for signal_id in dao.signals():
-        signal_info = dao.signal_info(signal_id)
-        device_type = DeviceType.from_device_info_type(signal_info.device.device_type)
-        if signal_info.type != SignalInfoType.IQ or device_type != DeviceType.SHFQA:
-            continue
-        _logger.debug(
-            "_shfqa_generator_allocation: found SHFQA iq signal %s", signal_info
-        )
-        device_id = signal_info.device.uid
-        awg_nr = calc_awg_number(signal_info.channels[0], device_type)
-        num_generator_signals = len(
-            [
-                x
-                for x in shfqa_generator_allocation.values()
-                if x.device_id == device_id and x.awg_nr == awg_nr
-            ]
-        )
-
-        shfqa_generator_allocation[signal_id] = _ShfqaGeneratorAllocation(
-            device_id=device_id,
-            awg_nr=awg_nr,
-            channels=[num_generator_signals],
-        )
-
-    return shfqa_generator_allocation
-
-
 class Compiler:
     def __init__(self, settings: dict | None = None):
         self._device_setup_fingerprint: str = ""
@@ -386,13 +291,11 @@ class Compiler:
 
         self._leader_properties = LeaderProperties()
         self._clock_settings: dict[str, Any] = {}
-        self._shfqa_generator_allocation: dict[str, _ShfqaGeneratorAllocation] = {}
         self._integration_unit_allocation: dict[str, IntegrationUnitAllocation] = {}
         self._awgs: AWGMapping = []
         self._delays_by_signal: dict[str, OnDeviceDelayCompensation] = {}
         self._precompensations: dict[str, PrecompensationInfo] = {}
         self._signal_objects: dict[str, SignalObj] = {}
-        self._feedback_register_layout: FeedbackRegisterLayout = {}
         self._has_uhfqa: bool = False
         self._compiler_output: CompiledExperiment | None = None
 
@@ -568,7 +471,6 @@ class Compiler:
             ],
             self._sampling_rate_tracker,
             self._signal_objects,
-            self._feedback_register_layout,
             self._settings,
         )
         executor = NtCompilerExecutor(rt_compiler, self._settings, chunk_count)
@@ -598,7 +500,6 @@ class Compiler:
                 leader_properties=self._leader_properties,
                 clock_settings=self._clock_settings,
                 sampling_rate_tracker=self._sampling_rate_tracker,
-                integration_unit_allocation=self._integration_unit_allocation,
                 delays_by_signal=self._delays_by_signal,
                 precompensations=self._precompensations,
                 combined_compiler_output=combined_output,
@@ -613,6 +514,7 @@ class Compiler:
                 combined_output,
                 self._experiment_dao.device_infos(),
                 self._settings,
+                recipe.integrator_allocations,
             )
 
         return CompiledExperiment(
@@ -633,17 +535,12 @@ class Compiler:
         self._sampling_rate_tracker = SamplingRateTracker(dao, self._clock_settings)
 
         self._awgs = self._calc_awgs(dao)
-        self._shfqa_generator_allocation = calc_shfqa_generator_allocation(dao)
-        self._integration_unit_allocation = calc_integration_unit_allocation(dao)
         self._precompensations = compute_precompensations_and_delays(dao)
         self._delays_by_signal = self._adjust_signals_for_on_device_delays(
             signal_infos=[dao.signal_info(uid) for uid in dao.signals()],
             use_2ghz_for_hdawg=self._clock_settings["use_2GHz_for_HDAWG"],
         )
         self._signal_objects = self._generate_signal_objects()
-        self._feedback_register_layout = calculate_feedback_register_layout(
-            self._integration_unit_allocation
-        )
         experiment = build_rs_experiment(
             experiment_dao=dao,
             sampling_rate_tracker=self._sampling_rate_tracker,
@@ -831,29 +728,15 @@ class Compiler:
 
             oscillator_info = self._experiment_dao.signal_oscillator(signal_id)
             channels = copy.deepcopy(signal_info.channels)
-            if signal_id in self._integration_unit_allocation:
-                channels = copy.deepcopy(
-                    self._integration_unit_allocation[signal_id].channels
-                )
-            elif signal_id in self._shfqa_generator_allocation:
-                channels = copy.deepcopy(
-                    self._shfqa_generator_allocation[signal_id].channels
-                )
             hw_oscillator = (
                 oscillator_info.uid
                 if oscillator_info is not None and oscillator_info.is_hardware
                 else None
             )
-
-            mixer_type = MixerType.IQ
-            if (
-                device_type == DeviceType.UHFQA
-                and oscillator_info
-                and oscillator_info.is_hardware
-            ):
-                mixer_type = MixerType.UHFQA_ENVELOPE
-            elif signal_type in ("single",):
-                mixer_type = None
+            oscillator_id = oscillator_info.uid if oscillator_info is not None else None
+            oscillator_is_hardware = (
+                oscillator_info.is_hardware if oscillator_info is not None else None
+            )
 
             port_delay = self._experiment_dao.port_delay(signal_id)
             local_oscillator_frequency = self._experiment_dao.lo_frequency(signal_id)
@@ -869,12 +752,14 @@ class Compiler:
                     int(c): p for c, p in signal_info.channel_to_port.items()
                 },
                 port_delay=port_delay or 0.0,
-                mixer_type=mixer_type,
                 hw_oscillator=hw_oscillator,
+                oscillator_id=oscillator_id,
+                oscillator_is_hardware=oscillator_is_hardware,
                 is_qc=device_info.is_qc,
                 automute=signal_info.automute,
                 local_oscillator_frequency=local_oscillator_frequency,
                 signal_range=signal_info.signal_range,
+                precompensation=self._precompensations.get(signal_id),
             )
             signal_objects[signal_id] = signal_obj
             awg.signals.append(signal_obj)

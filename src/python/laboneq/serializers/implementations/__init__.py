@@ -11,6 +11,7 @@ from older versions of LabOne Q.
 
 __all__ = [  # noqa: RUF022
     "CompiledExperimentSerializer",
+    "ScheduledExperimentSerializer",
     "CalibrationSerializer",
     "DeviceSetupSerializer",
     "ExperimentSerializer",
@@ -31,7 +32,10 @@ __all__ = [  # noqa: RUF022
 
 from . import _models
 from .calibration import CalibrationSerializer
-from .compiled_experiment import CompiledExperimentSerializer
+from .compiled_experiment import (
+    CompiledExperimentSerializer,
+    ScheduledExperimentSerializer,
+)
 from .device_setup import DeviceSetupSerializer
 from .enums import LabOneQEnumSerializer
 from .experiment import ExperimentSerializer

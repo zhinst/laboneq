@@ -7,8 +7,8 @@ use laboneq_common::types::AwgKey;
 use laboneq_dsl::types::{AcquisitionType, SignalUid};
 use laboneq_units::tinysample::TinySamples;
 
-use crate::ir::IrKind;
 use crate::{ScheduleInfo, ScheduledNode, SignalInfo};
+use laboneq_ir::IrKind;
 
 /// Adjust the length of nodes containing '[IrKind::Acquire]' in the given scheduled node so
 /// that acquisitions on the same AWG occupy the same length.

@@ -11,11 +11,11 @@ use laboneq_units::tinysample::{
 use num_integer::lcm;
 
 use crate::error::{Error, Result};
-use crate::ir::{IrKind, MatchTarget};
 use crate::scheduled_node::NodeChild;
 use crate::timing_resolver::timing_result::TimingWarning;
 use crate::utils::{ceil_to_grid, floor_to_grid};
 use crate::{RepetitionMode, ScheduledNode};
+use laboneq_ir::{IrKind, MatchTarget};
 
 use super::{FeedbackCalculator, TimingResult};
 
@@ -510,7 +510,7 @@ fn schedule_compressed_loop(
     adjust_section_length(iteration.node.make_mut(), length, absolute_start, ctx)?;
     iteration.offset = tiny_samples(0);
     node.schedule
-        .resolve_length(length * loop_obj.iterations as i64);
+        .resolve_length(length * loop_obj.iterations.get().into());
     Ok(absolute_start)
 }
 
@@ -583,8 +583,8 @@ fn schedule_auto_repetition_mode_loop(
     }
 
     // Set loop length
-    node.schedule
-        .resolve_length((longest_iteration * loop_obj.iterations as i64).into());
+    let loop_length = longest_iteration * loop_obj.iterations.get() as i64;
+    node.schedule.resolve_length(loop_length.into());
     Ok(absolute_start)
 }
 

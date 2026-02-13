@@ -3,26 +3,34 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy.typing as npt
 
-from laboneq.compiler.feedback_router.feedback_router import FeedbackRegisterLayout
-from laboneq.compiler.ir import IRTree
+from laboneq._rust.compiler import ExperimentIr
 from laboneq.compiler.seqc.waveform_sampler import SampledWaveformSignature
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.awg_info import AWGInfo
 from laboneq.data.compilation_job import Marker
 
-class PulseSignature:
+class PulseParameters:
+    parameters: dict
+    pulse_parameters: dict
+    play_parameters: dict
+
+class PulseSamplingDesc:
     start: int
     length: int
-    pulse: str | None
-    amplitude: float | None
-    phase: float | None
+    pulse: str
+    amplitude: float
+    phase: float
     oscillator_frequency: float | None
     channel: int | None
-    sub_channel: int | None
-    id_pulse_params: int | None
+    pulse_parameters: PulseParameters | None
     markers: list[Marker]
+
+class WaveformSamplingDesc:
+    length: int
+    pulses: list[PulseSamplingDesc]
 
 class PlaySamples:
     def __init__(
@@ -40,16 +48,6 @@ class PlaySamples:
 
 class PlayHold:
     def __init__(self, offset: int, length: int) -> None: ...
-
-class WaveformSignature:
-    length: int
-    pulses: list[PulseSignature]
-
-    def is_playzero(self) -> bool:
-        """Check if the waveform signature represents a play zero waveform."""
-
-    def signature_string(self) -> str:
-        """Generate a string representation of the waveform signature."""
 
 class SampledWaveform:
     signals: set[str]
@@ -76,6 +74,10 @@ class FeedbackRegisterConfig:
     command_table_offset: int | None
     target_feedback_register: int | None
 
+class ChannelProperties:
+    channel: int
+    marker_mode: Literal["TRIGGER", "MARKER"] | None
+
 class AwgCodeGenerationResult:
     seqc: str
     wave_indices: list[tuple[str, tuple[int, str]]]
@@ -90,6 +92,7 @@ class AwgCodeGenerationResult:
     integration_lengths: dict[str, SignalIntegrationInfo] = {}
     parameter_phase_increment_map: dict[str, list[int]] | None
     feedback_register_config: FeedbackRegisterConfig
+    channel_properties: list[ChannelProperties] = {}
 
 class Measurement:
     """Measurement information for a device.
@@ -109,6 +112,11 @@ class ResultSource:
     awg_id: int
     integrator_idx: int | None
 
+class IntegrationUnitAllocation:
+    signal: str
+    integrator_channels: list[int]
+    kernel_count: int
+
 class SeqCGenOutput:
     """Output of the SeqC code generation process.
 
@@ -118,28 +126,24 @@ class SeqCGenOutput:
         result_handle_maps: For each result source contains a mask that identifies the
                            acquire handles corresponding to incoming stream of data.
         measurements: List of Measurement objects.
+        integration_unit_allocations: Integration unit allocations for signals.
     """
 
     awg_results: list[AwgCodeGenerationResult]
     total_execution_time: float = 0.0
     result_handle_maps: dict[ResultSource, list[list[str]]] = {}
     measurements: list[Measurement] = []
+    integration_unit_allocations: list[IntegrationUnitAllocation] = []
 
 def generate_code(
-    ir: IRTree,
+    ir_experiment: ExperimentIr,
     awgs: list[AWGInfo],
     settings: dict[str, bool | int | float],
-    waveform_sampler: object,
-    feedback_register_layout: FeedbackRegisterLayout | None,
-    acquisition_type: AcquisitionType,
 ) -> SeqCGenOutput:
     """Generate SeqC code for given AWGs.
 
     Arguments:
-        ir: The IR tree containing the data to be processed.
+        ir_experiment: The Rust lib experiment IR.
         awgs: List of target awgs.
         settings: Compiler settings as dictionary.
-        waveform_sampler: An instance of `WaveformSampler` for waveform sampling.
-        feedback_register_layout: The feedback register layout.
-        acquisition_type: The acquisition type.
     """

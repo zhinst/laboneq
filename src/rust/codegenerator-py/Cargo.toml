@@ -18,5 +18,10 @@ anyhow = { workspace = true }
 num-complex = { workspace = true }
 thiserror = { workspace = true }
 
-codegenerator = { path = "../codegenerator" }
-numeric-array = { path = "../numeric-array", features = ["pyo3"] }
+codegenerator = { workspace = true }
+numeric-array = { workspace = true, features = ["pyo3"] }
+laboneq-dsl = { workspace = true }
+codegenerator-utils = { workspace = true }
+laboneq-py-utils = { workspace = true }
+laboneq-common = { workspace = true }
+laboneq-units = { workspace = true }

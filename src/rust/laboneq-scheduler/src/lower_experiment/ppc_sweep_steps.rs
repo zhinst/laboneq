@@ -10,10 +10,10 @@ use laboneq_units::tinysample::{TinySamples, seconds_to_tinysamples, tiny_sample
 
 use crate::error::Result;
 
-use crate::ir::{IrKind, PpcStep};
 use crate::schedule_info::ScheduleInfoBuilder;
 use crate::utils::round_to_grid;
 use crate::{ScheduledNode, SignalInfo};
+use laboneq_ir::{IrKind, PpcStep};
 
 const PPC_TRIGGER_ASSERT_DURATION: Duration<Second> = seconds(25e-3);
 const PPC_TRIGGER_DEASSERT_DURATION: Duration<Second> = seconds(0.1e-3);

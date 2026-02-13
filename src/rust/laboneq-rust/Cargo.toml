@@ -23,14 +23,17 @@ pyo3-log = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 smallvec = { workspace = true }
+serde_json = { workspace = true }
 
-laboneq-common = { path = "../laboneq-common" }
-laboneq-dsl = { path = "../laboneq-dsl" }
-codegenerator-py = { path = "../codegenerator-py" }
-laboneq-scheduler = { path = "../laboneq-scheduler" }
-numeric-array = { path = "../numeric-array", features = ["pyo3"] }
-laboneq-units = { path = "../laboneq-units" }
-laboneq-log = { path = "../laboneq-log" }
+laboneq-common = { workspace = true }
+laboneq-dsl = { workspace = true }
+codegenerator-py = { workspace = true }
+laboneq-scheduler = { workspace = true }
+numeric-array = { workspace = true, features = ["pyo3"] }
+laboneq-units = { workspace = true }
+laboneq-log = { workspace = true }
+laboneq-ir = { workspace = true }
+laboneq-py-utils = { workspace = true }
 
 [dev-dependencies]
 approx = { workspace = true }

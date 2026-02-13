@@ -167,7 +167,7 @@ impl Default for ScheduleInfoBuilder {
 }
 
 #[derive(Debug, Clone, PartialEq, Copy, Eq)]
-pub enum RepetitionMode {
+pub(crate) enum RepetitionMode {
     Fastest,
     Constant { time: TinySamples },
     Auto,
