@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from laboneq.data import calibration
 from laboneq.dsl import enums
-from laboneq.serializers.base import LabOneQClassicSerializer
+from laboneq.serializers._legacy import LabOneQClassicSerializer
 from laboneq.serializers.serializer_registry import serializer
 
 

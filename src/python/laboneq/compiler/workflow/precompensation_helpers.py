@@ -3,134 +3,16 @@
 
 from __future__ import annotations
 
-import copy
 import math
 from typing import TYPE_CHECKING
 
 import numpy as np
 from engineering_notation import EngNumber
 
-from laboneq.compiler.common.device_type import DeviceType
 from laboneq.core.exceptions import LabOneQException
-from laboneq.data.calibration import (
-    BounceCompensation,
-    ExponentialCompensation,
-    FIRCompensation,
-)
-from laboneq.data.compilation_job import PrecompensationInfo
 
 if TYPE_CHECKING:
-    from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-
-
-def precompensation_is_nonzero(precompensation: PrecompensationInfo):
-    """Check whether the precompensation has any effect"""
-    return precompensation is not None and (
-        precompensation.exponential
-        or precompensation.high_pass
-        or precompensation.bounce
-        or precompensation.FIR
-    )
-
-
-def precompensation_delay_samples(precompensation: PrecompensationInfo):
-    """Compute the additional delay (in samples) caused by the precompensation"""
-    if not precompensation_is_nonzero(precompensation):
-        return 0
-    delay = 72
-    try:
-        delay += 88 * len(precompensation.exponential or [])
-    except KeyError:
-        pass
-    if precompensation.high_pass is not None:
-        delay += 96
-    if precompensation.bounce is not None:
-        delay += 32
-    if precompensation.FIR is not None:
-        delay += 136
-    return delay
-
-
-def _adapt_precompensations_of_awg(signal_ids, precompensations):
-    # If multiple signals per AWG, find the union of all filter enables
-    number_of_exponentials = 0
-    has_high_pass = None
-    has_bounce = False
-    has_FIR = False
-    for signal_id in signal_ids:
-        precompensation: PrecompensationInfo = (
-            precompensations.get(signal_id) or PrecompensationInfo()
-        )
-
-        hp = bool(precompensation.high_pass)
-        if has_high_pass is None:
-            has_high_pass = hp
-        else:
-            if hp != has_high_pass:
-                msg = f"All precompensation settings for the same AWG must have the high pass filter enabled or disabled: '{', '.join(sorted(signal_ids))}'."
-                raise LabOneQException(msg)
-        exp = precompensation.exponential
-        if exp is not None and number_of_exponentials < len(exp):
-            number_of_exponentials = len(exp)
-        has_bounce = has_bounce or bool(precompensation.bounce)
-        has_FIR = has_FIR or bool(precompensation.FIR)
-    # Add zero effect filters to get consistent timing
-    if has_bounce or has_FIR or number_of_exponentials:
-        for signal_id in signal_ids:
-            old_pc = precompensations.get(signal_id) or PrecompensationInfo()
-            new_pc = copy.deepcopy(old_pc)
-            if number_of_exponentials:
-                exp = new_pc.exponential = new_pc.exponential or []
-                exp.extend(
-                    [ExponentialCompensation(amplitude=0.0, timeconstant=10e-9)]
-                    * (number_of_exponentials - len(exp))
-                )
-            if has_bounce and not new_pc.bounce:
-                new_pc.bounce = BounceCompensation(delay=10e-9, amplitude=0.0)
-            if has_FIR and not new_pc.FIR:
-                new_pc.FIR = FIRCompensation(coefficients=[1.0])
-            precompensations[signal_id] = new_pc
-
-
-def adapt_precompensations(
-    precompensations: dict[str, PrecompensationInfo], dao: ExperimentDAO
-):
-    """Make sure that we have the same timing for rf_signals on the same AWG"""
-    signals_by_awg = {}
-    # Group by AWG
-    for signal_id in precompensations.keys():
-        signal_info = dao.signal_info(signal_id)
-        device_id = signal_info.device.uid
-        device_type = DeviceType.from_device_info_type(signal_info.device.device_type)
-        channel = signal_info.channels[0]
-        awg = (
-            0
-            if device_type == DeviceType.UHFQA
-            else channel // device_type.channels_per_awg
-        )
-        signals_by_awg.setdefault((device_id, awg), []).append(signal_id)
-    for signal_ids in signals_by_awg.values():
-        if len(signal_ids) > 1:
-            _adapt_precompensations_of_awg(signal_ids, precompensations)
-
-
-def compute_precompensations_and_delays(dao: ExperimentDAO):
-    """Retrieve precompensations from DAO, adapt those on the same AWG and
-    compute timing"""
-    precompensations = {
-        id: copy.deepcopy(dao.precompensation(id)) for id in dao.signals()
-    }
-    adapt_precompensations(precompensations, dao)
-    for signal_id, pc in precompensations.items():
-        delay = precompensation_delay_samples(pc)
-        pc = precompensations.setdefault(signal_id, PrecompensationInfo())
-        if pc is None:
-            precompensations[signal_id] = PrecompensationInfo(
-                computed_delay_samples=delay
-            )
-        else:
-            pc.computed_delay_samples = delay
-    return precompensations
+    from laboneq._rust import compiler as compiler_rs
 
 
 def _round_to_FPGA(coef):
@@ -238,7 +120,7 @@ def verify_exponential_filter_params(
 
 
 def verify_precompensation_parameters(
-    precompensation: PrecompensationInfo | None,
+    precompensation: compiler_rs.Precompensation | None,
     sampling_rate: float,
     signal_id: str,
 ) -> str:
@@ -275,7 +157,7 @@ def verify_precompensation_parameters(
                 f"Bounce precompensation amplitude of signal '{signal_id}' out "
                 "of range; will be clamped to +/- 1."
             )
-    fir = precompensation.FIR
+    fir = precompensation.fir
     if fir:
         if len(fir.coefficients) > 40:
             raise LabOneQException(

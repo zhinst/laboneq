@@ -6,15 +6,16 @@ use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use laboneq_error::bail;
 use laboneq_log::warn;
 use laboneq_units::tinysample::{tiny_samples, tinysamples_to_seconds};
 
+use crate::Result;
 use crate::ir::compilation_job::{self as cjob, AwgCore, DeviceKind};
 use crate::ir::{
     FrequencySweepParameterInfo, IrNode, LinearParameterInfo, NodeKind, NonLinearParameterInfo,
     OscillatorFrequencySweepStep, Samples, SetOscillatorFrequencySweep, SignalUid,
 };
-use crate::{Error, Result};
 
 struct SignalPhaseTracker {
     cumulative: f64,
@@ -144,46 +145,41 @@ fn collect_osc_parameters(
         NodeKind::PlayPulse(ob) => {
             if ob.set_oscillator_phase.is_some() {
                 if ob.signal.is_hw_modulated() {
-                    let msg = format!(
+                    bail!(
                         "Cannot use 'set_oscillator_phase' of hardware modulated signal: {}",
                         &ob.signal.uid.0
                     );
-                    return Err(Error::new(&msg));
                 }
                 if in_branch && ob.signal.is_sw_modulated() {
-                    let msg = format!(
+                    bail!(
                         "Conditional 'set_oscillator_phase' of software modulated signal '{}' is not supported",
                         &ob.signal.uid.0
                     );
-                    return Err(Error::new(&msg));
                 }
             }
             if ob.increment_oscillator_phase.is_some() && in_branch {
                 // SHFQA and UHFQA do not support phase registers.
                 if device.is_qa_device() {
-                    let msg = format!(
+                    bail!(
                         "Conditional 'increment_oscillator_phase' of signal '{}' is not supported on device type '{}'",
                         &ob.signal.uid.0,
                         device.as_str()
                     );
-                    return Err(Error::new(&msg));
                 }
                 if ob.signal.is_sw_modulated() {
-                    let msg = format!(
+                    bail!(
                         "Conditional 'increment_oscillator_phase' of software modulated signal '{}' is not supported",
                         &ob.signal.uid.0
                     );
-                    return Err(Error::new(&msg));
                 }
             }
             if ob.signal.is_hw_modulated() {
                 if ob.increment_oscillator_phase.is_some() && ob.signal.kind != cjob::SignalKind::IQ
                 {
-                    let msg = format!(
+                    bail!(
                         "Signal {}: phase increments are only supported on IQ signals, or on RF signals with SW modulation",
                         &ob.signal.uid.0,
                     );
-                    return Err(Error::new(&msg));
                 }
                 return Ok(());
             }
@@ -474,9 +470,7 @@ fn check_device_compatibility(device: &DeviceKind, sweep_info: &SweepInfo) -> Re
         device,
         DeviceKind::SHFSG | DeviceKind::SHFQA | DeviceKind::HDAWG
     ) {
-        return Err(Error::new(
-            "Real-time frequency sweep only supported on SHF and HDAWG devices",
-        ));
+        bail!("Real-time frequency sweep only supported on SHF and HDAWG devices");
     }
     if device == &DeviceKind::HDAWG
         && sweep_info
@@ -484,9 +478,9 @@ fn check_device_compatibility(device: &DeviceKind, sweep_info: &SweepInfo) -> Re
             .values()
             .any(|info| info.frequencies.len() > MAX_SWEEP_ITERATIONS_HDAWG)
     {
-        return Err(Error::new(format!(
+        bail!(
             "HDAWG can only handle RT frequency sweeps up to {MAX_SWEEP_ITERATIONS_HDAWG} steps."
-        )));
+        );
     }
     Ok(())
 }
@@ -764,7 +758,6 @@ mod tests {
         fn test_osc_freq_sweep_parameter_calculator() {
             let awg = AwgCore::new(
                 0,
-                cjob::AwgKind::IQ,
                 vec![Arc::new(Signal {
                     uid: 0.into(),
                     kind: SignalKind::IQ,

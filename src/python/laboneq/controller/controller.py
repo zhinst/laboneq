@@ -8,8 +8,7 @@ import logging
 import time
 import traceback
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, Generic, TypeVar, cast
-from weakref import ref
+from typing import TYPE_CHECKING, Callable, cast
 
 import numpy as np
 import zhinst.utils  # type: ignore
@@ -28,6 +27,7 @@ from laboneq.controller.recipe_processor import (
     pre_process_compiled,
 )
 from laboneq.controller.results import ResultsBuilder
+from laboneq.controller.runtime_context_impl import LegacySessionData
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.sweep_params_tracker import SweepParamsTracker
 from laboneq.controller.versioning import (
@@ -62,9 +62,6 @@ _logger = logging.getLogger(__name__)
 CONNECT_CHECK_HOLDOFF = 10  # sec
 
 
-_SessionClass = TypeVar("_SessionClass")
-
-
 @dataclass
 class ControllerSubmission:
     scheduled_experiment: ScheduledExperiment
@@ -86,16 +83,14 @@ class NtStepResultContext:
     execution_context: ExecutionContext
 
 
-class Controller(EventLoopMixIn, Generic[_SessionClass]):
+class Controller(EventLoopMixIn):
     def __init__(
         self,
         target_setup: TargetSetup,
         ignore_version_mismatch: bool,
         neartime_callbacks: dict[str, Callable],
-        parent_session: _SessionClass,
     ):
         self._ignore_version_mismatch = ignore_version_mismatch
-        self._parent_session_ref = ref(parent_session)
         self._do_emulation = True
 
         _zhinst_core_version = LabOneVersion.from_version_string(zhinst_core_version())
@@ -115,6 +110,8 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
         self._neartime_callbacks: dict[str, Callable] = (
             {} if neartime_callbacks is None else neartime_callbacks
         )
+        # TODO: Remove _legacy_session_data tests once the RuntimeContext endpoints are removed
+        self._legacy_session_data = LegacySessionData(None, None, None, None, None)
 
         self._experiment_runner = AsyncWorker(run_one=self._run_one_experiment)
         self._result_collector = AsyncWorker(run_one=self._collect_nt_step_results)
@@ -428,8 +425,9 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
                 try:
                     await NearTimeRunner(
                         controller=self,
-                        parent_session_ref=self._parent_session_ref,
                         execution_context=execution_context,
+                        do_emulation=self._do_emulation,
+                        legacy_session_data=self._legacy_session_data,
                     ).run(recipe_data.execution)
                 except AbortExecution:
                     # eat the exception
@@ -574,3 +572,7 @@ class Controller(EventLoopMixIn, Generic[_SessionClass]):
             nt_step=nt_step,
             results_builder=results_builder,
         )
+
+    # TODO: Remove _legacy_session_data tests once the RuntimeContext endpoints are removed
+    def set_legacy_session_data(self, legacy_session_data: LegacySessionData):
+        self._legacy_session_data = legacy_session_data

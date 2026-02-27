@@ -4,9 +4,11 @@
 //! Module for defining settings for the code generator.
 use std::vec;
 
+use laboneq_error::laboneq_error;
+
+use crate::Result;
 use crate::ir::compilation_job::DeviceKind;
 use crate::utils::ceil_to_grid;
-use crate::{Error, Result};
 
 #[derive(Debug, Clone)]
 pub struct SanitizationChange {
@@ -137,7 +139,7 @@ fn sanitize_min_playwave_hint(value: u16, sample_multiple: u16) -> Result<u16> {
         return ceil_to_grid(value.into(), sample_multiple.into())
             .try_into()
             .map_err(|_| {
-                Error::new("Expected `MIN_PLAY_WAVE_HINT` to fit into 16 bit unsigned int")
+                laboneq_error!("Expected `MIN_PLAY_WAVE_HINT` to fit into 16 bit unsigned int")
             });
     }
     Ok(value)

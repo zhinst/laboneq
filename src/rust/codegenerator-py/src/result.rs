@@ -21,7 +21,7 @@ use codegenerator::result::{AwgCodeGenerationResult, MarkerMode};
 
 use crate::waveform_sampler::WaveformSamplerPy;
 
-#[pyo3::pyclass(name = "FeedbackRegisterConfig")]
+#[pyo3::pyclass(name = "FeedbackRegisterConfig", skip_from_py_object)]
 #[derive(Debug, Clone)]
 pub(crate) struct FeedbackRegisterConfigPy {
     #[pyo3(get)]
@@ -143,6 +143,8 @@ impl PpcSweeperConfigPy {
 #[pyclass(name = "AwgCodeGenerationResult", frozen)]
 pub struct AwgCodeGenerationResultPy {
     #[pyo3(get)]
+    awg_properties: AwgPropertiesPy,
+    #[pyo3(get)]
     seqc: String,
     #[pyo3(get)]
     wave_indices: Vec<(String, (u32, String))>,
@@ -164,6 +166,31 @@ pub struct AwgCodeGenerationResultPy {
     channel_properties: Vec<ChannelPropertiesPy>,
 }
 
+#[pyclass(name = "AwgProperties", skip_from_py_object)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AwgPropertiesPy {
+    awg_id: i64,
+    device_uid: DeviceUid,
+    kind: AwgKind,
+}
+
+#[pymethods]
+impl AwgPropertiesPy {
+    #[getter]
+    fn key(&self) -> (&str, i64) {
+        (&self.device_uid, self.awg_id)
+    }
+
+    #[getter]
+    fn signal_type(&self) -> &str {
+        match self.kind {
+            AwgKind::SINGLE => "SINGLE",
+            AwgKind::DOUBLE => "DOUBLE",
+            AwgKind::IQ => "IQ",
+        }
+    }
+}
+
 // SAFETY: Safe to Send/Sync across threads.
 // - All Py<T> fields rely on PyO3's delayed reference count mechanism for safe
 //   cross-thread drops (see https://docs.rs/pyo3/0.28.0/pyo3/struct.Py.html#impl-Drop-for-Py%3CT%3E)
@@ -175,7 +202,6 @@ unsafe impl Send for AwgCodeGenerationResultPy {}
 unsafe impl Sync for AwgCodeGenerationResultPy {}
 
 impl AwgCodeGenerationResultPy {
-    #[allow(clippy::too_many_arguments)]
     pub fn create(
         py: Python,
         result: AwgCodeGenerationResult<WaveformSamplerPy>,
@@ -306,6 +332,11 @@ impl AwgCodeGenerationResultPy {
             })
             .collect();
         let output = AwgCodeGenerationResultPy {
+            awg_properties: AwgPropertiesPy {
+                awg_id: result.awg.key.index() as i64,
+                device_uid: result.awg.key.device_name().clone(),
+                kind: result.awg.kind,
+            },
             seqc: result.seqc,
             wave_indices,
             command_table: result.command_table,
@@ -319,30 +350,6 @@ impl AwgCodeGenerationResultPy {
             channel_properties,
         };
         Ok(output)
-    }
-
-    pub fn default() -> Self {
-        AwgCodeGenerationResultPy {
-            seqc: String::new(),
-            wave_indices: vec![],
-            command_table: None,
-            shf_sweeper_config: None,
-            sampled_waveforms: vec![],
-            integration_weights: vec![],
-            signal_delays: HashMap::new(),
-            integration_lengths: HashMap::new(),
-            parameter_phase_increment_map: None,
-            feedback_register_config: FeedbackRegisterConfigPy {
-                local: false,
-                source_feedback_register: None,
-                register_index_select: None,
-                codeword_bitshift: None,
-                codeword_bitmask: None,
-                command_table_offset: None,
-                target_feedback_register: None,
-            },
-            channel_properties: vec![],
-        }
     }
 }
 
@@ -438,7 +445,7 @@ impl SeqCGenOutputPy {
     }
 }
 
-#[pyclass(name = "Measurement")]
+#[pyclass(name = "Measurement", skip_from_py_object)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeasurementPy {
     pub device: DeviceUid,
@@ -456,7 +463,7 @@ impl MeasurementPy {
     }
 }
 
-#[pyclass(name = "ResultSource")]
+#[pyclass(name = "ResultSource", skip_from_py_object)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ResultSourcePy {
     #[pyo3(get)]
@@ -467,7 +474,13 @@ pub(crate) struct ResultSourcePy {
     pub integrator_idx: Option<u8>,
 }
 
-#[pyclass(name = "IntegrationUnitAllocation", eq, hash, frozen)]
+#[pyclass(
+    name = "IntegrationUnitAllocation",
+    eq,
+    hash,
+    frozen,
+    skip_from_py_object
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct IntegrationUnitAllocationPy {
     #[pyo3(get)]
@@ -478,7 +491,7 @@ pub(crate) struct IntegrationUnitAllocationPy {
     pub kernel_count: u8,
 }
 
-#[pyclass(name = "ChannelProperties")]
+#[pyclass(name = "ChannelProperties", skip_from_py_object)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ChannelPropertiesPy {
     #[pyo3(get)]

@@ -78,7 +78,12 @@ class ChannelProperties:
     channel: int
     marker_mode: Literal["TRIGGER", "MARKER"] | None
 
+class AwgProperties:
+    key: tuple[str, int]  # (device UID, AWG index)
+    signal_type: Literal["IQ", "SINGLE", "DOUBLE"]
+
 class AwgCodeGenerationResult:
+    awg_properties: AwgProperties
     seqc: str
     wave_indices: list[tuple[str, tuple[int, str]]]
     command_table: dict[str, object] | None

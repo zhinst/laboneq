@@ -1,11 +1,11 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::Context;
 use codegenerator::ir::SignalUid;
 use codegenerator_utils::pulse_parameters::PulseParameterDeduplicator;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_dsl::types::ExternalParameterUid;
+use laboneq_error::{LabOneQError, PyErrorWithContext, WithContext, bail};
 use laboneq_py_utils::pulse::PulseDef;
 use laboneq_py_utils::py_export::pulse_def_to_py;
 use laboneq_py_utils::py_object_interner::PyObjectInterner;
@@ -25,7 +25,7 @@ use codegenerator::waveform_sampler::{
     CompressedWaveformPart, IntegrationKernel, SampleWaveforms, SampledWaveformCollection,
     SampledWaveformSignature, WaveformSamplingCandidate,
 };
-use codegenerator::{Error, Result, ir::Samples};
+use codegenerator::{Result, ir::Samples};
 
 use super::pulse_parameters::{PulseParametersPy, pulse_parameters_to_py};
 use super::signature::create_waveform_description;
@@ -253,13 +253,13 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
         &self,
         awg: &AwgCore,
         waveforms: &[WaveformSamplingCandidate],
-    ) -> Result<SampledWaveformCollection<SampledWaveformSignaturePy>> {
+    ) -> Result<SampledWaveformCollection<SampledWaveformSignaturePy>, LabOneQError> {
         let sampling_info = Self::make_awg_info(awg);
         let sampling_rate = sampling_info.sampling_rate;
         let rf_signal = sampling_info.rf_signal;
         let mut sampled_waveforms: SampledWaveformCollection<SampledWaveformSignaturePy> =
             SampledWaveformCollection::new();
-        Python::attach(|py| -> Result<()> {
+        Python::attach(|py| -> Result<(), PyErrorWithContext> {
             let device_type: Bound<'_, DeviceTypePy> =
                 DeviceTypePy::from_device_kind(awg.device_kind())
                     .into_pyobject(py)
@@ -388,15 +388,13 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
             Self::evaluate_mixer(awg.device_kind(), ref_signal)
         } else {
             if !kernels.is_empty() {
-                return Err(Error::new(
-                    "No integration signals found, but kernels were provided",
-                ));
+                bail!("No integration signals found, but kernels were provided",);
             }
             return Ok(vec![]);
         };
         let signal_map: HashMap<SignalUid, &Arc<Signal>> =
             integration_signals.iter().map(|s| (s.uid, *s)).collect();
-        Python::attach(|py| -> Result<Vec<IntegrationWeight>> {
+        Python::attach(|py| {
             let mixer_type = mixer_type.map(|mixer| {
                 let mixer_type_py: MixerTypePy = mixer.into();
                 mixer_type_py
@@ -405,52 +403,47 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
             });
             let mut bound_weights: Vec<BoundIntegrationWeight<'_>> =
                 Vec::with_capacity(kernels.len());
-            let sampler = sample_integration_weight_py(py).map_err(Error::with_error)?;
+            let sampler = sample_integration_weight_py(py)?;
             for kernel in kernels {
                 let params = kernel
                     .pulse_parameters_id()
                     .and_then(|id| self.pulse_parameters.get(&id).map(|p| p.clone_ref(py)));
-                let result: Bound<'_, PyAny> = sampler
-                    .call(
-                        (
-                            &self.pulse_defs[kernel.pulse_id()],
-                            params,
-                            kernel.oscillator_frequency(),
-                            kernel
-                                .signals()
-                                .iter()
-                                .map(|s| self.id_store.resolve_unchecked(*s))
-                                .collect::<Vec<_>>(),
-                            &awg.sampling_rate,
-                            &mixer_type,
-                        ),
-                        None,
-                    )
-                    .map_err(Error::with_error)?;
-                let samples_i_q = result
-                    .cast::<PyTuple>()
-                    .expect("Internal error: Expected a tuple from Python sampler");
-                let samples_i = samples_i_q.get_item(0).map_err(Error::with_error)?;
-                let samples_q = samples_i_q.get_item(1).map_err(Error::with_error)?;
-                bound_weights.push(
-                    BoundIntegrationWeight::new(
-                        samples_i,
-                        samples_q,
+                let result: Bound<'_, PyAny> = sampler.call(
+                    (
+                        &self.pulse_defs[kernel.pulse_id()],
+                        params,
+                        kernel.oscillator_frequency(),
                         kernel
                             .signals()
                             .iter()
-                            .map(|s| {
-                                signal_map
+                            .map(|s| self.id_store.resolve_unchecked(*s))
+                            .collect::<Vec<_>>(),
+                        &awg.sampling_rate,
+                        &mixer_type,
+                    ),
+                    None,
+                )?;
+                let samples_i_q = result
+                    .cast::<PyTuple>()
+                    .expect("Internal error: Expected a tuple from Python sampler");
+                let samples_i = samples_i_q.get_item(0)?;
+                let samples_q = samples_i_q.get_item(1)?;
+                bound_weights.push(BoundIntegrationWeight::new(
+                    samples_i,
+                    samples_q,
+                    kernel
+                        .signals()
+                        .iter()
+                        .map(|s| {
+                            signal_map
                                 .get(s)
                                 .expect(
                                     "Internal error: Integration weight on non-integration signal",
                                 )
                                 .uid
-                            })
-                            .collect(),
-                    )
-                    .map_err(Error::with_error)?,
-                );
+                        })
+                        .collect(),
+                )?);
             }
             let out = create_integration_weights(py, bound_weights, awg.device_kind())?;
             Ok(out)
@@ -540,7 +533,7 @@ fn sample_only(
     signal_type: &Bound<'_, SignalTypePy>,
     pulse_parameters: &HashMap<PulseParametersId, Py<PulseParametersPy>>,
     pulse_defs: &HashMap<String, Py<PyAny>>,
-) -> Result<Option<Py<PyAny>>> {
+) -> Result<Option<Py<PyAny>>, PyErrorWithContext> {
     if !should_sample_waveform(waveform) {
         return Ok(None);
     }
@@ -553,21 +546,19 @@ fn sample_only(
             .map(|(id, pp)| (*id, pp.clone_ref(py)))
             .collect(),
     );
-    let sample_and_compress_py_func = sample_waveform_py(py).map_err(Error::with_error)?;
-    let sampled_signature = sample_and_compress_py_func
-        .call(
-            (
-                signals,
-                waveform_desc,
-                sampling_rate,
-                signal_type,
-                device_type,
-                mixer_type,
-                rf_signal,
-            ),
-            None,
-        )
-        .map_err(Error::with_error)?;
+    let sample_and_compress_py_func = sample_waveform_py(py)?;
+    let sampled_signature = sample_and_compress_py_func.call(
+        (
+            signals,
+            waveform_desc,
+            sampling_rate,
+            signal_type,
+            device_type,
+            mixer_type,
+            rf_signal,
+        ),
+        None,
+    )?;
     if sampled_signature.is_none() {
         return Ok(None);
     }
@@ -587,7 +578,7 @@ fn sample_and_compress(
     signal_type: &Bound<'_, SignalTypePy>,
     pulse_parameters: &HashMap<PulseParametersId, Py<PulseParametersPy>>,
     pulse_defs: &HashMap<String, Py<PyAny>>,
-) -> Result<Option<Py<PyAny>>> {
+) -> Result<Option<Py<PyAny>>, PyErrorWithContext> {
     if !should_sample_waveform(waveform) {
         // If the waveform does not need to be sampled, skip the sampling process
         return Ok(None);
@@ -601,21 +592,19 @@ fn sample_and_compress(
             .map(|(id, pp)| (*id, pp.clone_ref(py)))
             .collect(),
     );
-    let sample_and_compress_py_func = sample_and_compress_py(py).map_err(Error::with_error)?;
-    let sampled_signature = sample_and_compress_py_func
-        .call(
-            (
-                waveform_desc,
-                signals,
-                sampling_rate,
-                signal_type,
-                device_type,
-                mixer_type,
-                rf_signal,
-            ),
-            None,
-        )
-        .map_err(Error::with_error)?;
+    let sample_and_compress_py_func = sample_and_compress_py(py)?;
+    let sampled_signature = sample_and_compress_py_func.call(
+        (
+            waveform_desc,
+            signals,
+            sampling_rate,
+            signal_type,
+            device_type,
+            mixer_type,
+            rf_signal,
+        ),
+        None,
+    )?;
     if sampled_signature.is_none() {
         // If the waveform does not need to be sampled, skip the sampling process
         return Ok(None);
@@ -706,8 +695,7 @@ fn create_integration_weights(
     if let Some(downsampling_factor) = common_downsampling_factor {
         for weight in bound_weights.into_iter() {
             let (samples_i, samples_q) =
-                downsample_samples(py, weight.samples_i, weight.samples_q, downsampling_factor)
-                    .map_err(Error::with_error)?;
+                downsample_samples(py, weight.samples_i, weight.samples_q, downsampling_factor)?;
             let integration_weight = IntegrationWeight {
                 signals: weight.signals.iter().copied().collect(),
                 samples_i: samples_i.arr.unbind(),
@@ -763,16 +751,15 @@ fn eval_common_downsampling_factor(
     const DOWNSAMPLING_FACTOR_SHFQA_MAX: usize = 16;
     let mut common_downsampling_factor: usize = 0;
     for weight in weights.iter() {
-        let weight_length = weight.samples_i.len().map_err(Error::with_error)?;
+        let weight_length = weight.samples_i.len()?;
         if device == &DeviceKind::SHFQA && weight_length > INTEGRATION_WEIGHT_MAX_LENGTH {
             let downsampling_factor = weight_length.div_ceil(INTEGRATION_WEIGHT_MAX_LENGTH);
             if downsampling_factor > DOWNSAMPLING_FACTOR_SHFQA_MAX {
-                let msg = format!(
+                bail!(
                     "Integration weight length ({}) exceeds the maximum supported by SHFQA ({})",
                     weight_length,
                     INTEGRATION_WEIGHT_MAX_LENGTH * DOWNSAMPLING_FACTOR_SHFQA_MAX
                 );
-                return Err(Error::new(&msg));
             }
             common_downsampling_factor = common_downsampling_factor.max(downsampling_factor);
         }

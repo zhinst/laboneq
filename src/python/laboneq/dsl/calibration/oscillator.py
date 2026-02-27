@@ -51,8 +51,11 @@ class Oscillator:
             while the choice SOFTWARE will lead to waveform being modulated in software
             before upload to the instruments.
             The default, `ModulationType.AUTO`, resolves to `HARDWARE` in most situations,
-            except for i) QA instruments in integration mode without LRT support
-            or ii) RF channels on HDAWGs, where it resolves to `SOFTWARE`.
+            except for i) QA instruments in integration mode with short
+            (<= 4096 samples) acquisitions, or ii) RF channels on HDAWGs,
+            where it resolves to `SOFTWARE`. For QA instruments with the LRT
+            option and acquisition lengths exceeding 4096 samples, `AUTO`
+            resolves to `HARDWARE`.
         carrier_type (CarrierType):
             Deprecated. The carrier type is no longer used. Default: `CarrierType.RF`.
 

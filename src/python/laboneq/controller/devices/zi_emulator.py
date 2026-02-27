@@ -720,7 +720,8 @@ class DevEmuUHFQA(DevEmuHW):
 
     def _awg_enable(self, node: NodeBase):
         self._armed_awg = node.value != 0
-        self._set_val("awgs/0/sequencer/status", 4 if self._armed_awg else 0)
+        # Theoretically 4 (waiting for trigger), but hardware reports 1, so we follow
+        self._set_val("awgs/0/sequencer/status", 1 if self._armed_awg else 0)
 
     def _awg_ready(self):
         self._set_val("awgs/0/ready", 1)

@@ -5,7 +5,7 @@ use codegenerator::ir::compilation_job::{DeviceKind, MixerType, SignalKind};
 use pyo3::prelude::*;
 
 #[allow(clippy::upper_case_acronyms)]
-#[pyclass(name = "SignalType", eq)]
+#[pyclass(name = "SignalType", eq, skip_from_py_object)]
 #[derive(PartialEq, Clone)]
 pub(crate) enum SignalTypePy {
     IQ,
@@ -24,7 +24,7 @@ impl SignalTypePy {
 }
 
 #[allow(clippy::upper_case_acronyms)]
-#[pyclass(name = "DeviceType", eq)]
+#[pyclass(name = "DeviceType", eq, skip_from_py_object)]
 #[derive(PartialEq, Clone)]
 pub(crate) enum DeviceTypePy {
     HDAWG,
@@ -45,7 +45,7 @@ impl DeviceTypePy {
 }
 
 #[allow(clippy::upper_case_acronyms)]
-#[pyclass(name = "MixerType", eq)]
+#[pyclass(name = "MixerType", eq, skip_from_py_object)]
 #[derive(PartialEq, Clone)]
 pub(crate) enum MixerTypePy {
     /// Mixer performs full complex modulation

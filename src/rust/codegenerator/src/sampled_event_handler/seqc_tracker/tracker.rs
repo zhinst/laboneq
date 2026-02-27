@@ -11,7 +11,7 @@ use super::{
 };
 use crate::ir::compilation_job::{AwgKind, ChannelIndex, DeviceKind};
 use crate::{Result, ir::Samples};
-use anyhow::anyhow;
+use laboneq_error::{bail, laboneq_error};
 use std::cell::RefCell;
 use std::ops::DerefMut;
 use std::rc::Rc;
@@ -312,7 +312,7 @@ impl SeqCTracker {
         if let Some(SeqCVariant::Integer(lat)) = &latency
             && *lat < 31
         {
-            return Err(anyhow!("Latency must be >= 31 if specified, was {lat}").into());
+            bail!("Latency must be >= 31 if specified, was {lat}");
         }
         self.current_loop_stack_generator()
             .borrow_mut()
@@ -362,7 +362,7 @@ impl SeqCTracker {
             None => seqc_generator_from_device_traits(self.device_kind.traits(), &self.signal_type),
         };
         let top_of_stack = self.loop_stack_generators.last_mut().ok_or_else(|| {
-            anyhow!("Loop stack should not be empty in append_loop_stack_generator")
+            laboneq_error!("Loop stack should not be empty in append_loop_stack_generator")
         })?;
         if always
             || top_of_stack.is_empty()
@@ -373,7 +373,7 @@ impl SeqCTracker {
             top_of_stack.push(Rc::new(RefCell::new(generator)));
         }
         top_of_stack.last().map(Rc::clone).ok_or_else(|| {
-            anyhow!("Loop stack should not be empty after appending generator").into()
+            laboneq_error!("Loop stack should not be empty after appending generator")
         })
     }
 

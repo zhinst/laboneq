@@ -9,7 +9,6 @@ from enum import Enum, auto
 from numpy.typing import ArrayLike
 
 from laboneq.data import EnumReprMixin
-from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.data.setup_description import ReferenceClockSource
 
 # Added when SHFQC is split into virtual SHFSG & SHFQA
@@ -93,9 +92,3 @@ class TargetSetup:
     uid: str = None
     servers: list[TargetServer] = field(default_factory=list)
     devices: list[TargetDevice] = field(default_factory=list)
-
-
-@dataclass
-class ExecutionPayload:
-    target_setup: TargetSetup = None
-    scheduled_experiment: ScheduledExperiment | None = None

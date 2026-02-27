@@ -184,10 +184,15 @@ def calc_wave_replacements(
         _logger.warning("No mapping found for pulse '%s' - ignoring", eff_pulse_uid)
         return []
 
-    for waveform in pm.waveforms.values():
+    for sig_string, waveform in pm.waveforms.items():
         if any([instance.can_compress for instance in waveform.instances]):
             raise LabOneQException(
                 f"Pulse replacement is not allowed for pulses that support compression. Pulse '{eff_pulse_uid}'."
+            )
+        wave = artifacts.waves.get(sig_string + ".wave")
+        if wave is not None and wave.hold_start is not None:
+            raise LabOneQException(
+                f"Pulse replacement is not allowed for long readout pulses. Pulse '{eff_pulse_uid}'."
             )
 
     replacements: list[WaveReplacement] = []

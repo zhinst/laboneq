@@ -344,7 +344,7 @@ class Section:
 
         Arguments:
             signal: Unique identifier of the signal where the delay should be applied.
-            time: Duration of the delay.
+            time: Duration of the delay (in seconds).
             precompensation_clear: Clear the precompensation filter during the delay.
         """
         self.add(

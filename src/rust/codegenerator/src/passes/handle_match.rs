@@ -1,23 +1,23 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_error::bail;
+
+use crate::Result;
 use crate::ir::{IrNode, NodeKind};
-use crate::{Error, Result};
 
 fn handle_match(node: &IrNode, state: Option<u16>) -> Result<()> {
     let state = match node.data() {
         NodeKind::Case(ob) => {
             if state.is_some() {
-                return Err(Error::new("Match cases cannot be nested."));
+                bail!("Match cases cannot be nested.");
             }
             Some(ob.state)
         }
         NodeKind::Section(_) => None,
         _ => {
             if state.is_some() && node.has_children() {
-                return Err(Error::new(
-                    "No special sections permitted inside 'case()' blocks.",
-                ));
+                bail!("No special sections permitted inside 'case()' blocks.",);
             }
             None
         }

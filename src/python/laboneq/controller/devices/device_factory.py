@@ -20,8 +20,16 @@ class DeviceFactory:
 
     @classmethod
     def register_device(cls, driver: str, dev_class: type[DeviceZI]):
-        assert driver not in cls._registered_devices
-        cls._registered_devices[driver] = dev_class
+        driver_key = driver.upper()
+        existing = cls._registered_devices.get(driver_key)
+        if existing is not None:
+            if existing is dev_class:
+                return
+            raise LabOneQControllerException(
+                f"Device driver {driver_key} already registered with {existing!r}, "
+                f"cannot re-register with {dev_class!r}"
+            )
+        cls._registered_devices[driver_key] = dev_class
 
     @classmethod
     def create(

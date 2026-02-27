@@ -344,9 +344,10 @@ class OpenQASMTranspiler:
                     programs of up to a few 100 microseconds. `nt` is the slowest.
 
                 **add_reset**:
-                    If `True`, an active reset operation is added to the beginning of each program.
+                    If `True`, a reset operation for each qubit is added to the beginning of each program.
 
-                    Note: Requires `reset(qubit)` operation to be defined for each qubit.
+                    Note: Requires a `reset(qubit)` operation to be defined in the `QuantumOperations`
+                    of the `QPU`.
 
                 **add_measurement**:
                     If `True`, add measurement at the end of each program for all qubits used.

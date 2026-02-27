@@ -8,7 +8,8 @@ import warnings
 from laboneq._version import get_version
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.data.scheduled_experiment import ScheduledExperiment
-from laboneq.serializers.base import LabOneQClassicSerializer, VersionedClassSerializer
+from laboneq.serializers._legacy import LabOneQClassicSerializer
+from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.core import from_dict, to_dict
 from laboneq.serializers.implementations._models._compiled_experiment import (
     ScheduledExperimentModel,
@@ -36,9 +37,11 @@ class CompiledExperimentSerializer(VersionedClassSerializer[CompiledExperiment])
         device_setup = to_dict(obj.device_setup, options)
         experiment = to_dict(obj.experiment, options)
         experiment_dict = to_dict(obj.experiment_dict, options)
-        scheduled_experiment = _converter.unstructure(
-            obj.scheduled_experiment, ScheduledExperimentModel
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            scheduled_experiment = _converter.unstructure(
+                obj.scheduled_experiment, ScheduledExperimentModel
+            )
         return {
             "__serializer__": cls.serializer_id(),
             "__version__": cls.version(),
@@ -88,10 +91,13 @@ class CompiledExperimentSerializer(VersionedClassSerializer[CompiledExperiment])
         experiment_dict = from_dict(
             serialized_data["__data__"]["experiment_dict"], options
         )
-        scheduled_experiment = _converter.structure(
-            serialized_data["__data__"]["scheduled_experiment"],
-            ScheduledExperimentModel,
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            scheduled_experiment = _converter.structure(
+                serialized_data["__data__"]["scheduled_experiment"],
+                ScheduledExperimentModel,
+            )
+
         return CompiledExperiment(
             device_setup=device_setup,
             experiment=experiment,
@@ -116,7 +122,9 @@ class ScheduledExperimentSerializer(VersionedClassSerializer[ScheduledExperiment
     def to_dict(
         cls, obj: ScheduledExperiment, options: SerializationOptions | None = None
     ) -> JsonSerializableType:
-        scheduled_experiment = _converter.unstructure(obj, ScheduledExperimentModel)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            scheduled_experiment = _converter.unstructure(obj, ScheduledExperimentModel)
         return {
             "__serializer__": cls.serializer_id(),
             "__version__": cls.version(),
@@ -149,7 +157,7 @@ class ScheduledExperimentSerializer(VersionedClassSerializer[ScheduledExperiment
                 warnings.warn(_mismatch, UserWarning, stacklevel=2)
 
     @classmethod
-    def from_dict_v2(
+    def from_dict_v1(
         cls,
         serialized_data: JsonSerializableType,
         options: DeserializationOptions | None = None,
@@ -157,8 +165,10 @@ class ScheduledExperimentSerializer(VersionedClassSerializer[ScheduledExperiment
         assert isinstance(serialized_data, dict)
         cls._check_laboneq_version(serialized_data.get("__laboneq_version__"), options)
 
-        scheduled_experiment = _converter.structure(
-            serialized_data["__data__"],
-            ScheduledExperimentModel,
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            scheduled_experiment = _converter.structure(
+                serialized_data["__data__"],
+                ScheduledExperimentModel,
+            )
         return scheduled_experiment

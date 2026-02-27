@@ -6,6 +6,16 @@ use std::ops::RangeInclusive;
 use crate::types::DeviceKind;
 use laboneq_units::duration::{Duration, Frequency, Hertz, Second, hertz, seconds};
 
+/// Default lead times for various devices and setups
+pub const DEFAULT_HDAWG_LEAD_PQSC: Duration<Second> = seconds(80e-9);
+pub const DEFAULT_HDAWG_LEAD_PQSC_2GHZ: Duration<Second> = seconds(80e-9);
+pub const DEFAULT_HDAWG_LEAD_DESKTOP_SETUP: Duration<Second> = seconds(20e-9); // PW 2022-09-21, dev2806, FPGA 68366, dev8047, FPGA 68666 & 68603
+pub const DEFAULT_HDAWG_LEAD_DESKTOP_SETUP_2GHZ: Duration<Second> = seconds(24e-9);
+pub const DEFAULT_UHFQA_LEAD_PQSC: Duration<Second> = seconds(80e-9);
+pub const DEFAULT_SHFQA_LEAD_PQSC: Duration<Second> = seconds(80e-9);
+pub const DEFAULT_SHFSG_LEAD_PQSC: Duration<Second> = seconds(80e-9);
+pub const DEFAULT_TESTDEVICE_LEAD: Duration<Second> = seconds(1200e-9);
+
 /// Commonly used device traits
 pub struct DeviceTraits {
     pub channels_per_awg: u16,
@@ -19,6 +29,7 @@ pub struct DeviceTraits {
     pub integration_dsp_latency: Option<Duration<Second>>,
     /// Granularity of port delay settings in number of samples
     pub port_delay_granularity: u8,
+    pub supports_precompensation: bool,
 }
 
 impl DeviceTraits {
@@ -52,6 +63,7 @@ pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     lo_frequency_range: None,
     integration_dsp_latency: None,
     port_delay_granularity: 1,
+    supports_precompensation: true,
 };
 
 pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -65,6 +77,7 @@ pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     lo_frequency_range: None,
     integration_dsp_latency: None,
     port_delay_granularity: 4,
+    supports_precompensation: false,
 };
 
 pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
@@ -78,6 +91,7 @@ pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     lo_frequency_range: Some(hertz(1e9)..=hertz(8.5e9)),
     integration_dsp_latency: None,
     port_delay_granularity: 1,
+    supports_precompensation: false,
 };
 
 pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -91,6 +105,7 @@ pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     lo_frequency_range: Some(hertz(1e9)..=hertz(8.5e9)),
     integration_dsp_latency: Some(seconds(212e-9)),
     port_delay_granularity: 4,
+    supports_precompensation: false,
 };
 
 pub const PRETTYPRINTERDEVICE_TRAITS: DeviceTraits = DeviceTraits {
@@ -104,4 +119,5 @@ pub const PRETTYPRINTERDEVICE_TRAITS: DeviceTraits = DeviceTraits {
     lo_frequency_range: None,
     integration_dsp_latency: None,
     port_delay_granularity: 0, // Not applicable
+    supports_precompensation: true,
 };

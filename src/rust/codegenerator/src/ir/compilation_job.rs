@@ -1,9 +1,9 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::anyhow;
+use laboneq_error::{LabOneQError, laboneq_error};
 use numeric_array::NumericArray;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use crate::utils::normalize_f64;
 pub type Samples = i64;
 pub type ChannelIndex = u8;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DeviceUid(Arc<String>);
 
 impl Deref for DeviceUid {
@@ -129,17 +129,19 @@ impl Signal {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AwgKind {
-    /// Only one channel is played
+    /// Only one RF channel is played on HDAWG
     SINGLE,
-    /// Two independent channels
+    /// Two independent RF channels on HDAWG
     DOUBLE,
-    /// Two channels form an I/Q signal
+    /// HDAWG / UHFQA: Two channels form an I/Q signal
+    /// SHFQA: Can contain both generator and acquisition signals
+    /// SHFSG: Only generator signals
     IQ,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct AwgKey {
     device_name: DeviceUid,
     index: u16,
@@ -189,6 +191,7 @@ pub enum TriggerMode {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct AwgCore {
     pub uid: u16,
     pub kind: AwgKind,
@@ -207,7 +210,6 @@ impl AwgCore {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         uid: u16,
-        kind: AwgKind,
         signals: Vec<Arc<Signal>>,
         sampling_rate: f64,
         device: Arc<Device>,
@@ -217,13 +219,35 @@ impl AwgCore {
     ) -> Self {
         AwgCore {
             uid,
-            kind,
+            kind: Self::eval_awg_kind(&device.kind, &signals),
             signals,
             sampling_rate,
             device,
             osc_allocation,
             trigger_mode: trigger_mode.unwrap_or(TriggerMode::ZSync),
             is_reference_clock_internal,
+        }
+    }
+
+    fn eval_awg_kind(device_kind: &DeviceKind, signals: &[Arc<Signal>]) -> AwgKind {
+        if device_kind == &DeviceKind::HDAWG {
+            match &signals.first().unwrap().kind {
+                SignalKind::IQ => AwgKind::IQ,
+                SignalKind::SINGLE => {
+                    let unique_channels = signals
+                        .iter()
+                        .flat_map(|s| &s.channels)
+                        .collect::<HashSet<_>>();
+                    if unique_channels.len() == 2 {
+                        AwgKind::DOUBLE
+                    } else {
+                        AwgKind::SINGLE
+                    }
+                }
+                _ => panic!("HDAWG supports only IQ or SINGLE signals."),
+            }
+        } else {
+            AwgKind::IQ
         }
     }
 
@@ -299,15 +323,15 @@ impl DeviceKind {
     }
 }
 impl std::str::FromStr for DeviceKind {
-    type Err = anyhow::Error;
+    type Err = LabOneQError;
 
-    fn from_str(s: &str) -> Result<DeviceKind, anyhow::Error> {
+    fn from_str(s: &str) -> Result<DeviceKind, Self::Err> {
         match s.to_uppercase().as_str() {
             "HDAWG" => Ok(DeviceKind::HDAWG),
             "SHFQA" => Ok(DeviceKind::SHFQA),
             "SHFSG" => Ok(DeviceKind::SHFSG),
             "UHFQA" => Ok(DeviceKind::UHFQA),
-            _ => Err(anyhow!(
+            _ => Err(laboneq_error!(
                 "Unsupported device type: {s}. Supported types are: SHFQA, SHFSG, HDAWG, UHFQA"
             )),
         }

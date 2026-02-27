@@ -7,7 +7,8 @@ import logging
 from typing import Any
 
 from laboneq.dsl.device.device_setup import DeviceSetup
-from laboneq.serializers.base import LabOneQClassicSerializer, VersionedClassSerializer
+from laboneq.serializers._legacy import LabOneQClassicSerializer
+from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.implementations._models._calibration import (
     remove_high_pass_clearing,
 )

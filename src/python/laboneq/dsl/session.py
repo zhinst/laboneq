@@ -8,14 +8,13 @@ import sys
 import warnings
 from copy import deepcopy
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, NoReturn, Union
-
-from numpy import typing as npt
+from typing import Any, Callable, Dict, NoReturn, Union
 
 from laboneq import laboneq_logging
 from laboneq.controller import Controller
+from laboneq.controller.runtime_context_impl import LegacySessionData
 from laboneq.controller.toolkit_adapter import ToolkitDevices
-from laboneq.core.exceptions import AbortExecution, LabOneQException
+from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types import CompiledExperiment
 from laboneq.core.utilities.environment import is_testing
 from laboneq.core.utilities.laboneq_compile import laboneq_compile
@@ -30,10 +29,6 @@ from laboneq.dsl.result import Results
 from laboneq.implementation.legacy_adapters.converters_target_setup import (
     convert_dsl_to_target_setup,
 )
-
-if TYPE_CHECKING:
-    from laboneq.dsl.experiment.pulse import Pulse
-
 
 _logger = logging.getLogger(__name__)
 
@@ -317,7 +312,6 @@ class Session:
             target_setup=target_setup,
             ignore_version_mismatch=ignore_version_mismatch,
             neartime_callbacks=self._neartime_callbacks,
-            parent_session=self,
         )
         controller.start()
         controller.connect(
@@ -352,13 +346,8 @@ class Session:
         self._connection_state.connected = False
         if self._controller is not None:
             if sys.is_finalizing():
-                # logging is not available anymore, using plain print.
-                print("""
-======================================================================================
-Warning: attempted to disconnect a LabOneQ session during Python interpreter shutdown.
-To avoid this warning, ensure the session is properly disconnected in your program.
-======================================================================================
-""")
+                # Not much we can do here. The OS is going to clean up after us.
+                pass
             else:
                 self._controller.disconnect()
         self._controller = None
@@ -506,6 +495,15 @@ To avoid this warning, ensure the session is properly disconnected in your progr
 
         self._last_results = None
         handle = None
+        # TODO: Remove _legacy_session_data tests once the RuntimeContext endpoints are removed
+        legacy_session_data = LegacySessionData(
+            experiment=self.experiment,
+            experiment_calibration=self.experiment_calibration,
+            signal_map=self.signal_map,
+            device_setup=self.device_setup,
+            device_calibration=self.device_calibration,
+        )
+        controller.set_legacy_session_data(legacy_session_data)
         try:
             handle = controller.submit_compiled(
                 self.compiled_experiment.scheduled_experiment
@@ -580,41 +578,6 @@ To avoid this warning, ensure the session is properly disconnected in your progr
         else:
             return queue("", self.compiled_experiment, self.device_setup)
 
-    def replace_pulse(
-        self, pulse_uid: str | Pulse, pulse_or_array: npt.ArrayLike | Pulse
-    ):
-        """
-        Replaces a specific pulse with new sample data on the device.
-
-        This is useful when called from within a near-time callback, and allows fast
-        waveform replacement within near-time loops without recompilation of the experiment.
-
-        Args:
-            pulse_uid: Pulse to replace, can be a Pulse object or the UID of the pulse.
-            pulse_or_array:
-                Replacement pulse, can be a Pulse object or array of values.
-                Needs to have the same length as the pulse it replaces.
-        """
-        _requires_neartime_callback()
-
-    def replace_phase_increment(
-        self,
-        parameter_uid: str,
-        new_value: int | float,
-    ):
-        """Replace the value of a parameter that drives phase increments value.
-
-        If the parameter spans multiple iterations of a loop, it will replace the
-        parameter by the same value in _all_ the iterations.
-
-
-        Args:
-            parameter_uid: The name of the parameter to replace.
-            new_value: The new replacement value.
-
-        """
-        _requires_neartime_callback()
-
     def get_results(self) -> Results:
         """
         Returns a deep copy of the result of the last experiment execution.
@@ -656,7 +619,11 @@ To avoid this warning, ensure the session is properly disconnected in your progr
         """
         Object holding the calibration of the experiment.
         """
-        return self._experiment_definition.get_calibration()
+        return (
+            self._experiment_definition.get_calibration()
+            if self._experiment_definition
+            else None
+        )
 
     @experiment_calibration.setter
     def experiment_calibration(self, value):
@@ -670,7 +637,11 @@ To avoid this warning, ensure the session is properly disconnected in your progr
         """
         Dict holding the signal mapping.
         """
-        return self._experiment_definition.get_signal_map()
+        return (
+            self._experiment_definition.get_signal_map()
+            if self._experiment_definition
+            else None
+        )
 
     @signal_map.setter
     def signal_map(self, value):
@@ -691,7 +662,7 @@ To avoid this warning, ensure the session is properly disconnected in your progr
         """
         Object holding the calibration of the device setup.
         """
-        return self._device_setup.get_calibration()
+        return self._device_setup.get_calibration() if self._device_setup else None
 
     @device_calibration.setter
     def device_calibration(self, value):
@@ -729,17 +700,3 @@ To avoid this warning, ensure the session is properly disconnected in your progr
             "experiment": Experiment,
             "_last_results": Results,
         }
-
-    def abort_execution(self):
-        """Abort the execution of an experiment.
-
-        !!! note
-
-            This currently exclusively works when called from within a near-time callback.
-            The function does not return, and instead passes control directly back to the
-            LabOne Q runtime.
-
-        """
-        raise AbortExecution(
-            "Experiment execution can only be aborted from within a near-time callback"
-        )

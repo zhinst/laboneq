@@ -1,26 +1,24 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use codegenerator::ir::compilation_job::AwgCore;
+use codegenerator::AwgInfo;
 use laboneq_common::named_id::NamedIdStore;
+use laboneq_common::named_id::resolve_ids;
+use laboneq_error::LabOneQError;
 use laboneq_py_utils::experiment_ir::ExperimentIrPy;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyo3::types::PyList;
 use pyo3::wrap_pyfunction;
-use std::vec;
 use waveform_sampler::PlayHoldPy;
 use waveform_sampler::PlaySamplesPy;
 mod py_conversions;
 use codegenerator::generate_code;
-mod awg_processor;
 mod common_types;
 mod ir_compat;
 mod result;
 mod settings;
 
-use crate::error::Result;
-use crate::error::error_to_pyerr;
 use crate::ir_compat::ir_to_code_compat;
 use crate::py_conversions::extract_awg;
 use crate::result::FeedbackRegisterConfigPy;
@@ -28,21 +26,13 @@ use crate::result::MeasurementPy;
 use crate::result::ResultSourcePy;
 use crate::settings::code_generator_settings_from_dict;
 use crate::waveform_sampler::WaveformSamplerPy;
-use awg_processor::process_awgs;
 use result::{AwgCodeGenerationResultPy, SampledWaveformPy, SeqCGenOutputPy};
 
-mod error;
 mod waveform_sampler;
 
-fn transform_awg_cores(awgs: &Bound<PyList>, id_store: &NamedIdStore) -> PyResult<Vec<AwgCore>> {
-    let mut awg_cores = vec![];
-    for awg in awgs.try_iter()? {
-        let mut awg = extract_awg(&awg?, id_store)?;
-        // Sort the signals for deterministic ordering
-        awg.signals.sort_by(|a, b| a.channels.cmp(&b.channels));
-        awg_cores.push(awg);
-    }
-    Ok(awg_cores)
+/// Convert LabOneQError to PyErr, while resolving [`NamedId`]s
+pub(crate) fn to_pyerr(error: LabOneQError, id_store: &NamedIdStore) -> PyErr {
+    error.to_pyerr(|s| resolve_ids(&s, id_store))
 }
 
 #[pyfunction(name = "generate_code")]
@@ -57,17 +47,13 @@ fn generate_code_py(
 ) -> PyResult<SeqCGenOutputPy> {
     let id_store = &ir_experiment.inner.id_store;
     let settings = code_generator_settings_from_dict(settings)?;
-    let mut awg_cores = transform_awg_cores(awgs, id_store)?;
-    // NOTE: We must mutate signals before creating the nodes as after that they are immutable due
-    // to Arc signal shared across nodes.
-    // TODO: Refactor tree to have only pointers to signals and not own them.
-    process_awgs(&mut awg_cores);
-    let signals = awg_cores
-        .iter()
-        .flat_map(|awg| awg.signals.iter())
-        .collect::<Vec<_>>();
-    let compat =
-        ir_to_code_compat(ir_experiment, &signals).map_err(|e| error_to_pyerr(e, id_store))?;
+
+    let awg_infos = awgs
+        .try_iter()?
+        .map(|awg| extract_awg(&awg.unwrap(), id_store).unwrap())
+        .collect::<Vec<AwgInfo>>();
+
+    let compat = ir_to_code_compat(ir_experiment, awg_infos).map_err(|e| to_pyerr(e, id_store))?;
     let sampler = WaveformSamplerPy::new(
         py,
         &ir_experiment.pulses,
@@ -80,13 +66,13 @@ fn generate_code_py(
         .detach(|| {
             generate_code(
                 &compat.root,
-                awg_cores,
+                compat.awg_cores,
                 compat.acquisition_type,
                 settings,
                 &sampler,
             )
         })
-        .map_err(|e| error_to_pyerr(e, id_store))?;
+        .map_err(|e| to_pyerr(e, id_store))?;
     Python::attach(|py| {
         let result = SeqCGenOutputPy::new(py, result, id_store);
         Ok(result)

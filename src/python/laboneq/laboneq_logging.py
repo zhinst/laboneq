@@ -19,6 +19,19 @@ _log_dir = os.path.join("laboneq_output", "log")
 _logging_initialized = False
 _laboneq_showwarning = None
 
+_additional_logger_namespaces: list[str] = []
+
+
+def register_logger_namespace(namespace: str) -> None:
+    """Register a logger namespace to receive the same handlers as 'laboneq'.
+
+    Backend plugins should call this during registration so that when
+    ``initialize_logging()`` runs, their loggers automatically receive
+    the same handlers as the main ``laboneq`` logger.
+    """
+    if namespace not in _additional_logger_namespaces:
+        _additional_logger_namespaces.append(namespace)
+
 
 def set_log_dir(dir):
     global _log_dir
@@ -266,6 +279,13 @@ def initialize_logging(
         logging.getLogger("laboneq").setLevel(log_level)
 
     capture_warnings(warnings)
+
+    laboneq_logger = logging.getLogger("laboneq")
+    for ns in _additional_logger_namespaces:
+        ns_logger = logging.getLogger(ns)
+        for handler in laboneq_logger.handlers:
+            if handler not in ns_logger.handlers:
+                ns_logger.addHandler(handler)
 
     _logger.info(
         "Logging initialized from [%s] logdir is %s",

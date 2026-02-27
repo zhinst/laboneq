@@ -1,6 +1,8 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_error::bail;
+
 use crate::Result;
 use crate::ir;
 use crate::ir::compilation_job::{self as cjob};
@@ -110,7 +112,7 @@ impl<'a> FrameChangeTracker<'a> {
         node_offset: ir::Samples,
         phase: f64,
         parameter: &mut Option<String>,
-    ) -> Result<bool, anyhow::Error> {
+    ) -> Result<bool> {
         let Some(wf) = self.current_waveform.get_mut(state) else {
             match state {
                 Some(s) => panic!("Internal error: no waveform found for case-branch {s}."),
@@ -162,11 +164,12 @@ impl<'a> FrameChangeTracker<'a> {
             if !FrameChangeTracker::point_inside_range(&wf_range, node_offset) {
                 return Ok(false);
             }
-            let msg = format!(
+            bail!(
                 "Cannot increment oscillator '{}' of signal '{}': the line is occupied by '{}'",
-                uid, signal.uid.0, wf_osc
+                uid,
+                signal.uid.0,
+                wf_osc
             );
-            anyhow::bail!(msg);
         }
         // Change timing to relative for comparison
         let offset_fc = node_offset - wf_start;

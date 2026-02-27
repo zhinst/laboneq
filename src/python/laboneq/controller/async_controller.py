@@ -13,6 +13,7 @@ from laboneq.controller.controller_api import (
     SubmissionStatus,
 )
 from laboneq.controller.devices.device_collection import DEFAULT_TIMEOUT_S
+from laboneq.controller.runtime_context_impl import LegacySessionData
 from laboneq.controller.utilities.exception import LabOneQControllerException
 
 if TYPE_CHECKING:
@@ -20,9 +21,6 @@ if TYPE_CHECKING:
     from laboneq.data.execution_payload import TargetSetup
     from laboneq.data.experiment_results import ExperimentResults
     from laboneq.data.scheduled_experiment import ScheduledExperiment
-
-
-class AsyncSession: ...
 
 
 class AsyncController(ControllerAPI):
@@ -41,12 +39,10 @@ class AsyncController(ControllerAPI):
         """Create an instance of the AsyncController."""
         if timeout_s is None:
             timeout_s = DEFAULT_TIMEOUT_S
-        async_session = AsyncSession()
         controller = Controller(
             target_setup=target_setup,
             ignore_version_mismatch=ignore_version_mismatch,
             neartime_callbacks=neartime_callbacks,
-            parent_session=async_session,
         )
         await controller._connect_async(
             do_emulation=do_emulation,
@@ -54,17 +50,17 @@ class AsyncController(ControllerAPI):
             disable_runtime_checks=disable_runtime_checks,
             timeout_s=timeout_s,
         )
-        return AsyncController(async_session=async_session, controller=controller)
+        return AsyncController(controller=controller)
 
     def __init__(
         self,
-        async_session: AsyncSession,
         controller: Controller,
     ):
         # Keep reference to avoid garbage collection
-        self._async_session = async_session
         self._controller = controller
         self._submissions: dict[int, ControllerSubmission] = {}
+        # TODO: Remove _legacy_session_data tests once the RuntimeContext endpoints are removed
+        self._legacy_session_data = LegacySessionData(None, None, None, None, None)
 
     def _submission(self, handle: SubmissionHandle) -> ControllerSubmission:
         submission = self._submissions.get(handle.id)
@@ -88,6 +84,8 @@ class AsyncController(ControllerAPI):
         self, scheduled_experiment: ScheduledExperiment
     ) -> SubmissionHandle:
         handle = SubmissionHandle()
+        # TODO: Remove _legacy_session_data tests once the RuntimeContext endpoints are removed
+        self._controller.set_legacy_session_data(self._legacy_session_data)
         self._submissions[handle.id] = await self._controller._submit_compiled_async(
             scheduled_experiment=scheduled_experiment,
         )
@@ -124,3 +122,8 @@ class AsyncController(ControllerAPI):
     async def close_submission(self, handle: SubmissionHandle):
         await self.cancel_submission(handle)
         self._submissions.pop(handle.id)
+
+    # TODO: Remove _legacy_session_data tests once the RuntimeContext endpoints are removed
+    def set_legacy_session_data(self, legacy_session_data: LegacySessionData):
+        self._legacy_session_data = legacy_session_data
+        self._controller.set_legacy_session_data(legacy_session_data)

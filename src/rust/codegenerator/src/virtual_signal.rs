@@ -1,8 +1,8 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::anyhow;
 use indexmap::IndexMap;
+use laboneq_error::bail;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -78,11 +78,11 @@ fn validate_signal_oscillators(signal: &VirtualSignal, awg: &AwgCore) -> Result<
             {
                 let mut signals = hw_modulated_signals[subchannel].iter().collect::<Vec<_>>();
                 signals.sort();
-                let err_msg = format!(
+                bail!(
                     "Attempting to multiplex HW-modulated signal(s) ({}) with signal that is not HW modulated ({}).",
-                    signals[0].0, channel.uid.0
+                    signals[0].0,
+                    channel.uid.0
                 );
-                return Err(anyhow!(err_msg).into());
             }
             sw_modulated_signals
                 .entry(*subchannel)
@@ -92,11 +92,11 @@ fn validate_signal_oscillators(signal: &VirtualSignal, awg: &AwgCore) -> Result<
             if sw_modulated_signals.contains_key(subchannel)
                 && let Some(sw_modulated_signal) = sw_modulated_signals[subchannel].first()
             {
-                let err_msg = format!(
+                bail!(
                     "Attempting to multiplex SW-modulated signal(s) ({}) with signal that is not SW modulated ({}).",
-                    channel.uid.0, sw_modulated_signal.0
+                    channel.uid.0,
+                    sw_modulated_signal.0
                 );
-                return Err(anyhow!(err_msg).into());
             }
             hw_modulated_signals
                 .entry(*subchannel)
@@ -125,7 +125,7 @@ fn validate_signal_oscillators(signal: &VirtualSignal, awg: &AwgCore) -> Result<
         hw_modulated_signals
     };
     signals.sort();
-    let msg = format!(
+    bail!(
         "Attempting to multiplex several hardware-modulated signals: \
                 '{}' on device '{}', which does not support oscillator switching.",
         signals
@@ -135,7 +135,6 @@ fn validate_signal_oscillators(signal: &VirtualSignal, awg: &AwgCore) -> Result<
             .join(", "),
         awg.device_kind().as_str()
     );
-    Err(anyhow!(msg).into())
 }
 
 fn get_signal_channels(signals: &[Arc<Signal>]) -> HashSet<Vec<u8>> {
@@ -154,29 +153,21 @@ fn is_multiplexing(awg: &AwgCore) -> Result<bool> {
         AwgKind::DOUBLE => {
             // Signals of this type have two channels, like 0 and 1 or 4 and 5.
             if channel_sets.len() != 2 {
-                return Err(
-                    anyhow!("DOUBLE signals need two channels. Found: {channel_sets:?}").into(),
-                );
+                bail!("DOUBLE signals need two channels. Found: {channel_sets:?}");
             }
             assert!(is_hdawg, "HDAWG device required for DOUBLE signals");
             Ok(awg.signals.len() > 2)
         }
         AwgKind::SINGLE => {
             if channel_sets.len() != 1 {
-                return Err(anyhow!(
-                    "SINGLE signals need a single channel. Found: {channel_sets:?}"
-                )
-                .into());
+                bail!("SINGLE signals need a single channel. Found: {channel_sets:?}");
             }
             assert!(is_hdawg, "HDAWG device required for SINGLE signals");
             Ok(awg.signals.len() > 1)
         }
         AwgKind::IQ => {
             if !is_shfqa && channel_sets.len() > 1 {
-                return Err(anyhow!(
-                    "IQ signals need a single channel configuration. Found: {channel_sets:?}"
-                )
-                .into());
+                bail!("IQ signals need a single channel configuration. Found: {channel_sets:?}");
             }
             Ok(!is_shfqa && awg.signals.len() > 1)
         }

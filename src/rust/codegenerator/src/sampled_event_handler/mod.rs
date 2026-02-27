@@ -25,8 +25,6 @@ pub use feedback_register_layout::{
 pub(crate) use handler::handle_sampled_events;
 pub use shfppc_sweeper_config::SHFPPCSweeperConfig;
 
-pub(crate) type Result<T, E = anyhow::Error> = std::result::Result<T, E>;
-
 pub(crate) type Samples = i64;
 
 pub(crate) struct SeqcResults {

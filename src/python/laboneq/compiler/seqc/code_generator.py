@@ -16,16 +16,16 @@ from laboneq.compiler.common.compiler_settings import (
     CompilerSettings,
 )
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.iface_code_generator import ICodeGenerator
 from laboneq.compiler.common.integration_times import (
     IntegrationTimes,
     SignalIntegrationInfo,
 )
-from laboneq.compiler.common.resource_usage import ResourceUsage, ResourceUsageCollector
+from laboneq.compiler.common.resource_usage import (
+    ResourceLimitationErrorCollector,
+)
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput, SeqCProgram
-from laboneq.core.types.enums.awg_signal_type import AWGSignalType
 from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.data.awg_info import AWGInfo, AwgKey
 from laboneq.data.scheduled_experiment import (
@@ -66,6 +66,7 @@ class CodeGenerator(ICodeGenerator):
         self._awgs: dict[AwgKey, AWGInfo] = {
             signal.awg.key: signal.awg for signal in signals
         }
+        self._awg_properties: dict[AwgKey, codegen_rs.AwgProperties] = {}
         self._src: dict[AwgKey, SeqCProgram] = {}
         self._wave_indices_all: dict[AwgKey, dict[str, tuple[int, WaveType]]] = {}
         self._waves: dict[str, CodegenWaveform] = {}
@@ -86,7 +87,6 @@ class CodeGenerator(ICodeGenerator):
         self._feedback_register_config: dict[
             AwgKey, codegen_rs.FeedbackRegisterConfig
         ] = {}
-        self._feedback_connections: dict[str, FeedbackConnection] = {}
         self._shfppc_sweep_configs: dict[AwgKey, dict[str, object]] = {}
         self._total_execution_time: float | None = None
         self._measurements: list[codegen_rs.Measurement] = []
@@ -100,7 +100,7 @@ class CodeGenerator(ICodeGenerator):
 
     def get_output(self):
         return SeqCGenOutput(
-            feedback_connections=self.feedback_connections(),
+            awg_properties=self._awg_properties,
             signal_delays=self.signal_delays(),
             integration_weights=self.integration_weights(),
             integration_times=self.integration_times(),
@@ -209,6 +209,7 @@ class CodeGenerator(ICodeGenerator):
             self._awgs.values(), self._integration_weights
         )
         for awg in self._awgs.values():
+            awg_properties = self._awg_properties[awg.key]
             # Handle integration weights separately
             integration_weights = integration_weights_sorted.get(awg.key, {})
             for signal_obj in awg.signals:
@@ -231,115 +232,79 @@ class CodeGenerator(ICodeGenerator):
                         self._save_wave_bin(
                             weight.samples_q, None, weight.basename, "_q"
                         )
-            if awg.signal_type in (AWGSignalType.IQ, AWGSignalType.SINGLE):
-                for sampled_waveform in self._sampled_waveforms.get(awg.key, []):
-                    sampled_signature = sampled_waveform.signature
-                    sig_string = sampled_waveform.signature_string
-                    if awg.device_type.supports_binary_waves:
-                        if awg.signal_type == AWGSignalType.SINGLE:
-                            self._save_wave_bin(
-                                sampled_signature.samples_i,
-                                sampled_signature.pulse_map,
-                                sig_string,
-                                "",
-                            )
-                            if sampled_signature.samples_marker1 is not None:
-                                self._save_wave_bin(
-                                    sampled_signature.samples_marker1,
-                                    sampled_signature.pulse_map,
-                                    sig_string,
-                                    "_marker1",
-                                )
-                            if sampled_signature.samples_marker2 is not None:
-                                self._save_wave_bin(
-                                    sampled_signature.samples_marker2,
-                                    sampled_signature.pulse_map,
-                                    sig_string,
-                                    "_marker2",
-                                )
-                        else:
-                            self._save_wave_bin(
-                                sampled_signature.samples_i,
-                                sampled_signature.pulse_map,
-                                sig_string,
-                                "_i",
-                            )
-                            if sampled_signature.samples_q is not None:
-                                self._save_wave_bin(
-                                    sampled_signature.samples_q,
-                                    sampled_signature.pulse_map,
-                                    sig_string,
-                                    "_q",
-                                )
-                            if sampled_signature.samples_marker1 is not None:
-                                self._save_wave_bin(
-                                    sampled_signature.samples_marker1,
-                                    sampled_signature.pulse_map,
-                                    sig_string,
-                                    "_marker1",
-                                )
-                            if sampled_signature.samples_marker2 is not None:
-                                self._save_wave_bin(
-                                    sampled_signature.samples_marker2,
-                                    sampled_signature.pulse_map,
-                                    sig_string,
-                                    "_marker2",
-                                )
-                    elif awg.device_type.supports_complex_waves:
-                        signal_id = min(sampled_waveform.signals)
+            for sampled_waveform in self._sampled_waveforms.get(awg.key, []):
+                sampled_signature = sampled_waveform.signature
+                sig_string = sampled_waveform.signature_string
+                if awg.device_type.supports_binary_waves:
+                    if awg_properties.signal_type == "SINGLE":
                         self._save_wave_bin(
-                            CodeGenerator.SHFQA_COMPLEX_SAMPLE_SCALING
-                            * (
-                                sampled_signature.samples_i
-                                - 1j * sampled_signature.samples_q
-                            ),
+                            sampled_signature.samples_i,
                             sampled_signature.pulse_map,
                             sig_string,
                             "",
-                            device_id=awg.device_id,
-                            signal_id=signal_id,
-                            hold_start=sampled_signature.hold_start,
-                            hold_length=sampled_signature.hold_length,
                         )
+                        if sampled_signature.samples_marker1 is not None:
+                            self._save_wave_bin(
+                                sampled_signature.samples_marker1,
+                                sampled_signature.pulse_map,
+                                sig_string,
+                                "_marker1",
+                            )
+                        if sampled_signature.samples_marker2 is not None:
+                            self._save_wave_bin(
+                                sampled_signature.samples_marker2,
+                                sampled_signature.pulse_map,
+                                sig_string,
+                                "_marker2",
+                            )
                     else:
-                        raise RuntimeError(
-                            f"Device type {awg.device_type} has invalid supported waves config."
+                        self._save_wave_bin(
+                            sampled_signature.samples_i,
+                            sampled_signature.pulse_map,
+                            sig_string,
+                            "_i",
                         )
-            else:
-                for waveform in self._sampled_waveforms.get(awg.key, []):
-                    if not awg.device_type.supports_binary_waves:
-                        raise RuntimeError(
-                            f"Device type {awg.device_type} has invalid supported waves config."
-                        )
-                    sampled_signature = waveform.signature
-                    sig_string = waveform.signature_string
+                        if sampled_signature.samples_q is not None:
+                            self._save_wave_bin(
+                                sampled_signature.samples_q,
+                                sampled_signature.pulse_map,
+                                sig_string,
+                                "_q",
+                            )
+                        if sampled_signature.samples_marker1 is not None:
+                            self._save_wave_bin(
+                                sampled_signature.samples_marker1,
+                                sampled_signature.pulse_map,
+                                sig_string,
+                                "_marker1",
+                            )
+                        if sampled_signature.samples_marker2 is not None:
+                            self._save_wave_bin(
+                                sampled_signature.samples_marker2,
+                                sampled_signature.pulse_map,
+                                sig_string,
+                                "_marker2",
+                            )
+                elif awg.device_type.supports_complex_waves:
+                    signal_id = min(sampled_waveform.signals)
                     self._save_wave_bin(
-                        sampled_signature.samples_i,
+                        CodeGenerator.SHFQA_COMPLEX_SAMPLE_SCALING
+                        * (
+                            sampled_signature.samples_i
+                            - 1j * sampled_signature.samples_q
+                        ),
                         sampled_signature.pulse_map,
                         sig_string,
-                        "_i",
+                        "",
+                        device_id=awg.device_id,
+                        signal_id=signal_id,
+                        hold_start=sampled_signature.hold_start,
+                        hold_length=sampled_signature.hold_length,
                     )
-                    if sampled_signature.samples_q is not None:
-                        self._save_wave_bin(
-                            sampled_signature.samples_q,
-                            sampled_signature.pulse_map,
-                            sig_string,
-                            "_q",
-                        )
-                    if sampled_signature.samples_marker1 is not None:
-                        self._save_wave_bin(
-                            sampled_signature.samples_marker1,
-                            sampled_signature.pulse_map,
-                            sig_string,
-                            "_marker1",
-                        )
-                    if sampled_signature.samples_marker2 is not None:
-                        self._save_wave_bin(
-                            sampled_signature.samples_marker2,
-                            sampled_signature.pulse_map,
-                            sig_string,
-                            "_marker2",
-                        )
+                else:
+                    raise RuntimeError(
+                        f"Device type {awg.device_type} has invalid supported waves config."
+                    )
 
         # check that there are no duplicate filenames in the wave pool (QCSW-1079)
         waves = sorted(
@@ -351,11 +316,6 @@ class CodeGenerator(ICodeGenerator):
             assert all(np.all(group[0][1] == g[1]) for g in group[1:])
 
     def generate_code(self):
-        awgs_sorted = sorted(
-            self._awgs.values(),
-            key=lambda item: item.key,
-        )
-
         settings: dict[str, bool | int | float] = {
             "HDAWG_MIN_PLAYWAVE_HINT": self._settings.HDAWG_MIN_PLAYWAVE_HINT,
             "HDAWG_MIN_PLAYZERO_HINT": self._settings.HDAWG_MIN_PLAYZERO_HINT,
@@ -371,9 +331,10 @@ class CodeGenerator(ICodeGenerator):
             "USE_AMPLITUDE_INCREMENT": self._settings.USE_AMPLITUDE_INCREMENT,
             "EMIT_TIMING_COMMENTS": self._settings.EMIT_TIMING_COMMENTS,
         }
+
         codegen_result = codegen_rs.generate_code(
             ir_experiment=self._experiment_ir,
-            awgs=awgs_sorted,
+            awgs=list(self._awgs.values()),
             settings=settings,
         )
         self._total_execution_time = codegen_result.total_execution_time
@@ -386,11 +347,14 @@ class CodeGenerator(ICodeGenerator):
         self._measurements = codegen_result.measurements
         self._integration_unit_allocations = codegen_result.integration_unit_allocations
 
-        res_usage_collector: ResourceUsageCollector = ResourceUsageCollector()
-        for idx, awg in enumerate(awgs_sorted):
-            awg_key = awg.key
-            awg_code_output = codegen_result.awg_results[idx]
-            self._channel_properties[awg.device_id].extend(
+        reserr_collector: ResourceLimitationErrorCollector = (
+            ResourceLimitationErrorCollector(compiler_settings=self._settings)
+        )
+        for awg_code_output in codegen_result.awg_results:
+            awg_key = AwgKey(*awg_code_output.awg_properties.key)
+
+            self._awg_properties[awg_key] = awg_code_output.awg_properties
+            self._channel_properties[awg_key.device_id].extend(
                 awg_code_output.channel_properties
             )
             for signal, delay in awg_code_output.signal_delays.items():
@@ -419,17 +383,18 @@ class CodeGenerator(ICodeGenerator):
                     k: [i if i >= 0 else COMPLEX_USAGE for i in v]
                     for k, v in awg_code_output.parameter_phase_increment_map.items()
                 }
-                if number_of_entries > 0 and awg.device_type.max_ct_entries:
-                    res_usage_collector.add(
-                        ResourceUsage(
-                            f"Command table of device '{awg.device_id}', AWG({awg.awg_id})",
-                            number_of_entries / awg.device_type.max_ct_entries,
-                        )
+                awg_info = self._awgs[awg_key]
+                if (
+                    max_ct := awg_info.device_type.max_ct_entries
+                ) and number_of_entries > max_ct:
+                    reserr_collector.add(
+                        f"Command table of device '{awg_key.device_id}', AWG({awg_key.awg_id})",
+                        usage=number_of_entries / max_ct,
                     )
             if awg_code_output.shf_sweeper_config is not None:
                 self._shfppc_sweep_configs[awg_key] = awg_code_output.shf_sweeper_config
 
-        res_usage_collector.raise_or_pass(compiler_settings=self._settings)
+        reserr_collector.raise_or_pass()
 
         for awg_key, seqc_program in self._src.items():
             awg_info = self._awgs[awg_key]
@@ -476,9 +441,6 @@ class CodeGenerator(ICodeGenerator):
     ) -> dict[AwgKey, codegen_rs.FeedbackRegisterConfig]:
         # convert defaultdict to dict
         return dict(self._feedback_register_config)
-
-    def feedback_connections(self) -> dict[str, FeedbackConnection]:
-        return self._feedback_connections
 
     def shfppc_sweep_configs(self) -> dict[AwgKey, dict[str, object]]:
         return self._shfppc_sweep_configs

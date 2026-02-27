@@ -5,6 +5,7 @@ use crate::operation::Operation;
 
 pub mod node;
 pub mod operation;
+pub mod signal_calibration;
 pub mod types;
 
 pub type ExperimentNode = node::Node<Operation>;

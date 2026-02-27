@@ -1,11 +1,11 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::Result;
 use crate::ir::compilation_job::{DeviceKind, Signal};
 use crate::ir::{IrNode, NodeKind, Samples, SectionId, SectionInfo, SignalUid};
 use crate::utils::{samples_to_grid, samples_to_length};
-use crate::{Error, Result};
-use anyhow::Context as AnyhowContext;
+use laboneq_error::{WithContext, bail};
 use laboneq_units::duration;
 use laboneq_units::duration::{Duration, Second};
 use laboneq_units::tinysample::{tiny_samples, tinysamples_to_samples};
@@ -210,7 +210,7 @@ fn validate_measurements(
                 } else {
                     (&next.play, next, &top.play, top)
                 };
-                let msg = format!(
+                bail!(
                     "Measurements in sections {} and {} \
                     overlap but their play operations start at {} and {}. \
                     The readout pulses of overlapping measurements on the same AWG must start at \
@@ -220,7 +220,6 @@ fn validate_measurements(
                     sample_converter.to_seconds(prev_play.start + prev.section_start),
                     sample_converter.to_seconds(next_play.start + next.section_start)
                 );
-                return Err(Error::new(&msg));
             }
             if top.acquire.start != next.acquire.start {
                 // Ensure error message is sorted by start time
@@ -230,7 +229,7 @@ fn validate_measurements(
                     } else {
                         (&next.acquire, next, &top.acquire, top)
                     };
-                let msg = format!(
+                bail!(
                     "Measurements in sections {} and {} \
                     overlap but their acquire operations start at {} and {}. \
                     The acquire operations of overlapping measurements on the same AWG must start at \
@@ -240,7 +239,6 @@ fn validate_measurements(
                     sample_converter.to_seconds(prev_acquire.start + prev.section_start),
                     sample_converter.to_seconds(next_acquire.start + next.section_start)
                 );
-                return Err(Error::new(&msg));
             }
         }
     }
@@ -257,21 +255,23 @@ fn insert_ensure_unique_delays(
         if existing.delay_sequencer != delay.delay_sequencer {
             let mut delays = [existing.delay_sequencer, delay.delay_sequencer];
             delays.sort();
-            return Err(Error::new(format!(
+            bail!(
                 "Cannot resolve measure timing on a signal {} \
                 as it would result in two different delays: {} and {}",
                 signal.0,
                 sample_converter.to_seconds(delays[0]),
                 sample_converter.to_seconds(delays[1])
-            )));
+            );
         } else if existing.delay_port != delay.delay_port {
             let mut delays = [existing.delay_port, delay.delay_port];
             delays.sort();
-            return Err(Error::new(format!(
+            bail!(
                 "Cannot resolve measure timing on a signal {} \
                 as it would result in two different delays: {} and {}",
-                signal.0, delays[0], delays[1]
-            )));
+                signal.0,
+                delays[0],
+                delays[1]
+            );
         }
     } else {
         delays.insert(signal, delay);
@@ -308,18 +308,22 @@ fn calculate_measurement_delays(
                         ),
                     );
                     insert_ensure_unique_delays(&mut delays, *signal, delay, sample_converter)
-                        .context(format!(
-                            "Failed to adjust measurement timing in signal {}",
-                            info.section_info.name
-                        ))?;
+                        .with_context(|| {
+                            format!(
+                                "Failed to adjust measurement timing in signal {}",
+                                info.section_info.name
+                            )
+                        })?;
                 }
                 for signal in &play_info.signals {
                     let delay = SignalDelay::new(0, 0.0);
                     insert_ensure_unique_delays(&mut delays, *signal, delay, sample_converter)
-                        .context(format!(
-                            "Failed to adjust measurement timing in signal {}",
-                            info.section_info.name
-                        ))?;
+                        .with_context(|| {
+                            format!(
+                                "Failed to adjust measurement timing in signal {}",
+                                info.section_info.name
+                            )
+                        })?;
                 }
             }
             DeviceKind::SHFQA => {
@@ -337,10 +341,12 @@ fn calculate_measurement_delays(
                         ),
                     );
                     insert_ensure_unique_delays(&mut delays, *signal, delay, sample_converter)
-                        .context(format!(
-                            "Failed to adjust measurement timing in signal {}",
-                            info.section_info.name
-                        ))?;
+                        .with_context(|| {
+                            format!(
+                                "Failed to adjust measurement timing in signal {}",
+                                info.section_info.name
+                            )
+                        })?;
                 }
                 for signal in &play_info.signals {
                     let delay = SignalDelay::new(
@@ -348,10 +354,12 @@ fn calculate_measurement_delays(
                         samples_to_length(-delay_play, sample_converter.sampling_rate()),
                     );
                     insert_ensure_unique_delays(&mut delays, *signal, delay, sample_converter)
-                        .context(format!(
-                            "Failed to adjust measurement timing in signal {}",
-                            info.section_info.name
-                        ))?;
+                        .with_context(|| {
+                            format!(
+                                "Failed to adjust measurement timing in signal {}",
+                                info.section_info.name
+                            )
+                        })?;
                 }
             }
             _ => {}
@@ -377,15 +385,15 @@ fn build_play_operations<'a>(
     let mut total_end = first_op.end();
     for op in play_operations.iter().skip(1) {
         if signals.contains(&op.signal.uid) {
-            let msg = format!(
+            bail!(
                 "There are multiple '{OPERATION}' operations in section '{}' on signal '{}'. \
                 A section with acquire signals may only contain a single '{OPERATION}' operation per signal.",
-                section_info.name, &op.signal.uid.0
+                section_info.name,
+                &op.signal.uid.0
             );
-            return Err(Error::new(&msg));
         }
         if first_start != op.start {
-            let msg = format!(
+            bail!(
                 "There are multiple '{OPERATION}' operations in section '{}'. \
                 In a section with an acquire, all play signals must start at the same time. \
                 Signal '{}' starts at {}. \
@@ -400,7 +408,6 @@ fn build_play_operations<'a>(
                     .join(", "),
                 sample_converter.to_seconds(first_start)
             );
-            return Err(Error::new(&msg));
         }
         total_end = total_end.max(op.end());
         signals.insert(op.signal.uid);
@@ -429,15 +436,15 @@ fn build_acquire_operations<'a>(
     let mut total_end = first_op.end();
     for op in operations.iter().skip(1) {
         if signals.contains(&op.signal.uid) {
-            let msg = format!(
+            bail!(
                 "There are multiple '{OPERATION}' operations in section '{}' on signal '{}'. \
                 A section with acquire signals may only contain a single '{OPERATION}' operation per signal.",
-                section_info.name, &op.signal.uid.0
+                section_info.name,
+                &op.signal.uid.0
             );
-            return Err(Error::new(&msg));
         }
         if first_start != op.start {
-            let msg = format!(
+            bail!(
                 "There are multiple '{OPERATION}' operations in section '{}'. \
                 In a section with an acquire, all acquire signals must start at the same time. \
                 Signal '{}' starts at {}. \
@@ -452,7 +459,6 @@ fn build_acquire_operations<'a>(
                     .join(", "),
                 sample_converter.to_seconds(first_start)
             );
-            return Err(Error::new(&msg));
         }
         total_end = total_end.max(op.end());
         signals.insert(op.signal.uid);
@@ -533,7 +539,7 @@ fn calculate_integration_times(
             if let Some(previous) = integration_lengths.get(&play_op.signal.uid)
                 && previous.duration != play_length
             {
-                let msg = format!(
+                bail!(
                     "Signal '{}' has two different integration lengths: \
                         '{}' from section '{}' and '{}' from earlier section.",
                     &play_op.signal.uid.0,
@@ -541,7 +547,6 @@ fn calculate_integration_times(
                     measurement.section_info.name,
                     previous.duration
                 );
-                return Err(Error::new(&msg));
             }
             let integration = IntegrationLength {
                 signal: play_op.signal.uid,
@@ -555,7 +560,7 @@ fn calculate_integration_times(
             if let Some(previous) = integration_lengths.get(&acquire_op.signal.uid)
                 && previous.duration != length
             {
-                let msg = format!(
+                bail!(
                     "Signal '{}' has two different integration lengths: \
                         '{}' from section '{}' and '{}' from earlier section.",
                     &acquire_op.signal.uid.0,
@@ -563,7 +568,6 @@ fn calculate_integration_times(
                     measurement.section_info.name,
                     sample_converter.to_seconds(previous.duration),
                 );
-                return Err(Error::new(&msg));
             }
             let integration = IntegrationLength {
                 signal: acquire_op.signal.uid,

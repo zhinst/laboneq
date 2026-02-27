@@ -13,7 +13,7 @@ use laboneq_py_utils::{
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(name = "PulseParameters")]
+#[pyclass(name = "PulseParameters", skip_from_py_object)]
 pub struct PulseParametersPy {
     pub id: PulseParametersId,
     // Original parameters from pulse (Python dictionary)

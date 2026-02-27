@@ -322,7 +322,7 @@ mod tests {
     use laboneq_common::named_id::NamedId;
 
     use super::*;
-    use crate::ir::compilation_job::{AwgKind, Device, DeviceKind, Signal, SignalKind};
+    use crate::ir::compilation_job::{Device, DeviceKind, Signal, SignalKind};
     use crate::ir::{IrNode, Loop, NodeKind, Section, SectionInfo};
 
     struct IrBuilder {
@@ -403,7 +403,6 @@ mod tests {
     fn create_awg_core(signals: Vec<Signal>, device_kind: DeviceKind) -> AwgCore {
         AwgCore::new(
             0,
-            AwgKind::IQ,
             signals.iter().map(|s| Arc::new(s.clone())).collect(),
             2e9,
             Arc::new(Device::new("test_device".to_string().into(), device_kind)),

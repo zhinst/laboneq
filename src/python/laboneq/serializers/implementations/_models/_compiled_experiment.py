@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 import sys
 from enum import Enum
-from typing import Any, ClassVar, Literal, Optional, Type, Union
+from typing import Any, Callable, ClassVar, Literal, Optional, Type, Union
 
 import attrs
 import numpy
@@ -41,8 +41,8 @@ from laboneq.data.scheduled_experiment import (
     RtLoopProperties,
     ScheduledExperiment,
 )
-from laboneq.dsl.serialization import Serializer
 from laboneq.executor.executor import Statement
+from laboneq.serializers._legacy import Serializer
 
 from ._common import (
     _structure_arraylike,
@@ -134,7 +134,7 @@ class AWGModel:
     codeword_bitmask: int | None
     feedback_register_index_select: int | None
     command_table_match_offset: int | None
-    target_feedback_register: int | None
+    target_feedback_register: int | Literal["local"] | None
     _target_class: ClassVar[Type] = AWG
 
 
@@ -262,6 +262,52 @@ class RecipeModel:
     _target_class: ClassVar[Type] = Recipe
 
 
+# Plugin registry for CompilerArtifact subclasses
+# Maps artifact_type -> (target_class, unstructure_fn, structure_fn)
+_compiler_artifact_plugins: dict[str, tuple[type, Callable, Callable]] = {}
+
+
+@attrs.define
+class CompilerArtifactModel:
+    """Polymorphic model for CompilerArtifact using plugin registry."""
+
+    _target_class: ClassVar[Type] = None
+
+    @classmethod
+    def _unstructure(cls, obj: CompilerArtifact):
+        for artifact_type, (
+            target_class,
+            unstructure_fn,
+            _,
+        ) in _compiler_artifact_plugins.items():
+            if isinstance(obj, target_class):
+                result = unstructure_fn(obj)
+                result["_artifact_type"] = artifact_type
+                return result
+
+        # Fallback to old serializer for unregistered types
+        result = _old_serialize(obj)
+        result["_artifact_type"] = "_legacy"
+        return result
+
+    @classmethod
+    def _structure(cls, obj: dict[str, Any], _) -> CompilerArtifact:
+        artifact_type = obj.pop("_artifact_type", "_legacy")
+
+        if artifact_type == "_legacy":
+            # Fallback to old deserializer for legacy data
+            return _old_deserialize(obj, CompilerArtifact)
+
+        if artifact_type in _compiler_artifact_plugins:
+            _, _, structure_fn = _compiler_artifact_plugins[artifact_type]
+            return structure_fn(obj)
+
+        raise ValueError(
+            f"Unknown _artifact_type: {artifact_type}. "
+            f"Available types: {', '.join(_compiler_artifact_plugins.keys())}"
+        )
+
+
 @attrs.define
 class ScheduledExperimentModel:
     device_setup_fingerprint: str
@@ -274,7 +320,7 @@ class ScheduledExperimentModel:
     # for now (see the function make_converter below).
     # TODO: Revisit this later to swap out the old serializer
     # with the new one completely.
-    artifacts: CompilerArtifact
+    artifacts: CompilerArtifactModel
     schedule: dict[str, Any] | None
     execution: Statement
 
@@ -312,7 +358,9 @@ def _structure_result_source(obj, _) -> ResultSource:
     device_id, awg_id, integrator_idx = match_result.groups()
     if awg_id.isnumeric():
         awg_id = int(awg_id)
-    return ResultSource(device_id, awg_id, int(integrator_idx))
+    return ResultSource(
+        device_id, awg_id, int(integrator_idx) if integrator_idx != "None" else None
+    )
 
 
 def _unstructure_np_or_list_np(obj: numpy.ndarray | list[numpy.ndarray]):
@@ -336,7 +384,8 @@ def make_converter():
     # We have to register these custom hooks first, otherwise the automatic hooks generated for parent attrs
     # classes (via make_dict_unstructure_fn / make_dict_structure_fn) silently assume some default repr based
     # implementation which does not get overridden if custom hooks are registered later.
-    for cls in [Statement, CompilerArtifact, dict[str, Any] | None]:
+    # Note: CompilerArtifact is now handled via the plugin registry in CompilerArtifactModel
+    for cls in [Statement, dict[str, Any] | None]:
         converter.register_unstructure_hook(cls, _old_serialize)
         converter.register_structure_hook(cls, _old_deserialize)
 
@@ -358,3 +407,25 @@ def make_converter():
 
     register_models(converter, collect_models(sys.modules[__name__]))
     return converter
+
+
+def register_compiler_artifact_plugin(
+    artifact_type: str,
+    target_class: type,
+    unstructure_fn: Callable,
+    structure_fn: Callable,
+) -> None:
+    """
+    Register a CompilerArtifact plugin for optional artifact types.
+
+    Args:
+        artifact_type: The discriminator value (e.g., "QCCS")
+        target_class: The target class (e.g., ArtifactsCodegen)
+        unstructure_fn: Function to serialize the artifact to a dict
+        structure_fn: Function to deserialize a dict to the artifact
+    """
+    _compiler_artifact_plugins[artifact_type] = (
+        target_class,
+        unstructure_fn,
+        structure_fn,
+    )

@@ -6,11 +6,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from inspect import isawaitable
-from typing import TYPE_CHECKING, Any, Generic, TypeVar
-from weakref import ReferenceType
+from typing import TYPE_CHECKING, Any
 
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.protected_session import ProtectedSession
+from laboneq.controller.runtime_context_impl import RuntimeContextImpl
+from laboneq.controller.toolkit_adapter import ToolkitDevices
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.sweep_params_tracker import SweepParamsTracker
 from laboneq.core.exceptions import AbortExecution
@@ -21,29 +21,29 @@ from laboneq.executor.executor import AsyncExecutorBase, LoopFlags, LoopingMode
 
 if TYPE_CHECKING:
     from laboneq.controller.controller import Controller, ExecutionContext
+    from laboneq.controller.runtime_context_impl import LegacySessionData
     from laboneq.core.types.numpy_support import NumPyArray
 
 _logger = logging.getLogger(__name__)
 
 
-_SessionClass = TypeVar("_SessionClass")
-
-
-class NearTimeRunner(AsyncExecutorBase, Generic[_SessionClass]):
+class NearTimeRunner(AsyncExecutorBase):
     def __init__(
         self,
         controller: Controller,
-        parent_session_ref: ReferenceType[_SessionClass],
         execution_context: ExecutionContext,
+        do_emulation: bool,
+        legacy_session_data: LegacySessionData,
     ):
         super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY)
         self.controller = controller
-        self.parent_session_ref = parent_session_ref
+        self.do_emulation = do_emulation
         self.execution_context = execution_context
         self.user_set_nodes = NodeCollector()
         self.nt_loop_indices: list[int] = []
         self.sweep_params_tracker = SweepParamsTracker()
         self.last_nt_step_result_completed: asyncio.Future[None] | None = None
+        self._legacy_session_data = legacy_session_data
 
     def nt_step(self) -> NtStepKey:
         return NtStepKey(indices=tuple(self.nt_loop_indices))
@@ -64,20 +64,19 @@ class NearTimeRunner(AsyncExecutorBase, Generic[_SessionClass]):
             raise LabOneQControllerException(
                 f"Near-time callback '{func_name}' is not registered."
             )
-        parent_session = self.parent_session_ref()
-        if parent_session is None:
-            raise LabOneQControllerException(
-                "Internal error: Originating session has been destroyed."
-            )
         experiment_results = self.execution_context.submission.results_builder.results
-        protected_session = ProtectedSession(
-            wrapped_session=parent_session,
+        runtime_context = RuntimeContextImpl(
             controller=self.controller,
             recipe_data=self.execution_context.recipe_data,
             experiment_results=experiment_results,
+            devices=ToolkitDevices(
+                None if self.do_emulation else self.controller.devices
+            ),
+            do_emulation=self.do_emulation,
+            legacy_session_data=self._legacy_session_data,
         )
         try:
-            res_or_coro = func(protected_session, **args)
+            res_or_coro = func(runtime_context, **args)
             if isawaitable(res_or_coro):
                 res = await res_or_coro
             else:

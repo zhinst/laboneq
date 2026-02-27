@@ -109,12 +109,19 @@ class FolderStore(LogbookStore):
     ) -> Logbook:
         """Create a new logbook for the given workflow."""
         day = local_date_stamp(start_time)
-        Path(self._folder / day).mkdir(parents=False, exist_ok=True)
+
+        if workflow.storage_key:
+            log_path_stem = Path(self._folder, day, *workflow.storage_key)
+            log_path_stem.mkdir(parents=True, exist_ok=True)
+        else:
+            log_path_stem = Path(self._folder, day)
+            log_path_stem.mkdir(parents=False, exist_ok=True)
+
         assert workflow.name is not None  # noqa: S101
         folder_name = self._unique_workflow_folder_name(workflow.name, start_time)
 
         return FolderLogbook(
-            self._folder / day / folder_name,
+            log_path_stem / folder_name,
             serialize=self._serialize,
             save_mode=self._save_mode,
         )

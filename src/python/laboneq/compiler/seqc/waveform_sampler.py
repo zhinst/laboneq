@@ -563,17 +563,24 @@ def compress_waveform(
     sampled_signature: SampledWaveformSignature, device_type: DeviceType
 ) -> list[codegen_rs.PlayHold | codegen_rs.PlaySamples] | None:
     """Compress a sampled waveform signature."""
-    pulses_can_compress = []
+    has_explicit_compress = False
+    is_sw_modulated = False
     for pulse_map in sampled_signature.pulse_map.values():
-        pulses_can_compress.extend(
-            [pulse_instance.can_compress for pulse_instance in pulse_map.instances]
-        )
-    # Do not compress waveforms that have no compressible pulses
-    if all(not can_compress for can_compress in pulses_can_compress):
+        for instance in pulse_map.instances:
+            if instance.can_compress:
+                has_explicit_compress = True
+            if instance.modulation_frequency is not None:
+                is_sw_modulated = True
+
+    # Auto-compress long SHFQA readout pulses with hardware oscillator.
+    if device_type == DeviceType.SHFQA:
+        if has_explicit_compress or not is_sw_modulated:
+            _compress_qa_waveform(sampled_signature)
         return None
-    # SHFQA long readout measure pulses
-    if device_type.is_qa_device:
-        return _compress_qa_waveform(sampled_signature)
+
+    # Do not compress waveforms that have no compressible pulses
+    if not has_explicit_compress:
+        return None
 
     compressor_input_samples = {
         k: getattr(sampled_signature, k)

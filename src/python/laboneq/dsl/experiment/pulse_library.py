@@ -420,7 +420,7 @@ def pulse_sampler(name: str) -> Callable:
 
 
 def pulse_factory(name: str) -> Callable:
-    """Return the named pules factory.
+    """Return the named pulses factory.
 
     The pulse factory returns the description of the pulse used to specify
     a pulse when calling LabOne Q DSl commands such as `.play(...)` and

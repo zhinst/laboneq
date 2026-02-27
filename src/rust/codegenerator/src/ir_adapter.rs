@@ -1,49 +1,159 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+
+use num_complex::Complex;
 
 use codegenerator_utils::pulse_parameters::PulseParameterDeduplicator;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_dsl::types::{
-    ComplexOrFloat, DeviceUid, MarkerSelector, ParameterUid, PulseUid, SectionUid, SignalUid,
-    ValueOrParameter,
+    AcquisitionType as AcquisitionTypeCommon, ComplexOrFloat, DeviceUid, MarkerSelector,
+    OscillatorKind as OscillatorKindCommon, ParameterUid, PulseUid, SectionUid, SignalUid,
+    SweepParameter as SweepParameterCommon, ValueOrParameter,
 };
-use laboneq_ir as hir;
 use laboneq_ir::node::IrNode as HirNode;
+use laboneq_ir::signal::{Signal as SignalCommon, SignalKind as SignalKindCommon};
+use laboneq_ir::{self as hir, ExperimentIr};
+
 use laboneq_units::tinysample::{TinySamples, tiny_samples};
-use num_complex::Complex;
 
 use crate::Result;
-use crate::ir::compilation_job::{Marker, PulseDef, Signal, SweepParameter};
-use crate::ir::experiment::{PulseParametersId, SweepCommand};
+use crate::awg_processor::process_awgs;
+use crate::ir::compilation_job::{
+    AwgCore, Device, Marker, Oscillator, OscillatorKind, PulseDef, Signal, SignalKind,
+    SweepParameter, TriggerMode,
+};
+use crate::ir::experiment::{AcquisitionType, PulseParametersId, SweepCommand};
 use crate::ir::{
     AcquirePulse, Case, InitialOscillatorFrequency, IrNode, Loop, LoopIteration, Match, NodeKind,
     PhaseReset, PlayPulse, PpcDevice, PpcSweepStep, PrngSetup, Section, SectionId, SectionInfo,
     SetOscillatorFrequency, SignalFrequency,
 };
+use crate::utils::length_to_samples;
 
 pub struct CodegenIr {
     pub root: IrNode,
+    pub sweep_parameters: Vec<Arc<SweepParameter>>,
     pub pulse_parameters: PulseParameterDeduplicator,
+    pub acquisition_type: AcquisitionType,
+    pub awg_cores: Vec<AwgCore>,
+}
+
+pub struct AwgInfo {
+    pub uid: u16,
+    pub sampling_rate: f64,
+    pub device: Arc<Device>,
+    // Mapping from HW oscillator to an assigned index
+    pub osc_allocation: HashMap<String, u16>,
+    pub trigger_mode: TriggerMode,
+    pub is_reference_clock_internal: bool,
+    pub signals: HashSet<SignalUid>,
 }
 
 /// Lower a IR into a codegenerator IR.
 pub fn ir_to_codegen_ir(
-    node: &HirNode,
-    id_store: &NamedIdStore,
-    signals: Vec<&Arc<Signal>>,
+    experiment: &ExperimentIr,
+    awg_cores: Vec<AwgInfo>,
     pulse_defs: Vec<&Arc<PulseDef>>,
-    parameters: Vec<&Arc<SweepParameter>>,
 ) -> Result<CodegenIr> {
-    let mut lowerer = IrToCodeIrLowerer::new(id_store, signals, pulse_defs, parameters);
-    let codegen_ir = transform_ir(&mut lowerer, node, tiny_samples(0))?;
+    let ir_signals = experiment.device_setup.signals();
+    let id_store = &experiment.id_store;
+
+    let mut signals_by_awg: HashMap<SignalUid, Signal> = ir_signals
+        .map(|signal| (signal.uid, signal_to_codegen_signal(signal, id_store)))
+        .collect();
+
+    let mut awgs = vec![];
+    for awg_info in awg_cores {
+        let signals: Vec<Arc<Signal>> = awg_info
+            .signals
+            .iter()
+            .map(|uid| signals_by_awg.remove(uid).unwrap().into())
+            .collect();
+
+        let awg = AwgCore::new(
+            awg_info.uid,
+            signals,
+            awg_info.sampling_rate,
+            awg_info.device,
+            awg_info.osc_allocation,
+            Some(awg_info.trigger_mode),
+            awg_info.is_reference_clock_internal,
+        );
+        awgs.push(awg);
+    }
+    // We must process the AWGs before building the tree, since
+    // the signals are shared in the nodes.
+    // TODO: Refactor to avoid this somewhat awkward ordering.
+    process_awgs(&mut awgs);
+
+    let sweep_parameters = experiment
+        .parameters
+        .iter()
+        .map(|param| Arc::new(transform_parameter_to_code_parameter(param, id_store)))
+        .collect::<Vec<Arc<SweepParameter>>>();
+
+    let mut lowerer = IrToCodeIrLowerer::new(
+        id_store,
+        awgs.iter().flat_map(|awg| &awg.signals).collect(),
+        pulse_defs,
+        &sweep_parameters,
+    );
+    let codegen_ir = transform_ir(&mut lowerer, &experiment.root, tiny_samples(0))?;
     let result = CodegenIr {
         root: codegen_ir,
+        sweep_parameters,
         pulse_parameters: lowerer.pulse_parameter_deduplicator,
+        acquisition_type: convert_acquisition_type(&experiment.acquisition_type),
+        awg_cores: awgs,
     };
     Ok(result)
+}
+
+fn signal_to_codegen_signal(signal: &SignalCommon, id_store: &NamedIdStore) -> Signal {
+    Signal {
+        uid: signal.uid,
+        kind: match signal.kind {
+            SignalKindCommon::Rf => SignalKind::SINGLE,
+            SignalKindCommon::Integration => SignalKind::INTEGRATION,
+            SignalKindCommon::Iq => SignalKind::IQ,
+        },
+        channels: signal.channels.iter().map(|c| *c as u8).collect(),
+        oscillator: signal.oscillator.as_ref().map(|osc| Oscillator {
+            uid: id_store.resolve_unchecked(osc.uid).to_string(),
+            kind: match osc.kind {
+                OscillatorKindCommon::Software => OscillatorKind::SOFTWARE,
+                OscillatorKindCommon::Hardware => OscillatorKind::HARDWARE,
+            },
+        }),
+        start_delay: length_to_samples(signal.start_delay.value(), signal.sampling_rate),
+        signal_delay: length_to_samples(signal.signal_delay.value(), signal.sampling_rate),
+        automute: signal.automute,
+    }
+}
+
+fn transform_parameter_to_code_parameter(
+    parameter: &SweepParameterCommon,
+    id_store: &NamedIdStore,
+) -> SweepParameter {
+    let uid = id_store.resolve_unchecked(parameter.uid);
+    SweepParameter {
+        uid: uid.to_string(),
+        values: Arc::clone(&parameter.values),
+    }
+}
+
+fn convert_acquisition_type(acquisition_type: &AcquisitionTypeCommon) -> AcquisitionType {
+    match acquisition_type {
+        AcquisitionTypeCommon::Raw => AcquisitionType::RAW,
+        AcquisitionTypeCommon::Integration => AcquisitionType::INTEGRATION,
+        AcquisitionTypeCommon::SpectroscopyIq => AcquisitionType::SPECTROSCOPY_IQ,
+        AcquisitionTypeCommon::SpectroscopyPsd => AcquisitionType::SPECTROSCOPY_PSD,
+        AcquisitionTypeCommon::Spectroscopy => AcquisitionType::SPECTROSCOPY_IQ,
+        AcquisitionTypeCommon::Discrimination => AcquisitionType::DISCRIMINATION,
+    }
 }
 
 fn transform_ir(
@@ -129,7 +239,7 @@ struct IrToCodeIrLowerer<'a> {
     id_store: &'a NamedIdStore,
     signals: HashMap<SignalUid, &'a Arc<Signal>>,
     pulse_defs: HashMap<PulseUid, &'a Arc<PulseDef>>,
-    parameters: HashMap<ParameterUid, &'a Arc<SweepParameter>>,
+    parameters: HashMap<ParameterUid, Arc<SweepParameter>>,
     // Build time structures
     // These are populated during lowering for deduplication and cross-referencing
     pulse_parameter_deduplicator: PulseParameterDeduplicator,
@@ -142,7 +252,7 @@ impl<'a> IrToCodeIrLowerer<'a> {
         id_store: &'a NamedIdStore,
         signals: Vec<&'a Arc<Signal>>,
         pulse_defs: Vec<&'a Arc<PulseDef>>,
-        parameters: Vec<&'a Arc<SweepParameter>>,
+        parameters: &[Arc<SweepParameter>],
     ) -> Self {
         let signals_map = signals
             .into_iter()
@@ -153,8 +263,8 @@ impl<'a> IrToCodeIrLowerer<'a> {
             .map(|pulse_def| (id_store.get(&pulse_def.uid).unwrap().into(), pulse_def))
             .collect();
         let parameter_map = parameters
-            .into_iter()
-            .map(|param| (id_store.get(&param.uid).unwrap().into(), param))
+            .iter()
+            .map(|param| (id_store.get(&param.uid).unwrap().into(), Arc::clone(param)))
             .collect();
         IrToCodeIrLowerer {
             id_store,
@@ -189,7 +299,7 @@ impl<'a> IrToCodeIrLowerer<'a> {
     }
 
     fn get_sweep_parameter(&self, uid: &ParameterUid) -> Arc<SweepParameter> {
-        Arc::clone(self.parameters[uid])
+        Arc::clone(&self.parameters[uid])
     }
 
     fn get_or_create_ppc_device(

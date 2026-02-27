@@ -244,7 +244,6 @@ module = [
   "engineering_notation",
   "jsonschema.*",
   "pycparser.*",
-  "sqlitedict",
   "openpulse",
   "cycler",
 ]
@@ -270,28 +269,6 @@ directory = "doc"
 name = "Documentation"
 showcontent = true
 
-# system tests, tooling, infrastructure, ...
-
-[[tool.mypy.overrides]]
-module = [
-  "scipy.*",
-  "sortedcollections",
-  "sortedcontainers",
-  "intervaltree",
-  "pybase64",
-  "engineering_notation",
-  "jsonschema.*",
-  "pycparser.*",
-  "openpulse",
-  "cycler",
-]
-ignore_missing_imports = true
-
-[[tool.towncrier.type]]
-directory = "doc"
-name = "Documentation"
-showcontent = true
-
 [[tool.towncrier.type]]
 directory = "deprecate"
 name = "Deprecation Notices"
@@ -302,6 +279,7 @@ directory = "remove"
 name = "Removals from the Codebase"
 showcontent = true
 
+# system tests, tooling, infrastructure, ...
 [[tool.towncrier.type]]
 directory = "misc"
 name = "Miscellaneous"

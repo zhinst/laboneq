@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar
 
 if TYPE_CHECKING:
+    from laboneq._rust import compiler as compiler_rs
     from laboneq.compiler.common.iface_code_generator import ICodeGenerator
     from laboneq.compiler.common.iface_compiler_output import CombinedOutput
     from laboneq.compiler.common.iface_linker import ILinker
@@ -18,9 +19,7 @@ if TYPE_CHECKING:
         AWGMapping,
         LeaderProperties,
     )
-    from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
     from laboneq.data.awg_info import AWGInfo
-    from laboneq.data.compilation_job import PrecompensationInfo
     from laboneq.data.recipe import Recipe
 
 
@@ -31,8 +30,7 @@ class GenerateRecipeArgs:
     leader_properties: LeaderProperties
     clock_settings: dict[str, Any]
     sampling_rate_tracker: SamplingRateTracker
-    delays_by_signal: dict[str, OnDeviceDelayCompensation]
-    precompensations: dict[str, PrecompensationInfo]
+    experiment_rs: compiler_rs.ExperimentInfo
     combined_compiler_output: CombinedOutput
 
 
@@ -52,6 +50,10 @@ class CompilerHooks(ABC):
     @staticmethod
     @abstractmethod
     def generate_recipe(args: GenerateRecipeArgs) -> Recipe: ...
+
+    @staticmethod
+    @abstractmethod
+    def compiler_module() -> compiler_rs: ...
 
     @staticmethod
     @abstractmethod
@@ -80,11 +82,31 @@ def all_compiler_hooks() -> Iterator[type[CompilerHooks]]:
     yield from _registered_compiler_hooks.values()
 
 
+def resolve_compiler_module(device_classes: set[int]) -> compiler_rs:
+    """Return the compiler module for the given device classes.
+
+    Exactly one device class must be present; mixed device classes are not
+    supported. Falls back to the default (SeqC) backend for empty experiments.
+    """
+    if not device_classes:
+        device_classes = {0}
+    if len(device_classes) != 1:
+        raise ValueError(f"Expected exactly one device class, got {device_classes}")
+    (device_class,) = device_classes
+    return get_compiler_hooks(device_class).compiler_module()
+
+
 @register_compiler_hooks
 class CompilerHooksSeqC(CompilerHooks):
     @staticmethod
     def device_class() -> int:
         return 0
+
+    @staticmethod
+    def compiler_module() -> compiler_rs:
+        from laboneq._rust import compiler
+
+        return compiler
 
     @staticmethod
     def linker() -> type[ILinker]:
@@ -110,8 +132,7 @@ class CompilerHooksSeqC(CompilerHooks):
             args.leader_properties,
             args.clock_settings,
             args.sampling_rate_tracker,
-            args.delays_by_signal,
-            args.precompensations,
+            args.experiment_rs,
             args.combined_compiler_output,
         )
 

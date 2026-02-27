@@ -33,6 +33,35 @@ class AmplifierPump:
     ):
         """A representation of an amplifier pump configuration."""
 
+class Precompensation:
+    def __init__(
+        self,
+        exponential: list[ExponentialCompensation] = [],
+        high_pass: HighPassCompensation | None = None,
+        bounce: BounceCompensation | None = None,
+        fir: FirCompensation | None = None,
+    ): ...
+
+class ExponentialCompensation:
+    def __init__(timeconstant: float, amplitude: float): ...
+
+class HighPassCompensation:
+    def __init__(self, timeconstant: float): ...
+
+class FirCompensation:
+    def __init__(self, coefficients: list[float]): ...
+
+class BounceCompensation:
+    def __init__(self, delay: float, amplitude: float): ...
+
+class OutputRoute:
+    def __init__(
+        self,
+        source_channel: int,
+        amplitude_scaling: float | SweepParameter,
+        phase_shift: float | SweepParameter,
+    ): ...
+
 class Signal:
     def __init__(
         self,
@@ -50,7 +79,10 @@ class Signal:
         automute: bool,
         signal_delay: float,
         port_delay: float | SweepParameter,
-        start_delay: float,
+        # value, unit (e.g. (1.0, 'volt')) or None
+        range: tuple[float, str] | None,
+        precompensation: Precompensation | None,
+        added_outputs: list[OutputRoute],
     ):
         """A representation of signal properties."""
 
@@ -64,8 +96,16 @@ class Device:
     ):
         """A representation of device properties."""
 
+class AwgInfo:
+    def __init__(self, uid: int, number: list[int]):
+        """A representation of AWG properties."""
+
 def build_experiment(
-    experiment: Experiment, signals: list[Signal], devices: list[Device]
+    experiment: Experiment,
+    signals: list[Signal],
+    devices: list[Device],
+    awgs: list[AwgInfo],
+    desktop_setup: bool,
 ) -> ExperimentInfo:
     """Build a scheduled experiment.
 
@@ -73,6 +113,8 @@ def build_experiment(
         experiment: Experiment description.
         signals: List of signals.
         devices: List of devices.
+        awgs: List of AWG information.
+        desktop_setup: Whether the experiment is being built for a desktop setup.
 
     Returns:
         An object containing the Rust experiment
@@ -108,7 +150,7 @@ def schedule_experiment(
         Scheduled experiment.
     """
 
-def generate_schedule(
+def generate_pulse_sheet_schedule(
     ir_py: ExperimentIr,
     expand_loops: bool,
     max_events: int,
@@ -128,6 +170,5 @@ def generate_schedule(
         - event_list: List of scheduler events
         - section_info: Section metadata with preorder map
         - section_signals_with_children: Signal hierarchy per section
-
-        Note: sampling_rates should be added separately by Python (depends on SamplingRateTracker).
+        - sampling_rates: Sampling rates per device type
     """

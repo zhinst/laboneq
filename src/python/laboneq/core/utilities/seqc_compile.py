@@ -15,9 +15,7 @@ from zhinst.core.errors import CoreError as LabOneCoreError
 
 from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.resource_usage import (
-    ResourceUsage,
-    ResourceUsageCollector,
-    UsageClassification,
+    ResourceLimitationErrorCollector,
 )
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 
@@ -71,7 +69,7 @@ async def seqc_compile_async(item: SeqCCompileItem):
 def _process_errors(messages: list[str], settings: CompilerSettings):
     if len(messages) == 0:
         return
-    resource_usage_collector = ResourceUsageCollector()
+    reserr_collector = ResourceLimitationErrorCollector(compiler_settings=settings)
     other_errors = []
     for msg in messages:
         msg_lower = msg.lower()
@@ -101,12 +99,10 @@ def _process_errors(messages: list[str], settings: CompilerSettings):
                 excess, max_capacity = float(match.group(1)), float(match.group(2))
                 hint = (max_capacity + excess) / max_capacity
 
-            resource_usage_collector.add(
-                ResourceUsage(msg, hint or UsageClassification.BEYOND_LIMIT)
-            )
+            reserr_collector.add(msg, usage=hint)
         else:
             other_errors.append(msg)
-    resource_usage_collector.raise_or_pass(compiler_settings=settings)
+    reserr_collector.raise_or_pass()
     if other_errors:
         combined_messages = "\n".join([e for e in messages])
         raise LabOneQException(f"Compilation failed.\n{combined_messages}")

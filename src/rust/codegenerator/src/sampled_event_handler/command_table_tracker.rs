@@ -11,6 +11,7 @@ use crate::ir::{
     compilation_job::{AwgKind, DeviceKind},
 };
 use crate::sampled_event_handler::awg_events::PulseSource;
+use laboneq_error::bail;
 use serde_json::{Map, Value, json};
 
 pub enum ParameterPhaseIncrement {
@@ -102,9 +103,7 @@ impl CommandTableTracker {
         ignore_already_in_table: bool, // Default to false
     ) -> Result<usize> {
         if !ignore_already_in_table && self.table_index_by_signature.contains_key(signature) {
-            return Err(
-                anyhow::anyhow!("Signature {signature:?} already exists in command table").into(),
-            );
+            bail!("Signature {signature:?} already exists in command table");
         }
         let index = self.command_table.len();
 

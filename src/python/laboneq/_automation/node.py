@@ -1,52 +1,53 @@
-# Copyright 2025 Zurich Instruments AG
+# Copyright 2026 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+import attrs
 
-from laboneq._automation.element import AutomationElement, AutomationElementStatus
+from laboneq._automation.element import AutomationElement
+from laboneq._automation.element import AutomationElementStatus as Status
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 
 @classformatter
+@attrs.define(kw_only=True)
 class AutomationNode(AutomationElement):
     """A node in the automation framework.
 
     Attributes:
-        key: The automation element key.
-        depends_on: A list of automation element dependencies.
-        qpu: The QPU to use (optional). If not specified, the QPU from the
-            `Automation` instance is used.
+        layer_key: The key of the parent layer.
+        status: The status of the automation element.
         max_fail_count: The maximum number of allowed failures.
         time_valid: The time for which the automation element is reliably valid.
         time_until_invalid: The time until the automation element is invalid.
-        status: The status of the automation element.
         fail_count: The number of failed runs.
-        timestamp: The time the automation element was last run
+        pass_count: The number of passed runs.
+        timestamp: The time the automation node was last run
                 formatted as '%Y%m%dT%H%M%S'.
-        layer: The key of the parent layer.
     """
 
-    def __init__(
-        self,
-        layer: str,
-        status: AutomationElementStatus = AutomationElementStatus.READY,
-        **kwargs,  # automation element parameters
-    ) -> None:
-        """Initialize generic node attributes.
+    layer_key: str
+    status: Status = Status.READY
+    # node execution parameters
+    max_fail_count: int | None = 4
+    time_valid: int | None = None
+    time_until_invalid: int | None = None
+    # node status parameters
+    fail_count: int = 0
+    pass_count: int = 0
+    timestamp: str | None = None
 
-        Arguments:
-            layer: The key of the parent layer.
+    @property
+    def id(self) -> str:
+        """The node ID."""
+        return f"{self.layer_key}_{self.key}"
 
-        This constructor also accepts the arguments of
-        [`AutomationElement`][laboneq._automation.framework.element.AutomationElement].
-        The arguments `key` and `depends_on` are compulsory.
 
-        !!! note
-            This is an abstract base class and cannot be instantiated directly.
+@classformatter
+@attrs.define
+class RootNode(AutomationNode):
+    """Root node class."""
 
-        !!! note
-            In order to inherit these instance attributes, call this `__init__` method
-            in the subclass initialization routine.
-        """
-        super().__init__(**kwargs)
-        self.layer = layer
-        self.status = status
+    key: str = "root"
+    depends_on: set[str] = attrs.field(factory=set)
+    layer_key: str = "root"
+    status: Status = Status.ROOT

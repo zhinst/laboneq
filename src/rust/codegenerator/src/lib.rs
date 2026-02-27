@@ -14,7 +14,9 @@ mod settings;
 pub mod signature;
 pub mod utils;
 pub(crate) mod virtual_signal;
+use laboneq_error::LabOneQError;
 pub use settings::CodeGeneratorSettings;
+mod awg_processor;
 mod context;
 mod event_list;
 mod generator;
@@ -24,7 +26,8 @@ pub mod result;
 mod triggers;
 
 pub use generator::generate_code;
-pub use ir_adapter::ir_to_codegen_ir;
+// Public for Python layer, not intended for external use
+pub use ir_adapter::{AwgInfo, CodegenIr, ir_to_codegen_ir};
 
 // Re-export for easier access
 pub use crate::sampled_event_handler::FeedbackRegister;
@@ -39,20 +42,4 @@ pub mod waveform_sampler {
     };
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error(transparent)]
-    Anyhow(#[from] anyhow::Error),
-}
-
-impl Error {
-    pub fn new<T: Into<String>>(msg: T) -> Self {
-        Error::Anyhow(anyhow::anyhow!(msg.into()))
-    }
-
-    pub fn with_error<E: Into<anyhow::Error>>(err: E) -> Self {
-        Error::Anyhow(err.into())
-    }
-}
-
-pub type Result<T, E = Error> = std::result::Result<T, E>;
+pub type Result<T, E = LabOneQError> = std::result::Result<T, E>;

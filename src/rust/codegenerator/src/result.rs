@@ -7,6 +7,8 @@ use indexmap::IndexMap;
 
 pub use crate::handle_feedback_registers::Acquisition;
 use crate::ir::SignalUid;
+use crate::ir::compilation_job::AwgKey;
+use crate::ir::compilation_job::AwgKind;
 use crate::ir::compilation_job::ChannelIndex;
 use crate::ir::compilation_job::DeviceUid;
 pub use crate::sample_waveforms::SampledWaveform;
@@ -29,6 +31,7 @@ pub struct SeqCGenOutput<T: SampleWaveforms> {
 }
 
 pub struct AwgCodeGenerationResult<T: SampleWaveforms> {
+    pub awg: AwgProperties,
     pub seqc: String,
     pub wave_indices: IndexMap<String, (WaveIndex, SignalType)>,
     pub command_table: Option<String>,
@@ -40,6 +43,12 @@ pub struct AwgCodeGenerationResult<T: SampleWaveforms> {
     pub parameter_phase_increment_map: Option<HashMap<String, Vec<ParameterPhaseIncrement>>>,
     pub feedback_register_config: FeedbackRegisterConfig,
     pub channel_properties: Vec<ChannelProperties>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AwgProperties {
+    pub key: AwgKey,
+    pub kind: AwgKind,
 }
 
 #[derive(Debug, Clone)]

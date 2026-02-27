@@ -12,6 +12,7 @@ impl From<u16> for PhysicalDeviceUid {
     }
 }
 
+/// Unique identifier for an AWG. This is a device-agnostic identifier that can be used to reference an AWG across different devices.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct AwgKey(pub u64);
 

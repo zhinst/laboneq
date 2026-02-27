@@ -99,7 +99,7 @@ class MultiProgramOptions(SingleProgramOptions):
             programs of up to a few 100 microseconds but allows more efficient use of instrument restrictions.
             "nt" is the slowest.
         add_reset:
-            If `True`, an active reset operation is added to the beginning of each program.
+            If `True`, a reset operation for each qubit is added to the beginning of each program.
         add_measurement:
             If `True`, add measurement at the end for all qubits used.
         add_measurement_handle:

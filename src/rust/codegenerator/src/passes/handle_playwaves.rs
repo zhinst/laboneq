@@ -14,9 +14,10 @@ use crate::utils;
 use crate::utils::ceil_to_grid;
 use crate::utils::floor_to_grid;
 use crate::virtual_signal::{VirtualSignal, VirtualSignals};
-use anyhow::anyhow;
 use interval_calculator::calculate_intervals;
 use interval_calculator::interval::{Interval, OrderedRange};
+use laboneq_error::LabOneQError;
+use laboneq_error::bail;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -86,10 +87,7 @@ impl PlayPulseSlot<'_> {
 /// for each of their contained signals, and adjusting their length
 /// to that of the parent match node.
 /// Returns nodes pointing to the play nodes in the tree.
-fn assign_pulse_slots(
-    node: &mut ir::IrNode,
-    state: Option<u16>,
-) -> Result<Vec<PlayPulseSlot<'_>>, anyhow::Error> {
+fn assign_pulse_slots(node: &mut ir::IrNode, state: Option<u16>) -> Result<Vec<PlayPulseSlot<'_>>> {
     match node.data() {
         ir::NodeKind::FrameChange(ob) => {
             let signal = Arc::clone(&ob.signal);
@@ -127,7 +125,7 @@ fn assign_pulse_slots(
             let match_length = ob.length;
             for child in node.iter_children_mut() {
                 if match_length == 0 && child.data().length() == 0 {
-                    anyhow::bail!("Unable to process match-block with zero length.");
+                    bail!("Unable to process match-block with zero length.");
                 }
                 out.extend(assign_pulse_slots(child, state)?);
             }
@@ -205,7 +203,7 @@ where
             if let (Some(s0), Some(s1)) = (top.1, next.1)
                 && !signals_share_hw_oscillator(s0, s1)
             {
-                let msg = format!(
+                bail!(
                     "Overlapping HW oscillators: '{:}' on signal '{:}' and '{:}' on signal '{:}'.\n\
                     If you play different pulses on the same SG channel but on different logical signal lines,\n\
                     then LabOne Q must fit an oscillator switch in between them.\n\
@@ -215,7 +213,6 @@ where
                     s1.oscillator.as_ref().unwrap().uid,
                     s1.uid.0
                 );
-                return Err(anyhow!(msg).into());
             }
             if top.0.0.end < next.0.0.end {
                 top.0.0.end = next.0.0.end;
@@ -484,16 +481,15 @@ pub(crate) fn handle_plays(
         let compacted_intervals = match compacted_intervals {
             Err(e) => match e {
                 interval_calculator::Error::MinimumWaveformLengthViolation(_) => {
-                    let msg = format!(
+                    bail!(
                         "Failed to map the scheduled pulses to SeqC without violating the minimum waveform size \
                     {} samples on device '{}'.\n\
                     Suggested workaround: manually add delays to overly short loops, etc.",
                         traits.min_play_wave,
                         awg.device_kind().as_str()
                     );
-                    return Err(anyhow!(msg).into());
                 }
-                _ => return Err(anyhow!(e.to_string()).into()),
+                _ => return Err(LabOneQError::from_err(e)),
             },
             Ok(out) => out,
         };

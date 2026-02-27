@@ -349,7 +349,10 @@ class UHFQAAwg(CoreBase):
                 )
             )
 
-        rw = ResponseWaiterAsync(api=self._api, dev_repr=self._unit_repr, timeout_s=10)
+        # Reduce timeout, as currently it is always hit due to the issue with zhinst.comms,
+        # See: https://zhinst.atlassian.net/browse/LOB-76
+        # TODO(2K): Remove this workaround when zhinst.comms issue is resolved.
+        rw = ResponseWaiterAsync(api=self._api, dev_repr=self._unit_repr, timeout_s=2)
         rw.add_nodes(upload_ready_conditions)
         await rw.prepare()
         await self._api.set_parallel(elf_nodes)
@@ -404,6 +407,10 @@ class UHFQAAwg(CoreBase):
         nc.add("qas/0/result/enable", 1 if enable else 0)
         nc.barrier()
         return nc
+
+    async def stop_result_logger(self):
+        nc = NodeCollector.one(f"/{self._serial}/qas/0/result/enable", 0, cache=False)
+        await self._api.set_parallel(nc)
 
     def _configure_input_monitor(
         self,
@@ -471,7 +478,8 @@ class UHFQAAwg(CoreBase):
     ) -> dict[str, tuple[Any, str]]:
         return {
             self.nodes.awg_sequencer_status: (
-                4,
+                # Expected value: 4 (waiting for trigger), but actually reports 1
+                1,  # sequencer is running
                 f"AWG {self._core_index} didn't start.",
             )
         }

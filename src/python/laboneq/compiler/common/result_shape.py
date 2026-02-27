@@ -11,17 +11,16 @@ from typing import Iterable
 import numpy as np
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings
+from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.iface_compiler_output import CombinedOutput
 from laboneq.compiler.common.resource_usage import (
-    ResourceUsage,
-    ResourceUsageCollector,
-    UsageClassification,
+    ResourceLimitationErrorCollector,
 )
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.types.numpy_support import NumPyArray
-from laboneq.data.awg_info import AWGInfo, AwgKey
+from laboneq.data.awg_info import AwgKey
 from laboneq.data.compilation_job import DeviceInfo
 from laboneq.data.recipe import IntegratorAllocation
 from laboneq.data.scheduled_experiment import (
@@ -306,7 +305,6 @@ class _ResultShapeExtractor(ExecutorBase):
 def construct_result_shape_info(
     execution: Statement,
     rt_loop_properties: RtLoopProperties,
-    awgs: list[AWGInfo],
     combined_compiler_output: CombinedOutput,
     device_infos: list[DeviceInfo],
     compiler_settings: CompilerSettings,
@@ -317,7 +315,6 @@ def construct_result_shape_info(
     shapes = extractor.get_result_shapes()
     result_lengths = _calculate_result_lengths(
         rt_loop_properties,
-        awgs,
         shapes,
         combined_compiler_output,
         compiler_settings,
@@ -332,7 +329,6 @@ def construct_result_shape_info(
 
 def _calculate_result_lengths(
     rt_loop_properties: RtLoopProperties,
-    awgs: list[AWGInfo],
     handle_result_shapes: dict[str, HandleResultShape],
     combined_compiler_output: CombinedOutput,
     compiler_settings: CompilerSettings,
@@ -347,68 +343,66 @@ def _calculate_result_lengths(
     different instruments.
     """
     result_lengths: dict[AwgKey, int] = {}
-    res_usage_collector = ResourceUsageCollector()
-    for awg in awgs:
-        for sig in awg.signals:
-            integration_unit = None
-            if rt_loop_properties.acquisition_type != AcquisitionType.RAW:
-                integration_unit = next(
-                    (u for u in integration_unit_allocation if u.signal_id == sig.id),
-                    None,
+    reserr_collector = ResourceLimitationErrorCollector(compiler_settings)
+    for integration_unit in integration_unit_allocation:
+        integrator_index = (
+            None
+            if rt_loop_properties.acquisition_type == AcquisitionType.RAW
+            else integration_unit.channels[0]
+        )
+
+        result_source = ResultSource(
+            integration_unit.device_id, integration_unit.awg, integrator_index
+        )
+        # NOTE: the mapping comes from a single RT artifact, hence it is already
+        # adjusted for chunking. The result_length calculated below is basically
+        # the result length for a single chunk of the experiment.
+        mapping = combined_compiler_output.result_handle_maps.get(result_source)
+        if mapping is None:
+            continue
+
+        result_length = len(mapping) * (
+            rt_loop_properties.shots
+            if rt_loop_properties.averaging_mode is AveragingMode.SINGLE_SHOT
+            else 1
+        )
+        device = device_infos[integration_unit.device_id]
+        device_type = DeviceType.from_device_info_type(device.device_type)
+        if rt_loop_properties.acquisition_type is AcquisitionType.RAW:
+            max_segments = device_type.scope_max_segments
+            if max_segments is not None and result_length > max_segments:
+                raise LabOneQException(
+                    f"A maximum of {max_segments} raw result(s) is supported per real-time execution."
                 )
-                if integration_unit is None:
-                    continue
-                integration_unit = integration_unit.channels[0]
 
-            result_source = ResultSource(awg.device_id, awg.awg_id, integration_unit)
-            # NOTE: the mapping comes from a single RT artifact, hence it is already
-            # adjusted for chunking. The result_length calculated below is basically
-            # the result length for a single chunk of the experiment.
-            mapping = combined_compiler_output.result_handle_maps.get(result_source)
-            if mapping is None:
-                continue
-
-            result_length = len(mapping) * (
-                rt_loop_properties.shots
-                if rt_loop_properties.averaging_mode is AveragingMode.SINGLE_SHOT
-                else 1
+            signal_handles = set(
+                h
+                for m in mapping
+                for h in m
+                if handle_result_shapes[h].signal == integration_unit.signal_id
             )
-            if rt_loop_properties.acquisition_type is AcquisitionType.RAW:
-                max_segments = awg.device_type.scope_max_segments
-                if max_segments is not None and result_length > max_segments:
+            for handle in signal_handles:
+                raw_acquire_samples = combined_compiler_output.get_raw_acquire_length(
+                    integration_unit.signal_id, handle
+                )
+                scope_memory_consumption = result_length * raw_acquire_samples
+                scope_memory_size = device_type.scope_memory_size_samples(
+                    device_infos[integration_unit.device_id]
+                )
+                if scope_memory_consumption > scope_memory_size:
                     raise LabOneQException(
-                        f"A maximum of {max_segments} raw result(s) is supported per real-time execution."
+                        "The total size of the requested raw traces exceeds the instrument's memory capacity."
                     )
-
-                signal_handles = set(
-                    h
-                    for m in mapping
-                    for h in m
-                    if handle_result_shapes[h].signal == sig.id
-                )
-                for handle in signal_handles:
-                    raw_acquire_samples = (
-                        combined_compiler_output.get_raw_acquire_length(sig.id, handle)
-                    )
-                    scope_memory_consumption = result_length * raw_acquire_samples
-                    scope_memory_size = awg.device_type.scope_memory_size_samples(
-                        device_infos[awg.device_id]
-                    )
-                    if scope_memory_consumption > scope_memory_size:
-                        raise LabOneQException(
-                            "The total size of the requested raw traces exceeds the instrument's memory capacity."
-                        )
-            else:
-                max_result_vector_length = awg.device_type.max_result_vector_length
-                res_usage_collector.add(
-                    ResourceUsage(
-                        f"Result length for awg {awg.awg_id} on device {awg.device_id}",
-                        result_length / max_result_vector_length
-                        if max_result_vector_length is not None
-                        else UsageClassification.WITHIN_LIMIT,
-                    )
-                )
-            result_lengths[AwgKey(awg.device_id, awg.awg_id)] = result_length
-    res_usage_collector.raise_or_pass(compiler_settings=compiler_settings)
+        elif (
+            max_result_vector_length := device_type.max_result_vector_length
+        ) is not None and result_length > max_result_vector_length:
+            reserr_collector.add(
+                f"Result length for awg {integration_unit.awg} on device {integration_unit.device_id}",
+                usage=result_length / max_result_vector_length,
+            )
+        result_lengths[AwgKey(integration_unit.device_id, integration_unit.awg)] = (
+            result_length
+        )
+    reserr_collector.raise_or_pass()
 
     return result_lengths

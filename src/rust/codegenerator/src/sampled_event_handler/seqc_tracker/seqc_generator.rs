@@ -8,8 +8,8 @@ use super::seqc_statements::{SeqCStatement, SeqCVariant};
 use super::wave_index_tracker::WaveIndex;
 use crate::device_traits::DeviceTraits;
 use crate::ir::compilation_job::{AwgKind, ChannelIndex, DeviceKind};
-use crate::{Error, Result, ir::Samples};
-use anyhow::anyhow;
+use crate::{Result, ir::Samples};
+use laboneq_error::{LabOneQError, bail};
 
 type WaveId = str;
 type Variable = str;
@@ -177,9 +177,10 @@ impl Display for PlayEmissionError {
 }
 
 impl std::error::Error for PlayEmissionError {}
-impl From<PlayEmissionError> for Error {
-    fn from(e: PlayEmissionError) -> Error {
-        Error::Anyhow(anyhow::Error::from(e))
+
+impl From<PlayEmissionError> for LabOneQError {
+    fn from(value: PlayEmissionError) -> Self {
+        LabOneQError::from_err(value)
     }
 }
 
@@ -258,15 +259,14 @@ impl SeqCGenerator {
         has_marker2: bool,
     ) -> Result<()> {
         if length < self.device_traits.min_play_wave.into() {
-            return Err(anyhow!(
+            bail!(
                 "Attempting to emit placeholder({}), which is below the minimum \
                 waveform length {} of device '{}' (sample multiple is {})",
                 length,
                 self.device_traits.min_play_wave,
                 self.device_traits.type_str,
                 self.device_traits.sample_multiple,
-            )
-            .into());
+            );
         }
         self.statements.push(
             SeqCStatement::WaveDeclaration {
@@ -286,15 +286,14 @@ impl SeqCGenerator {
         length: Samples,
     ) -> Result<()> {
         if length < self.device_traits.min_play_wave.into() {
-            return Err(anyhow!(
+            bail!(
                 "Attempting to emit placeholder({}), which is below the minimum \
                 waveform length {} of device '{}' (sample multiple is {})",
                 length,
                 self.device_traits.min_play_wave,
                 self.device_traits.type_str,
                 self.device_traits.sample_multiple,
-            )
-            .into());
+            );
         }
         self.statements.push(
             SeqCStatement::ZeroWaveDeclaration {
@@ -340,12 +339,11 @@ impl SeqCGenerator {
         mut bodies: Vec<SeqCGenerator>,
     ) -> Result<()> {
         if conditions.len() != bodies.len() && bodies.len() != conditions.len() + 1 {
-            return Err(anyhow!(
+            bail!(
                 "Number of conditions {} and bodies {} do not match",
                 conditions.len(),
                 bodies.len()
-            )
-            .into());
+            );
         }
         let conditions = conditions
             .into_iter()
@@ -355,7 +353,7 @@ impl SeqCGenerator {
             .iter()
             .any(|c| c.is_empty())
         {
-            return Err(anyhow!("Condition may not be None").into());
+            bail!("Condition may not be None");
         }
 
         let mut complexity = 0;
@@ -394,10 +392,9 @@ impl SeqCGenerator {
     ) -> Result<()> {
         let variable_name: String = variable_name.into();
         if self.symbols.contains(&variable_name) {
-            return Err(anyhow!(
+            bail!(
                 "Trying to declare variable {variable_name} which has already been declared in this scope"
-            )
-                .into());
+            );
         }
         self.symbols.insert(variable_name.clone());
         self.statements.push(

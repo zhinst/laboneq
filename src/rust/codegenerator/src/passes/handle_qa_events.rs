@@ -1,9 +1,11 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_error::bail;
+
+use crate::Result;
 use crate::ir::compilation_job::DeviceKind;
 use crate::ir::{IrNode, NodeKind, QaEvent, Samples};
-use crate::{Error, Result};
 use std::collections::HashMap;
 
 struct AcquireContext<'a> {
@@ -44,7 +46,7 @@ fn collect_nodes<'a>(node: &'a mut IrNode, ctx: &mut AcquireContext<'a>) {
 
 fn validate_qa_event(event: &QaEvent, disallow_standalone_play: bool) -> Result<()> {
     if !event.play_waves().is_empty() && event.acquires().is_empty() && disallow_standalone_play {
-        let msg = format!(
+        bail!(
             "Play and acquire must happen at the same time on device SHFQA. Invalid play timing on signal(s): {}",
             event
                 .play_waves()
@@ -57,7 +59,6 @@ fn validate_qa_event(event: &QaEvent, disallow_standalone_play: bool) -> Result<
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        return Err(Error::new(&msg));
     }
     Ok(())
 }

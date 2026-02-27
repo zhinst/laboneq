@@ -13,9 +13,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.101"
+version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f0e0fee31ef5ed1ba1316088939cea399010ed7731dba877ed44aeb407a75ea"
+checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "approx"
@@ -23,14 +23,15 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
 dependencies = [
+ "num-complex",
  "num-traits",
 ]
 
 [[package]]
 name = "arc-swap"
-version = "1.8.1"
+version = "1.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ded5f9a03ac8f24d1b8a25101ee812cd32cdc8c50a4c50237de2c4915850e73"
+checksum = "f9f3647c145568cec02c42054e07bdf9a5a698e15b466fb2341bfc393cd24aa5"
 dependencies = [
  "rustversion",
 ]
@@ -52,9 +53,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.55"
+version = "1.2.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47b26a0954ae34af09b50f0de26458fa95369a0d478d8236d3f93082b219bd29"
+checksum = "aebf35691d1bfb0ac386a69bac2fde4dd276fb618cf8bf4f5318fe285e821bb2"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -68,15 +69,15 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "codegenerator"
-version = "26.4.0-b1"
+version = "26.4.0-b2"
 dependencies = [
- "anyhow",
  "codegenerator-utils",
  "derive_more",
  "indexmap",
  "interval-calculator",
  "laboneq-common",
  "laboneq-dsl",
+ "laboneq-error",
  "laboneq-ir",
  "laboneq-log",
  "laboneq-units",
@@ -93,13 +94,13 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-py"
-version = "26.4.0-b1"
+version = "26.4.0-b2"
 dependencies = [
- "anyhow",
  "codegenerator",
  "codegenerator-utils",
  "laboneq-common",
  "laboneq-dsl",
+ "laboneq-error",
  "laboneq-py-utils",
  "laboneq-units",
  "num-complex",
@@ -110,7 +111,7 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-utils"
-version = "26.4.0-b1"
+version = "26.4.0-b2"
 dependencies = [
  "laboneq-dsl",
  "laboneq-ir",
@@ -257,17 +258,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "indoc"
-version = "2.0.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79cf5c93f93228cf8efb3ba362535fb11199ac548a09ce117c9b1adc3030d706"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
 name = "interval-calculator"
-version = "26.4.0-b1"
+version = "26.4.0-b2"
 dependencies = [
  "anyhow",
  "thiserror",
@@ -290,7 +282,7 @@ checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
 name = "laboneq-common"
-version = "26.4.0-b1"
+version = "26.4.0-b2"
 dependencies = [
  "laboneq-units",
  "regex",
@@ -298,8 +290,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "laboneq-compiler-py"
+version = "26.4.0-b2"
+dependencies = [
+ "anyhow",
+ "approx",
+ "laboneq-common",
+ "laboneq-dsl",
+ "laboneq-ir",
+ "laboneq-log",
+ "laboneq-py-utils",
+ "laboneq-scheduler",
+ "laboneq-units",
+ "num-complex",
+ "num-integer",
+ "numeric-array",
+ "pyo3",
+ "serde_json",
+ "smallvec",
+ "thiserror",
+]
+
+[[package]]
 name = "laboneq-dsl"
-version = "26.4.0-b1"
+version = "26.4.0-b2"
 dependencies = [
  "laboneq-common",
  "laboneq-units",
@@ -309,8 +323,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "laboneq-error"
+version = "26.4.0-b2"
+dependencies = [
+ "pyo3",
+ "thiserror",
+]
+
+[[package]]
 name = "laboneq-ir"
-version = "26.4.0-b1"
+version = "26.4.0-b2"
 dependencies = [
  "laboneq-common",
  "laboneq-dsl",
@@ -320,18 +342,19 @@ dependencies = [
  "numeric-array",
  "serde",
  "serde_json",
+ "smallvec",
 ]
 
 [[package]]
 name = "laboneq-log"
-version = "26.4.0-b1"
+version = "26.4.0-b2"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "laboneq-py-utils"
-version = "26.4.0-b1"
+version = "26.4.0-b2"
 dependencies = [
  "laboneq-common",
  "laboneq-dsl",
@@ -343,12 +366,13 @@ dependencies = [
 
 [[package]]
 name = "laboneq-rust"
-version = "26.4.0-b1"
+version = "26.4.0-b2"
 dependencies = [
  "anyhow",
  "approx",
  "codegenerator-py",
  "laboneq-common",
+ "laboneq-compiler-py",
  "laboneq-dsl",
  "laboneq-ir",
  "laboneq-log",
@@ -366,7 +390,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-scheduler"
-version = "26.4.0-b1"
+version = "26.4.0-b2"
 dependencies = [
  "anyhow",
  "itertools",
@@ -385,7 +409,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-units"
-version = "26.4.0-b1"
+version = "26.4.0-b2"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -393,9 +417,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.180"
+version = "0.2.182"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcc35a38544a891a5f7c865aca548a982ccb3b8650a5b06d0fd33a10283c56fc"
+checksum = "6800badb6cb2082ffd7b6a67e6125bb39f18782f793520caee8cb8846be06112"
 
 [[package]]
 name = "log"
@@ -424,15 +448,6 @@ name = "memchr"
 version = "2.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
-
-[[package]]
-name = "memoffset"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
-dependencies = [
- "autocfg",
-]
 
 [[package]]
 name = "ndarray"
@@ -478,7 +493,7 @@ dependencies = [
 
 [[package]]
 name = "numeric-array"
-version = "26.4.0-b1"
+version = "26.4.0-b2"
 dependencies = [
  "approx",
  "num-complex",
@@ -489,9 +504,9 @@ dependencies = [
 
 [[package]]
 name = "numpy"
-version = "0.27.1"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7aac2e6a6e4468ffa092ad43c39b81c79196c2bb773b8db4085f695efe3bba17"
+checksum = "778da78c64ddc928ebf5ad9df5edf0789410ff3bdbf3619aed51cd789a6af1e2"
 dependencies = [
  "libc",
  "ndarray",
@@ -535,28 +550,25 @@ dependencies = [
 
 [[package]]
 name = "pyo3"
-version = "0.27.2"
+version = "0.28.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab53c047fcd1a1d2a8820fe84f05d6be69e9526be40cb03b73f86b6b03e6d87d"
+checksum = "cf85e27e86080aafd5a22eae58a162e133a589551542b3e5cee4beb27e54f8e1"
 dependencies = [
  "anyhow",
- "indoc",
  "libc",
- "memoffset",
  "num-complex",
  "once_cell",
  "portable-atomic",
  "pyo3-build-config",
  "pyo3-ffi",
  "pyo3-macros",
- "unindent",
 ]
 
 [[package]]
 name = "pyo3-build-config"
-version = "0.27.2"
+version = "0.28.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b455933107de8642b4487ed26d912c2d899dec6114884214a0b3bb3be9261ea6"
+checksum = "8bf94ee265674bf76c09fa430b0e99c26e319c945d96ca0d5a8215f31bf81cf7"
 dependencies = [
  "python3-dll-a",
  "target-lexicon",
@@ -564,9 +576,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-ffi"
-version = "0.27.2"
+version = "0.28.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c85c9cbfaddf651b1221594209aed57e9e5cff63c4d11d1feead529b872a089"
+checksum = "491aa5fc66d8059dd44a75f4580a2962c1862a1c2945359db36f6c2818b748dc"
 dependencies = [
  "libc",
  "pyo3-build-config",
@@ -574,9 +586,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-log"
-version = "0.13.2"
+version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f8bae9ad5ba08b0b0ed2bb9c2bdbaeccc69cafca96d78cf0fbcea0d45d122bb"
+checksum = "26c2ec80932c5c3b2d4fbc578c9b56b2d4502098587edb8bef5b6bfcad43682e"
 dependencies = [
  "arc-swap",
  "log",
@@ -585,9 +597,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros"
-version = "0.27.2"
+version = "0.28.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a5b10c9bf9888125d917fb4d2ca2d25c8df94c7ab5a52e13313a07e050a3b02"
+checksum = "f5d671734e9d7a43449f8480f8b38115df67bef8d21f76837fa75ee7aaa5e52e"
 dependencies = [
  "proc-macro2",
  "pyo3-macros-backend",
@@ -597,9 +609,9 @@ dependencies = [
 
 [[package]]
 name = "pyo3-macros-backend"
-version = "0.27.2"
+version = "0.28.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "03b51720d314836e53327f5871d4c0cfb4fb37cc2c4a11cc71907a86342c40f9"
+checksum = "22faaa1ce6c430a1f71658760497291065e6450d7b5dc2bcf254d49f66ee700a"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -654,7 +666,7 @@ dependencies = [
 
 [[package]]
 name = "rccow"
-version = "26.4.0-b1"
+version = "26.4.0-b2"
 
 [[package]]
 name = "regex"
@@ -681,9 +693,9 @@ dependencies = [
 
 [[package]]
 name = "regex-syntax"
-version = "0.8.9"
+version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a96887878f22d7bad8a3b6dc5b7440e0ada9a245242924394987b21cf2210a4c"
+checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "rustc-hash"
@@ -791,9 +803,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.114"
+version = "2.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4d107df263a3013ef9b1879b0df87d706ff80f65a86ea879bd9c31f9b307c2a"
+checksum = "e665b8803e7b1d2a727f4023456bbbbe74da67099c585258af0ad9c5013b9b99"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -802,9 +814,9 @@ dependencies = [
 
 [[package]]
 name = "target-lexicon"
-version = "0.13.4"
+version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b1dd07eb858a2067e2f3c7155d54e929265c264e6f37efe3ee7a8d1b5a1dd0ba"
+checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
 name = "thiserror"
@@ -834,15 +846,9 @@ checksum = "562d481066bde0658276a35467c4af00bdc6ee726305698a55b86e61d7ad82bb"
 
 [[package]]
 name = "unicode-ident"
-version = "1.0.23"
+version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "537dd038a89878be9b64dd4bd1b260315c1bb94f4d784956b81e27a088d9a09e"
-
-[[package]]
-name = "unindent"
-version = "0.2.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7264e107f553ccae879d21fbea1d6724ac785e8c3bfc762137959b5802826ef3"
+checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
 name = "version_check"
@@ -852,6 +858,6 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "zmij"
-version = "1.0.20"
+version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4de98dfa5d5b7fef4ee834d0073d560c9ca7b6c46a71d058c48db7960f8cfaf7"
+checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"

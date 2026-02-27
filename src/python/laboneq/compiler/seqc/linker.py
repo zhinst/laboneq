@@ -11,7 +11,6 @@ import numpy as np
 
 import laboneq._rust.codegenerator as codegen_rs
 from laboneq.compiler import CompilerSettings
-from laboneq.compiler.common.feedback_connection import FeedbackConnection
 from laboneq.compiler.common.iface_compiler_output import (
     CombinedOutput,
     NeartimeStepBase,
@@ -44,7 +43,7 @@ from laboneq.data.scheduled_experiment import (
 @dataclass
 class CombinedRTOutputSeqC(CombinedOutput):
     integration_times: IntegrationTimes
-    feedback_connections: dict[str, FeedbackConnection] = field(default_factory=dict)
+    awg_properties: dict[AwgKey, codegen_rs.AwgProperties] = field(default_factory=dict)
     signal_delays: SignalDelays = field(default_factory=dict)
     # key - SeqC name
     integration_weights: dict[str, AwgWeights] = field(default_factory=dict)
@@ -124,7 +123,6 @@ class SeqCProgram:
 
 @dataclass
 class SeqCGenOutput(RTCompilerOutput):
-    feedback_connections: dict[str, FeedbackConnection]
     signal_delays: SignalDelays
     integration_weights: dict[AwgKey, AwgWeights]
     integration_times: IntegrationTimes
@@ -146,13 +144,10 @@ class SeqCGenOutput(RTCompilerOutput):
     channel_properties: dict[str, list[codegen_rs.ChannelProperties]] = field(
         default_factory=dict
     )
+    awg_properties: dict[AwgKey, codegen_rs.AwgProperties] = field(default_factory=dict)
 
 
 def _check_compatibility(this: SeqCGenOutput, new: SeqCGenOutput):
-    if this.feedback_connections != new.feedback_connections:
-        raise LabOneQException(
-            "Feedback connections do not match between real-time iterations"
-        )
     if this.signal_delays != new.signal_delays:
         raise LabOneQException(
             "Signal delays do not match between real-time iterations"
@@ -234,8 +229,8 @@ class SeqCLinker(ILinker):
             )
 
         return CombinedRTOutputSeqC(
+            awg_properties=output.awg_properties,
             integration_times=output.integration_times,
-            feedback_connections=output.feedback_connections,
             signal_delays=output.signal_delays,
             integration_weights=integration_weights,
             result_handle_maps=output.result_handle_maps,

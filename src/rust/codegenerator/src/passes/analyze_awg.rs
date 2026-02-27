@@ -4,12 +4,13 @@
 use std::{collections::HashMap, sync::Arc};
 
 use laboneq_dsl::types::SignalUid;
+use laboneq_error::bail;
 
+use crate::Result;
 use crate::ir::compilation_job::{AwgCore, ChannelIndex, DeviceKind, SignalKind};
 use crate::ir::experiment::Handle;
 use crate::ir::{IrNode, NodeKind, PlayPulse, PpcDevice, TriggerBitData};
 use crate::result::MarkerMode;
-use crate::{Error, Result};
 
 /// Maps a channel to marker.
 fn marker_to_channel_hdawg(marker_selector: &str) -> u8 {
@@ -81,7 +82,7 @@ impl AwgCompilationInfo {
                     self.marker_modes.insert(marker_channel, MarkerMode::Marker);
                 } else if self.device_kind == DeviceKind::SHFSG {
                     if marker.marker_selector != "marker1" {
-                        return Err(Error::new("Only marker1 supported on SHFSG"));
+                        bail!("Only marker1 supported on SHFSG");
                     }
                     for channel in &signal.channels {
                         self.check_trigger_marker_conflict(
@@ -138,13 +139,12 @@ impl AwgCompilationInfo {
         if let Some(mode) = self.marker_modes.get(&channel)
             && *mode != marker_mode
         {
-            let msg = format!(
+            bail!(
                 "Using triggers and markers on the same channel '{}' on signal '{}' on '{}' is not allowed.",
                 channel,
                 signal.0,
                 self.device_kind.as_str()
             );
-            return Err(Error::new(msg));
         }
         Ok(())
     }

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 from typing import TYPE_CHECKING, Any, Dict, cast
 
@@ -17,9 +16,7 @@ from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC, NeartimeStep
 from laboneq.compiler.seqc.types import SignalDelays
-from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
 from laboneq.compiler.workflow.precompensation_helpers import (
-    precompensation_is_nonzero,
     verify_precompensation_parameters,
 )
 from laboneq.core.exceptions import LabOneQException
@@ -32,7 +29,6 @@ from laboneq.data.compilation_job import (
     DeviceInfo,
     DeviceInfoType,
     ParameterInfo,
-    PrecompensationInfo,
     SignalInfo,
     SignalInfoType,
 )
@@ -52,6 +48,7 @@ from laboneq.data.recipe import (
 )
 
 if TYPE_CHECKING:
+    from laboneq._rust import compiler as compiler_rs
     from laboneq._rust.codegenerator import (
         FeedbackRegisterConfig,
     )
@@ -311,16 +308,30 @@ class RecipeGenerator:
             for route in output_routers
         ]
 
-        if precompensation is not None:
-            precomp_dict = {
-                k: v
-                for k, v in dataclasses.asdict(precompensation).items()
-                if k in ("exponential", "high_pass", "bounce", "FIR")
+        def precompensation_to_recipe_dict(precompensation) -> dict:
+            out = {
+                "exponential": None,
+                "high_pass": None,
+                "bounce": None,
+                "FIR": None,
             }
-            if "clearing" in (precomp_dict["high_pass"] or {}):
-                del precomp_dict["high_pass"]["clearing"]
-        else:
-            precomp_dict = None
+            if precompensation.exponential:
+                out["exponential"] = [
+                    {"timeconstant": exp.timeconstant, "amplitude": exp.amplitude}
+                    for exp in precompensation.exponential
+                ]
+            if precompensation.high_pass:
+                out["high_pass"] = {
+                    "timeconstant": precompensation.high_pass.timeconstant
+                }
+            if precompensation.bounce:
+                out["bounce"] = {
+                    "delay": precompensation.bounce.delay,
+                    "amplitude": precompensation.bounce.amplitude,
+                }
+            if precompensation.fir:
+                out["FIR"] = {"coefficients": precompensation.fir.coefficients}
+            return out
 
         if isinstance(lo_frequency, ParameterInfo):
             lo_frequency = lo_frequency.uid
@@ -338,7 +349,9 @@ class RecipeGenerator:
             channel=channel,
             enable=True,
             offset=offset,
-            precompensation=precomp_dict,
+            precompensation=precompensation_to_recipe_dict(precompensation)
+            if precompensation is not None
+            else None,
             lo_frequency=lo_frequency,
             port_mode=port_mode,
             range=None if output_range is None else float(output_range),
@@ -505,8 +518,7 @@ def calc_outputs(
     experiment_dao: ExperimentDAO,
     combined_compiler_output: CombinedRTOutputSeqC,
     sampling_rate_tracker: SamplingRateTracker,
-    delays_by_signal: dict[str, OnDeviceDelayCompensation],
-    precompensations: dict[str, PrecompensationInfo],
+    experiment_rs,
 ):
     all_channels = {}
 
@@ -516,14 +528,9 @@ def calc_outputs(
         signal_info: SignalInfo = experiment_dao.signal_info(signal_id)
         if signal_info.type == SignalInfoType.INTEGRATION:
             continue
-        oscillator_frequency = None
-
-        oscillator_info = experiment_dao.signal_oscillator(signal_id)
         oscillator_is_hardware = (
-            oscillator_info is not None and oscillator_info.is_hardware
+            signal_info.oscillator is not None and signal_info.oscillator.is_hardware
         )
-        if oscillator_is_hardware:
-            oscillator_frequency = oscillator_info.frequency
 
         voltage_offset = experiment_dao.voltage_offset(signal_id)
         mixer_calibration = experiment_dao.mixer_calibration(signal_id)
@@ -537,13 +544,22 @@ def calc_outputs(
         signal_delays = combined_compiler_output.signal_delays
         if signal_id in signal_delays:
             scheduler_port_delay += signal_delays[signal_id].on_device
-        scheduler_port_delay += delays_by_signal[signal_id].on_port
+        scheduler_port_delay += experiment_rs.signal_delay_compensation(signal_id)
 
         base_channel = min(signal_info.channels)
         device_channel_properties = combined_compiler_output.channel_properties.get(
             signal_info.device.uid, []
         )
-        precompensation = precompensations[signal_id]
+        precompensation = experiment_rs.signal_precompensation(signal_id)
+        warnings = verify_precompensation_parameters(
+            precompensation,
+            sampling_rate_tracker.sampling_rate_for_device(
+                signal_info.device.uid, signal_info.type
+            ),
+            signal_id,
+        )
+        if warnings:
+            _logger.warning(warnings)
         for channel in signal_info.channels:
             output = {
                 "device_id": signal_info.device.uid,
@@ -562,6 +578,7 @@ def calc_outputs(
                 ],
                 "enable_output_mute": signal_info.automute,
                 "marker_mode": None,
+                "precompensation": precompensation,
             }
             channel_properties = next(
                 (cp for cp in device_channel_properties if cp.channel == channel),
@@ -574,8 +591,6 @@ def calc_outputs(
 
             if oscillator_is_hardware and signal_is_modulated:
                 output["modulation"] = True
-                if isinstance(oscillator_frequency, ParameterInfo):
-                    oscillator_frequency = 0
             else:
                 output["modulation"] = False
 
@@ -610,19 +625,6 @@ def calc_outputs(
             device_type = DeviceType.from_device_info_type(
                 signal_info.device.device_type
             )
-            if precompensation_is_nonzero(precompensation):
-                warnings = verify_precompensation_parameters(
-                    precompensation,
-                    sampling_rate_tracker.sampling_rate_for_device(
-                        signal_info.device.uid, signal_info.type
-                    ),
-                    signal_id,
-                )
-                if warnings:
-                    _logger.warning(warnings)
-                output["precompensation"] = precompensation
-
-            output["oscillator_frequency"] = oscillator_frequency
             channel_key = (signal_info.device.uid, channel)
             # TODO(2K): check for conflicts if 'channel_key' already present in 'all_channels'
             all_channels[channel_key] = output
@@ -695,31 +697,16 @@ def generate_recipe(
     leader_properties: LeaderProperties,
     clock_settings: dict[str, Any],
     sampling_rate_tracker: SamplingRateTracker,
-    delays_by_signal: dict[str, OnDeviceDelayCompensation],
-    precompensations: dict[str, PrecompensationInfo],
+    experiment_rs: compiler_rs.Experiment,
     combined_compiler_output: CombinedRTOutputSeqC,
 ) -> Recipe:
     recipe_generator = RecipeGenerator()
     recipe_generator.from_experiment(experiment_dao, leader_properties, clock_settings)
 
-    for signal in experiment_dao.signals():
-        signal_info = experiment_dao.signal_info(signal)
-        device_type = DeviceType.from_device_info_type(signal_info.device.device_type)
-        if not device_type.supports_precompensation and precompensation_is_nonzero(
-            signal_info.precompensation
-        ):
-            raise LabOneQException(
-                f"Precompensation is not supported on device {device_type.name.upper()}"
-            )
-
     recipe_generator.add_oscillator_params(awgs, experiment_dao)
 
     for output in calc_outputs(
-        experiment_dao,
-        combined_compiler_output,
-        sampling_rate_tracker,
-        delays_by_signal,
-        precompensations,
+        experiment_dao, combined_compiler_output, sampling_rate_tracker, experiment_rs
     ):
         _logger.debug("Adding output %s", output)
         recipe_generator.add_output(
@@ -761,12 +748,12 @@ def generate_recipe(
         recipe_generator.validate_and_postprocess_ios(device)
 
     for awg in awgs:
+        properties = combined_compiler_output.awg_properties[awg.key]
         device_id = awg.key.device_id
-        signal_type = awg.signal_type
         recipe_generator.add_awg(
             device_id=device_id,
             awg_number=cast(int, awg.awg_id),
-            signal_type=signal_type,
+            signal_type=AWGSignalType(properties.signal_type.lower()),
             feedback_register_config=combined_compiler_output.feedback_register_configurations.get(
                 awg.key
             ),

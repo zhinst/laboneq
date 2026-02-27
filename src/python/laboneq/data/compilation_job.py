@@ -244,7 +244,6 @@ class PrecompensationInfo:
     high_pass: HighPassCompensation | None = None
     bounce: BounceCompensation | None = None
     FIR: FIRCompensation | None = None
-    computed_delay_samples: int | None = None
 
 
 @dataclass(unsafe_hash=True)
@@ -336,4 +335,3 @@ class ChunkingInfo:
 class CompilationJob:
     experiment_info: ExperimentInfo = None
     execution: Statement = None
-    compiler_settings: dict = None

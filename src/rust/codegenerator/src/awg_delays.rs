@@ -3,11 +3,13 @@
 
 use std::collections::HashMap;
 
+use laboneq_error::bail;
+
+use crate::Result;
 use crate::ir::Samples;
 use crate::ir::SignalUid;
 use crate::ir::compilation_job::{AwgCore, AwgKind, DeviceKind, SignalKind};
 use crate::utils::samples_to_grid;
-use crate::{Error, Result};
 
 #[derive(Default)]
 pub(crate) struct AwgTiming {
@@ -27,26 +29,18 @@ impl AwgTiming {
     }
 }
 
+/// Validate that all signals on the AWG have the same delay for RF signals.
 fn validate_signal_delays(awg: &AwgCore) -> Result<()> {
     if awg.kind == AwgKind::IQ {
         return Ok(());
     }
-    let delays: Vec<_> = awg
+
+    if !awg
         .signals
         .iter()
-        .filter_map(|s| {
-            if s.kind == SignalKind::INTEGRATION {
-                None
-            } else {
-                Some(s.delay())
-            }
-        })
-        .collect();
-    if !delays.iter().all(|&x| x == delays[0]) {
-        // This error should be caught earlier in the compiler. We check it anyways.
-        return Err(Error::new(
-            "Signals on AWG RF channels must have the same delay.",
-        ));
+        .all(|s| s.delay() == awg.signals[0].delay())
+    {
+        bail!("Signals on AWG RF channels must have the same delay.",);
     }
     Ok(())
 }
@@ -74,12 +68,12 @@ pub(crate) fn calculate_awg_delays(
             awg.device_kind().traits().sample_multiple.into(),
         );
         if remainder != 0 {
-            return Err(Error::new(format!(
+            bail!(
                 "Internal error: Signal {} has a delay of {} samples, which is not a multiple of the device's sample multiple {}.",
                 signal.uid.0,
                 signal.delay(),
                 awg.device_kind().traits().sample_multiple
-            )));
+            );
         }
         signal_delays.insert(signal.uid, total_delay);
         if signal.kind != SignalKind::INTEGRATION {
@@ -136,7 +130,6 @@ mod tests {
     fn create_awg_core(signals: Vec<Signal>) -> AwgCore {
         AwgCore::new(
             0,
-            AwgKind::IQ,
             signals.iter().map(|s| Arc::new(s.clone())).collect(),
             2e9,
             Arc::new(Device::new("".to_string().into(), DeviceKind::SHFQA)),

@@ -4,7 +4,7 @@
 use crate::device_traits::DeviceTraits;
 use crate::utils::length_to_samples;
 use crate::{Result, ir::Samples};
-use anyhow::anyhow;
+use laboneq_error::bail;
 
 fn ceil(value: i64, grid: u16) -> Samples {
     assert!(value > 0, "Value must be greater than 0");
@@ -37,11 +37,10 @@ pub(super) struct OutputMute {
 impl OutputMute {
     pub(super) fn new(device_traits: &'static DeviceTraits, duration_min: f64) -> Result<Self> {
         if !device_traits.supports_output_mute {
-            return Err(anyhow!(
+            bail!(
                 "Unsupported device type: {0}. Supported types are: SHFQA, SHFSG and SHFQC.",
                 device_traits.type_str
-            )
-            .into());
+            );
         }
 
         // The minimum time for the muting required by the instrument
@@ -49,10 +48,7 @@ impl OutputMute {
             - device_traits.output_mute_disengage_delay  // latency of just turning on and off the blanking...
             + device_traits.min_play_wave as f64 / device_traits.sampling_rate; // ... plus a minimal playZero
         if duration_min <= device_duration_min {
-            return Err(anyhow!(
-                "Output mute duration must be larger than {device_duration_min} s."
-            )
-            .into());
+            bail!("Output mute duration must be larger than {device_duration_min} s.");
         }
         let samples_min = length_to_samples(duration_min, device_traits.sampling_rate);
         let samples_min = ((samples_min as f64 / device_traits.sample_multiple as f64).ceil()

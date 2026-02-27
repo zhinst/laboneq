@@ -1,7 +1,8 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::Error;
+use laboneq_error::bail;
+
 use crate::Result;
 use crate::ir;
 use crate::ir::TriggerBitData;
@@ -22,10 +23,12 @@ fn handle_triggers_recursive(
             // TODO: Move validation to later stage as there are some manipulations of trigger bits after this?
             for bit in active_bits(data.bits) {
                 if bit >= number_of_trigger_bits {
-                    return Err(Error::new(format!(
+                    bail!(
                         "Trigger bit {} is out of range for device with {} trigger bits in section '{}'",
-                        bit, number_of_trigger_bits, data.section_info.name,
-                    )));
+                        bit,
+                        number_of_trigger_bits,
+                        data.section_info.name,
+                    );
                 }
             }
             let mut trigger = data.clone();

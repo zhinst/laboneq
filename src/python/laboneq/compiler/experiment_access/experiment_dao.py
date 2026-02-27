@@ -116,9 +116,6 @@ class ExperimentDAO:
     def mixer_calibration(self, signal_id):
         return self._signals[signal_id].mixer_calibration
 
-    def precompensation(self, signal_id):
-        return self._signals[signal_id].precompensation
-
     def lo_frequency(self, signal_id) -> float | ParameterInfo:
         return self._signals[signal_id].lo_frequency
 

@@ -1,13 +1,13 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_error::bail;
+
 use crate::ir::compilation_job::{AwgCore, AwgKey, DeviceUid, Signal};
 use crate::ir::experiment::Handle;
 use crate::ir::{IrNode, NodeKind, Samples, SignalUid};
 use crate::result::IntegrationUnitAllocation;
-use crate::{
-    Error, FeedbackRegister, FeedbackRegisterLayout, Result, SingleFeedbackRegisterLayoutItem,
-};
+use crate::{FeedbackRegister, FeedbackRegisterLayout, Result, SingleFeedbackRegisterLayoutItem};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 
@@ -55,9 +55,7 @@ fn collect_handles(
                     handle_info.global = !ob.local;
                     handle_info.is_feedback = true;
                 } else {
-                    return Err(Error::new(format!(
-                        "Handle '{handle}' not found for match.",
-                    )));
+                    bail!("Handle '{handle}' not found for match.",);
                 }
             }
             for child in node.iter_children() {
@@ -140,10 +138,10 @@ fn allocate_feedback_registers(
                     target_feedback_registers.insert(awg.key(), FeedbackRegisterAllocation::Local);
                 } else {
                     if register >= PQSC_FEEDBACK_REGISTER_COUNT {
-                        return Err(Error::new(format!(
+                        bail!(
                             "Cannot allocate feedback register. \
                             All {PQSC_FEEDBACK_REGISTER_COUNT} registers of the PQSC are already allocated.",
-                        )));
+                        );
                     }
                     target_feedback_registers
                         .insert(awg.key(), FeedbackRegisterAllocation::Global { register });

@@ -5,12 +5,13 @@ use std::collections::HashMap;
 use std::num::NonZero;
 
 use laboneq_dsl::types::SignalUid;
+use laboneq_error::{bail, laboneq_error};
 
+use crate::Result;
 use crate::ir::compilation_job::{AwgCore, AwgKey, ChannelIndex, DeviceKind, SignalKind};
 use crate::ir::experiment::AcquisitionType;
 use crate::ir::{IrNode, NodeKind};
 use crate::result::IntegrationUnitAllocation;
-use crate::{Error, Result};
 
 /// Allocate integration units based on the acquisition nodes in the IR tree, the AWG cores,
 /// and the acquisition type.
@@ -87,24 +88,18 @@ struct KernelCollection {
 impl KernelCollection {
     fn register_acquisition(&mut self, signal: SignalUid, kernel_count: usize) -> Result<()> {
         let count = kernel_count.try_into().map_err(|_| {
-            Error::new(format!(
+            laboneq_error!(
                 "Kernel count for signal {} exceeds u8 limit: {}",
-                signal.0, kernel_count
-            ))
+                signal.0,
+                kernel_count
+            )
         })?;
-        let kernel_count = NonZero::new(count).ok_or_else(|| {
-            Error::new(format!(
-                "Kernel count for signal {} cannot be zero",
-                signal.0
-            ))
-        })?;
+        let kernel_count = NonZero::new(count)
+            .ok_or_else(|| laboneq_error!("Kernel count for signal {} cannot be zero", signal.0))?;
         if let Some(existing) = self.kernel_counts.get(&signal)
             && *existing != kernel_count
         {
-            return Err(Error::new(format!(
-                "Inconsistent kernel counts for signal '{}'",
-                signal.0
-            )));
+            bail!("Inconsistent kernel counts for signal '{}'", signal.0);
         } else {
             self.kernel_counts.insert(signal, kernel_count);
         }
@@ -124,9 +119,7 @@ fn visit_nodes(node: &IrNode, kernels: &mut KernelCollection) -> Result<()> {
 
 fn integrators_per_signal(device: &DeviceKind, acquisition_type: &AcquisitionType) -> Result<u8> {
     if device == &DeviceKind::UHFQA && acquisition_type == &AcquisitionType::SPECTROSCOPY_PSD {
-        return Err(Error::new(
-            "Acquisition type 'Spectroscopy PSD' is not allowed on UHFQA",
-        ));
+        bail!("Acquisition type 'Spectroscopy PSD' is not allowed on UHFQA",);
     }
     if matches!(
         acquisition_type,

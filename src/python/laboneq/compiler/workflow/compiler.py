@@ -23,22 +23,17 @@ from laboneq.compiler.common.result_shape import construct_result_shape_info
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
-from laboneq.compiler.workflow import on_device_delays
 from laboneq.compiler.workflow.compiler_hooks import (
     GenerateRecipeArgs,
     all_compiler_hooks,
     get_compiler_hooks,
+    resolve_compiler_module,
 )
 from laboneq.compiler.workflow.neartime_execution import (
     NtCompilerExecutor,
 )
-from laboneq.compiler.workflow.precompensation_helpers import (
-    compute_precompensations_and_delays,
-)
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.compiled_experiment import CompiledExperiment
-from laboneq.core.types.enums.awg_signal_type import AWGSignalType
 from laboneq.core.types.enums.trigger_mode import TriggerMode
 from laboneq.data.awg_info import AWGInfo, AwgKey
 from laboneq.data.compilation_job import (
@@ -47,11 +42,8 @@ from laboneq.data.compilation_job import (
     DeviceInfo,
     DeviceInfoType,
     OscillatorInfo,
-    ParameterInfo,
-    PrecompensationInfo,
     ReferenceClockSourceInfo,
     SignalInfo,
-    SignalInfoType,
 )
 from laboneq.data.recipe import Recipe
 from laboneq.data.scheduled_experiment import (
@@ -64,7 +56,6 @@ from .compat import build_rs_experiment
 
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
-    from laboneq.compiler.workflow.on_device_delays import OnDeviceDelayCompensation
 
 
 AWGMapping = list[AWGInfo]
@@ -87,33 +78,6 @@ def _chunk_count_trial(requested: int, candidates: list[int]) -> int:
     """
     idx = bisect_left(candidates, requested)
     return candidates[min(idx, len(candidates) - 1)]
-
-
-def _adjust_awg_signal_type(awg: AWGInfo):
-    occupied_channels = {sc[1] for sc in awg.signal_channels}
-    if len(occupied_channels) == 2 and awg.signal_type == AWGSignalType.SINGLE:
-        awg.signal_type = AWGSignalType.DOUBLE
-
-
-def _verify_rf_signal_delays(awg: AWGInfo, dao: ExperimentDAO):
-    # For each awg of a HDAWG, retrieve the delay of all of its rf_signals (for
-    # playZeros and check whether they are the same:
-    if awg.signal_type == AWGSignalType.IQ:
-        return
-
-    signal_ids = set(sc[0] for sc in awg.signal_channels)
-    signal_delays = {
-        dao.signal_info(signal_id).delay_signal or 0.0 for signal_id in signal_ids
-    }
-    if any(isinstance(d, ParameterInfo) for d in signal_delays):
-        raise LabOneQException("Cannot sweep delay on RF channel")
-    if len(signal_delays) > 1:
-        delay_strings = ", ".join([f"{d * 1e9:.2f} ns" for d in signal_delays])
-        raise RuntimeError(
-            "Delays {" + str(delay_strings) + "} on awg "
-            f"{awg.device_id}:{awg.awg_id} with signals "
-            f"{signal_ids} differ."
-        )
 
 
 def _awg_oscs(device: DeviceInfo, awg_index: int) -> tuple[list[int], str | None]:
@@ -183,9 +147,6 @@ def _allocate_oscillators(awg: AWGInfo, dao: ExperimentDAO):
 
 def calc_awgs(dao: ExperimentDAO) -> AWGMapping:
     awgs: dict[AwgKey, AWGInfo] = {}
-    signals_by_channel_and_awg: dict[
-        tuple[str, int, int], dict[str, set[str] | AWGInfo]
-    ] = {}
     for signal_id in dao.signals():
         signal_info = dao.signal_info(signal_id)
         device_id = signal_info.device.uid
@@ -197,40 +158,22 @@ def calc_awgs(dao: ExperimentDAO) -> AWGMapping:
             key = AwgKey(device_id, awg_id)
             awg = awgs.get(key)
             if awg is None:
-                signal_type = signal_info.type.value
-                # Treat "integration" signal type same as "iq" at AWG level
-                if signal_type == "integration":
-                    signal_type = "iq"
                 awg = AWGInfo(
                     device_id=device_id,
-                    signal_type=AWGSignalType(signal_type),
                     awg_id=awg_id,
                     device_type=device_type,
+                    signal_type=None,
                     dev_type=signal_info.device.seqc_dev_type,
                     dev_opts=signal_info.device.seqc_dev_opts,
                     sampling_rate=None,
                     device_class=device_type.device_class,
+                    awg_allocation=[awg_id],
                 )
                 awgs[key] = awg
 
             awg.signal_channels.append((signal_id, channel))
 
-            if signal_info.type == SignalInfoType.IQ:
-                assert isinstance(awg.awg_id, int)
-                signal_channel_awg_key = (device_id, awg.awg_id, channel)
-                if signal_channel_awg_key in signals_by_channel_and_awg:
-                    signals_by_channel_and_awg[signal_channel_awg_key]["signals"].add(
-                        signal_id
-                    )
-                else:
-                    signals_by_channel_and_awg[signal_channel_awg_key] = {
-                        "awg": awg,
-                        "signals": {signal_id},
-                    }
-
     for awg in awgs.values():
-        _adjust_awg_signal_type(awg)
-        _verify_rf_signal_delays(awg, dao)
         _allocate_oscillators(awg, dao)
 
     return list(awgs.values())
@@ -291,13 +234,9 @@ class Compiler:
 
         self._leader_properties = LeaderProperties()
         self._clock_settings: dict[str, Any] = {}
-        self._integration_unit_allocation: dict[str, IntegrationUnitAllocation] = {}
         self._awgs: AWGMapping = []
-        self._delays_by_signal: dict[str, OnDeviceDelayCompensation] = {}
-        self._precompensations: dict[str, PrecompensationInfo] = {}
         self._signal_objects: dict[str, SignalObj] = {}
         self._has_uhfqa: bool = False
-        self._compiler_output: CompiledExperiment | None = None
 
         _logger.info("Starting LabOne Q Compiler run...")
         self._check_tinysamples()
@@ -410,8 +349,7 @@ class Compiler:
 
             _logger.debug("Using desktop setup configuration with leader %s", leader)
 
-            # TODO: Check if this is needed for standalone QC, where only SG part is used
-            if has_hdawg or (standalone_qc is True and has_shfsg and not has_shfqa):
+            if has_hdawg:
                 has_signal_on_awg_0_of_leader = False
                 for signal_id in experiment_dao.signals():
                     signal_info = experiment_dao.signal_info(signal_id)
@@ -462,14 +400,13 @@ class Compiler:
 
     def _compile_whole_or_with_chunks(
         self, experiment: compiler_rs.ExperimentInfo, chunk_count: int | None
-    ) -> CompiledExperiment:
+    ) -> ScheduledExperiment:
         rt_compiler = RealtimeCompiler(
             experiment,
             [
                 self._experiment_dao.signal_info(uid)
                 for uid in self._experiment_dao.signals()
             ],
-            self._sampling_rate_tracker,
             self._signal_objects,
             self._settings,
         )
@@ -500,8 +437,7 @@ class Compiler:
                 leader_properties=self._leader_properties,
                 clock_settings=self._clock_settings,
                 sampling_rate_tracker=self._sampling_rate_tracker,
-                delays_by_signal=self._delays_by_signal,
-                precompensations=self._precompensations,
+                experiment_rs=experiment,
                 combined_compiler_output=combined_output,
             )
             recipe = get_compiler_hooks(device_class).generate_recipe(
@@ -510,41 +446,36 @@ class Compiler:
             result_shape_info = construct_result_shape_info(
                 self._execution,
                 rt_loop_properties,
-                awgs,
                 combined_output,
                 self._experiment_dao.device_infos(),
                 self._settings,
                 recipe.integrator_allocations,
             )
 
-        return CompiledExperiment(
-            experiment_dict=None,
-            scheduled_experiment=ScheduledExperiment(
-                device_setup_fingerprint=self._device_setup_fingerprint,
-                recipe=recipe,
-                artifacts=combined_compiler_output.get_artifacts(),
-                schedule=combined_compiler_output.schedule,
-                execution=self._execution,
-                rt_loop_properties=rt_loop_properties,
-                result_shape_info=result_shape_info,
-            ),
+        return ScheduledExperiment(
+            device_setup_fingerprint=self._device_setup_fingerprint,
+            recipe=recipe,
+            artifacts=combined_compiler_output.get_artifacts(),
+            schedule=combined_compiler_output.schedule,
+            execution=self._execution,
+            rt_loop_properties=rt_loop_properties,
+            result_shape_info=result_shape_info,
         )
 
-    def _process_experiment(self):
+    def _process_experiment(self) -> ScheduledExperiment:
         dao = self._experiment_dao
         self._sampling_rate_tracker = SamplingRateTracker(dao, self._clock_settings)
-
         self._awgs = self._calc_awgs(dao)
-        self._precompensations = compute_precompensations_and_delays(dao)
-        self._delays_by_signal = self._adjust_signals_for_on_device_delays(
-            signal_infos=[dao.signal_info(uid) for uid in dao.signals()],
-            use_2ghz_for_hdawg=self._clock_settings["use_2GHz_for_HDAWG"],
-        )
         self._signal_objects = self._generate_signal_objects()
+        compiler_module = resolve_compiler_module(
+            {s.awg.device_class for s in self._signal_objects.values()}
+        )
         experiment = build_rs_experiment(
             experiment_dao=dao,
             sampling_rate_tracker=self._sampling_rate_tracker,
             signal_objects=self._signal_objects,
+            compiler_module=compiler_module,
+            desktop_setup=self._leader_properties.is_desktop_setup,
         )
 
         chunking = self._chunking_info
@@ -568,7 +499,7 @@ class Compiler:
                     )
 
             try:
-                self._compiler_output = self._compile_whole_or_with_chunks(
+                return self._compile_whole_or_with_chunks(
                     experiment=experiment, chunk_count=chunk_count
                 )
             except ResourceLimitationError as err:
@@ -590,14 +521,14 @@ class Compiler:
             while True:
                 try:
                     _logger.debug("Attempting to compile with %s chunks", chunk_count)
-                    self._compiler_output = self._compile_whole_or_with_chunks(
+                    compiler_output = self._compile_whole_or_with_chunks(
                         experiment=experiment, chunk_count=chunk_count
                     )
                     _logger.info(
                         "Auto-chunked sweep divided into %s chunks", chunk_count
                     )
-                    break
-                except ResourceLimitationError as err:
+                    return compiler_output
+                except ResourceLimitationError as err:  # noqa: PERF203
                     _logger.debug(
                         "The attempt to compile with %s chunks failed with %s",
                         chunk_count,
@@ -613,7 +544,7 @@ class Compiler:
                         )
                         raise LabOneQException(msg) from err
                     chunk_count = _chunk_count_trial(
-                        requested=chunk_count * math.ceil(err.hint or 2),
+                        requested=chunk_count * math.ceil(err.usage or 2),
                         candidates=divisors,
                     )
 
@@ -623,44 +554,6 @@ class Compiler:
         for compiler_hooks in all_compiler_hooks():
             d.extend(compiler_hooks.calc_awgs(dao))
         return d
-
-    def _adjust_signals_for_on_device_delays(
-        self, signal_infos: list[SignalInfo], use_2ghz_for_hdawg: bool
-    ) -> dict[str, OnDeviceDelayCompensation]:
-        """Adjust signals for on device delays.
-
-        Returns:
-            Signal and device port delays which are adjusted to delays on device.
-        """
-        delay_from_output_router = on_device_delays.calculate_output_router_delays(
-            {sig.uid: sig.output_routing or [] for sig in signal_infos}
-        )
-        signal_grid = {}
-        for info in signal_infos:
-            devtype = DeviceType.from_device_info_type(info.device.device_type)
-            sampling_rate = (
-                devtype.sampling_rate_2GHz
-                if use_2ghz_for_hdawg and devtype == DeviceType.HDAWG
-                else devtype.sampling_rate
-            )
-            initial_delay = 0
-            initial_delay += (
-                self._precompensations[info.uid].computed_delay_samples or 0
-            )
-            initial_delay += delay_from_output_router[info.uid]
-            signal_grid[info.uid] = on_device_delays.OnDeviceDelayInfo(
-                sampling_rate=sampling_rate,
-                sample_multiple=devtype.sample_multiple,
-                delay_samples=initial_delay,
-            )
-        signal_infos_by_uid: dict[str, SignalInfo] = {
-            info.uid: info for info in signal_infos
-        }
-        compensated_values = on_device_delays.compensate_on_device_delays(signal_grid)
-        for key, values in compensated_values.items():
-            if signal_infos_by_uid[key].device.device_type == DeviceInfoType.UHFQA:
-                assert values.on_port == 0
-        return compensated_values
 
     def _generate_signal_objects(self):
         signal_objects: dict[str, SignalObj] = {}
@@ -680,13 +573,6 @@ class Compiler:
             sampling_rate = self._sampling_rate_tracker.sampling_rate_for_device(
                 device_id, signal_info.type
             )
-            start_delay = get_lead_delay(
-                self._settings,
-                device_type,
-                self._leader_properties.is_desktop_setup,
-                self._clock_settings["use_2GHz_for_HDAWG"],
-            )
-            start_delay += self._delays_by_signal[signal_id].on_signal
 
             if delay_signal is not None:
                 delay_signal = get_total_rounded_delay(
@@ -743,7 +629,6 @@ class Compiler:
 
             signal_obj = SignalObj(
                 id=signal_id,
-                start_delay=start_delay,
                 delay_signal=delay_signal,
                 signal_type=signal_type,
                 awg=awg,
@@ -759,50 +644,18 @@ class Compiler:
                 automute=signal_info.automute,
                 local_oscillator_frequency=local_oscillator_frequency,
                 signal_range=signal_info.signal_range,
-                precompensation=self._precompensations.get(signal_id),
             )
             signal_objects[signal_id] = signal_obj
             awg.signals.append(signal_obj)
         return signal_objects
 
-    def run(self, data: CompilationJob) -> CompiledExperiment:
-        _logger.debug("ES Compiler run")
+    def run(self, data: CompilationJob) -> ScheduledExperiment:
+        _logger.debug("Start LabOne Q Compiler run")
 
         self.use_experiment(data)
         self._analyze_setup(self._experiment_dao)
-        self._process_experiment()
+        compiler_output = self._process_experiment()
 
-        assert self._compiler_output is not None
+        assert compiler_output is not None
         _logger.info("Finished LabOne Q Compiler run.")
-
-        return self._compiler_output
-
-
-def get_lead_delay(
-    settings: compiler_settings.CompilerSettings,
-    device_type: DeviceType,
-    desktop_setup: bool,
-    hdawg_uses_2GHz: bool,
-):
-    assert isinstance(device_type, DeviceType)
-    if device_type == DeviceType.HDAWG:
-        if not desktop_setup:
-            if hdawg_uses_2GHz:
-                return settings.HDAWG_LEAD_PQSC_2GHz
-            else:
-                return settings.HDAWG_LEAD_PQSC
-        else:
-            if hdawg_uses_2GHz:
-                return settings.HDAWG_LEAD_DESKTOP_SETUP_2GHz
-            else:
-                return settings.HDAWG_LEAD_DESKTOP_SETUP
-    if device_type == DeviceType.PRETTYPRINTERDEVICE:
-        return settings.PRETTYPRINTERDEVICE_LEAD
-    elif device_type == DeviceType.UHFQA:
-        return settings.UHFQA_LEAD_PQSC
-    elif device_type == DeviceType.SHFQA:
-        return settings.SHFQA_LEAD_PQSC
-    elif device_type == DeviceType.SHFSG:
-        return settings.SHFSG_LEAD_PQSC
-    else:
-        raise RuntimeError(f"Unsupported device type {device_type}")
+        return compiler_output

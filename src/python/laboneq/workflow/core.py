@@ -46,13 +46,20 @@ class Workflow(Generic[Parameters]):
     Arguments:
         root: A root workflow block.
         input: Input parameters of the workflow.
+        storage_key: A tuple of strings specifying the sub-folder in which to store the
+            workflow result. For example, when using a `FolderStore` the workflow would
+            be saved in the path `Path(folder_store, day, *storage_key)`. A value of
+            `None` is treated the same as an empty key.
     """
 
     def __init__(
         self,
         root: WorkflowBlock,
         input: dict | None = None,  # noqa: A002
+        *,
+        storage_key: tuple[str, ...] | None = None,
     ) -> None:
+        self.storage_key = storage_key
         self._root = root
         self._graph = WorkflowGraph(self._root)
         self._input = input or {}

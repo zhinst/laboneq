@@ -15,6 +15,7 @@ from laboneq.simple import (
     Calibration,
     Experiment,
     Oscillator,
+    RuntimeContext,
     SectionAlignment,
     Session,
     SignalCalibration,
@@ -342,7 +343,10 @@ class CLOPSExperimentBuilder:
         pass
 
     def _update_circuit_template(
-        self, rng: nprnd.Generator, session: Session, template_id: int
+        self,
+        rng: nprnd.Generator,
+        runtime_context: RuntimeContext,
+        template_id: int,
     ) -> int:
         return 0
 
@@ -352,7 +356,7 @@ class CLOPSExperimentBuilder:
         qubit_ids: list[str],
         circuit_depth: int,
         excitation_length: float,
-        session: Session,
+        runtime_context: RuntimeContext,
         template_id: int,
         repetition_id: int,
     ) -> int:
@@ -361,12 +365,16 @@ class CLOPSExperimentBuilder:
         Returns:
             entropy: The seed used for the PRNG when randomizing gates.
         """
-        results = session.results.acquired_results
+        results = runtime_context.results.acquired_results
 
         latest_results = {
             qubit_id: results[f"ac_{qubit_id}"].data[tuple(last_nt_step)]
             for qubit_id in qubit_ids
-            if (last_nt_step := session.results.get_last_nt_step(f"ac_{qubit_id}"))
+            if (
+                last_nt_step := runtime_context.results.get_last_nt_step(
+                    f"ac_{qubit_id}"
+                )
+            )
         }
 
         result_entropy = self._calculate_readout_entropy(latest_results)
@@ -380,7 +388,7 @@ class CLOPSExperimentBuilder:
         entropy = rng.bit_generator.seed_seq.entropy
 
         self._randomize_su4_gate_pulses(
-            session, rng, qubit_ids, circuit_depth, excitation_length
+            runtime_context, rng, qubit_ids, circuit_depth, excitation_length
         )
         return entropy  # can be accessed later from session.results.user_func_results
 
@@ -435,7 +443,7 @@ class CLOPSExperimentBuilder:
 
     def _randomize_su4_gate_pulses(
         self,
-        session: Session,
+        runtime_context: RuntimeContext,
         rng: nprnd.Generator,
         qubit_ids: list[str],
         circuit_depth: int,
@@ -458,7 +466,7 @@ class CLOPSExperimentBuilder:
                     pulse_uid = f"{qubit_id}_d{layer_index}_{discriminator}"
                     amplitude = amplitudes[layer_index, qubit_index, disc_index]
                     phasor = phasors[layer_index, qubit_index, disc_index]
-                    session.replace_pulse(
+                    runtime_context.replace_pulse(
                         pulse_uid,
                         pulse_factory(
                             uid=pulse_uid,

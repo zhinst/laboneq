@@ -8,7 +8,8 @@ import logging
 from laboneq.core.types.enums.dsl_version import DSLVersion
 from laboneq.dsl.experiment.experiment import Experiment
 from laboneq.serializers._cache import create_caches
-from laboneq.serializers.base import LabOneQClassicSerializer, VersionedClassSerializer
+from laboneq.serializers._legacy import LabOneQClassicSerializer
+from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.implementations._models._calibration import (
     remove_high_pass_clearing,
 )

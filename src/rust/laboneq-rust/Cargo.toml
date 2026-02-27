@@ -17,7 +17,7 @@ name = "laboneq_rust"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { workspace = true, features = ["anyhow"] }
+pyo3 = { workspace = true }
 num-complex = { workspace = true }
 pyo3-log = { workspace = true }
 anyhow = { workspace = true }
@@ -29,6 +29,7 @@ laboneq-common = { workspace = true }
 laboneq-dsl = { workspace = true }
 codegenerator-py = { workspace = true }
 laboneq-scheduler = { workspace = true }
+laboneq-compiler-py = { workspace = true }
 numeric-array = { workspace = true, features = ["pyo3"] }
 laboneq-units = { workspace = true }
 laboneq-log = { workspace = true }

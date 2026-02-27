@@ -7,10 +7,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-import laboneq._rust.compiler as compiler_rs
-from laboneq.data.compilation_job import ParameterInfo
+from laboneq.data.compilation_job import ParameterInfo, SignalInfo
 
 if TYPE_CHECKING:
+    from laboneq._rust import compiler as compiler_rs
     from laboneq.compiler.common.signal_obj import SignalObj
     from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
     from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
@@ -50,8 +50,12 @@ def build_rs_experiment(
     experiment_dao: ExperimentDAO,
     sampling_rate_tracker: SamplingRateTracker,
     signal_objects: dict[str, SignalObj],
-) -> compiler_rs.ExperimentInfo:
+    compiler_module: compiler_rs,
+    desktop_setup: bool,
+):
     """Builds a Rust representation of the experiment."""
+    compiler_rs = compiler_module
+
     driving_parameters = _resolve_all_driving_parameters(experiment_dao.dsl_parameters)
 
     def maybe_parameter(value: Any) -> compiler_rs.SweepParameter | Any:
@@ -71,8 +75,22 @@ def build_rs_experiment(
             is_shfqc=device_info.is_qc,
         )
 
+    def create_output_routes(
+        signal_info: SignalInfo,
+    ) -> list[compiler_rs.OutputRoute]:
+        return [
+            compiler_rs.OutputRoute(
+                source_channel=route.from_channel,
+                amplitude_scaling=maybe_parameter(route.amplitude),
+                phase_shift=maybe_parameter(route.phase),
+            )
+            for route in signal_info.output_routing or []
+        ]
+
     devices = {}
     signals = []
+    awg_allocation: dict[int, compiler_rs.AwgInfo] = {}
+
     for signal in experiment_dao.signals():
         signal_info = experiment_dao.signal_info(signal)
         device_uid = signal_info.device.uid
@@ -88,12 +106,19 @@ def build_rs_experiment(
                 is_hardware=signal_info.oscillator.is_hardware is True,
             )
         signal_obj = signal_objects[signal]
+
+        awg_key = hash(signal_obj.awg.key)
+        if awg_key not in awg_allocation:
+            awg_allocation[awg_key] = compiler_rs.AwgInfo(
+                uid=awg_key, number=signal_obj.awg.awg_allocation
+            )
+
         s = compiler_rs.Signal(
             uid=signal,
             sampling_rate=sampling_rate_tracker.sampling_rate_for_device(
                 device_uid, signal_info.type
             ),
-            awg_key=hash(signal_obj.awg.key),
+            awg_key=awg_key,
             device_uid=device_uid,
             oscillator=osc,
             lo_frequency=maybe_parameter(signal_info.lo_frequency),
@@ -126,11 +151,59 @@ def build_rs_experiment(
             else None,
             signal_delay=signal_obj.delay_signal or 0.0,
             port_delay=maybe_parameter(signal_obj.port_delay),
-            start_delay=signal_obj.start_delay or 0.0,
+            range=(signal_obj.signal_range.value, signal_obj.signal_range.unit)
+            if signal_obj.signal_range is not None
+            else None,
+            precompensation=_build_precompensation(signal_info, compiler_rs),
+            added_outputs=create_output_routes(signal_info),
         )
         signals.append(s)
     return compiler_rs.build_experiment(
         experiment=experiment_dao.source_experiment,
         signals=signals,
         devices=list(devices.values()),
+        awgs=list(awg_allocation.values()),
+        desktop_setup=desktop_setup,
+    )
+
+
+def _build_precompensation(
+    signal_info: SignalInfo,
+    compiler_rs: compiler_rs,
+):
+    if signal_info.precompensation is None:
+        return None
+    pc = signal_info.precompensation
+    exponential = [
+        compiler_rs.ExponentialCompensation(
+            timeconstant=tc.timeconstant,
+            amplitude=tc.amplitude,
+        )
+        for tc in pc.exponential or []
+    ]
+    high_pass = (
+        None
+        if not pc.high_pass
+        else compiler_rs.HighPassCompensation(timeconstant=pc.high_pass.timeconstant)
+    )
+    bounce = (
+        None
+        if not pc.bounce
+        else compiler_rs.BounceCompensation(
+            delay=pc.bounce.delay,
+            amplitude=pc.bounce.amplitude,
+        )
+    )
+    fir = (
+        None
+        if not pc.FIR
+        else compiler_rs.FirCompensation(
+            coefficients=pc.FIR.coefficients,
+        )
+    )
+    return compiler_rs.Precompensation(
+        exponential=exponential,
+        high_pass=high_pass,
+        bounce=bounce,
+        fir=fir,
     )

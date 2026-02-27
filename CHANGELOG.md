@@ -1,3 +1,34 @@
+# LabOne Q 26.4.0b2 (2026-02-27)
+
+## Features
+
+- Near-time Callbacks now receive an object implementing `RuntimeContext` as their first argument instead of a `Session`. No changes are required to existing callback function definitions except when they use the accessors to experiment data, calibrations, connection state or the device setup. In these cases, the required data must be submitted via the function arguments.  It is still recommended to rename the parameter from `session` to `runtime_context` and update the type hint, if present.
+- Long readout pulses on SHFQA devices are now automatically compressed without requiring the `can_compress` parameter when using hardware with long readout time support.
+- `ModulationType.AUTO` on QA devices in integration mode now resolves to `HARDWARE` only when the device has the LRT option and the acquisition length exceeds 2 µs; shorter acquisitions default to `SOFTWARE` to avoid silent phase-averaging errors and NCO limitations. Long acquisitions (> 2 µs) without LRT now raise a compile-time error. Spectroscopy mode is unchanged and always resolves to `HARDWARE`.
+- Refactored the abstract base classes for the LabOne Q Automation framework (currently in beta), due to be officially released in v26.04.
+
+
+## Bug Fixes
+
+- Fixed a bug where UHFQA AWG status check failed after AWG ready logic change in 26.1.0.
+- Fixed a bug where hardware modulation was not applied when using a short readout on SHFQA with an LTR option.
+- Fixed a bug where stale SHFQA integration kernel downsampling factor persists across sequential experiment runs within the same session.
+- Fixed a bug where deserialization of a compiled experiment that uses local feedback would fail.
+- Fixed a bug where deserialization of a scheduled experiment with RAW acquisition would fail.
+
+## Documentation
+
+- Fix inaccurate description of the `add_reset` argument to `batch_experiment`.
+  The argument adds a *reset* operation not an *active reset* operation.
+  Whether the reset is active or passive is determined by the implementation
+  provided by the quantum operations of the QPU.
+
+## Deprecation Notices
+
+- Deprecated the legacy serializer provided by `laboneq.dsl.serialization` and
+  `laboneq.core.serialization`. These will be removed in LabOneQ 26.7.
+  Use `laboneq.serializers` instead.
+
 # LabOne Q 26.4.0b1 (2026-02-12)
 
 ## Features
@@ -8,7 +39,6 @@
 ## Bug Fixes
 
 - Fixed a bug where a read timeout occurred when running LRT after non-LRT, due to LabOne Q enabling MSD by default even for two states for non-LRT experiments. MSD is now explicitly disabled for LRT.
-- Fixed a bug where hardware modulation was not applied when using a short readout on SHFQA with the LRT option.
 - Fixed a bug where OutputSimulator did not properly decompress long readout (LRT) waveforms on SHFQA, so that simulated output did not match the full hardware playback.
 - Fixed a bug where PSV crashed if a zero-length trigger was present.
 - Fixed a bug where automatic measure section length in QPU did not take readout pulse into account.

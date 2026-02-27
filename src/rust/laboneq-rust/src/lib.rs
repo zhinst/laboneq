@@ -2,9 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use pyo3::prelude::*;
-pub mod error;
 mod logging;
-mod scheduler;
 
 #[pymodule]
 #[pyo3(name = "_rust")]
@@ -24,7 +22,8 @@ fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
     modules.set_item("laboneq._rust.codegenerator", &codegenerator)?;
     m.add_submodule(&codegenerator)?;
 
-    let compiler = scheduler::create_py_module(m.py(), "compiler")?;
+    let compiler = laboneq_compiler_py::create_py_module(m.py(), "compiler")
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
     modules.set_item("laboneq._rust.compiler", &compiler)?;
     m.add_submodule(&compiler)?;
 

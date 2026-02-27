@@ -139,7 +139,6 @@ pub(super) fn handle_set_oscillator_frequency<T: SignalInfo + Sized>(
     let node = ScheduledNode::new(
         IrKind::SetOscillatorFrequency(SetOscillatorFrequency {
             values: signal_osc_value,
-            oscillator_is_hardware: matches!(oscillator_type, Some(OscillatorKind::Hardware)),
         }),
         ScheduleInfoBuilder::new()
             .grid(system_grid)

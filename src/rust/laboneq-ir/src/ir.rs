@@ -155,9 +155,6 @@ impl Loop {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SetOscillatorFrequency {
     pub values: Vec<(SignalUid, ValueOrParameter<f64>)>,
-    /// True when all signals in `values` use a hardware oscillator.
-    /// Software-oscillator nodes are skipped during PSV event generation.
-    pub oscillator_is_hardware: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

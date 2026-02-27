@@ -11,6 +11,7 @@ from typing import Type, TypeVar
 
 import attrs
 import numpy
+import pybase64
 from cattrs import Converter
 from cattrs.gen import make_dict_unstructure_fn
 from cattrs.preconf.orjson import make_converter
@@ -62,6 +63,26 @@ def _structure_complex_or_np_numbers(obj, _):
     if isinstance(obj, list) and len(obj) == 2:
         return numpy.complex128(obj[0], obj[1])
     return obj
+
+
+def _unstructure_bytes(obj: bytes) -> str:
+    """Encode bytes as base64 string."""
+    return pybase64.b64encode(obj).decode("ascii")
+
+
+def _structure_bytes(obj: str, _: Type) -> bytes:
+    """Decode base64 string to bytes."""
+    return pybase64.b64decode(obj.encode("ascii"))
+
+
+def _unstructure_set(obj: set[str]) -> list[str]:
+    """Convert set to sorted list for deterministic serialization."""
+    return sorted(obj)
+
+
+def _structure_set(obj: list[str], _: Type) -> set[str]:
+    """Convert list back to set."""
+    return set(obj)
 
 
 # Supporting functions for serialization
@@ -147,57 +168,81 @@ def _predicate(cls):
 
 
 def register_models(converter: Converter, models: Iterable[type]) -> None:
+    # Partition models into those with custom hooks and those without.
+    # Custom unstructure hooks must be registered first because
+    # make_dict_unstructure_fn resolves field-level hooks at generation time.
+    # If a model B references model A's type for a field, and A has a custom
+    # _unstructure hook, that hook must already be registered when
+    # make_dict_unstructure_fn(B, converter) is called — otherwise cattrs
+    # will silently bind a default handler that produces wrong output.
+    enum_models: list[type] = []
+    custom_hook_models: list[type] = []
+    auto_hook_models: list[type] = []
     for model in models:
         if issubclass(model, Enum):
-            # Register the enum models
-            converter.register_structure_hook(
-                model, lambda d, cls: cls._target_class.value(d)
-            )
-            continue
-        if "_unstructure" in model.__dict__:
-            if hasattr(model, "__cache_serializer__"):
-                converter.register_unstructure_hook_func(
-                    _predicate(model),
-                    model.__cache_serializer__.cache_unstructure(model._unstructure),
-                )
-            else:
-                converter.register_unstructure_hook_func(
-                    _predicate(model), model._unstructure
-                )
+            enum_models.append(model)
+        elif "_unstructure" in model.__dict__ or "_structure" in model.__dict__:
+            custom_hook_models.append(model)
         else:
-            if hasattr(model, "__cache_serializer__"):
-                converter.register_unstructure_hook(
-                    model,
-                    model.__cache_serializer__.cache_unstructure(
-                        make_dict_unstructure_fn(model, converter)
-                    ),
-                )
-            else:
-                converter.register_unstructure_hook(
-                    model, make_dict_unstructure_fn(model, converter)
-                )
+            auto_hook_models.append(model)
 
-        if "_structure" in model.__dict__:
-            if hasattr(model, "__cache_serializer__"):
-                converter.register_structure_hook_func(
-                    _predicate(model),
-                    model.__cache_serializer__.cache_structure(model._structure),
-                )
-            else:
-                converter.register_structure_hook_func(
-                    _predicate(model), model._structure
-                )
+    for model in enum_models:
+        converter.register_structure_hook(
+            model, lambda d, cls: cls._target_class.value(d)
+        )
+
+    # Pass 1: register all custom hooks so they are available for resolution.
+    for model in custom_hook_models:
+        _register_model(converter, model)
+
+    # Pass 2: register auto-generated hooks (may reference custom hooks).
+    for model in auto_hook_models:
+        _register_model(converter, model)
+
+
+def _register_model(converter: Converter, model: type) -> None:
+    if "_unstructure" in model.__dict__:
+        if hasattr(model, "__cache_serializer__"):
+            converter.register_unstructure_hook_func(
+                _predicate(model),
+                model.__cache_serializer__.cache_unstructure(model._unstructure),
+            )
         else:
-            if hasattr(model, "__cache_serializer__"):
-                cache_func = model.__cache_serializer__.cache_structure(structure)
-                converter.register_structure_hook(
-                    model,
-                    lambda d, cls, cache_func=cache_func: cache_func(d, cls, converter),
-                )
-            else:
-                converter.register_structure_hook(
-                    model, lambda d, cls: structure(d, cls, converter)
-                )
+            converter.register_unstructure_hook_func(
+                _predicate(model), model._unstructure
+            )
+    else:
+        if hasattr(model, "__cache_serializer__"):
+            converter.register_unstructure_hook(
+                model,
+                model.__cache_serializer__.cache_unstructure(
+                    make_dict_unstructure_fn(model, converter)
+                ),
+            )
+        else:
+            converter.register_unstructure_hook(
+                model, make_dict_unstructure_fn(model, converter)
+            )
+
+    if "_structure" in model.__dict__:
+        if hasattr(model, "__cache_serializer__"):
+            converter.register_structure_hook_func(
+                _predicate(model),
+                model.__cache_serializer__.cache_structure(model._structure),
+            )
+        else:
+            converter.register_structure_hook_func(_predicate(model), model._structure)
+    else:
+        if hasattr(model, "__cache_serializer__"):
+            cache_func = model.__cache_serializer__.cache_structure(structure)
+            converter.register_structure_hook(
+                model,
+                lambda d, cls, cache_func=cache_func: cache_func(d, cls, converter),
+            )
+        else:
+            converter.register_structure_hook(
+                model, lambda d, cls: structure(d, cls, converter)
+            )
 
 
 def collect_models(module_models: ModuleType) -> frozenset[type]:
@@ -276,5 +321,11 @@ def make_laboneq_converter() -> Converter:
 
     converter.register_unstructure_hook(Enum, unstructure_enum)
     converter.register_structure_hook(Enum, structure_enum)
+
+    converter.register_unstructure_hook(bytes, _unstructure_bytes)
+    converter.register_structure_hook(bytes, _structure_bytes)
+
+    converter.register_unstructure_hook(set, _unstructure_set)
+    converter.register_structure_hook(set, _structure_set)
 
     return converter

@@ -15,7 +15,7 @@ from laboneq.implementation.legacy_adapters.converters_experiment_description im
 from laboneq.implementation.legacy_adapters.device_setup_converter import (
     convert_device_setup_to_setup,
 )
-from laboneq.implementation.payload_builder.payload_builder import PayloadBuilder
+from laboneq.implementation.payload_builder.payload_builder import compile_experiment
 
 if TYPE_CHECKING:
     from laboneq.dsl.device.device_setup import DeviceSetup
@@ -39,19 +39,17 @@ def laboneq_compile(
     new_experiment = convert_Experiment(experiment)
     signal_mapping = convert_signal_map(experiment)
 
-    payload_builder = PayloadBuilder()
-    payload = payload_builder.build_payload(
-        new_setup,
-        new_experiment,
-        signal_mapping,
-        compiler_settings,
+    scheduled_experiment = compile_experiment(
+        device_setup=new_setup,
+        experiment=new_experiment,
+        signal_mappings=signal_mapping,
+        compiler_settings=compiler_settings,
     )
-
     compiled_experiment = CompiledExperiment(
         device_setup=device_setup,
         experiment=experiment,
         compiler_settings=compiler_settings,
         experiment_dict=None,  # deprecated
-        scheduled_experiment=payload.scheduled_experiment,
+        scheduled_experiment=scheduled_experiment,
     )
     return compiled_experiment

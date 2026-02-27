@@ -25,6 +25,7 @@ use crate::passes::analyze_measurements;
 use crate::passes::fanout_awg::fanout_for_awg;
 use crate::result::Acquisition;
 use crate::result::AwgCodeGenerationResult;
+use crate::result::AwgProperties;
 use crate::result::ChannelProperties;
 use crate::result::FeedbackRegisterConfig;
 use crate::result::Measurement;
@@ -42,7 +43,7 @@ use crate::sampled_event_handler::seqc_tracker::FeedbackRegisterIndex;
 use crate::sampled_event_handler::seqc_tracker::awg::Awg;
 use crate::waveform_sampler::SampleWaveforms;
 
-use anyhow::Context;
+use laboneq_error::WithContext;
 use laboneq_log::warn;
 use laboneq_units::tinysample::{tiny_samples, tinysamples_to_seconds};
 use rayon::prelude::*;
@@ -210,7 +211,12 @@ where
         });
     }
 
+    let awg = AwgProperties {
+        key: awg.key(),
+        kind: awg.kind,
+    };
     AwgCodeGenerationResult {
+        awg,
         seqc: awg_events.seqc,
         wave_indices: awg_events.wave_indices,
         command_table: awg_events
@@ -262,7 +268,6 @@ where
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn generate_code_for_multiple_awgs<T: SampleWaveforms + Sync + Send>(
     root: &IrNode,
     awgs: &[AwgCore],
@@ -271,15 +276,18 @@ fn generate_code_for_multiple_awgs<T: SampleWaveforms + Sync + Send>(
 ) -> Result<Vec<AwgCodeGenerationResult<T>>> {
     let awg_results: Vec<AwgCodeGenerationResult<T>> = awgs
         .par_iter()
-        .map(|awg| -> Result<AwgCodeGenerationResult<T>> {
-            let code = generate_code_for_awg(root, awg, ctx, waveform_sampler).context(format!(
-                "Error while generating code for signals: {}",
-                &awg.signals
-                    .iter()
-                    .map(|s| s.uid.0.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))?;
+        .map(|awg| {
+            let code =
+                generate_code_for_awg(root, awg, ctx, waveform_sampler).with_context(|| {
+                    format!(
+                        "Error while generating code for signals: {}",
+                        &awg.signals
+                            .iter()
+                            .map(|s| s.uid.0.to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                })?;
             Ok(code)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -359,11 +367,12 @@ fn construct_result_handle_maps(
 
 pub fn generate_code<T: SampleWaveforms + Sync + Send>(
     root: &IrNode,
-    awgs: Vec<AwgCore>,
+    mut awgs: Vec<AwgCore>,
     acquisition_type: AcquisitionType,
     mut settings: CodeGeneratorSettings,
     sampler: &T,
 ) -> Result<SeqCGenOutput<T>> {
+    awgs.sort_by_key(|a| a.key());
     for msg in settings.sanitize()? {
         warn!(
             "Compiler setting `{}` is sanitized from {} to {}. Reason: {}",
@@ -375,7 +384,7 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
     }
     // Context construction
     let mut feedback_config = collect_feedback_config(root, &awgs)
-        .context("Error while processing feedback configuration")?;
+        .with_context(|| "Error while processing feedback configuration")?;
     let integration_unit_allocation = allocate_integration_units(root, &awgs, &acquisition_type)?;
     let feedback_register_layout =
         calculate_feedback_register_layout(&awgs, &integration_unit_allocation, &feedback_config);
@@ -393,7 +402,7 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
 
     // Result construction
     let total_execution_time = estimate_total_execution_time(root);
-    let measurements = evaluate_measurement_per_device(&awgs, &awg_results);
+    let measurements = evaluate_measurement_per_device(&awg_results);
     let result_handle_maps = construct_result_handle_maps(simulaneous_acquires, &awgs, &ctx);
     let result = SeqCGenOutput {
         awg_results,
@@ -410,11 +419,10 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
 /// The measurements are grouped by device and channel, and the maximum length
 /// of the measurements is taken for each channel.
 fn evaluate_measurement_per_device(
-    awgs: &[AwgCore],
     awg_results: &[AwgCodeGenerationResult<impl SampleWaveforms>],
 ) -> Vec<Measurement> {
     let mut measurements_by_awg: HashMap<AwgKey, Vec<Measurement>> = HashMap::new();
-    for (awg, result) in awgs.iter().zip(awg_results.iter()) {
+    for result in awg_results.iter() {
         if result.integration_lengths.is_empty() {
             continue;
         }
@@ -431,7 +439,7 @@ fn evaluate_measurement_per_device(
             .max()
             .unwrap_or_default();
         measurements_by_awg
-            .entry(awg.key())
+            .entry(result.awg.key.clone())
             .and_modify(|measurement| {
                 for meas in measurement.iter_mut() {
                     meas.length = meas.length.max(max);
@@ -439,8 +447,8 @@ fn evaluate_measurement_per_device(
             })
             .or_default()
             .push(Measurement {
-                device: awg.device.uid().clone(),
-                channel: awg.uid,
+                device: result.awg.key.device_name().clone(),
+                channel: result.awg.key.index(),
                 length: max,
             });
     }

@@ -3,24 +3,30 @@
 
 from __future__ import annotations
 
-from laboneq._rust import compiler as compiler_rs
+from typing import TYPE_CHECKING
+
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
+
+if TYPE_CHECKING:
+    from laboneq._rust import compiler as compiler_rs
 
 
 class Scheduler:
     def __init__(
         self,
-    ): ...
+        compiler_module: compiler_rs,
+    ):
+        self._compiler_module = compiler_module
 
     def run(
         self,
-        experiment: compiler_rs.ExperimentInfo,
+        experiment,
         nt_parameters: ParameterStore[str, float],
-    ) -> compiler_rs.ExperimentIr:
+    ):
         if nt_parameters is None:
             nt_parameters = ParameterStore[str, float]()
 
-        self._scheduled_experiment_rs = compiler_rs.schedule_experiment(
+        self._scheduled_experiment_rs = self._compiler_module.schedule_experiment(
             experiment=experiment,
             parameters={
                 k: v

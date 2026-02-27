@@ -915,7 +915,9 @@ class QAChannel(SHFChannelBase):
                         filename=wave_name,
                     )
 
-        if self._long_readout_available and not uses_lrt:
+        if self._long_readout_available and (
+            not uses_lrt or used_downsampling_factor is None
+        ):
             nc.add("integration/downsampling/factor", 1, cache=False)
 
         if integration_length is not None:

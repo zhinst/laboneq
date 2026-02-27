@@ -49,6 +49,8 @@ from laboneq.data.experiment_description import (
     ExperimentSignal,
     PlayPulse,
     PrngLoop,
+    PulseFunctional,
+    PulseSampled,
     Section,
     SignalOperation,
     Sweep,
@@ -97,6 +99,9 @@ class ExperimentInfoBuilder:
 
         self._sweep_params_min_maxes: dict[str, tuple[float, float]] = {}
         self._acquisition_type: acq_type.AcquisitionType | None = None
+        # Max acquire length per signal (seconds), used for AUTO modulation
+        # type resolution on QA devices with LRT.
+        self._max_acquire_lengths: dict[str, float] = {}
         # Rust migration helper fields:
         # Parameters defined in the experiment.
         self._dsl_parameters: dict[str, Parameter] = {}
@@ -106,9 +111,8 @@ class ExperimentInfoBuilder:
         for signal in self._experiment.signals:
             self._load_signal(signal)
 
-        section_uid_map: dict[str, Section] = {}
         for section in self._experiment.sections:
-            self._walk_sections(section, section_uid_map)
+            self._walk_sections(section)
         self._validate_realtime(self._experiment.sections)
 
         experiment_info = ExperimentInfo(
@@ -524,7 +528,6 @@ class ExperimentInfoBuilder:
     def _walk_sections(
         self,
         section: Section,
-        section_uid_map: dict[str, Section],
     ):
         if isinstance(section, AcquireLoopRt):
             if self._acquisition_type is not None:
@@ -533,23 +536,16 @@ class ExperimentInfoBuilder:
                 )
             self._acquisition_type = section.acquisition_type
 
-        if section.uid in section_uid_map and section != section_uid_map[section.uid]:
-            raise LabOneQException(
-                f"Duplicate section uid '{section.uid}' found in experiment"
-            )
-        section_uid_map[section.uid] = section
-
         self._load_section(section)
         for child in section.children:
             if isinstance(child, Section):
-                self._walk_sections(child, section_uid_map)
+                self._walk_sections(child)
             else:
-                self._visit_operation(child, section)
+                self._visit_operation(child)
 
     def _visit_operation(
         self,
         operation: SignalOperation,
-        section: Section,
     ):
         """Visit a signal operation and extract parameter information."""
         if isinstance(operation, Delay):
@@ -565,6 +561,11 @@ class ExperimentInfoBuilder:
             for params in pulse_params:
                 for param_value in (params or {}).values():
                     self.opt_param(param_value)
+            # Track acquire length for AUTO modulation type resolution
+            acquire_length = self._estimate_acquire_length(operation)
+            if acquire_length is not None and operation.signal is not None:
+                prev = self._max_acquire_lengths.get(operation.signal, 0.0)
+                self._max_acquire_lengths[operation.signal] = max(prev, acquire_length)
 
         elif isinstance(operation, PlayPulse):
             # Parametrized fields
@@ -649,16 +650,91 @@ class ExperimentInfoBuilder:
                 root_section, in_realtime=False
             )
 
+    #: Threshold above which AUTO modulation resolves to HARDWARE on QA devices
+    #: with LRT option. Below this, SOFTWARE is used for integration mode.
+    #: This corresponds to 4096 samples at the SHFQA's 2 GHz sampling rate.
+    _LRT_HW_MODULATION_THRESHOLD = 4096 / 2e9  # 2.048 us
+
+    @staticmethod
+    def _estimate_acquire_length(operation: Acquire) -> float | None:
+        """Best-effort estimate of the acquire length from DSL-level info.
+
+        Returns the length in seconds, or None if the length cannot be
+        determined at this stage.
+        """
+        # Explicit length takes precedence (used in spectroscopy mode).
+        if operation.length is not None:
+            return operation.length
+        # Try to derive length from kernel pulse(s).
+        if operation.kernel is not None:
+            kernels = (
+                operation.kernel
+                if isinstance(operation.kernel, list)
+                else [operation.kernel]
+            )
+            max_len = 0.0
+            for pulse in kernels:
+                if isinstance(pulse, PulseFunctional) and isinstance(
+                    pulse.length, (int, float)
+                ):
+                    max_len = max(max_len, float(pulse.length))
+                elif isinstance(pulse, PulseSampled) and pulse.samples is not None:
+                    # Acquire is always on an SHFQA device.
+                    samples = pulse.samples
+                    sample_count = len(samples)
+                    max_len = max(
+                        max_len,
+                        sample_count / DeviceType.SHFQA.sampling_rate,
+                    )
+            if max_len > 0:
+                return max_len
+        return None
+
     def _resolve_oscillator_modulation_type(self, experiment_info: ExperimentInfo):
         for signal in experiment_info.signals:
             if (osc := signal.oscillator) is None:
                 continue
             if osc.is_hardware is not None:
                 continue
-            is_qa_device = DeviceType.from_device_info_type(
-                signal.device.device_type
-            ).is_qa_device
-            if is_qa_device and "LRT" not in signal.device.dev_opts:
+            if signal.device.device_type is DeviceInfoType.SHFQA:
+                has_lrt = "LRT" in signal.device.dev_opts
+                max_acq_len = self._max_acquire_lengths.get(signal.uid, 0.0)
+                is_long_readout = max_acq_len > self._LRT_HW_MODULATION_THRESHOLD
+                if (
+                    is_long_readout
+                    and not has_lrt
+                    and not acq_type.is_spectroscopy(self._acquisition_type)
+                ):
+                    raise LabOneQException(
+                        f"Acquisition length on signal '{signal.uid}' exceeds"
+                        f" {self._LRT_HW_MODULATION_THRESHOLD * 1e6:.3f} µs"
+                        f" (4096 samples) and"
+                        f" requires hardware modulation, but the device"
+                        f" '{signal.device.uid}' does not have the LRT option"
+                        f" installed. Either reduce the acquisition length or"
+                        f" set the oscillator modulation type explicitly."
+                    )
+                if (
+                    has_lrt
+                    and not acq_type.is_spectroscopy(self._acquisition_type)
+                    and is_long_readout
+                ):
+                    # Long readout on a device with LRT support: use hardware
+                    # modulation so that the NCO handles the long integration.
+                    osc.is_hardware = True
+                    if self._acquisition_type is acq_type.AcquisitionType.RAW:
+                        _logger.warning(
+                            f"Oscillator '{osc.uid}' on signal"
+                            f" '{signal.uid}' resolved to HARDWARE modulation"
+                            f" in RAW acquisition mode. Set"
+                            f" reset_oscillator_phase=True on the"
+                            f" acquire_loop_rt, or use"
+                            f" ModulationType.SOFTWARE explicitly, to avoid"
+                            f" the signal averaging out."
+                        )
+                else:
+                    osc.is_hardware = acq_type.is_spectroscopy(self._acquisition_type)
+            elif signal.device.device_type is DeviceInfoType.UHFQA:
                 osc.is_hardware = acq_type.is_spectroscopy(self._acquisition_type)
             elif (
                 signal.type is SignalInfoType.RF

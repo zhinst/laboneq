@@ -1,18 +1,18 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_error::bail;
+
+use crate::Result;
 use crate::ir::{AcquirePulse, IrNode, NodeKind, PlayAcquire, Samples};
 use crate::passes::handle_oscillators::SoftwareOscillatorParameters;
 use crate::utils::floor_to_grid;
-use crate::{Error, Result};
 use std::sync::Arc;
 
 fn validate(pulse: &AcquirePulse) -> Result<()> {
     assert_ne!(pulse.length, 0, "Acquire length must be non-zero");
     if pulse.pulse_defs.len() != pulse.id_pulse_params.len() {
-        return Err(Error::new(
-            "Pulse definitions and ID pulse parameters must match in length",
-        ));
+        bail!("Pulse definitions and ID pulse parameters must match in length",);
     }
     Ok(())
 }

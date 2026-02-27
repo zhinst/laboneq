@@ -6,7 +6,8 @@ from __future__ import annotations
 import logging
 
 from laboneq.dsl.calibration.calibration import Calibration
-from laboneq.serializers.base import LabOneQClassicSerializer, VersionedClassSerializer
+from laboneq.serializers._legacy import LabOneQClassicSerializer
+from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.serializer_registry import serializer
 from laboneq.serializers.types import (
     DeserializationOptions,

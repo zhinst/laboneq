@@ -17,7 +17,8 @@ use super::seqc_tracker::seqc_statements::SeqCVariant;
 use super::seqc_tracker::tracker::{SeqCTracker, top_loop_stack_generators_have_statements};
 use super::seqc_tracker::wave_index_tracker::{SignalType, WaveIndexTracker};
 use super::shfppc_sweeper_config_tracker::SHFPPCSweeperConfigTracker;
-use super::{AwgEventList, FeedbackRegisterIndex, Result, Samples, SeqcResults};
+use super::{AwgEventList, FeedbackRegisterIndex, Samples, SeqcResults};
+use crate::Result;
 use crate::device_traits::{self};
 use crate::ir::compilation_job::{AwgKey, AwgKind, ChannelIndex, DeviceKind, TriggerMode};
 use crate::ir::experiment::{AcquisitionType, Handle, SweepCommand};
@@ -25,6 +26,7 @@ use crate::ir::{OscillatorFrequencySweepStep, ParameterOperation, SignalUid};
 use crate::sample_waveforms::WaveDeclaration;
 use core::str;
 use indexmap::IndexMap;
+use laboneq_error::{bail, laboneq_error};
 use std::collections::{HashMap, HashSet};
 
 type WaveIndex = u32;
@@ -209,9 +211,9 @@ fn add_wait_trigger_statements(
             // HDAWG+UHFQA connected via DIO, no PQSC
             if awg.awg_key.index() == 0 {
                 if awg.is_reference_clock_internal {
-                    return Err(anyhow::anyhow!(
+                    bail!(
                         "HDAWG+UHFQA system can only be used with an external clock connected to HDAWG in order to prevent jitter."
-                    ));
+                    );
                 }
                 init_generator.add_function_call_statement(
                     "waitDigTrigger",
@@ -321,14 +323,14 @@ fn check_state_coverage(
         .expect("Internal error: No last entry in command table")
         .0;
     if first != 0 || (last - first + 1) as usize != sorted_ct_entries.len() {
-        return Err(anyhow::anyhow!(
+        bail!(
             "States missing in match statement for {}. First state: {}, last state: {}, number of states: {}, expected {}, starting from 0.",
             id_generator(),
             first,
             last,
             sorted_ct_entries.len(),
             last + 1
-        ));
+        );
     }
     Ok(())
 }
@@ -440,7 +442,7 @@ impl<'a> SampledEventHandler<'a> {
 
     fn assert_command_table(&self, msg: &str) -> Result<()> {
         if !self.awg.device_kind.traits().supports_command_table {
-            return Err(anyhow::anyhow!("Internal error: {msg}"));
+            bail!("Internal error: {msg}");
         }
         Ok(())
     }
@@ -514,9 +516,9 @@ impl<'a> SampledEventHandler<'a> {
                     match_parent_event.start,
                 )?;
             } else {
-                return Err(anyhow::anyhow!(
+                bail!(
                     "Internal error: Found match/case statement without handle, prng_sample or user_register."
-                ));
+                );
             }
         } else {
             assert!(
@@ -543,9 +545,7 @@ impl<'a> SampledEventHandler<'a> {
         ))?;
         if let Some(previous_entry) = self.match_command_table_entries.get(&state) {
             if previous_entry != &(signature, wave_index, start - parent_match_start) {
-                return Err(anyhow::anyhow!(
-                    "Duplicate state {state} with different pulses for handle {handle} found.",
-                ));
+                bail!("Duplicate state {state} with different pulses for handle {handle} found.",);
             }
         } else {
             self.match_command_table_entries
@@ -601,9 +601,9 @@ impl<'a> SampledEventHandler<'a> {
         self.assert_command_table("Found PRNG statement on unsupported device.")?;
         if let Some(entry) = self.match_command_table_entries.get(&state) {
             if entry != &(waveform, wave_index, start - parent_match_start) {
-                return Err(anyhow::anyhow!(
+                bail!(
                     "Duplicate state {state} with different pulses for PRNG found in section {section}."
-                ));
+                );
             }
         } else {
             self.match_command_table_entries
@@ -684,7 +684,7 @@ impl<'a> SampledEventHandler<'a> {
         if let Some(match_parent_event) = self.match_parent_event
             && let EventType::Match(parent_data) = &match_parent_event.kind
         {
-            return Err(anyhow::anyhow!(
+            bail!(
                 "Simultaneous match events on the same physical AWG are not supported. \
                 Affected handles/user registers: '{}' and '{}'",
                 parent_data
@@ -702,7 +702,7 @@ impl<'a> SampledEventHandler<'a> {
                         .map(|ur| ur.to_string())
                         .unwrap_or("PRNG".to_string())
                 ),
-            ));
+            );
         } else {
             self.match_seqc_generators.clear();
         }
@@ -1228,7 +1228,7 @@ impl<'a> SampledEventHandler<'a> {
                     SignalType::SIGNAL(self.awg.signal_kind),
                 )
                 .map_err(|_| {
-                    anyhow::anyhow!(
+                    laboneq_error!(
                         "Internal error: Could not create wave index for precompensation reset."
                     )
                 })?;
@@ -1384,7 +1384,7 @@ impl<'a> SampledEventHandler<'a> {
                     .command_table_tracker
                     .get(idx as usize + command_table_offset as usize)
                     .map_err(|e| {
-                        anyhow::anyhow!("Internal error: Error retrieving command table entry: {e}")
+                        laboneq_error!("Internal error: Error retrieving command table entry: {e}")
                     })?;
                 let current_wf_idx = current_ct_entry
                     .1
@@ -1400,9 +1400,9 @@ impl<'a> SampledEventHandler<'a> {
                     });
                 if current_ct_entry.0.waveform != signature.waveform || wave_index != current_wf_idx
                 {
-                    return Err(anyhow::anyhow!(
+                    bail!(
                         "Multiple command table entry sets for feedback (handle {handle}), do you use the same pulses and states?"
-                    ));
+                    );
                 }
             }
         } else {
@@ -1441,9 +1441,7 @@ impl<'a> SampledEventHandler<'a> {
         )?;
         let use_zsync = !local;
         if self.zsync_feedback_active.is_some() && self.zsync_feedback_active != Some(use_zsync) {
-            return Err(anyhow::anyhow!(
-                "Mixed feedback paths (global and local) are illegal"
-            ));
+            bail!("Mixed feedback paths (global and local) are illegal");
         }
         self.zsync_feedback_active = Some(use_zsync);
         self.seqc_tracker.add_timing_comment(match_parent_event_end);
@@ -1460,9 +1458,9 @@ impl<'a> SampledEventHandler<'a> {
         match_parent_match_end: Samples,
     ) -> Result<()> {
         if user_register > 15 {
-            return Err(anyhow::anyhow!(
+            bail!(
                 "Invalid user register {user_register} in match statement. User registers must be between 0 and 15."
-            ));
+            );
         }
         let var_name = format!("_match_user_register_{user_register}");
         let _ = self.declarations_generator.add_variable_declaration(

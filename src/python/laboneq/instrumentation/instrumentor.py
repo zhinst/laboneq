@@ -230,6 +230,16 @@ class LabOneQInstrumentor(BaseInstrumentor):
 
     _instrumentors = [SessionInstrumentor, CompilerInstrumentor, ControllerInstrumentor]
 
+    @classmethod
+    def register_instrumentor(cls, instrumentor_class: type) -> None:
+        """Register an additional instrumentor.
+
+        Backend plugins can register their instrumentor classes to be
+        included when LabOne Q tracing is activated.
+        """
+        if instrumentor_class not in cls._instrumentors:
+            cls._instrumentors.append(instrumentor_class)
+
     def instrumentation_dependencies(self):
         return [f"laboneq == {__version__}"]
 

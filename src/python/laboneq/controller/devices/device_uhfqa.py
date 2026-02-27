@@ -299,6 +299,12 @@ class DeviceUHFQA(DeviceBase):
             ),
         )
 
+    async def on_experiment_end(self):
+        await _gather(
+            super().on_experiment_end(),
+            *(core.stop_result_logger() for core in self._awg_cores),
+        )
+
     def _ch_repr_monitor(self, ch: int) -> str:
         return f"{self.dev_repr}:monitor{ch}"
 

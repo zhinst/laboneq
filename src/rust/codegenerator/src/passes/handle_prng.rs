@@ -4,7 +4,7 @@
 use crate::Result;
 use crate::ir;
 use crate::ir::SectionId;
-use anyhow::anyhow;
+use laboneq_error::bail;
 use std::collections::HashSet;
 
 fn handle_prng_recursive(
@@ -20,11 +20,10 @@ fn handle_prng_recursive(
                 if let Some(ref section_id) = parent_prng_setup_section_here
                     && section_id != &data.section_info.id
                 {
-                    return Err(anyhow::anyhow!(
+                    bail!(
                         "PRNG setup already exists while processing section {}",
                         data.section_info.name
-                    )
-                    .into());
+                    );
                 }
                 parent_prng_setup_section_here = Some(data.section_info.id);
                 cut_points.insert(*child.offset());
@@ -36,10 +35,9 @@ fn handle_prng_recursive(
                 let mut reset_active_prng_sample = false;
                 if let Some(sample_name) = &ob.prng_sample {
                     if let Some(other_sample) = active_prng_sample {
-                        return Err(anyhow!(
+                        bail!(
                             "Nested PRNG loops are not allowed: '{sample_name}' (current) vs '{other_sample}' (existing)"
-                        )
-                        .into());
+                        );
                     }
                     *active_prng_sample = Some(sample_name.clone());
                     reset_active_prng_sample = true;
@@ -58,14 +56,14 @@ fn handle_prng_recursive(
                 if let Some(sample_name) = &data.prng_sample
                     && data.prng_sample != *active_prng_sample
                 {
-                    return Err(anyhow!(
+                    bail!(
                         "In section '{}': cannot match PRNG sample '{}' here. The only available PRNG sample is '{}'.",
                         data.section_info.name,
                         sample_name,
-                                                  active_prng_sample
+                        active_prng_sample
                             .as_ref()
                             .unwrap_or(&String::from("<empty>")),
-                    ).into());
+                    );
                 }
                 handle_prng_recursive(
                     child,

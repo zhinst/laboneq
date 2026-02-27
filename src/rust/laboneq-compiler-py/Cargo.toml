@@ -1,0 +1,39 @@
+[package]
+name = "laboneq-compiler-py"
+authors.workspace = true
+description = "Python bindings for laboneq-compiler"
+documentation.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "laboneq_compiler_py"
+crate-type = ["lib"]
+
+[dependencies]
+pyo3 = { workspace = true, features = ["anyhow"] }
+num-complex = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+smallvec = { workspace = true }
+serde_json = { workspace = true }
+num-integer = { workspace = true }
+
+laboneq-common = { workspace = true }
+laboneq-dsl = { workspace = true }
+laboneq-scheduler = { workspace = true }
+numeric-array = { workspace = true, features = ["pyo3"] }
+laboneq-units = { workspace = true }
+laboneq-log = { workspace = true }
+laboneq-ir = { workspace = true }
+laboneq-py-utils = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }
+laboneq-dsl = { workspace = true, features = ["test_utils"] }

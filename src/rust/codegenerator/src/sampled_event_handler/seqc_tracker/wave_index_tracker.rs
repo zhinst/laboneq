@@ -1,10 +1,11 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::Result;
 use crate::ir::compilation_job::AwgKind;
 use crate::sampled_event_handler::awg_events::StaticWaveformSignature;
-use crate::{Error, Result};
 use indexmap::IndexMap;
+use laboneq_error::bail;
 
 pub type WaveIndex = u32;
 
@@ -45,7 +46,7 @@ impl WaveIndexTracker {
         signal_type: SignalType,
     ) -> Result<WaveIndex> {
         if self.wave_indices.contains_key(wave_id) {
-            return Err(Error::new("Wave ID already exists"));
+            bail!("Wave ID already exists");
         }
         let index = self.next_wave_index;
         self.next_wave_index += 1;

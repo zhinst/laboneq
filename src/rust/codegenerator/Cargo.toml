@@ -14,7 +14,6 @@ workspace = true
 
 
 [dependencies]
-anyhow = { workspace = true }
 derive_more = { workspace = true, features = ["from"] }
 indexmap = { workspace = true }
 log = { workspace = true }
@@ -30,6 +29,7 @@ interval-calculator = { workspace = true }
 numeric-array = { workspace = true }
 laboneq-units = { workspace = true }
 laboneq-common = { workspace = true }
+laboneq-error = { workspace = true }
 laboneq-log = { workspace = true }
 laboneq-ir = { workspace = true }
 laboneq-dsl = { workspace = true }
