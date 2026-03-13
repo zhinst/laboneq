@@ -5,29 +5,33 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from typing import TYPE_CHECKING, Any
 
-from laboneq.data.compilation_job import ParameterInfo, SignalInfo
+from laboneq.data.compilation_job import DeviceInfoType, ParameterInfo, SignalInfo
+from laboneq.implementation.utils.devices import parse_device_options
 
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
     from laboneq.compiler.common.signal_obj import SignalObj
     from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-    from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
     from laboneq.data.compilation_job import DeviceInfo
-    from laboneq.data.parameter import Parameter
+    from laboneq.dsl.parameter import Parameter
 
 
 def _resolve_parents(parameter: Parameter) -> set[str]:
     # NOTE: Legacy serializer fails if imported at the top level
-    from laboneq.data.parameter import SweepParameter
+    from laboneq.data.parameter import SweepParameter as DataSweepParameter
+    from laboneq.dsl.parameter import SweepParameter
 
     parents = set()
 
     def _traverse(param: Parameter):
-        if not isinstance(param, SweepParameter):
+        # TODO(DSL cutover): Remove DataSweepParameter once setup calibration uses DSL types.
+        if not isinstance(param, (SweepParameter, DataSweepParameter)):
             return
-        for driver in param.driven_by:
+        for driver in param.driven_by or []:
             if driver.uid not in parents:
                 parents.add(driver.uid)
                 _traverse(driver)
@@ -46,15 +50,42 @@ def _resolve_all_driving_parameters(
     return {k: list(v) for k, v in parents.items()}
 
 
+def _resolve_default_options(
+    options: str, device_type: DeviceInfoType, is_qc: bool
+) -> list[str]:
+    dev_type, options = parse_device_options(options)
+    options = options or []
+    # TODO(2K): This is a workaround, as options string is still not
+    # enforced in the device setup.
+    if dev_type is not None:
+        return [dev_type, *options]
+    if device_type == DeviceInfoType.UHFQA:
+        dev_type = "UHFQA"
+    elif device_type == DeviceInfoType.HDAWG:
+        dev_type = "HDAWG8"
+    elif is_qc:
+        options = ["QC6CH"] if not options else options
+        return ["SHFQC", *options]
+    elif device_type == DeviceInfoType.SHFQA:
+        dev_type = "SHFQA2"
+    elif device_type == DeviceInfoType.SHFSG:
+        dev_type = "SHFSG8"
+    else:
+        return []
+    # TODO(2K): Add warning for missing options in the device setup
+    out = [dev_type, *options]
+    return out
+
+
 def build_rs_experiment(
     experiment_dao: ExperimentDAO,
-    sampling_rate_tracker: SamplingRateTracker,
     signal_objects: dict[str, SignalObj],
     compiler_module: compiler_rs,
     desktop_setup: bool,
 ):
     """Builds a Rust representation of the experiment."""
     compiler_rs = compiler_module
+    compiler_rs.init_logging(logging.getLogger("laboneq").getEffectiveLevel())
 
     driving_parameters = _resolve_all_driving_parameters(experiment_dao.dsl_parameters)
 
@@ -73,6 +104,12 @@ def build_rs_experiment(
             physical_device_uid=device_info.physical_device_uid,
             kind=device_info.device_type.name,
             is_shfqc=device_info.is_qc,
+            options=_resolve_default_options(
+                device_info.options, device_info.device_type, device_info.is_qc
+            ),
+            reference_clock=device_info.reference_clock_source.name
+            if device_info.reference_clock_source is not None
+            else None,
         )
 
     def create_output_routes(
@@ -87,17 +124,18 @@ def build_rs_experiment(
             for route in signal_info.output_routing or []
         ]
 
-    devices = {}
+    devices = [
+        create_device(device_info)
+        for device_info in experiment_dao.device_infos()
+        if device_info.device_type != DeviceInfoType.NONQC
+    ]
+
     signals = []
     awg_allocation: dict[int, compiler_rs.AwgInfo] = {}
 
     for signal in experiment_dao.signals():
         signal_info = experiment_dao.signal_info(signal)
         device_uid = signal_info.device.uid
-        if device_uid not in devices:
-            device = experiment_dao.device_info(device_uid)
-            devices[device_uid] = create_device(device)
-
         osc = None
         if signal_info.oscillator is not None:
             osc = compiler_rs.Oscillator(
@@ -115,9 +153,6 @@ def build_rs_experiment(
 
         s = compiler_rs.Signal(
             uid=signal,
-            sampling_rate=sampling_rate_tracker.sampling_rate_for_device(
-                device_uid, signal_info.type
-            ),
             awg_key=awg_key,
             device_uid=device_uid,
             oscillator=osc,
@@ -149,7 +184,7 @@ def build_rs_experiment(
             port_mode=signal_info.port_mode.value
             if signal_info.port_mode is not None
             else None,
-            signal_delay=signal_obj.delay_signal or 0.0,
+            signal_delay=signal_info.delay_signal or 0.0,
             port_delay=maybe_parameter(signal_obj.port_delay),
             range=(signal_obj.signal_range.value, signal_obj.signal_range.unit)
             if signal_obj.signal_range is not None
@@ -158,13 +193,49 @@ def build_rs_experiment(
             added_outputs=create_output_routes(signal_info),
         )
         signals.append(s)
-    return compiler_rs.build_experiment(
-        experiment=experiment_dao.source_experiment,
-        signals=signals,
-        devices=list(devices.values()),
-        awgs=list(awg_allocation.values()),
-        desktop_setup=desktop_setup,
+
+    use_capnp = os.environ.get("LABONEQ_SERIALIZATION", "capnp").lower() != "legacy"
+    verify = os.environ.get("LABONEQ_VERIFY_SERIALIZATION", "0").lower() in (
+        "1",
+        "true",
+        "yes",
     )
+
+    if use_capnp:
+        use_packed = os.environ.get("LABONEQ_CAPNP_PACKED", "0").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        capnp_bytes = compiler_rs.serialize_experiment(
+            experiment_dao.source_experiment, packed=use_packed
+        )
+        capnp_result = compiler_rs.build_experiment_capnp(
+            capnp_bytes,
+            signals=signals,
+            devices=devices,
+            awgs=list(awg_allocation.values()),
+            desktop_setup=desktop_setup,
+            packed=use_packed,
+        )
+        if verify:
+            legacy_result = compiler_rs.build_experiment(
+                experiment=experiment_dao.source_experiment,
+                signals=signals,
+                devices=devices,
+                awgs=list(awg_allocation.values()),
+                desktop_setup=desktop_setup,
+            )
+            compiler_rs.assert_experiment_equivalent(capnp_result, legacy_result)
+        return capnp_result
+    else:
+        return compiler_rs.build_experiment(
+            experiment=experiment_dao.source_experiment,
+            signals=signals,
+            devices=devices,
+            awgs=list(awg_allocation.values()),
+            desktop_setup=desktop_setup,
+        )
 
 
 def _build_precompensation(

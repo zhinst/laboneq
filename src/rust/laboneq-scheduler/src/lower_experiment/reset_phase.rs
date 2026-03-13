@@ -64,9 +64,13 @@ fn create_schedule<T: SignalInfo>(
             let grid_adjusted = lcm(grid, duration.value());
             // TODO: Returns a dedicated result type with logging information instead of logging directly here?
             if grid != grid_adjusted {
+                let section_label = ctx
+                    .id_store
+                    .resolve(section_uid)
+                    .unwrap_or("unnamed section");
                 diagnostic!(
                     "Phase reset in section '{}' has extended the section's timing grid to {}, so to be commensurate with the local oscillator.",
-                    ctx.resolve_uid(section_uid)?,
+                    section_label,
                     tinysamples_to_seconds(tiny_samples(grid_adjusted)),
                 );
             }

@@ -9,7 +9,7 @@ use laboneq_dsl::types::{
     AmplifierPump, DeviceUid, Oscillator, OscillatorKind, SignalUid, ValueOrParameter,
 };
 use laboneq_ir::signal::{PortMode, Signal, SignalKind};
-use laboneq_ir::system::{Device, DeviceSetup};
+use laboneq_ir::system::{AwgDevice, DeviceSetup};
 use laboneq_scheduler::SignalInfo;
 
 use laboneq_units::duration::{Duration, Second};
@@ -18,16 +18,16 @@ use laboneq_units::duration::{Duration, Second};
 /// Provides convenient access to signal and device properties.
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub(crate) struct SignalView<'a> {
-    device: &'a Device,
+    device: &'a AwgDevice,
     signal: &'a Signal,
 }
 
 impl SignalView<'_> {
-    pub(crate) fn new<'a>(device: &'a Device, signal: &'a Signal) -> SignalView<'a> {
+    pub(crate) fn new<'a>(device: &'a AwgDevice, signal: &'a Signal) -> SignalView<'a> {
         SignalView { device, signal }
     }
 
-    pub(crate) fn device(&self) -> &Device {
+    pub(crate) fn device(&self) -> &AwgDevice {
         self.device
     }
 
@@ -43,7 +43,7 @@ impl SignalView<'_> {
         self.signal.automute
     }
 
-    pub(crate) fn device_kind(&self) -> &DeviceKind {
+    pub(crate) fn device_kind(&self) -> DeviceKind {
         self.device.kind()
     }
 
@@ -52,7 +52,7 @@ impl SignalView<'_> {
     }
 
     pub(crate) fn device_traits(&self) -> &'static DeviceTraits {
-        DeviceTraits::from_device_kind(self.device_kind())
+        DeviceTraits::from_device_kind(&self.device_kind())
     }
 
     pub(crate) fn sampling_rate(&self) -> f64 {
@@ -94,6 +94,10 @@ impl SignalView<'_> {
             .is_some_and(|osc| matches!(osc.kind, OscillatorKind::Hardware))
     }
 
+    pub(crate) fn has_option(&self, opt: &str) -> bool {
+        self.device.has_option(opt)
+    }
+
     pub(crate) fn signal_delay(&self) -> Duration<Second> {
         self.signal.signal_delay
     }
@@ -121,7 +125,7 @@ impl SignalInfo for SignalView<'_> {
     }
 
     fn device_traits(&self) -> &'static DeviceTraits {
-        DeviceTraits::from_device_kind(self.device_kind())
+        DeviceTraits::from_device_kind(&self.device_kind())
     }
 
     fn oscillator(&self) -> Option<&Oscillator> {
@@ -132,8 +136,8 @@ impl SignalInfo for SignalView<'_> {
         self.lo_frequency()
     }
 
-    fn supports_initial_local_oscillator_frequency(&self) -> bool {
-        DeviceTraits::from_device_kind(self.device_kind()).device_class != 0
+    fn supports_initial_oscillator_frequency(&self) -> bool {
+        DeviceTraits::from_device_kind(&self.device_kind()).device_class != 0
     }
 
     fn voltage_offset(&self) -> Option<&ValueOrParameter<f64>> {
@@ -141,7 +145,7 @@ impl SignalInfo for SignalView<'_> {
     }
 
     fn supports_initial_voltage_offset(&self) -> bool {
-        DeviceTraits::from_device_kind(self.device_kind()).device_class != 0
+        DeviceTraits::from_device_kind(&self.device_kind()).device_class != 0
     }
 
     fn amplifier_pump(&self) -> Option<&AmplifierPump> {
@@ -149,7 +153,7 @@ impl SignalInfo for SignalView<'_> {
     }
 
     fn supports_multiple_acquisition_lengths(&self) -> bool {
-        matches!(self.device_kind(), DeviceKind::PrettyPrinterDevice)
+        matches!(self.device_kind(), DeviceKind::Zqcs)
     }
 }
 

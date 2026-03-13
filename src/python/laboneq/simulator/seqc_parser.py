@@ -35,7 +35,7 @@ from pycparser.c_parser import CParser
 from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
 from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.utilities.prng import PRNG
-from laboneq.data.recipe import Recipe, RoutedOutput, TriggeringMode
+from laboneq.data.recipe import Recipe, RoutedOutput
 from laboneq.data.scheduled_experiment import ArtifactsCodegen
 
 if TYPE_CHECKING:
@@ -1051,14 +1051,7 @@ def analyze_recipe(
         sampling_rate = init.config.sampling_rate
         if sampling_rate is None or sampling_rate == 0:
             sampling_rate = get_frequency(device_type)
-        startup_delay = -80e-9
-        if device_type == "HDAWG":
-            triggering_mode = init.config.triggering_mode
-            if triggering_mode == TriggeringMode.DESKTOP_LEADER:
-                if sampling_rate == 2e9:
-                    startup_delay = -24e-9
-                else:
-                    startup_delay = -20e-9
+        startup_delay = -init.config.lead_delay
 
         # TODO(2K): input port_delay previously was not taken into account by the simulator
         # - keeping it as is for not breaking the tests. To be cleaned up.

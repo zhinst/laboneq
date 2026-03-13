@@ -24,7 +24,7 @@ if TYPE_CHECKING:
         HighPassCompensation,
         PortMode,
     )
-    from laboneq.data.experiment_description import Experiment
+    from laboneq.dsl.experiment import Experiment
     from laboneq.dsl.parameter import Parameter
     from laboneq.executor.executor import Statement
 
@@ -40,7 +40,7 @@ class DeviceInfoType(EnumReprMixin, Enum):
     PQSC = "pqsc"
     QHUB = "qhub"
     SHFPPC = "shfppc"
-    PRETTYPRINTERDEVICE = "prettyprinterdevice"
+    ZQCS = "zqcs"
     NONQC = "nonqc"
 
 
@@ -99,43 +99,12 @@ class DeviceInfo:
     # This UID is used to group virtual devices that share the same
     # physical hardware, enabling proper device detection.
     physical_device_uid: int
+    options: str = field(default_factory=str)
     dev_type: str | None = None
     dev_opts: list[str] = field(default_factory=list)
     reference_clock_source: ReferenceClockSourceInfo | None = None
     is_qc: bool | None = None
     followers: list[str] = field(default_factory=list)
-
-    @property
-    def seqc_dev_type(self) -> str:
-        # TODO(2K): This is a workaround, as options string is still not
-        # enforced in the device setup.
-        if self.dev_type is not None:
-            return self.dev_type
-        if self.device_type == DeviceInfoType.UHFQA:
-            dev_type = "UHFQA"
-        elif self.device_type == DeviceInfoType.HDAWG:
-            dev_type = "HDAWG8"
-        elif self.is_qc:
-            dev_type = "SHFQC"
-        elif self.device_type == DeviceInfoType.SHFQA:
-            dev_type = "SHFQA2"
-        elif self.device_type == DeviceInfoType.SHFSG:
-            dev_type = "SHFSG8"
-        else:
-            # TODO(2K): We should never reach this point
-            raise AssertionError(
-                "Internal error: Unexpected device type for SeqC compilation."
-            )
-        # TODO(2K): Add warning for missing options in the device setup
-        return dev_type
-
-    @property
-    def seqc_dev_opts(self) -> list[str]:
-        # TODO(2K): This is a workaround, as options string is still not
-        # enforced in the device setup.
-        if self.dev_type is None and self.is_qc:
-            return ["QC6CH"]
-        return self.dev_opts
 
 
 @dataclass
@@ -316,7 +285,6 @@ class ExperimentInfo:
     devices: list[DeviceInfo]
     signals: list[SignalInfo]
     acquisition_type: AcquisitionType
-    global_leader_device: DeviceInfo | None  # todo: remove
     chunking: ChunkingInfo | None
     # Scheduler Rust integration fields
     src: Experiment | None = field(default=None)

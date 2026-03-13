@@ -31,7 +31,6 @@ from laboneq.data.recipe import (
     RefClkType,
     RoutedOutput,
     SoftwareVersions,
-    TriggeringMode,
 )
 from laboneq.data.scheduled_experiment import (
     CompilerArtifact,
@@ -67,15 +66,6 @@ class RefClkTypeModel(Enum):
     _10MHZ = 10_000_000
     _100MHZ = 100_000_000
     _target_class = RefClkType
-
-
-class TriggeringModeModel(Enum):
-    ZSYNC_FOLLOWER = 1
-    DIO_FOLLOWER = 2
-    DESKTOP_LEADER = 3
-    DESKTOP_DIO_FOLLOWER = 4
-    INTERNAL_FOLLOWER = 5
-    _target_class = TriggeringMode
 
 
 @attrs.define
@@ -147,8 +137,7 @@ class MeasurementModel:
 
 @attrs.define
 class ConfigModel:
-    repetitions: int
-    triggering_mode: TriggeringModeModel
+    lead_delay: float
     sampling_rate: float | None
     _target_class: ClassVar[Type] = Config
 

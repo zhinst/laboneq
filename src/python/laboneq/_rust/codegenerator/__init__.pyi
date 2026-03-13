@@ -75,16 +75,26 @@ class FeedbackRegisterConfig:
     target_feedback_register: int | None
 
 class ChannelProperties:
+    signal: str
     channel: int
     marker_mode: Literal["TRIGGER", "MARKER"] | None
+    hw_oscillator_index: int | None
 
 class AwgProperties:
     key: tuple[str, int]  # (device UID, AWG index)
     signal_type: Literal["IQ", "SINGLE", "DOUBLE"]
 
+class SeqcProgram:
+    src: str
+    sequencer: str
+    dev_type: str
+    dev_opts: list[str]
+    awg_index: int
+    sampling_rate: float
+
 class AwgCodeGenerationResult:
     awg_properties: AwgProperties
-    seqc: str
+    seqc: SeqcProgram
     wave_indices: list[tuple[str, tuple[int, str]]]
     command_table: dict[str, object] | None
     shf_sweeper_config: dict[str, object] | None

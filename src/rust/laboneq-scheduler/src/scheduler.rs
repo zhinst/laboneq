@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use anyhow::Context;
 use laboneq_common::named_id::resolve_ids;
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::Operation;
@@ -27,6 +28,7 @@ use crate::resolve_repetition_mode::resolve_repetition_mode;
 use crate::scheduled_to_ir::scheduled_node_to_ir_node;
 use crate::signal_info::SignalInfo;
 use crate::timing_resolver::calculate_timing;
+use crate::utils::check_tinysample_commensurability;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScheduledExperiment {
@@ -45,6 +47,11 @@ pub fn schedule_experiment<T: SignalInfo>(
     chunking_info: Option<ChunkingInfo>,
     feedback_calculator: Option<&impl FeedbackCalculator>,
 ) -> Result<ScheduledExperiment> {
+    context.signals().try_for_each(|s| {
+        check_tinysample_commensurability(s.sampling_rate())
+            .with_context(|| format!("Incompatible sampling rate on signal: '{}'", s.uid().0))
+    })?;
+
     let mut real_time_root = find_real_time_root(root)
         .expect("Experiment has no real-time section")
         .clone();

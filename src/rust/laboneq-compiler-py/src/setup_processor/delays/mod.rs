@@ -10,4 +10,4 @@ mod precompensation;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use calculator::{DelayRegistry, compute_delays};
+pub(crate) use calculator::{DelayRegistry, SignalDelayProperties, compute_signal_delays};

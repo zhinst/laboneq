@@ -35,7 +35,11 @@ pub(super) struct OutputMute {
 }
 
 impl OutputMute {
-    pub(super) fn new(device_traits: &'static DeviceTraits, duration_min: f64) -> Result<Self> {
+    pub(super) fn new(
+        device_traits: &'static DeviceTraits,
+        sampling_rate: f64,
+        duration_min: f64,
+    ) -> Result<Self> {
         if !device_traits.supports_output_mute {
             bail!(
                 "Unsupported device type: {0}. Supported types are: SHFQA, SHFSG and SHFQC.",
@@ -46,22 +50,17 @@ impl OutputMute {
         // The minimum time for the muting required by the instrument
         let device_duration_min = device_traits.output_mute_engage_delay
             - device_traits.output_mute_disengage_delay  // latency of just turning on and off the blanking...
-            + device_traits.min_play_wave as f64 / device_traits.sampling_rate; // ... plus a minimal playZero
+            + device_traits.min_play_wave as f64 / sampling_rate; // ... plus a minimal playZero
         if duration_min <= device_duration_min {
             bail!("Output mute duration must be larger than {device_duration_min} s.");
         }
-        let samples_min = length_to_samples(duration_min, device_traits.sampling_rate);
+        let samples_min = length_to_samples(duration_min, sampling_rate);
         let samples_min = ((samples_min as f64 / device_traits.sample_multiple as f64).ceil()
             * device_traits.sample_multiple as f64) as Samples;
-        let delay_engage = length_to_samples(
-            device_traits.output_mute_engage_delay,
-            device_traits.sampling_rate,
-        );
+        let delay_engage = length_to_samples(device_traits.output_mute_engage_delay, sampling_rate);
         let delay_engage = ceil(delay_engage, device_traits.sample_multiple) as Samples;
-        let delay_disengage = length_to_samples(
-            -device_traits.output_mute_disengage_delay,
-            device_traits.sampling_rate,
-        );
+        let delay_disengage =
+            length_to_samples(-device_traits.output_mute_disengage_delay, sampling_rate);
         let delay_disengage = ceil(delay_disengage, device_traits.sample_multiple);
 
         Ok(OutputMute {

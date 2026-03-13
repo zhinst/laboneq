@@ -32,7 +32,7 @@ class DeviceTypeModel(Enum):
     UHFQA = "uhfqa"
     SHFQA = "shfqa"
     SHFSG = "shfsg"
-    PRETTYPRINTERDEVICE = "prettyprinterdevice"
+    ZQCS = "zqcs"
     _target_class: ClassVar[Type] = DeviceType
 
 

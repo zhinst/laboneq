@@ -11,8 +11,11 @@ version.workspace = true
 
 [dependencies]
 pyo3 = { workspace = true }
+pyo3-log = { workspace = true }
+log = { workspace = true }
 
 laboneq-dsl = { workspace = true }
+laboneq-log = { workspace = true }
 laboneq-units = { workspace = true }
 laboneq-common = { workspace = true }
 laboneq-ir = { workspace = true }

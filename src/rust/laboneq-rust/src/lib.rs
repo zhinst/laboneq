@@ -2,12 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use pyo3::prelude::*;
-mod logging;
 
 #[pymodule]
 #[pyo3(name = "_rust")]
 fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    pyo3_log::init();
     let py = m.py();
     // To enable import from submodules, we must make submodules a package,
     // not only a module. To avoid having to create several Rust extensions,
@@ -26,7 +24,5 @@ fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
     modules.set_item("laboneq._rust.compiler", &compiler)?;
     m.add_submodule(&compiler)?;
-
-    m.add_function(wrap_pyfunction!(logging::init_logging_py, m)?)?;
     Ok(())
 }

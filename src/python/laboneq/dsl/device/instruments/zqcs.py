@@ -1,6 +1,7 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+
 import attrs
 
 from laboneq.core.types.enums.io_direction import IODirection
@@ -13,7 +14,7 @@ from .zi_standard_instrument import ZIStandardInstrument
 
 @classformatter
 @attrs.define
-class PRETTYPRINTERDEVICE(ZIStandardInstrument):
+class ZQCS(ZIStandardInstrument):
     """Class representing a virtual instrument that pretty prints some info about the experiment.
 
     !!! version-changed "Changed in version 2.62.0"

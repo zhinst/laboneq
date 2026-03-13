@@ -24,7 +24,9 @@ thiserror = { workspace = true }
 smallvec = { workspace = true }
 serde_json = { workspace = true }
 num-integer = { workspace = true }
+capnp = { workspace = true }
 
+laboneq-capnp = { workspace = true }
 laboneq-common = { workspace = true }
 laboneq-dsl = { workspace = true }
 laboneq-scheduler = { workspace = true }

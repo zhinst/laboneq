@@ -100,6 +100,7 @@ class NearTimeRunner(AsyncExecutorBase):
         value: float,
         axis_name: str,
         values: NumPyArray,
+        is_user_registered: bool,
     ):
         self.sweep_params_tracker.set_param(name, value)
 

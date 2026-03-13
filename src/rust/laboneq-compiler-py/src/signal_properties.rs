@@ -21,7 +21,6 @@ pub(crate) struct SignalProperties {
     pub device_uid: DeviceUid,
 
     // Configuration parameters
-    pub sampling_rate: f64,
     pub port_mode: Option<PortMode>,
     pub channels: SmallVec<[u16; 4]>,
     pub kind: SignalKind,

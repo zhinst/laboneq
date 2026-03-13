@@ -145,7 +145,7 @@ class ArtifactsCodegen(CompilerArtifact):
     integration_weights: dict[str, AwgWeights] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(frozen=True)
 class HandleResultShape:
     signal: str
     shape: tuple[int, ...]

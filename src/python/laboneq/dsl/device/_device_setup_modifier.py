@@ -31,13 +31,13 @@ from laboneq.dsl.device.instrument import Instrument
 from laboneq.dsl.device.instruments import (
     HDAWG,
     PQSC,
-    PRETTYPRINTERDEVICE,
     QHUB,
     SHFPPC,
     SHFQA,
     SHFQC,
     SHFSG,
     UHFQA,
+    ZQCS,
 )
 from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
 from laboneq.dsl.device.io_units.physical_channel import (
@@ -210,7 +210,7 @@ class _HDAWGGenerator(_InstrumentGenerator):
         return ls
 
 
-class _PRETTYPRINTERDEVICEGenerator(_InstrumentGenerator):
+class _ZQCSGenerator(_InstrumentGenerator):
     @staticmethod
     def determine_signal_type(ports: list[str]) -> str:
         return "rf"
@@ -236,9 +236,7 @@ class _PRETTYPRINTERDEVICEGenerator(_InstrumentGenerator):
             )
             connections.append(conn)
         else:
-            raise DeviceSetupInternalException(
-                "Pretty printer devices do not feature a DIO port"
-            )
+            raise DeviceSetupInternalException("ZQCS does not feature a DIO port")
         return connections
 
     @staticmethod
@@ -652,14 +650,14 @@ def add_connection(
         SHFSG: _SHFSGGenerator,
         PQSC: _PQSCGenerator,
         QHUB: _QHUBGenerator,
-        PRETTYPRINTERDEVICE: _PRETTYPRINTERDEVICEGenerator,
+        ZQCS: _ZQCSGenerator,
     }
     dev = setup.instrument_by_uid(instrument)
     if dev is None:
         raise DeviceSetupInternalException(f"Instrument {instrument} not found.")
 
     handler = HANDLERS[dev.__class__]
-    if isinstance(dev, PRETTYPRINTERDEVICE):
+    if isinstance(dev, ZQCS):
         try:
             [port] = connection.ports
         except ValueError as e:
@@ -760,7 +758,7 @@ def add_instrument(setup: DeviceSetup, instrument: Instrument):
     if isinstance(instrument, ZIStandardInstrument):
         if not instrument.address:
             raise DeviceSetupInternalException("Instrument must have an address.")
-        if not isinstance(instrument, PRETTYPRINTERDEVICE):
+        if not isinstance(instrument, ZQCS):
             if len(setup.servers) == 1 and instrument.server_uid is None:
                 instrument.server_uid = next(iter(setup.servers.values())).uid
             else:

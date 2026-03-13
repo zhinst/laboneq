@@ -13,9 +13,6 @@ import laboneq._rust.compiler as compiler_rs
 import laboneq._rust.test_compiler as test_compiler
 from laboneq import simple
 from laboneq.core.utilities.laboneq_compile import laboneq_compile
-from laboneq.implementation.legacy_adapters.converters_experiment_description import (
-    convert_Experiment,
-)
 
 compiler_rs = cast(compiler_rs, test_compiler)
 
@@ -61,7 +58,7 @@ def create_experiment():
 def run_experiment():
     exp, setup = create_experiment()
     laboneq_compile(setup, exp)  # Smoke test to ensure the experiment is valid
-    return convert_Experiment(exp)
+    return exp
 
 
 def create_derived_param_experiment_calibration():
@@ -92,7 +89,6 @@ def create_derived_param_experiment_calibration():
     laboneq_compile(setup, exp)  # Smoke test to ensure the experiment is valid
     signal = compiler_rs.Signal(
         uid="q0/drive",
-        sampling_rate=2e9,
         awg_key=0,
         device_uid="device_hdawg",
         oscillator=compiler_rs.Oscillator(
@@ -121,7 +117,7 @@ def create_derived_param_experiment_calibration():
         kind="HDAWG",
         is_shfqc=False,
     )
-    return convert_Experiment(exp), [signal], [device]
+    return exp, [signal], [device]
 
 
 def create_derived_param_experiment_operation_field():
@@ -150,7 +146,6 @@ def create_derived_param_experiment_operation_field():
     laboneq_compile(setup, exp)  # Smoke test to ensure the experiment is valid
     signal = compiler_rs.Signal(
         uid="q0/drive",
-        sampling_rate=2e9,
         awg_key=0,
         device_uid="device_hdawg",
         oscillator=None,
@@ -173,7 +168,7 @@ def create_derived_param_experiment_operation_field():
         kind="HDAWG",
         is_shfqc=False,
     )
-    return convert_Experiment(exp), [signal], [device]
+    return exp, [signal], [device]
 
 
 def create_missing_signal_experiment():
@@ -191,4 +186,4 @@ def create_missing_signal_experiment():
         with exp.section(uid="section"):
             exp.delay("q1/drive", time=1e-6)
 
-    return convert_Experiment(exp), [], []
+    return exp, [], []

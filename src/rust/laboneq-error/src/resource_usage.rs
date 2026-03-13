@@ -5,6 +5,8 @@ use std::borrow::Cow;
 
 use crate::{ContextualError, LabOneQError, WithContext};
 
+use laboneq_log::warn;
+
 #[derive(thiserror::Error, Debug)]
 #[error("{source}")]
 pub struct ResourceExhaustionError {
@@ -64,6 +66,31 @@ pub fn intercept_and_collect<T>(
     }
 
     Ok(collected)
+}
+
+/// Handle resource exhaustion errors ([`LabOneQError::ResourceExhaustion`]) in the given iterator of results.
+///
+/// If `warn_on_error` is true, then only an warning is issued and the error is ignored,
+/// otherwise the error is returned.
+///
+/// Note that if there are multiple resource exhaustion errors, only the one
+/// corresponding to the most severe exhaustion is returned.
+pub fn handle_resource_exhaustion(
+    errors: impl Iterator<Item = Result<(), LabOneQError>>,
+    warn_on_error: bool,
+) -> Result<(), LabOneQError> {
+    if let Err(e) = intercept_and_collect(errors) {
+        if warn_on_error {
+            let msg = "Ignoring resource limitation error since IGNORE_RESOURCE_LIMITATION_ERRORS is set. \
+                Compilation result is incomplete and cannot be executed on hardware.";
+            warn!("{}", msg);
+            Ok(())
+        } else {
+            Err(e)
+        }
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

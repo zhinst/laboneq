@@ -6,7 +6,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
@@ -14,10 +14,8 @@ if TYPE_CHECKING:
     from laboneq.compiler.common.iface_compiler_output import CombinedOutput
     from laboneq.compiler.common.iface_linker import ILinker
     from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-    from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
     from laboneq.compiler.workflow.compiler import (
         AWGMapping,
-        LeaderProperties,
     )
     from laboneq.data.awg_info import AWGInfo
     from laboneq.data.recipe import Recipe
@@ -27,9 +25,6 @@ if TYPE_CHECKING:
 class GenerateRecipeArgs:
     awgs: list[AWGInfo]
     experiment_dao: ExperimentDAO
-    leader_properties: LeaderProperties
-    clock_settings: dict[str, Any]
-    sampling_rate_tracker: SamplingRateTracker
     experiment_rs: compiler_rs.ExperimentInfo
     combined_compiler_output: CombinedOutput
 
@@ -129,9 +124,6 @@ class CompilerHooksSeqC(CompilerHooks):
         return generate_recipe(
             args.awgs,
             args.experiment_dao,
-            args.leader_properties,
-            args.clock_settings,
-            args.sampling_rate_tracker,
             args.experiment_rs,
             args.combined_compiler_output,
         )

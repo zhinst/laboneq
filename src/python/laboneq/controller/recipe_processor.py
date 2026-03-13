@@ -839,7 +839,7 @@ def pre_process_compiled(
         init = get_initialization_by_device_uid(recipe, device_uid)
         device_settings[device_uid] = DeviceRecipeData(
             is_present=init is not None,
-            start_trigger_repetitions=1 if init is None else init.config.repetitions,
+            start_trigger_repetitions=1,
             iq_settings=_pre_process_iq_settings_hdawg(init),
             allocated_oscs=_pre_process_oscillator_allocations(
                 recipe=recipe, oscillator_ids=oscillator_ids, device_id=device_uid

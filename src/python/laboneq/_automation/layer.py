@@ -6,10 +6,9 @@ from typing import TYPE_CHECKING, Any, Callable
 
 import attrs
 
-from laboneq._automation.element import AutomationElement
-from laboneq._automation.element import AutomationElementStatus as Status
 from laboneq._automation.logic import AutomationLogic
 from laboneq._automation.node import AutomationNode, RootNode
+from laboneq._automation.status import AutomationStatus as Status
 from laboneq._automation.utils.class_parser import find_logic_class
 from laboneq.core.utilities.add_exception_note import add_note
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
@@ -20,10 +19,12 @@ if TYPE_CHECKING:
 
 @classformatter
 @attrs.define
-class AutomationLayer(AutomationElement):
+class AutomationLayer:
     """A layer in the automation framework.
 
     Attributes:
+        key: The automation layer key.
+        depends_on: A set of automation layer dependencies.
         function: The layer function.
         node_keys: The node keys.
         sequential: Whether to execute the layer sequentially.
@@ -32,22 +33,32 @@ class AutomationLayer(AutomationElement):
     """
 
     function: Callable | None
-    node_keys: list[str]
+    node_keys: list[str | tuple[str, ...]]
+    key: str
+    depends_on: set[str]
+
     sequential: bool = attrs.field(default=False, kw_only=True)
     parameters: dict[str, dict[str, Any]] = attrs.field(factory=dict, kw_only=True)
     results: dict = attrs.field(factory=dict, init=False)
-    _node_lookup: dict[str, AutomationNode] = attrs.field(factory=dict, init=False)
+    _node_lookup: dict[str | tuple[str, ...], AutomationNode] = attrs.field(
+        factory=dict, init=False
+    )
 
     @property
-    def nodes(self) -> dict[str, AutomationNode]:
+    def nodes(self) -> dict[str | tuple[str, ...], AutomationNode]:
         """The node dictionary."""
         for node_key in self.node_keys:
-            deps = {
-                f"{layer_key}_{node_key}"
-                for layer_key in self.depends_on
-                if layer_key != "root"
-            }
             if node_key not in self._node_lookup:
+                if isinstance(node_key, str):
+                    element_key = (node_key,)
+                else:
+                    element_key = tuple(node_key)
+                deps = {
+                    f"{layer_key}_{k}"
+                    for layer_key in self.depends_on
+                    if layer_key != "root"
+                    for k in element_key
+                }
                 self._node_lookup[node_key] = AutomationNode(
                     key=node_key,
                     depends_on=deps,
@@ -58,7 +69,7 @@ class AutomationLayer(AutomationElement):
         }
 
     @abstractmethod
-    def run_executable(self, auto: "Automation") -> Any:
+    def run_executable(self, auto: "Automation", **kwargs) -> Any:
         """Run the executable.
 
         Runs the executable for the automation layer.
@@ -98,7 +109,10 @@ class AutomationLayer(AutomationElement):
             raise err
 
     def is_runnable(
-        self, auto: "Automation", *, node_keys: list[str] | None = None
+        self,
+        auto: "Automation",
+        *,
+        node_keys: list[str | tuple[str, ...]] | None = None,
     ) -> bool:
         """Check if the automation layer is runnable.
 
@@ -193,7 +207,7 @@ class AutomationLayer(AutomationElement):
                 Active nodes exist and do not all share the same status.
 
         Returns:
-            `AutomationElementStatus` enumerator.
+            `AutomationStatus` enumerator.
         """
         all_node_statuses = [node.status for node in self.nodes.values()]
         active_node_statuses = [
@@ -306,7 +320,7 @@ class RootLayer(AutomationLayer):
     """Root layer class."""
 
     function: Callable | None = None
-    node_keys: list[str] = ["root"]
+    node_keys: list[str | tuple[str, ...]] = ["root"]
     key: str = "root"
     depends_on: set[str] = attrs.field(factory=set)
 

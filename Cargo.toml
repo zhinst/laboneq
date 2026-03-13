@@ -1,5 +1,5 @@
 [workspace.package]
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
 edition = "2024"
 publish = false
@@ -47,6 +47,7 @@ serde_json = "1.0"
 sha1 = "0.10.6"
 smallvec = "1.15.1"
 string-interner = "0.19.0"
+capnp = "0.25"
 thiserror = "2.0"
 
 # 1st party
@@ -61,6 +62,7 @@ laboneq-compiler-py = { path = "src/rust/laboneq-compiler-py" }
 numeric-array = { path = "src/rust/numeric-array" }
 codegenerator-py = { path = "src/rust/codegenerator-py" }
 codegenerator-utils = { path = "src/rust/codegenerator-utils" }
+laboneq-capnp = { path = "src/rust/laboneq-capnp" }
 laboneq-common = { path = "src/rust/laboneq-common" }
 laboneq-units = { path = "src/rust/laboneq-units" }
 laboneq-py-utils = { path = "src/rust/laboneq-py-utils" }

@@ -19,10 +19,12 @@ pub enum ParameterPhaseIncrement {
     ComplexUsage,
 }
 
-pub(super) struct CommandTableResults {
+pub(crate) struct CommandTableResults {
     pub command_table: Value,
+    pub n_entries: usize,
     pub parameter_phase_increment_map: HashMap<String, Vec<ParameterPhaseIncrement>>,
 }
+
 pub(super) struct CommandTableTracker {
     command_table: Vec<(usize, Value)>,
     table_index_by_signature: HashMap<PlayWaveEvent, usize>,
@@ -293,9 +295,11 @@ impl CommandTableTracker {
     /// This function may only be called once.
     ///
     pub(super) fn finish(self) -> Option<CommandTableResults> {
+        let n_entries = self.command_table.len();
         match CommandTableTracker::build_command_table(&self.device_type, self.command_table) {
             Some(ct) => Some(CommandTableResults {
                 command_table: ct,
+                n_entries,
                 parameter_phase_increment_map: self.parameter_phase_increment_map,
             }),
             None => None,

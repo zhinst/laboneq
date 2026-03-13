@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use laboneq_dsl::types::{SignalUid, ValueOrParameter};
 use laboneq_ir::signal::SignalKind;
-use laboneq_ir::system::Device;
+use laboneq_ir::system::AwgDevice;
 use pyo3::Python;
 
 use laboneq_common::types::{AwgKey, DeviceKind};
@@ -25,8 +25,8 @@ pub(crate) trait FeedbackModel<'py> {
     fn get_latency(
         &self,
         acquisition_end_samples: Samples,
-        qa_device: &Device,
-        sg_device: &Device,
+        qa_device: &AwgDevice,
+        sg_device: &AwgDevice,
         local_feedback: bool,
     ) -> anyhow::Result<Samples>;
 }
@@ -58,7 +58,7 @@ struct AcquisitionParameters<'a> {
     /// Acquisition device properties
     sampling_rate: f64,
     port_granularity_samples: i64,
-    device: &'a Device,
+    device: &'a AwgDevice,
 }
 
 /// Parameters required for generator latency calculation.
@@ -68,7 +68,7 @@ struct GeneratorParameters<'a> {
     /// Generator device properties
     sampling_rate: f64,
     sample_multiple: i64,
-    device: &'a Device,
+    device: &'a AwgDevice,
 }
 
 impl<'a> QccsFeedbackCalculator<'a, QCCSFeedbackModel<'a>> {
@@ -197,7 +197,7 @@ where
         absolute_start: Duration<Second>,
         acquisition_length: Duration<Second>,
     ) -> Result<Duration<Second>, Error> {
-        if acquisition_params.device.kind() == &DeviceKind::Shfqa {
+        if acquisition_params.device.kind() == DeviceKind::Shfqa {
             // TODO: Currently the Python error is not properly propagated to enable
             // Python tracebacks. We should improve this in the future, currently it is
             // fine as it is not something the users should encounter.
@@ -406,10 +406,8 @@ mod tests {
     use super::*;
     use approx::abs_diff_eq;
     use laboneq_common::{named_id::NamedId, types::PhysicalDeviceUid};
-    use laboneq_ir::{
-        device::builder::DeviceBuilder,
-        signal::{Signal, SignalKind, builder::SignalBuilder},
-    };
+    use laboneq_ir::signal::{Signal, SignalKind, builder::SignalBuilder};
+    use laboneq_ir::system::AwgDevice;
 
     struct MockFeedbackModel {}
 
@@ -428,8 +426,8 @@ mod tests {
         fn get_latency(
             &self,
             _acquisition_end_samples: Samples,
-            _qa_device: &Device,
-            _sg_device: &Device,
+            _qa_device: &AwgDevice,
+            _sg_device: &AwgDevice,
             _local_feedback: bool,
         ) -> anyhow::Result<Samples> {
             Ok((_acquisition_end_samples / 8) as Samples)
@@ -443,9 +441,9 @@ mod tests {
         device_kind: DeviceKind,
         signal_delay: f64,
         port_delay: f64,
-    ) -> (Signal, Device) {
+    ) -> (Signal, AwgDevice) {
         let awg_key = AwgKey(awg_uid);
-        let device = DeviceBuilder::new(0.into(), PhysicalDeviceUid(0), device_kind)
+        let device = AwgDevice::builder(0.into(), PhysicalDeviceUid(0), device_kind)
             .shfqc(true)
             .build();
 

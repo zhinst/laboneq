@@ -625,6 +625,7 @@ mod tests {
     use super::*;
     use crate::ir::compilation_job::{DeviceKind, PulseDef, PulseDefKind, Signal, SignalKind};
     use crate::ir::{AcquirePulse, IrNode, NodeKind, PlayPulse, Section, SectionInfo};
+    use laboneq_common::device_traits;
     use laboneq_units::tinysample::samples_to_tinysamples;
 
     struct IrBuilder {
@@ -734,8 +735,7 @@ mod tests {
     /// Test that the acquire and measure signal delays are calculated to start at the same time.
     #[test]
     fn test_acquire_offset() {
-        let device = DeviceKind::SHFQA;
-        let srate = device.traits().sampling_rate;
+        let srate = device_traits::SHFQA_SAMPLING_RATE.value();
 
         let signals = HashMap::from([
             ("acquire".to_string(), (create_signal(0, 0))),
@@ -776,7 +776,7 @@ mod tests {
     #[test]
     fn test_port_delay() {
         let device = DeviceKind::SHFQA;
-        let srate = device.traits().sampling_rate;
+        let srate = device_traits::SHFQA_SAMPLING_RATE.value();
 
         // Offset + signal delay that does no match the granularity of the sequencer,
         // So it cannot be fully compensated by the sequencer.
@@ -822,8 +822,7 @@ mod tests {
     /// Test multiple sections delay compensation.
     #[test]
     fn test_delay_subtraction_rounding() {
-        let device = DeviceKind::SHFQA;
-        let srate = device.traits().sampling_rate;
+        let srate = device_traits::SHFQA_SAMPLING_RATE.value();
 
         let signals = HashMap::from([
             ("acquire".to_string(), (create_signal(0, 0))),

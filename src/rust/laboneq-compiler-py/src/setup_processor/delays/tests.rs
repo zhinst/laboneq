@@ -17,7 +17,7 @@ mod test_compute_delays {
     use smallvec::SmallVec;
 
     use crate::setup_processor::delays::{
-        calculator::{SignalDelayProperties, compute_delays_impl},
+        calculator::{SignalDelayProperties, compute_signal_delays},
         output_routing::OUTPUT_ROUTE_DELAY_SAMPLES,
         precompensation::{
             PRECOMPENSATION_BASE_DELAY_SAMPLES, PRECOMPENSATION_HIGH_PASS_DELAY_SAMPLES,
@@ -90,7 +90,7 @@ mod test_compute_delays {
         let signal_c = create_signal_props(2, 0, DeviceKind::Shfsg, 2e9, &[0], vec![], None);
 
         let signals = vec![signal_a, signal_b, signal_c];
-        let delays = compute_delays_impl(&signals, false);
+        let delays = compute_signal_delays(&signals, false);
 
         // All signals should have zero delay when no precompensation or output routing
         assert_abs_diff_eq!(
@@ -138,7 +138,7 @@ mod test_compute_delays {
         let signal_hdawg_0 = create_signal_props(2, 2, DeviceKind::Hdawg, 2e9, &[0], vec![], None);
 
         let signals = vec![signal_sg_0, signal_sg_1, signal_hdawg_0];
-        let delays = compute_delays_impl(&signals, false);
+        let delays = compute_signal_delays(&signals, false);
 
         // Signals using output routing should have the same total delay
         let delay_sg_0 = delays.signal_start_delay(0.into()) + delays.signal_port_delay(0.into());
@@ -177,7 +177,7 @@ mod test_compute_delays {
             create_signal_props(1, 1, DeviceKind::Hdawg, 2e9, &[0], vec![], Some(&precomp));
 
         let signals = vec![signal_output_route, signal_precomp];
-        let delays = compute_delays_impl(&signals, false);
+        let delays = compute_signal_delays(&signals, false);
 
         // Calculate total delays including precompensation effects
         let delay_output_route =
@@ -203,7 +203,7 @@ mod test_compute_delays {
         let signal_uhfqa = create_signal_props(1, 1, DeviceKind::Uhfqa, 1.8e9, &[0], vec![], None);
 
         let signals = vec![signal_hdawg, signal_uhfqa];
-        let delays = compute_delays_impl(&signals, true);
+        let delays = compute_signal_delays(&signals, true);
 
         let delay_hdawg = delays.signal_start_delay(0.into()) + delays.signal_port_delay(0.into());
         let delay_uhfqa = delays.signal_start_delay(1.into()) + delays.signal_port_delay(1.into());

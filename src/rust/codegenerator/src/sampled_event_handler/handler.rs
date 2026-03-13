@@ -19,13 +19,13 @@ use super::seqc_tracker::wave_index_tracker::{SignalType, WaveIndexTracker};
 use super::shfppc_sweeper_config_tracker::SHFPPCSweeperConfigTracker;
 use super::{AwgEventList, FeedbackRegisterIndex, Samples, SeqcResults};
 use crate::Result;
-use crate::device_traits::{self};
 use crate::ir::compilation_job::{AwgKey, AwgKind, ChannelIndex, DeviceKind, TriggerMode};
 use crate::ir::experiment::{AcquisitionType, Handle, SweepCommand};
 use crate::ir::{OscillatorFrequencySweepStep, ParameterOperation, SignalUid};
 use crate::sample_waveforms::WaveDeclaration;
 use core::str;
 use indexmap::IndexMap;
+use laboneq_common::device_traits::{HDAWG_SAMPLING_RATE_WITHOUT_SHF, UHFQA_SAMPLING_RATE};
 use laboneq_error::{bail, laboneq_error};
 use std::collections::{HashMap, HashSet};
 
@@ -202,19 +202,15 @@ fn add_wait_trigger_statements(
     init_generator: &mut SeqCGenerator,
     deferred_function_calls: &mut SeqCGenerator,
 ) -> Result<()> {
-    const DELAY_FIRST_AWG: f64 = 32.0 / device_traits::HDAWG_TRAITS.sampling_rate;
-    const DELAY_OTHER_AWG: f64 = 32.0 / device_traits::HDAWG_TRAITS.sampling_rate;
-    const DELAY_UHFQA: f64 = 128.0 / device_traits::UHFQA_TRAITS.sampling_rate;
+    // UHFQA + HDAWG cannot exist with SHF devices so its ok to use the hardcoded sampling rate.
+    let delay_first_awg: f64 = 32.0 / HDAWG_SAMPLING_RATE_WITHOUT_SHF.value();
+    let delay_other_awg: f64 = 32.0 / HDAWG_SAMPLING_RATE_WITHOUT_SHF.value();
+    let delay_uhfqa: f64 = 128.0 / UHFQA_SAMPLING_RATE.value();
 
     match awg.trigger_mode {
         TriggerMode::DioTrigger => {
             // HDAWG+UHFQA connected via DIO, no PQSC
             if awg.awg_key.index() == 0 {
-                if awg.is_reference_clock_internal {
-                    bail!(
-                        "HDAWG+UHFQA system can only be used with an external clock connected to HDAWG in order to prevent jitter."
-                    );
-                }
                 init_generator.add_function_call_statement(
                     "waitDigTrigger",
                     vec![SeqCVariant::Integer(1)],
@@ -231,7 +227,7 @@ fn add_wait_trigger_statements(
                     None::<String>,
                 );
                 let delay_first_awg_samples =
-                    (awg.sampling_rate * DELAY_FIRST_AWG / 16.0).round() as Samples * 16;
+                    (awg.sampling_rate * delay_first_awg / 16.0).round() as Samples * 16;
                 if delay_first_awg_samples > 0 {
                     deferred_function_calls.add_function_call_statement(
                         "playZero",
@@ -246,7 +242,7 @@ fn add_wait_trigger_statements(
                     None::<String>,
                 );
                 let delay_other_awg_samples =
-                    (awg.sampling_rate * DELAY_OTHER_AWG / 16.0).round() as Samples * 16;
+                    (awg.sampling_rate * delay_other_awg / 16.0).round() as Samples * 16;
                 if delay_other_awg_samples > 0 {
                     deferred_function_calls.add_function_call_statement(
                         "playZero",
@@ -264,7 +260,7 @@ fn add_wait_trigger_statements(
             // UHFQA triggered by HDAWG
             init_generator.add_function_call_statement("waitDIOTrigger", vec![], None::<String>);
             let delay_uhfqa_samples =
-                (awg.sampling_rate * DELAY_UHFQA / 8.0).round() as Samples * 8; // DELAY_UHFQA
+                (awg.sampling_rate * delay_uhfqa / 8.0).round() as Samples * 8; // delay_uhfqa
             if delay_uhfqa_samples > 0 {
                 init_generator.add_function_call_statement(
                     "playZero",
@@ -1679,20 +1675,10 @@ impl<'a> SampledEventHandler<'a> {
     }
 
     pub(crate) fn finish(mut self) -> Result<SeqcResults> {
-        let seqc = self.assemble_seqc()?;
-        let command_table = self.command_table_tracker.finish();
-        let (command_table, parameter_phase_increment_map) = match command_table {
-            Some(ct) => (
-                Some(ct.command_table),
-                Some(ct.parameter_phase_increment_map),
-            ),
-            None => (None, None),
-        };
         Ok(SeqcResults {
-            seqc,
+            seqc: self.assemble_seqc()?,
             wave_indices: self.wave_indices.finish(),
-            command_table,
-            parameter_phase_increment_map,
+            command_table: self.command_table_tracker.finish(),
             shf_sweeper_config: self
                 .shfppc_sweeper_config_tracker
                 .finish()

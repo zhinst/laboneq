@@ -13,6 +13,20 @@ pub enum ValueOrParameter<T> {
     ResolvedParameter { value: T, uid: ParameterUid },
 }
 
+impl<T> ValueOrParameter<T> {
+    /// If this is a fixed value (not a parameter), return it. Otherwise, return None.
+    pub fn fixed_value(&self) -> Option<T>
+    where
+        T: Copy,
+    {
+        match self {
+            ValueOrParameter::Value(v) => Some(*v),
+            ValueOrParameter::ResolvedParameter { .. } => None,
+            _ => None,
+        }
+    }
+}
+
 impl TryFrom<ValueOrParameter<f64>> for f64 {
     type Error = &'static str;
 

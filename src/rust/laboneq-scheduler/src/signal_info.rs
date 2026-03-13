@@ -14,7 +14,7 @@ pub trait SignalInfo {
     fn device_traits(&self) -> &'static DeviceTraits;
     fn oscillator(&self) -> Option<&Oscillator>;
     fn lo_frequency(&self) -> Option<&ValueOrParameter<f64>>;
-    fn supports_initial_local_oscillator_frequency(&self) -> bool;
+    fn supports_initial_oscillator_frequency(&self) -> bool;
     fn voltage_offset(&self) -> Option<&ValueOrParameter<f64>>;
     fn supports_initial_voltage_offset(&self) -> bool;
     fn amplifier_pump(&self) -> Option<&AmplifierPump>;

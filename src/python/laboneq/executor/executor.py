@@ -252,9 +252,16 @@ class SetSoftwareParamLinear(Statement):
 
 
 class SetSoftwareParam(Statement):
-    def __init__(self, name: str, values: ArrayLike, axis_name: str | None = None):
+    def __init__(
+        self,
+        name: str,
+        axis_name: str | None,
+        values: ArrayLike,
+        is_user_registered: bool,
+    ):
         self.name = name
         self.values = np.asarray(values)
+        self.is_user_registered = is_user_registered
         self.axis_name = axis_name
 
     def run(self, scope: ExecutionScope) -> Iterator[Notification]:
@@ -269,6 +276,7 @@ class SetSoftwareParam(Statement):
                 value=value,
                 axis_name=self.axis_name,
                 values=self.values,
+                is_user_registered=self.is_user_registered,
             ),
         )
 
@@ -524,7 +532,13 @@ class ExecutorBase:
         pass
 
     def set_sw_param_handler(
-        self, name: str, index: int, value: float, axis_name: str, values: NumPyArray
+        self,
+        name: str,
+        index: int,
+        value: float,
+        axis_name: str,
+        values: NumPyArray,
+        is_user_registered: bool,
     ):
         pass
 
@@ -603,7 +617,13 @@ class AsyncExecutorBase:
         pass
 
     async def set_sw_param_handler(
-        self, name: str, index: int, value: float, axis_name: str, values: NumPyArray
+        self,
+        name: str,
+        index: int,
+        value: float,
+        axis_name: str,
+        values: NumPyArray,
+        is_user_registered: bool,
     ):
         pass
 

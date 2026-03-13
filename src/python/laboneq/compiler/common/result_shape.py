@@ -149,7 +149,7 @@ def _merge_handle_result_shapes(
                     )
                 combined_mask[axis_idx].update(rows)
 
-    combined_shape = first_shape.to_HandleResultShape()
+    combined_shape = first_shape
     if combined_mask is None:
         combined_shape.shape = (
             *combined_shape.shape,
@@ -163,7 +163,7 @@ def _merge_handle_result_shapes(
             k: sorted(v) for k, v in combined_mask.items()
         }
 
-    return combined_shape
+    return combined_shape.to_HandleResultShape()
 
 
 class _ResultShapeExtractor(ExecutorBase):
@@ -258,8 +258,16 @@ class _ResultShapeExtractor(ExecutorBase):
         )
 
     def set_sw_param_handler(
-        self, name: str, index: int, value: float, axis_name: str, values: NumPyArray
+        self,
+        name: str,
+        index: int,
+        value: float,
+        axis_name: str,
+        values: NumPyArray,
+        is_user_registered: bool,
     ):
+        if not is_user_registered:
+            return
         self._loop_stack[-1].axis_names.append(name if axis_name is None else axis_name)
         self._loop_stack[-1].axis_points.append(values)
         self._loop_stack[-1].sweep_params.append(_Parameter(name, values))

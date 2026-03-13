@@ -12,11 +12,7 @@ from laboneq.data.compilation_job import DeviceInfo, DeviceInfoType
 
 @dataclass(eq=True, frozen=True)
 class DeviceTraits:
-    """Device specific traits.
-
-    Args:
-        max_ct_entries: Maximum number of command table entries.
-    """
+    """Device specific traits."""
 
     str_value: str
     sampling_rate: float
@@ -32,8 +28,6 @@ class DeviceTraits:
     lo_frequency_granularity: Optional[float] = None
     min_lo_frequency: Optional[float] = None
     max_lo_frequency: Optional[float] = None
-    max_ct_entries: Optional[int] = None
-    supports_output_mute: bool = False
     device_class: int = 0x0
     max_result_vector_length: int | None = None
     scope_max_segments: int | None = None
@@ -45,7 +39,7 @@ class DeviceTraits:
             return 256 * 1024
         if self == DeviceType.UHFQA:
             return 4096
-        if self == DeviceType.PRETTYPRINTERDEVICE:
+        if self == DeviceType.ZQCS:
             return 133120
 
         return 0
@@ -85,7 +79,6 @@ class DeviceType(DeviceTraits, Enum):
         oscillator_set_latency=304e-9,
         # Verified by PW (2022-10-13) on dev8047, proc. FPGA 68603. Observed ~77 ns.
         reset_osc_duration=80e-9,
-        max_ct_entries=1024,
         is_qa_device=False,
         device_class=0x0,
     )
@@ -130,7 +123,6 @@ class DeviceType(DeviceTraits, Enum):
         max_lo_frequency=8.5e9,
         is_qa_device=True,
         device_class=0x0,
-        supports_output_mute=True,
         max_result_vector_length=1 << 19,
         scope_max_segments=1024,
     )
@@ -149,13 +141,11 @@ class DeviceType(DeviceTraits, Enum):
         lo_frequency_granularity=100e6,
         min_lo_frequency=1e9,
         max_lo_frequency=8.5e9,
-        max_ct_entries=4096,
         is_qa_device=False,
-        supports_output_mute=True,
         device_class=0x0,
     )
-    PRETTYPRINTERDEVICE = DeviceTraits(
-        str_value="prettyprinterdevice",
+    ZQCS = DeviceTraits(
+        str_value="zqcs",
         sampling_rate=2.0e9,
         min_play_wave=4,
         sample_multiple=4,

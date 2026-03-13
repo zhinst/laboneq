@@ -145,7 +145,7 @@ pub struct AwgCodeGenerationResultPy {
     #[pyo3(get)]
     awg_properties: AwgPropertiesPy,
     #[pyo3(get)]
-    seqc: String,
+    seqc: Py<SeqCProgramPy>,
     #[pyo3(get)]
     wave_indices: Vec<(String, (u32, String))>,
     #[pyo3(get)]
@@ -204,7 +204,7 @@ unsafe impl Sync for AwgCodeGenerationResultPy {}
 impl AwgCodeGenerationResultPy {
     pub fn create(
         py: Python,
-        result: AwgCodeGenerationResult<WaveformSamplerPy>,
+        mut result: AwgCodeGenerationResult<WaveformSamplerPy>,
         id_store: &NamedIdStore,
     ) -> PyResult<Self> {
         let sampled_waveforms: Vec<Py<SampledWaveformPy>> = result
@@ -269,8 +269,13 @@ impl AwgCodeGenerationResultPy {
         } else {
             None
         };
-        let parameter_phase_increment_map = result.parameter_phase_increment_map.map(|p| {
-            p.into_iter()
+        let command_table = result
+            .command_table
+            .as_mut()
+            .map(|ct| std::mem::take(&mut ct.src));
+        let parameter_phase_increment_map = result.command_table.map(|ct| {
+            ct.parameter_phase_increment_map
+                .into_iter()
                 .map(|(k, v)| {
                     (
                         k,
@@ -320,26 +325,43 @@ impl AwgCodeGenerationResultPy {
             command_table_offset: result.feedback_register_config.command_table_offset,
             target_feedback_register: result.feedback_register_config.target_feedback_register,
         };
+
         let channel_properties = result
             .channel_properties
             .into_iter()
             .map(|properties| ChannelPropertiesPy {
+                signal: id_store.resolve_unchecked(properties.signal).to_string(),
                 channel: properties.channel,
                 marker_mode: properties.marker_mode.map(|marker_mode| match marker_mode {
                     MarkerMode::Trigger => "TRIGGER".to_string(),
                     MarkerMode::Marker => "MARKER".to_string(),
                 }),
+                hw_oscillator_index: properties.hw_oscillator_index,
             })
             .collect();
+
         let output = AwgCodeGenerationResultPy {
             awg_properties: AwgPropertiesPy {
                 awg_id: result.awg.key.index() as i64,
                 device_uid: result.awg.key.device_name().clone(),
                 kind: result.awg.kind,
             },
-            seqc: result.seqc,
+            seqc: {
+                Py::new(
+                    py,
+                    SeqCProgramPy {
+                        src: result.seqc.src,
+                        sequencer: result.seqc.sequencer.to_string(),
+                        dev_type: result.seqc.dev_type,
+                        dev_opts: result.seqc.dev_opts,
+                        awg_index: result.seqc.awg_index,
+                        sampling_rate: result.seqc.sampling_rate,
+                    },
+                )
+                .unwrap()
+            },
             wave_indices,
-            command_table: result.command_table,
+            command_table,
             shf_sweeper_config,
             sampled_waveforms,
             integration_weights,
@@ -495,7 +517,28 @@ pub(crate) struct IntegrationUnitAllocationPy {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ChannelPropertiesPy {
     #[pyo3(get)]
+    pub signal: String,
+    #[pyo3(get)]
     pub channel: ChannelIndex,
     #[pyo3(get)]
     pub marker_mode: Option<String>,
+    #[pyo3(get)]
+    pub hw_oscillator_index: Option<u16>,
+}
+
+#[pyclass(name = "SeqCProgram", skip_from_py_object)]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SeqCProgramPy {
+    #[pyo3(get)]
+    src: String,
+    #[pyo3(get)]
+    dev_type: String,
+    #[pyo3(get)]
+    dev_opts: Vec<String>,
+    #[pyo3(get)]
+    awg_index: u16,
+    #[pyo3(get)]
+    sequencer: String,
+    #[pyo3(get)]
+    sampling_rate: Option<f64>,
 }

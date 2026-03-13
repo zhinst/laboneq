@@ -3,6 +3,7 @@
 
 use crate::operation::Operation;
 
+pub mod device_setup;
 pub mod node;
 pub mod operation;
 pub mod signal_calibration;

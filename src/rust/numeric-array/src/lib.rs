@@ -54,6 +54,7 @@ impl NumericArray {
             let value = start + step * i as f64;
             vec.push(value);
         }
+        vec[count - 1] = stop; // match end point exactly
         NumericArray::Float64(vec)
     }
 
@@ -70,6 +71,7 @@ impl NumericArray {
             let value = start + step * i as f64;
             vec.push(value);
         }
+        vec[count - 1] = stop; // match end point exactly
         NumericArray::Complex64(vec)
     }
 

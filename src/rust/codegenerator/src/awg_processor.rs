@@ -3,12 +3,22 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use crate::ir::compilation_job::{AwgCore, DeviceKind, SignalKind};
+use crate::Result;
+use crate::{
+    ir::compilation_job::{AwgCore, DeviceKind, SignalKind},
+    oscillator_allocation::allocate_oscillators,
+};
 
-pub(crate) fn process_awgs(awgs: &mut [AwgCore]) {
+pub(crate) fn process_awgs(awgs: &mut [AwgCore]) -> Result<()> {
     // Sort the signals for consistent ordering.
     order_awgs(awgs);
+    for awg in awgs.iter_mut() {
+        for (signal_uid, osc_index) in allocate_oscillators(awg)? {
+            awg.add_oscillator_index(signal_uid, osc_index);
+        }
+    }
     allocate_shfqa_generator_channels(awgs);
+    Ok(())
 }
 
 /// Sort AWGs and their signals for consistent ordering.

@@ -17,6 +17,16 @@ macro_rules! info {
 }
 
 #[macro_export]
+macro_rules! debug {
+    ($msg:literal, $($arg:tt)+) => {
+        laboneq_log::_log::debug!(target: concat!("laboneq.rust::", module_path!()), $msg, $($arg)+);
+    };
+    ($msg:literal) => {
+        laboneq_log::_log::debug!(target: concat!("laboneq.rust::", module_path!()), $msg);
+    };
+}
+
+#[macro_export]
 macro_rules! warn {
     ($msg:literal, $($arg:tt)+) => {
         laboneq_log::_log::warn!(target: concat!("laboneq.rust::", module_path!()), $msg, $($arg)+);

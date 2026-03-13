@@ -1,7 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_ir::system::Device;
+use laboneq_ir::system::AwgDevice;
 use pyo3::exceptions::PyValueError;
 use pyo3::{intern, prelude::*, types::PyDict, types::PyModule};
 
@@ -21,8 +21,8 @@ impl FeedbackModel<'_> for QCCSFeedbackModel<'_> {
     fn get_latency(
         &self,
         acquisition_end_samples: i64,
-        acquisition_device: &Device,
-        generator_device: &Device,
+        acquisition_device: &AwgDevice,
+        generator_device: &AwgDevice,
         local_feedback: bool,
     ) -> anyhow::Result<i64> {
         let latency = self.get_latency(
@@ -41,7 +41,7 @@ impl QCCSFeedbackModel<'_> {
         Ok(QCCSFeedbackModel { module })
     }
 
-    fn get_sg_type(&self, py: Python<'_>, device: &Device) -> PyResult<Py<PyAny>> {
+    fn get_sg_type(&self, py: Python<'_>, device: &AwgDevice) -> PyResult<Py<PyAny>> {
         let sg_device = if device.is_shfqc() {
             return Ok(self
                 .module
@@ -49,7 +49,7 @@ impl QCCSFeedbackModel<'_> {
                 .getattr(intern!(py, "SHFQC"))?
                 .into());
         } else {
-            match &device.kind() {
+            match device.kind() {
                 DeviceKind::Hdawg => self
                     .module
                     .getattr(intern!(py, "SGType"))?
@@ -69,7 +69,7 @@ impl QCCSFeedbackModel<'_> {
         Ok(sg_device)
     }
 
-    fn get_qa_type(&self, py: Python<'_>, device: &Device) -> PyResult<Option<Py<PyAny>>> {
+    fn get_qa_type(&self, py: Python<'_>, device: &AwgDevice) -> PyResult<Option<Py<PyAny>>> {
         let qa_type = if device.is_shfqc() {
             Some(
                 self.module
@@ -94,8 +94,8 @@ impl QCCSFeedbackModel<'_> {
 
     fn build_model(
         &self,
-        acquisition_device: &Device,
-        generator_device: &Device,
+        acquisition_device: &AwgDevice,
+        generator_device: &AwgDevice,
         local_feedback: bool,
     ) -> PyResult<Bound<'_, PyAny>> {
         let qa_type = self.get_qa_type(self.module.py(), acquisition_device)?;
@@ -150,8 +150,8 @@ impl QCCSFeedbackModel<'_> {
     pub(super) fn get_latency(
         &self,
         acquisition_end_samples: i64,
-        acquisition_device: &Device,
-        generator_device: &Device,
+        acquisition_device: &AwgDevice,
+        generator_device: &AwgDevice,
         local_feedback: bool,
     ) -> PyResult<i64> {
         let model = self.build_model(acquisition_device, generator_device, local_feedback)?;

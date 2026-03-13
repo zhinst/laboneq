@@ -1,6 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_common::device_options::DeviceOptions;
 use laboneq_error::{LabOneQError, laboneq_error};
 use numeric_array::NumericArray;
 use std::collections::{HashMap, HashSet};
@@ -23,6 +24,12 @@ impl Deref for DeviceUid {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+impl std::fmt::Display for DeviceUid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
@@ -83,10 +90,12 @@ pub enum OscillatorKind {
     HARDWARE,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Oscillator {
     pub uid: String,
     pub kind: OscillatorKind,
+    /// Optional fixed frequency for hardware oscillators.
+    pub frequency: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -200,10 +209,11 @@ pub struct AwgCore {
     pub signals: Vec<Arc<Signal>>,
     pub sampling_rate: f64,
     pub device: Arc<Device>,
-    // Mapping from HW oscillator to an assigned index
-    pub osc_allocation: HashMap<String, u16>,
     pub trigger_mode: TriggerMode,
-    pub is_reference_clock_internal: bool,
+    pub options: DeviceOptions,
+    oscillator_allocation: HashMap<SignalUid, u16>,
+    signal_to_channel_mapping: HashMap<SignalUid, Vec<ChannelIndex>>,
+    pub is_shfqc: bool,
 }
 
 impl AwgCore {
@@ -213,9 +223,10 @@ impl AwgCore {
         signals: Vec<Arc<Signal>>,
         sampling_rate: f64,
         device: Arc<Device>,
-        osc_allocation: HashMap<String, u16>,
         trigger_mode: Option<TriggerMode>,
-        is_reference_clock_internal: bool,
+        options: DeviceOptions,
+        signal_to_channel_mapping: HashMap<SignalUid, Vec<ChannelIndex>>,
+        is_shfqc: bool,
     ) -> Self {
         AwgCore {
             uid,
@@ -223,9 +234,11 @@ impl AwgCore {
             signals,
             sampling_rate,
             device,
-            osc_allocation,
             trigger_mode: trigger_mode.unwrap_or(TriggerMode::ZSync),
-            is_reference_clock_internal,
+            options,
+            signal_to_channel_mapping,
+            oscillator_allocation: HashMap::new(),
+            is_shfqc,
         }
     }
 
@@ -255,19 +268,6 @@ impl AwgCore {
         AwgKey::new(self.device.uid.clone(), self.uid)
     }
 
-    /// A mapping from signal UID to the index of the oscillator in the `osc_allocation` map.
-    pub fn oscillator_index_by_signal_uid(&self) -> HashMap<SignalUid, u16> {
-        let mut index_map = HashMap::new();
-        for signal in self.signals.iter() {
-            if let Some(osc) = &signal.oscillator
-                && let Some(osc_index) = self.osc_allocation.get(&osc.uid)
-            {
-                index_map.insert(signal.uid, *osc_index);
-            }
-        }
-        index_map
-    }
-
     pub fn device_kind(&self) -> &DeviceKind {
         &self.device.kind
     }
@@ -288,6 +288,29 @@ impl AwgCore {
     /// Use command table for amplitude increments
     pub(crate) fn use_amplitude_increment(&self) -> bool {
         !matches!(self.kind, AwgKind::DOUBLE)
+    }
+
+    pub(crate) fn add_oscillator_index(&mut self, signal_uid: SignalUid, index: u16) {
+        assert!(
+            !self.oscillator_allocation.contains_key(&signal_uid),
+            "Signal {} already has an assigned oscillator index.",
+            signal_uid.0
+        );
+        self.oscillator_allocation.insert(signal_uid, index);
+    }
+
+    pub(crate) fn oscillator_index(&self, signal_uid: &SignalUid) -> Option<u16> {
+        self.oscillator_allocation.get(signal_uid).cloned()
+    }
+
+    /// Get the AWG channels for a given signal UID.
+    ///
+    /// These are not generator channels. They are the original signal channels, which can be used for output mapping.
+    pub(crate) fn awg_channels_for_signal(
+        &self,
+        signal_uid: &SignalUid,
+    ) -> Option<&Vec<ChannelIndex>> {
+        self.signal_to_channel_mapping.get(signal_uid)
     }
 }
 

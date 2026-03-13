@@ -6,7 +6,7 @@ use laboneq_common::device_traits::DeviceTraits;
 use laboneq_common::types::DeviceKind;
 use laboneq_dsl::operation::AveragingLoop;
 use laboneq_dsl::types::ValueOrParameter;
-use laboneq_ir::signal::PortMode;
+use laboneq_ir::signal::{PortMode, SignalKind};
 use numeric_array::NumericArray;
 
 use crate::error::{Error, Result};
@@ -14,7 +14,6 @@ use crate::experiment_validation::{ExperimentContext, ParamsContext, ValidationC
 use crate::signal_view::SignalView;
 
 /// Validates signals in an [`Experiment`].
-///
 pub(super) fn validate_experiment_signals<'a>(
     avg_loop: &AveragingLoop,
     ctx: &ExperimentContext<'a>,
@@ -28,8 +27,11 @@ pub(super) fn validate_experiment_signals<'a>(
         if ctx_validator.signal_check_done.contains(signal_uid) {
             continue;
         }
-        freq_sweep_on_acquire_line_requires_spectroscopy_mode(signal, avg_loop)?;
+        validate_freq_sweep_on_acquire_line(signal, avg_loop)?;
         check_lo_frequency(signal, ctx)?;
+        if signal.automute() {
+            check_automute_requirements(signal)?;
+        }
         digest_awgs(signal, ctx_params);
         ctx_validator.signal_check_done.push(*signal_uid);
     }
@@ -79,6 +81,34 @@ fn validate_lo_frequency_ranges(lo_frequency: f64, device_kind: &DeviceKind) -> 
     Ok(())
 }
 
+fn check_automute_requirements(signal: &SignalView) -> Result<()> {
+    // Device support check
+    if !matches!(signal.device_kind(), DeviceKind::Shfqa | DeviceKind::Shfsg) {
+        let err_msg = format!(
+            "Automute is not available on device '{}'",
+            signal.device_kind()
+        );
+        return Err(Error::new(&err_msg));
+    }
+
+    // Port mode check
+    if let Some(port_mode) = signal.port_mode()
+        && port_mode != &PortMode::RF
+    {
+        return Err(Error::new(
+            "Automute can only be applied when with RF port mode.",
+        ));
+    }
+
+    // Signal kind check
+    if signal.signal_kind() == &SignalKind::Integration {
+        return Err(Error::new(
+            "Automute can only be applied to output channels.",
+        ));
+    }
+    Ok(())
+}
+
 fn check_lo_frequency(signal: &SignalView, ctx: &ExperimentContext) -> Result<()> {
     const LO_FREQ_RESOLUTION_HZ: f64 = 1e-6;
     const LO_FREQ_STEP_HZ: f64 = 200e6;
@@ -97,7 +127,7 @@ fn check_lo_frequency(signal: &SignalView, ctx: &ExperimentContext) -> Result<()
                 NumericArray::Float64(ref vals) => {
                     let mut value = None;
                     for v in vals {
-                        validation_result = validate_lo_frequency_ranges(*v, signal.device_kind());
+                        validation_result = validate_lo_frequency_ranges(*v, &signal.device_kind());
                         if (*v % LO_FREQ_STEP_HZ).abs() > LO_FREQ_RESOLUTION_HZ {
                             value = Some(*v);
                             break;
@@ -112,7 +142,7 @@ fn check_lo_frequency(signal: &SignalView, ctx: &ExperimentContext) -> Result<()
             })
         }
         ValueOrParameter::ResolvedParameter { value, .. } | ValueOrParameter::Value(value) => {
-            validation_result = validate_lo_frequency_ranges(*value, signal.device_kind());
+            validation_result = validate_lo_frequency_ranges(*value, &signal.device_kind());
             ((value % LO_FREQ_STEP_HZ).abs() > LO_FREQ_RESOLUTION_HZ)
                 .then_some(value)
                 .cloned()
@@ -137,7 +167,7 @@ fn check_lo_frequency(signal: &SignalView, ctx: &ExperimentContext) -> Result<()
     validation_result
 }
 
-fn freq_sweep_on_acquire_line_requires_spectroscopy_mode(
+fn validate_freq_sweep_on_acquire_line(
     signal: &SignalView,
     avg_loop: &AveragingLoop,
 ) -> Result<()> {
@@ -145,14 +175,24 @@ fn freq_sweep_on_acquire_line_requires_spectroscopy_mode(
         return Ok(());
     };
 
-    let is_invalid_osc = match osc.frequency {
+    let is_hw_osc_sweep = match osc.frequency {
         ValueOrParameter::Parameter(_) | ValueOrParameter::ResolvedParameter { .. } => {
-            signal.is_hardware_modulated() && !avg_loop.acquisition_type.is_spectroscopy()
+            signal.is_hardware_modulated()
         }
         _ => false,
     };
 
-    if is_invalid_osc && signal.device_kind().is_qa_device() {
+    if !is_hw_osc_sweep || !signal.device_kind().is_qa_device() {
+        return Ok(());
+    }
+
+    // SHFQA devices with LRT option support hardware oscillator sweeps
+    // in non-spectroscopy acquisition modes.
+    if signal.has_option("LRT") {
+        return Ok(());
+    }
+
+    if !avg_loop.acquisition_type.is_spectroscopy() {
         let err_msg = format!(
             "Hardware oscillator sweep using oscillator {} on acquire line \
             {} connected to UFHQA or SHFQA device {} \

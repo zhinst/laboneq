@@ -1,14 +1,12 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::Arc;
-
 use laboneq_dsl::types::{NumericLiteral, PulseUid};
-use pyo3::prelude::*;
+use numeric_array::NumericArray;
 
 use laboneq_units::duration::{Duration, Second};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PulseDef {
     pub uid: PulseUid,
     pub kind: PulseKind,
@@ -21,7 +19,7 @@ pub struct PulseDef {
     pub amplitude: NumericLiteral,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PulseKind {
     Functional(FunctionalPulse),
     Sampled(SampledPulse),
@@ -29,7 +27,7 @@ pub enum PulseKind {
     MarkerPulse { length: Duration<Second> },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PulseFunction {
     Constant,
     Custom { function: String },
@@ -39,15 +37,13 @@ impl PulseFunction {
     pub const CONSTANT_PULSE_NAME: &str = "const";
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionalPulse {
     pub length: Duration<Second>,
     pub function: PulseFunction,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SampledPulse {
-    pub samples: Arc<Py<PyAny>>,
-    // Convenience field for length in samples
-    pub length: usize,
+    pub samples: NumericArray,
 }

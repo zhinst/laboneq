@@ -4,6 +4,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use indexmap::IndexMap;
+use laboneq_common::device_options::DeviceOptions;
 
 pub use crate::handle_feedback_registers::Acquisition;
 use crate::ir::SignalUid;
@@ -32,23 +33,64 @@ pub struct SeqCGenOutput<T: SampleWaveforms> {
 
 pub struct AwgCodeGenerationResult<T: SampleWaveforms> {
     pub awg: AwgProperties,
-    pub seqc: String,
+    pub seqc: SeqCProgram,
     pub wave_indices: IndexMap<String, (WaveIndex, SignalType)>,
-    pub command_table: Option<String>,
+    pub command_table: Option<CommandTable>,
     pub shf_sweeper_config: Option<ShfPpcSweepJson>,
     pub sampled_waveforms: Vec<SampledWaveform<T::Signature>>,
     pub integration_weights: Vec<T::IntegrationWeight>,
     pub signal_delays: HashMap<SignalUid, f64>,
     pub integration_lengths: HashMap<SignalUid, SignalIntegrationInfo>,
-    pub parameter_phase_increment_map: Option<HashMap<String, Vec<ParameterPhaseIncrement>>>,
     pub feedback_register_config: FeedbackRegisterConfig,
     pub channel_properties: Vec<ChannelProperties>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SequencerType {
+    Qa,
+    Sg,
+    Auto,
+}
+
+impl std::fmt::Display for SequencerType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SequencerType::Qa => write!(f, "qa"),
+            SequencerType::Sg => write!(f, "sg"),
+            SequencerType::Auto => write!(f, "auto"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SeqCProgram {
+    pub src: String,
+    pub dev_type: String,
+    pub dev_opts: Vec<String>,
+    pub awg_index: u16,
+    pub sequencer: SequencerType,
+    pub sampling_rate: Option<f64>,
+}
+
+pub struct CommandTable {
+    pub src: String,
+    pub n_entries: usize,
+    pub max_entries: usize,
+    pub parameter_phase_increment_map: HashMap<String, Vec<ParameterPhaseIncrement>>,
+}
+
+impl CommandTable {
+    pub fn resource_usage_percentage(&self) -> f64 {
+        self.n_entries as f64 / self.max_entries as f64
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AwgProperties {
     pub key: AwgKey,
     pub kind: AwgKind,
+    pub sampling_rate: f64,
+    pub options: DeviceOptions,
 }
 
 #[derive(Debug, Clone)]
@@ -103,8 +145,10 @@ pub enum MarkerMode {
     Marker,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChannelProperties {
+    pub signal: SignalUid,
     pub channel: ChannelIndex,
     pub marker_mode: Option<MarkerMode>,
+    pub hw_oscillator_index: Option<u16>,
 }

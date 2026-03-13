@@ -15,6 +15,7 @@ use crate::ir::IrNode;
 use crate::ir::SignalUid;
 use crate::ir::compilation_job::AwgCore;
 use crate::ir::compilation_job::AwgKey;
+use crate::ir::compilation_job::DeviceKind;
 use crate::ir::compilation_job::SignalKind;
 use crate::ir::experiment::AcquisitionType;
 use crate::ir::experiment::Handle;
@@ -27,11 +28,14 @@ use crate::result::Acquisition;
 use crate::result::AwgCodeGenerationResult;
 use crate::result::AwgProperties;
 use crate::result::ChannelProperties;
+use crate::result::CommandTable;
 use crate::result::FeedbackRegisterConfig;
 use crate::result::Measurement;
 use crate::result::ResultSource;
 use crate::result::SampledWaveform;
 use crate::result::SeqCGenOutput;
+use crate::result::SeqCProgram;
+use crate::result::SequencerType;
 use crate::result::ShfPpcSweepJson;
 use crate::result::SignalIntegrationInfo;
 use crate::sample_waveforms::{
@@ -43,7 +47,10 @@ use crate::sampled_event_handler::seqc_tracker::FeedbackRegisterIndex;
 use crate::sampled_event_handler::seqc_tracker::awg::Awg;
 use crate::waveform_sampler::SampleWaveforms;
 
+use laboneq_error::LabOneQError;
 use laboneq_error::WithContext;
+use laboneq_error::resource_usage::ResourceExhaustionError;
+use laboneq_error::resource_usage::handle_resource_exhaustion;
 use laboneq_log::warn;
 use laboneq_units::tinysample::{tiny_samples, tinysamples_to_seconds};
 use rayon::prelude::*;
@@ -74,7 +81,6 @@ fn generate_output(
         sampling_rate: awg.sampling_rate,
         shf_output_mute_min_duration,
         trigger_mode: awg.trigger_mode,
-        is_reference_clock_internal: awg.is_reference_clock_internal,
     };
     let seqc_results = handle_sampled_events(
         sampled_events,
@@ -199,29 +205,41 @@ where
 
     // Construct channel properties
     let mut channel_properties = vec![];
-    for generator_channel in awg
-        .signals
-        .iter()
-        .filter(|s| s.kind != SignalKind::INTEGRATION)
-        .flat_map(|s| s.channels.clone())
-    {
-        channel_properties.push(ChannelProperties {
-            channel: generator_channel,
-            marker_mode: awg_info.marker_modes.get(&generator_channel).cloned(),
-        });
+    for signal in awg.signals.iter() {
+        let oscillator_index = awg.oscillator_index(&signal.uid);
+        for channel in awg.awg_channels_for_signal(&signal.uid).unwrap() {
+            channel_properties.push(ChannelProperties {
+                signal: signal.uid,
+                channel: *channel,
+                marker_mode: awg_info.marker_modes.get(channel).cloned(),
+                hw_oscillator_index: oscillator_index,
+            });
+        }
     }
 
-    let awg = AwgProperties {
+    let awg_properties = AwgProperties {
         key: awg.key(),
         kind: awg.kind,
+        sampling_rate: awg.sampling_rate,
+        options: awg.options.clone(),
     };
     AwgCodeGenerationResult {
-        awg,
-        seqc: awg_events.seqc,
+        awg: awg_properties,
+        seqc: create_seqc_program(awg, awg_events.seqc),
         wave_indices: awg_events.wave_indices,
-        command_table: awg_events
-            .command_table
-            .map(|ct| serde_json::to_string(&ct).unwrap()),
+        command_table: {
+            if let Some(command_table_results) = awg_events.command_table {
+                Some(CommandTable {
+                    src: serde_json::to_string(&command_table_results.command_table).unwrap(),
+                    n_entries: command_table_results.n_entries,
+                    max_entries: awg.device_kind().traits().max_ct_entries.unwrap() as usize,
+                    parameter_phase_increment_map: command_table_results
+                        .parameter_phase_increment_map,
+                })
+            } else {
+                None
+            }
+        },
         shf_sweeper_config: awg_events
             .shf_sweeper_config
             .map(|config_json| ShfPpcSweepJson {
@@ -248,7 +266,6 @@ where
                 )
             })
             .collect(),
-        parameter_phase_increment_map: awg_events.parameter_phase_increment_map,
         feedback_register_config: FeedbackRegisterConfig {
             local: matches!(
                 target_feedback_register,
@@ -400,6 +417,12 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
     // Code generation per AWG
     let awg_results = generate_code_for_multiple_awgs(root, &awgs, &ctx, sampler)?;
 
+    // Resource usage evaluation
+    handle_resource_exhaustion(
+        evaluate_resource_usage(&awg_results),
+        ctx.settings.ignore_resource_exhaustion,
+    )?;
+
     // Result construction
     let total_execution_time = estimate_total_execution_time(root);
     let measurements = evaluate_measurement_per_device(&awg_results);
@@ -459,4 +482,54 @@ fn evaluate_measurement_per_device(
     // Sorted for output consistency
     measurements.sort_by(|a, b| a.channel.cmp(&b.channel));
     measurements
+}
+
+fn evaluate_resource_usage(
+    awg_results: &[AwgCodeGenerationResult<impl SampleWaveforms>],
+) -> impl Iterator<Item = Result<(), LabOneQError>> + '_ {
+    awg_results.iter().map(|result| {
+        if let Some(ct) = &result.command_table {
+            let usage = ct.resource_usage_percentage();
+            if usage > 1.0 {
+                let msg = format!(
+                    "Exceeded max number of command table entries on device '{}', AWG({}): Needed: {}, max available: {}",
+                    result.awg.key.device_name(),
+                    result.awg.key.index(),
+                    ct.n_entries,
+                    ct.max_entries
+                );
+                Err(ResourceExhaustionError::new(msg, usage).into())
+            } else {
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    })
+}
+
+fn create_seqc_program(awg: &AwgCore, seqc_code: String) -> SeqCProgram {
+    let dev_type = awg
+        .options
+        .first()
+        .map(String::as_str)
+        .unwrap_or("")
+        .to_string();
+    let dev_opts = awg.options.iter().skip(1).map(String::to_string).collect();
+    SeqCProgram {
+        src: seqc_code,
+        dev_type,
+        dev_opts,
+        awg_index: awg.key().index(),
+        sequencer: match awg.device_kind() {
+            DeviceKind::SHFSG => SequencerType::Sg,
+            DeviceKind::SHFQA => SequencerType::Qa,
+            _ => SequencerType::Auto,
+        },
+        sampling_rate: if matches!(awg.device_kind(), DeviceKind::HDAWG) {
+            Some(awg.sampling_rate)
+        } else {
+            None
+        },
+    }
 }

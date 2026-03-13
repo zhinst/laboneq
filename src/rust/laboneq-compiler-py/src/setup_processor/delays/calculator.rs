@@ -6,13 +6,10 @@ use std::collections::HashMap;
 use laboneq_common::device_traits::DeviceTraits;
 use laboneq_common::types::{DeviceKind, PhysicalDeviceUid};
 use laboneq_dsl::signal_calibration::Precompensation;
-use laboneq_dsl::types::{DeviceUid, SignalUid};
+use laboneq_dsl::types::SignalUid;
 use laboneq_ir::signal::OutputRoute;
-use laboneq_ir::system::Device;
 use laboneq_units::duration::{Duration, Second};
 use smallvec::SmallVec;
-
-use crate::signal_properties::SignalProperties;
 
 use super::lead_delay::get_lead_delay;
 use super::on_device::{SignalDelay, compute_on_device_delays};
@@ -23,6 +20,7 @@ use super::precompensation::precompensation_delay_samples;
 #[derive(Debug)]
 pub(crate) struct DelayRegistry {
     signal_delays: HashMap<SignalUid, SignalDelayInfo>,
+    lead_delays: HashMap<PhysicalDeviceUid, Duration<Second>>,
 }
 
 impl DelayRegistry {
@@ -38,10 +36,21 @@ impl DelayRegistry {
             .map_or(0.0.into(), |info| info.port_delay)
     }
 
+    pub(crate) fn device_lead_delay(&self, device: PhysicalDeviceUid) -> Duration<Second> {
+        self.lead_delays
+            .get(&device)
+            .map_or(0.0.into(), |&delay| delay)
+    }
+
     fn new() -> Self {
         Self {
             signal_delays: HashMap::new(),
+            lead_delays: HashMap::new(),
         }
+    }
+
+    fn add_lead_delay(&mut self, device: PhysicalDeviceUid, delay: Duration<Second>) {
+        self.lead_delays.insert(device, delay);
     }
 
     fn add_delay(
@@ -66,7 +75,7 @@ struct SignalDelayInfo {
     port_delay: Duration<Second>,
 }
 
-pub(super) struct SignalDelayProperties<'a> {
+pub(crate) struct SignalDelayProperties<'a> {
     uid: SignalUid,
     channels: SmallVec<[u16; 4]>,
     physical_device: PhysicalDeviceUid,
@@ -78,7 +87,7 @@ pub(super) struct SignalDelayProperties<'a> {
 }
 
 impl<'a> SignalDelayProperties<'a> {
-    pub(super) fn new(
+    pub(crate) fn new(
         uid: SignalUid,
         channels: SmallVec<[u16; 4]>,
         physical_device: PhysicalDeviceUid,
@@ -107,55 +116,7 @@ impl<'a> SignalDelayProperties<'a> {
     }
 }
 
-/// Computes the on-device delays for a set of signals based on their properties and device information.
-///
-/// Once the on-device delays are computed, the start and port delays for each signal are calculated accordingly
-/// to compensate for the on-device delays, ensuring that the signals are correctly aligned in time when executed on the device.
-///
-/// The alignment takes into account following factors:
-/// - Lead delay: The inherent delay of the device before the signal starts being output.
-/// - Output routing delay: Delay introduced by output routing.
-/// - Precompensation delay: Delay introduced by precompensation settings on the signal.
-///
-/// Returns a struct containing the start and port delays for each signal, which can be used to adjust the signal timing in the setup processing.
-pub(crate) fn compute_delays(
-    signals: &[&SignalProperties],
-    devices: &HashMap<DeviceUid, Device>,
-    desktop_setup: bool,
-) -> Result<DelayRegistry, &'static str> {
-    let signal_delay_props = signals
-        .iter()
-        .map(|s| {
-            let device = devices.get(&s.device_uid).unwrap();
-            SignalDelayProperties::new(
-                s.uid,
-                s.channels.clone(),
-                device.physical_device_uid(),
-                s.sampling_rate,
-                *device.kind(),
-                s.added_outputs.iter().collect(),
-                s.precompensation.as_ref(),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let delays = compute_delays_impl(&signal_delay_props, desktop_setup);
-
-    // Ensure that port delays are not assigned to UHFQA devices, as they do not support port delays.
-    for signal in signal_delay_props {
-        if signal.device_kind == DeviceKind::Uhfqa {
-            assert_eq!(
-                delays.signal_port_delay(signal.uid),
-                0.0.into(),
-                "Port delays are not supported on UHFQA devices"
-            );
-        }
-    }
-
-    Ok(delays)
-}
-
-pub(super) fn compute_delays_impl(
+pub(crate) fn compute_signal_delays(
     signals: &[SignalDelayProperties],
     desktop_setup: bool,
 ) -> DelayRegistry {
@@ -163,6 +124,7 @@ pub(super) fn compute_delays_impl(
     let output_delays = calculate_output_route_signal_delays(signals);
     let precomp_delays = signals
         .iter()
+        .filter(|info| info.device_kind != DeviceKind::Zqcs)
         .filter_map(|info| {
             info.precompensation
                 .as_ref()
@@ -190,12 +152,24 @@ pub(super) fn compute_delays_impl(
     for on_device_delay in compute_on_device_delays(signal_delays) {
         if let Some(signal) = signals.iter().find(|s| s.uid == on_device_delay.signal_uid) {
             // Lastly add the lead delay to the start delay.
-            let start_delay =
+            let lead_delay =
                 get_lead_delay(&signal.device_kind, signal.sampling_rate, desktop_setup);
             delays.add_delay(
                 on_device_delay.signal_uid,
-                start_delay + on_device_delay.on_signal.into(),
+                (on_device_delay.on_signal + lead_delay.value()).into(),
                 on_device_delay.on_port.into(),
+            );
+            delays.add_lead_delay(signal.physical_device, lead_delay);
+        }
+    }
+
+    // Ensure that port delays are not assigned to UHFQA devices, as they do not support port delays.
+    for signal in signals {
+        if signal.device_kind == DeviceKind::Uhfqa {
+            assert_eq!(
+                delays.signal_port_delay(signal.uid),
+                0.0.into(),
+                "Port delays are not supported on UHFQA devices"
             );
         }
     }

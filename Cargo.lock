@@ -52,6 +52,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "capnp"
+version = "0.25.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ae0593da254d02d0e69525b5eec7a59586753aa3bd2e54842eca33c6786330c"
+dependencies = [
+ "embedded-io",
+]
+
+[[package]]
+name = "capnpc"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6cdfa6b0df161a71201367910265b97180541ecdb48bd08e05ef8694c295d1f"
+dependencies = [
+ "capnp",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -69,7 +87,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "codegenerator"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
  "codegenerator-utils",
  "derive_more",
@@ -94,7 +112,7 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-py"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
  "codegenerator",
  "codegenerator-utils",
@@ -111,7 +129,7 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-utils"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
  "laboneq-dsl",
  "laboneq-ir",
@@ -199,6 +217,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
 
 [[package]]
+name = "embedded-io"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb1aa714776b75c7e67e1da744b81a129b3ff919c8712b5e1b32252c1f07cc7"
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -259,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "interval-calculator"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
  "anyhow",
  "thiserror",
@@ -281,8 +305,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
+name = "laboneq-capnp"
+version = "26.4.0-b3"
+dependencies = [
+ "capnp",
+ "capnpc",
+]
+
+[[package]]
 name = "laboneq-common"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
  "laboneq-units",
  "regex",
@@ -291,10 +323,12 @@ dependencies = [
 
 [[package]]
 name = "laboneq-compiler-py"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
  "anyhow",
  "approx",
+ "capnp",
+ "laboneq-capnp",
  "laboneq-common",
  "laboneq-dsl",
  "laboneq-ir",
@@ -313,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-dsl"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
  "laboneq-common",
  "laboneq-units",
@@ -324,15 +358,16 @@ dependencies = [
 
 [[package]]
 name = "laboneq-error"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
+ "laboneq-log",
  "pyo3",
  "thiserror",
 ]
 
 [[package]]
 name = "laboneq-ir"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
  "laboneq-common",
  "laboneq-dsl",
@@ -347,50 +382,39 @@ dependencies = [
 
 [[package]]
 name = "laboneq-log"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "laboneq-py-utils"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
  "laboneq-common",
  "laboneq-dsl",
  "laboneq-ir",
+ "laboneq-log",
  "laboneq-units",
+ "log",
  "numeric-array",
  "pyo3",
+ "pyo3-log",
 ]
 
 [[package]]
 name = "laboneq-rust"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
- "anyhow",
- "approx",
  "codegenerator-py",
- "laboneq-common",
  "laboneq-compiler-py",
- "laboneq-dsl",
- "laboneq-ir",
- "laboneq-log",
- "laboneq-py-utils",
  "laboneq-scheduler",
- "laboneq-units",
- "num-complex",
- "numeric-array",
  "pyo3",
- "pyo3-log",
- "serde_json",
- "smallvec",
- "thiserror",
 ]
 
 [[package]]
 name = "laboneq-scheduler"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
  "anyhow",
  "itertools",
@@ -409,7 +433,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-units"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -417,9 +441,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.182"
+version = "0.2.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6800badb6cb2082ffd7b6a67e6125bb39f18782f793520caee8cb8846be06112"
+checksum = "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d"
 
 [[package]]
 name = "log"
@@ -493,7 +517,7 @@ dependencies = [
 
 [[package]]
 name = "numeric-array"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 dependencies = [
  "approx",
  "num-complex",
@@ -631,9 +655,9 @@ dependencies = [
 
 [[package]]
 name = "quote"
-version = "1.0.44"
+version = "1.0.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21b2ebcf727b7760c461f091f9f0f539b77b8e87f2fd88131e7f1b433b3cece4"
+checksum = "41f2619966050689382d2b44f664f4bc593e129785a36d6ee376ddf37259b924"
 dependencies = [
  "proc-macro2",
 ]
@@ -666,7 +690,7 @@ dependencies = [
 
 [[package]]
 name = "rccow"
-version = "26.4.0-b2"
+version = "26.4.0-b3"
 
 [[package]]
 name = "regex"

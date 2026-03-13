@@ -111,7 +111,7 @@ fn determine_pulse_length(pulse_def: &PulseDef, sampling_rate: f64) -> Duration<
     match &pulse_def.kind {
         PulseKind::Functional(func) => func.length,
         PulseKind::Sampled(obj) => {
-            let num_samples = obj.length as f64;
+            let num_samples = obj.samples.len() as f64;
             seconds(num_samples / sampling_rate)
         }
         PulseKind::LengthOnly { length } => *length,

@@ -12,7 +12,6 @@ pub(crate) struct Awg {
     pub sampling_rate: f64,
     pub shf_output_mute_min_duration: Option<f64>,
     pub trigger_mode: TriggerMode,
-    pub is_reference_clock_internal: bool,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

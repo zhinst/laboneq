@@ -13,5 +13,7 @@ version.workspace = true
 pyo3 = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
+laboneq-log = { workspace = true }
+
 [lints]
 workspace = true

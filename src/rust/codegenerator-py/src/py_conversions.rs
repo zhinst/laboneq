@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Translations from Python IR into code generator IR
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -35,12 +34,6 @@ pub(crate) fn extract_device_kind(ob: &Bound<'_, PyAny>) -> Result<DeviceKind, P
     Ok(kind)
 }
 
-fn extract_awg_oscs(ob: &Bound<'_, PyAny>) -> Result<HashMap<String, u16>, PyErr> {
-    // awg_info.AWGInfo.oscs
-    let out = ob.extract::<HashMap<String, u16>>()?;
-    Ok(out)
-}
-
 fn extract_trigger_mode(ob: &Bound<'_, PyAny>) -> Result<TriggerMode, PyErr> {
     // compilation_job.TriggerMode
     let py = ob.py();
@@ -65,17 +58,9 @@ pub(crate) fn extract_awg(
     id_store: &NamedIdStore,
 ) -> Result<AwgInfo, PyErr> {
     let py = ob.py();
-    let sampling_rate = ob.getattr(intern!(py, "sampling_rate"))?.extract::<f64>()?;
     let device_kind = extract_device_kind(&ob.getattr(intern!(py, "device_type"))?)?;
     let awg_id = ob.getattr(intern!(py, "awg_id"))?.extract::<u16>()?;
     let trigger_mode = extract_trigger_mode(&ob.getattr(intern!(py, "trigger_mode"))?)?;
-    let reference_clock_source = &ob
-        .getattr(intern!(py, "reference_clock_source"))?
-        .extract::<Option<String>>()?;
-    let is_reference_clock_internal = reference_clock_source
-        .as_ref()
-        .map(|s| s == "internal")
-        .unwrap_or(false);
     let mut signal_uids = HashSet::new();
     for signal in ob.getattr(intern!(py, "signals"))?.try_iter()? {
         let signal_uid_py = signal?.getattr(intern!(py, "id"))?;
@@ -85,16 +70,13 @@ pub(crate) fn extract_awg(
     }
     let awg = AwgInfo {
         uid: awg_id,
-        sampling_rate,
         device: Arc::new(Device::new(
             ob.getattr(intern!(py, "device_id"))?
                 .extract::<String>()?
                 .into(),
             device_kind,
         )),
-        osc_allocation: extract_awg_oscs(&ob.getattr(intern!(py, "oscs"))?)?,
         trigger_mode,
-        is_reference_clock_internal,
         signals: signal_uids,
     };
     Ok(awg)

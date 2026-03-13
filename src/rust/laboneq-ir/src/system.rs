@@ -8,20 +8,20 @@ use laboneq_dsl::types::{DeviceUid, SignalUid};
 
 use crate::{awg::AwgCore, signal::Signal};
 // Re-export for convenience
-pub use crate::device::Device;
+pub use crate::device::AwgDevice;
 
 /// Device and signal setup used in the experiment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeviceSetup {
     signals: HashMap<SignalUid, Signal>,
-    devices: HashMap<DeviceUid, Device>,
+    devices: HashMap<DeviceUid, AwgDevice>,
     awg_cores: HashMap<AwgKey, AwgCore>,
 }
 
 impl DeviceSetup {
     pub fn new(
         signals: HashMap<SignalUid, Signal>,
-        devices: HashMap<DeviceUid, Device>,
+        devices: HashMap<DeviceUid, AwgDevice>,
         awg_cores: Vec<AwgCore>,
     ) -> Result<Self, String> {
         // Validate all signals reference existing devices
@@ -48,7 +48,7 @@ impl DeviceSetup {
         self.signals.get(uid)
     }
 
-    pub fn device_by_uid(&self, uid: &DeviceUid) -> Option<&Device> {
+    pub fn device_by_uid(&self, uid: &DeviceUid) -> Option<&AwgDevice> {
         self.devices.get(uid)
     }
 

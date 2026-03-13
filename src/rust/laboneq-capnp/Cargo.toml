@@ -1,0 +1,22 @@
+[package]
+name = "laboneq-capnp"
+authors.workspace = true
+description = "Cap'n Proto generated code for LabOne Q pulse-level schemas"
+documentation.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "laboneq_capnp"
+
+[dependencies]
+capnp = { workspace = true }
+
+[build-dependencies]
+capnpc = "0.25"

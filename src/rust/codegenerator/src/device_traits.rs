@@ -9,17 +9,11 @@ use laboneq_common::device_traits as device_traits_common;
 /// NOTE: Mirror from `laboneq` Python package:
 ///     src/python/laboneq/compiler/common/device_type.py
 ///     Ensure that the values do match when changing.
-/// NOTE: The frequency of the HDAWG may be either 2.4 GHz or 2 GHz depending on the
-///     setup - the compiler determines which one during analyzing the device setup.
-///     This is not reflected in the traits here yet - we have specified the maximum
-///     frequency of 2.4 GHz used in a non-SHF* setup. todo: Add support for
-///     the large setup case once this part of the code is used in rust.
 
 #[derive(Debug)]
 pub struct DeviceTraits {
     pub type_str: &'static str,
     pub sample_multiple: u16,
-    pub sampling_rate: f64,
     pub min_play_wave: u32,
     pub max_play_zero_hold: Samples,
     pub amplitude_register_count: u16,
@@ -39,12 +33,12 @@ pub struct DeviceTraits {
     pub number_of_trigger_bits: u8,
     pub ct_schema_version: Option<&'static str>,
     pub num_integration_units_per_acquire_signal: u8,
+    pub max_ct_entries: Option<u16>,
 }
 
 pub(crate) const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "HDAWG",
     sample_multiple: device_traits_common::HDAWG_TRAITS.sample_multiple,
-    sampling_rate: device_traits_common::HDAWG_TRAITS.sampling_rate,
     min_play_wave: 32,
     max_play_zero_hold: (1 << 19) - 16,
     amplitude_register_count: 4,
@@ -64,12 +58,12 @@ pub(crate) const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     number_of_trigger_bits: 4,
     ct_schema_version: Some("hd_1.1.0"),
     num_integration_units_per_acquire_signal: 0,
+    max_ct_entries: Some(1024),
 };
 
 pub(crate) const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "UHFQA",
     sample_multiple: device_traits_common::UHFQA_TRAITS.sample_multiple,
-    sampling_rate: device_traits_common::UHFQA_TRAITS.sampling_rate,
     min_play_wave: 16,
     max_play_zero_hold: 131056,
     amplitude_register_count: 1,
@@ -89,12 +83,12 @@ pub(crate) const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     number_of_trigger_bits: 4,
     ct_schema_version: None,
     num_integration_units_per_acquire_signal: 2,
+    max_ct_entries: None,
 };
 
 pub(crate) const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "SHFSG",
     sample_multiple: device_traits_common::SHFSG_TRAITS.sample_multiple,
-    sampling_rate: device_traits_common::SHFSG_TRAITS.sampling_rate,
     min_play_wave: 32,
     max_play_zero_hold: (1 << 19) - 16,
     amplitude_register_count: 1,
@@ -118,12 +112,12 @@ pub(crate) const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     number_of_trigger_bits: 1,
     ct_schema_version: Some("sg_1.2.0"),
     num_integration_units_per_acquire_signal: 0,
+    max_ct_entries: Some(4096),
 };
 
 pub(crate) const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "SHFQA",
     sample_multiple: device_traits_common::SHFQA_TRAITS.sample_multiple,
-    sampling_rate: device_traits_common::SHFQA_TRAITS.sampling_rate,
     min_play_wave: 32,
     max_play_zero_hold: (1 << 19) - 16,
     amplitude_register_count: 1,
@@ -148,4 +142,5 @@ pub(crate) const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     number_of_trigger_bits: 1,
     ct_schema_version: None,
     num_integration_units_per_acquire_signal: 1,
+    max_ct_entries: None,
 };

@@ -15,14 +15,10 @@ from laboneq._rust.codegenerator import SampledWaveform
 from laboneq.compiler.common.compiler_settings import (
     CompilerSettings,
 )
-from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.iface_code_generator import ICodeGenerator
 from laboneq.compiler.common.integration_times import (
     IntegrationTimes,
     SignalIntegrationInfo,
-)
-from laboneq.compiler.common.resource_usage import (
-    ResourceLimitationErrorCollector,
 )
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput, SeqCProgram
@@ -40,8 +36,6 @@ from .types import SignalDelay, SignalDelays
 
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
-
-_SEQUENCER_TYPES = {DeviceType.SHFQA: "qa", DeviceType.SHFSG: "sg"}
 
 
 class CodeGenerator(ICodeGenerator):
@@ -330,6 +324,7 @@ class CodeGenerator(ICodeGenerator):
             "PHASE_RESOLUTION_BITS": max(self._settings.PHASE_RESOLUTION_BITS, 0),
             "USE_AMPLITUDE_INCREMENT": self._settings.USE_AMPLITUDE_INCREMENT,
             "EMIT_TIMING_COMMENTS": self._settings.EMIT_TIMING_COMMENTS,
+            "IGNORE_RESOURCE_LIMITATION_ERRORS": self._settings.IGNORE_RESOURCE_LIMITATION_ERRORS,
         }
 
         codegen_result = codegen_rs.generate_code(
@@ -347,9 +342,6 @@ class CodeGenerator(ICodeGenerator):
         self._measurements = codegen_result.measurements
         self._integration_unit_allocations = codegen_result.integration_unit_allocations
 
-        reserr_collector: ResourceLimitationErrorCollector = (
-            ResourceLimitationErrorCollector(compiler_settings=self._settings)
-        )
         for awg_code_output in codegen_result.awg_results:
             awg_key = AwgKey(*awg_code_output.awg_properties.key)
 
@@ -367,7 +359,15 @@ class CodeGenerator(ICodeGenerator):
             self._integration_weights[awg_key] = awg_code_output.integration_weights
 
             self._sampled_waveforms[awg_key] = awg_code_output.sampled_waveforms
-            self._src[awg_key] = SeqCProgram(src=awg_code_output.seqc)
+            seqc_program = awg_code_output.seqc
+            self._src[awg_key] = SeqCProgram(
+                src=seqc_program.src,
+                dev_type=seqc_program.dev_type,
+                dev_opts=seqc_program.dev_opts,
+                awg_index=seqc_program.awg_index,
+                sequencer=seqc_program.sequencer,
+                sampling_rate=seqc_program.sampling_rate,
+            )
             self._feedback_register_config[awg_key] = (
                 awg_code_output.feedback_register_config
             )
@@ -378,36 +378,13 @@ class CodeGenerator(ICodeGenerator):
             if awg_code_output.command_table:
                 ct = orjson.loads(awg_code_output.command_table)
                 self._command_tables[awg_key] = {"ct": ct}
-                number_of_entries = len(ct["table"])
                 self._parameter_phase_increment_map[awg_key] = {
                     k: [i if i >= 0 else COMPLEX_USAGE for i in v]
                     for k, v in awg_code_output.parameter_phase_increment_map.items()
                 }
-                awg_info = self._awgs[awg_key]
-                if (
-                    max_ct := awg_info.device_type.max_ct_entries
-                ) and number_of_entries > max_ct:
-                    reserr_collector.add(
-                        f"Command table of device '{awg_key.device_id}', AWG({awg_key.awg_id})",
-                        usage=number_of_entries / max_ct,
-                    )
             if awg_code_output.shf_sweeper_config is not None:
                 self._shfppc_sweep_configs[awg_key] = awg_code_output.shf_sweeper_config
 
-        reserr_collector.raise_or_pass()
-
-        for awg_key, seqc_program in self._src.items():
-            awg_info = self._awgs[awg_key]
-            assert isinstance(awg_info.awg_id, int)
-            seqc_program.dev_type = awg_info.dev_type
-            seqc_program.dev_opts = awg_info.dev_opts
-            seqc_program.awg_index = awg_info.awg_id
-            seqc_program.sequencer = _SEQUENCER_TYPES.get(awg_info.device_type, "auto")
-            seqc_program.sampling_rate = (
-                awg_info.sampling_rate
-                if awg_info.device_type == DeviceType.HDAWG
-                else None
-            )
         self._gen_waves()
 
     def waves(self) -> dict[str, CodegenWaveform]:

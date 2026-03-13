@@ -34,9 +34,19 @@ impl<K: Copy + Eq + std::hash::Hash + From<ObjectUid>> PyObjectInterner<K> {
         Ok(uid)
     }
 
+    /// Insert a Python object with a pre-computed UID.
+    pub fn insert(&mut self, uid: K, value: Py<PyAny>) {
+        self.values.entry(uid).or_insert(value);
+    }
+
     /// Resolve the Python object associated with the given UID.
     pub fn resolve(&self, key: &K) -> Option<&Py<PyAny>> {
         self.values.get(key)
+    }
+
+    /// Iterate over all interned keys.
+    pub fn keys(&self) -> impl Iterator<Item = K> + '_ {
+        self.values.keys().copied()
     }
 }
 

@@ -3,29 +3,34 @@
 
 import attrs
 
-from laboneq._automation.element import AutomationElement
-from laboneq._automation.element import AutomationElementStatus as Status
+from laboneq._automation.status import AutomationStatus as Status
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 
 @classformatter
 @attrs.define(kw_only=True)
-class AutomationNode(AutomationElement):
+class AutomationNode:
     """A node in the automation framework.
 
     Attributes:
+        key: The automation node key. A string for single-element nodes,
+             or a tuple of strings for grouped elements.
+        depends_on: A set of automation node keys on which the node depends.
         layer_key: The key of the parent layer.
-        status: The status of the automation element.
+        status: The status of the automation node.
         max_fail_count: The maximum number of allowed failures.
-        time_valid: The time for which the automation element is reliably valid.
-        time_until_invalid: The time until the automation element is invalid.
+        time_valid: The time for which the automation node is reliably valid.
+        time_until_invalid: The time until the automation node is invalid.
         fail_count: The number of failed runs.
         pass_count: The number of passed runs.
         timestamp: The time the automation node was last run
                 formatted as '%Y%m%dT%H%M%S'.
     """
 
+    key: str | tuple[str, ...]
+    depends_on: set[str]
     layer_key: str
+
     status: Status = Status.READY
     # node execution parameters
     max_fail_count: int | None = 4
@@ -47,7 +52,7 @@ class AutomationNode(AutomationElement):
 class RootNode(AutomationNode):
     """Root node class."""
 
-    key: str = "root"
+    key: str | tuple[str, ...] = "root"
     depends_on: set[str] = attrs.field(factory=set)
     layer_key: str = "root"
     status: Status = Status.ROOT

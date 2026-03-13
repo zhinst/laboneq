@@ -210,6 +210,44 @@ impl PreorderInterval {
     }
 }
 
+/// Deterministic display labels for section UIDs.
+///
+/// Named sections keep their user-provided names. Unnamed/internal sections get
+/// stable `_s_<n>` labels assigned by first tree encounter.
+fn build_section_display_names(
+    root: &IrNode,
+    id_store: &NamedIdStore,
+) -> HashMap<SectionUid, String> {
+    fn visit(
+        node: &IrNode,
+        id_store: &NamedIdStore,
+        names: &mut HashMap<SectionUid, String>,
+        next_anonymous: &mut usize,
+    ) {
+        if let Some(info) = node.kind.section_info() {
+            names.entry(*info.uid).or_insert_with(|| {
+                if let Some(name) = id_store.resolve(*info.uid)
+                    && !name.is_empty()
+                {
+                    name.to_string()
+                } else {
+                    let label = format!("_s_{}", *next_anonymous);
+                    *next_anonymous += 1;
+                    label
+                }
+            });
+        }
+        for child in &node.children {
+            visit(&child.node, id_store, names, next_anonymous);
+        }
+    }
+
+    let mut names = HashMap::new();
+    let mut next_anonymous = 0usize;
+    visit(root, id_store, &mut names, &mut next_anonymous);
+    names
+}
+
 /// Event list generator using visitor pattern.
 struct EventListGenerator<'a> {
     id_counter: usize,
@@ -217,6 +255,7 @@ struct EventListGenerator<'a> {
     section_stack: Vec<String>,
     iteration_counter: HashMap<String, usize>,
     id_store: &'a NamedIdStore,
+    section_display_names: &'a HashMap<SectionUid, String>,
 }
 
 // =============================================================================
@@ -224,13 +263,18 @@ struct EventListGenerator<'a> {
 // =============================================================================
 
 impl<'a> EventListGenerator<'a> {
-    fn new(expand_loops: bool, id_store: &'a NamedIdStore) -> Self {
+    fn new(
+        expand_loops: bool,
+        id_store: &'a NamedIdStore,
+        section_display_names: &'a HashMap<SectionUid, String>,
+    ) -> Self {
         Self {
             id_counter: 0,
             expand_loops,
             section_stack: Vec::new(),
             iteration_counter: HashMap::new(),
             id_store,
+            section_display_names,
         }
     }
 
@@ -247,8 +291,9 @@ impl<'a> EventListGenerator<'a> {
         expand_loops: bool,
         max_events: usize,
         id_store: &'a NamedIdStore,
+        section_display_names: &'a HashMap<SectionUid, String>,
     ) -> EventList {
-        let mut generator = Self::new(expand_loops, id_store);
+        let mut generator = Self::new(expand_loops, id_store, section_display_names);
         let mut remaining = max_events;
         generator.visit_node(root, TinySamples::default(), &mut remaining)
     }
@@ -261,10 +306,11 @@ impl<'a> EventListGenerator<'a> {
     }
 
     fn resolve_section(&self, section: &SectionUid) -> String {
-        self.id_store
-            .resolve(*section)
-            .unwrap_or(UNKNOWN_LABEL)
-            .to_string()
+        self.section_display_names
+            .get(section)
+            .cloned()
+            .or_else(|| self.id_store.resolve(*section).map(str::to_owned))
+            .unwrap_or_else(|| UNKNOWN_LABEL.to_string())
     }
 
     fn get_parameter_name<T>(
@@ -1151,23 +1197,27 @@ fn calculate_preorder(
     node: &IrNode,
     current_depth: usize,
     section_info: &mut HashMap<String, SectionInfo>,
-    id_store: &NamedIdStore,
+    section_display_names: &HashMap<SectionUid, String>,
 ) -> usize {
     if matches!(node.kind, IrKind::Root) {
         let mut max_depth = current_depth;
         for child in &node.children {
-            let child_depth =
-                calculate_preorder(&child.node, current_depth, section_info, id_store);
+            let child_depth = calculate_preorder(
+                &child.node,
+                current_depth,
+                section_info,
+                section_display_names,
+            );
             max_depth = max_depth.max(child_depth);
         }
         return max_depth;
     }
 
     if let Some(info) = node.kind.section_info() {
-        let section_name = id_store
-            .resolve(*info.uid)
-            .unwrap_or(UNKNOWN_LABEL)
-            .to_string();
+        let section_name = section_display_names
+            .get(info.uid)
+            .cloned()
+            .unwrap_or_else(|| UNKNOWN_LABEL.to_string());
         section_info.insert(
             section_name.clone(),
             SectionInfo {
@@ -1181,8 +1231,12 @@ fn calculate_preorder(
         let mut max_depth = current_depth;
         for child in &node.children {
             if matches!(child.node.kind, IrKind::LoopIteration) {
-                let child_depth =
-                    calculate_preorder(&child.node, current_depth, section_info, id_store);
+                let child_depth = calculate_preorder(
+                    &child.node,
+                    current_depth,
+                    section_info,
+                    section_display_names,
+                );
                 max_depth = max_depth.max(child_depth);
                 // Loops without sweep parameters are cloned from a single
                 // prototype and are structurally identical across iterations;
@@ -1221,19 +1275,31 @@ fn calculate_preorder(
 
         if let Some(range) = &section_range {
             if range.overlaps(&child_interval) {
-                let child_depth =
-                    calculate_preorder(&child.node, max_depth + 1, section_info, id_store);
+                let child_depth = calculate_preorder(
+                    &child.node,
+                    max_depth + 1,
+                    section_info,
+                    section_display_names,
+                );
                 max_depth = max_depth.max(child_depth);
                 section_range = Some(range.merge(&child_interval));
             } else {
-                let child_depth =
-                    calculate_preorder(&child.node, current_depth + 1, section_info, id_store);
+                let child_depth = calculate_preorder(
+                    &child.node,
+                    current_depth + 1,
+                    section_info,
+                    section_display_names,
+                );
                 max_depth = max_depth.max(child_depth);
                 section_range = Some(child_interval);
             }
         } else {
-            let child_depth =
-                calculate_preorder(&child.node, current_depth + 1, section_info, id_store);
+            let child_depth = calculate_preorder(
+                &child.node,
+                current_depth + 1,
+                section_info,
+                section_display_names,
+            );
             max_depth = max_depth.max(child_depth);
             section_range = Some(child_interval);
         }
@@ -1272,10 +1338,18 @@ impl PulseSheetSchedule {
         max_events: usize,
         id_store: &NamedIdStore,
     ) -> Self {
-        let event_list = EventListGenerator::generate(root, expand_loops, max_events, id_store);
+        let section_display_names = build_section_display_names(root, id_store);
+        let event_list = EventListGenerator::generate(
+            root,
+            expand_loops,
+            max_events,
+            id_store,
+            &section_display_names,
+        );
 
-        let section_info = Self::generate_section_info(root, id_store);
-        let section_signals = Self::generate_section_signals(root, id_store);
+        let section_info = Self::generate_section_info(root, &section_display_names);
+        let section_signals =
+            Self::generate_section_signals(root, id_store, &section_display_names);
         let sampling_rates = Self::generate_sampling_rates(sampling_rates);
 
         PulseSheetSchedule {
@@ -1326,10 +1400,10 @@ impl PulseSheetSchedule {
     /// This is used by PSV for visualization.
     fn generate_section_info(
         root: &IrNode,
-        id_store: &NamedIdStore,
+        section_display_names: &HashMap<SectionUid, String>,
     ) -> HashMap<String, SectionInfo> {
         let mut section_info = HashMap::new();
-        calculate_preorder(root, 0, &mut section_info, id_store);
+        calculate_preorder(root, 0, &mut section_info, section_display_names);
         section_info
     }
 
@@ -1341,12 +1415,14 @@ impl PulseSheetSchedule {
     fn generate_section_signals(
         root: &IrNode,
         id_store: &NamedIdStore,
+        section_display_names: &HashMap<SectionUid, String>,
     ) -> HashMap<String, Vec<String>> {
         let mut section_signals: HashMap<String, Vec<String>> = HashMap::new();
 
         fn collect_signals(
             node: &IrNode,
             id_store: &NamedIdStore,
+            section_display_names: &HashMap<SectionUid, String>,
             section_signals: &mut HashMap<String, Vec<String>>,
         ) -> Vec<String> {
             let mut signals = Vec::new();
@@ -1363,7 +1439,12 @@ impl PulseSheetSchedule {
             }
 
             for child in &node.children {
-                let child_signals = collect_signals(&child.node, id_store, section_signals);
+                let child_signals = collect_signals(
+                    &child.node,
+                    id_store,
+                    section_display_names,
+                    section_signals,
+                );
                 for signal in child_signals {
                     if !signals.contains(&signal) {
                         signals.push(signal);
@@ -1372,17 +1453,17 @@ impl PulseSheetSchedule {
             }
 
             if let Some(info) = node.kind.section_info() {
-                let section_name = id_store
-                    .resolve(*info.uid)
-                    .unwrap_or(UNKNOWN_LABEL)
-                    .to_string();
+                let section_name = section_display_names
+                    .get(info.uid)
+                    .cloned()
+                    .unwrap_or_else(|| UNKNOWN_LABEL.to_string());
                 section_signals.insert(section_name, signals.clone());
             }
 
             signals
         }
 
-        collect_signals(root, id_store, &mut section_signals);
+        collect_signals(root, id_store, section_display_names, &mut section_signals);
 
         section_signals
             .into_iter()
@@ -1425,7 +1506,13 @@ mod tests {
     }
 
     fn setup_generator(id_store: &NamedIdStore, expand_loops: bool) -> EventListGenerator<'_> {
-        EventListGenerator::new(expand_loops, id_store)
+        use std::sync::OnceLock;
+        static EMPTY_SECTION_DISPLAY_NAMES: OnceLock<HashMap<SectionUid, String>> = OnceLock::new();
+        EventListGenerator::new(
+            expand_loops,
+            id_store,
+            EMPTY_SECTION_DISPLAY_NAMES.get_or_init(HashMap::new),
+        )
     }
 
     fn create_test_id_store() -> Arc<NamedIdStore> {
@@ -1717,7 +1804,8 @@ mod tests {
         );
 
         let id_store = create_test_id_store();
-        let section_info = PulseSheetSchedule::generate_section_info(&root, &id_store);
+        let section_display_names = build_section_display_names(&root, &id_store);
+        let section_info = PulseSheetSchedule::generate_section_info(&root, &section_display_names);
 
         // Verify preorder numbering
         // Sequential sections (not overlapping) get the same depth
@@ -1777,7 +1865,12 @@ mod tests {
         parent.add_child(tiny_samples(1000), child);
 
         let id_store = create_test_id_store();
-        let section_signals = PulseSheetSchedule::generate_section_signals(&parent, &id_store);
+        let section_display_names = build_section_display_names(&parent, &id_store);
+        let section_signals = PulseSheetSchedule::generate_section_signals(
+            &parent,
+            &id_store,
+            &section_display_names,
+        );
 
         // Parent should include child signals
         let parent_signals = section_signals.get("root").unwrap();

@@ -24,11 +24,13 @@ pub(super) fn handle_initial_oscillator_frequency<T: SignalInfo + Sized>(
         if let Some(osc) = signal.oscillator() {
             let freq_unwrapped = match &osc.frequency {
                 ValueOrParameter::Parameter(obj) => {
-                    // HW oscillators are either set by the controller, or swept in a RT
-                    // loop. Either way, no need to set the initial frequency here. If we
-                    // did include it in the schedule this would count as a dependency on
-                    // the parameter, and force needless recompilation of each NT step.
-                    if osc.kind == OscillatorKind::Hardware {
+                    if osc.kind == OscillatorKind::Hardware
+                        && !signal.supports_initial_oscillator_frequency()
+                    {
+                        // HW oscillators are either set by the controller, or swept in a RT
+                        // loop. Either way, no need to set the initial frequency here. If we
+                        // did include it in the schedule this would count as a dependency on
+                        // the parameter, and force needless recompilation of each NT step.
                         continue;
                     }
                     if let Some(freq) = parameters.get(obj) {
@@ -60,7 +62,7 @@ pub(super) fn handle_initial_local_oscillator_frequency<T: SignalInfo + Sized>(
     signals
         .iter()
         .filter_map(|signal| {
-            if !signal.supports_initial_local_oscillator_frequency() {
+            if !signal.supports_initial_oscillator_frequency() {
                 return None;
             }
             signal.lo_frequency().and_then(|&lo_freq| {

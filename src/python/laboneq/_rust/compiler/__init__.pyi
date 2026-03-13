@@ -6,10 +6,29 @@ from typing import Literal
 from numpy.typing import ArrayLike
 
 from laboneq.core.types.enums.port_mode import PortMode
-from laboneq.data.experiment_description import Experiment
+from laboneq.dsl.experiment import Experiment
+
+def init_logging(level: int) -> None:
+    """Initialize logging with the given Python log level."""
 
 class ExperimentInfo:
     """Object containing the information about the experiment."""
+
+    def signals(self) -> list[str]: ...
+    def signal_device_uid(self, signal_uid: str) -> str: ...
+    def signal_sampling_rate(self, signal_uid: str) -> float: ...
+    def device_lead_delay(self, physical_device_uid: int) -> float: ...
+    def signal_delay_compensation(self, signal_uid: str) -> float: ...
+    def signal_hw_oscillator(
+        self, signal_uid: str
+    ) -> tuple[str, float | None, str | None] | None:
+        """Return the hardware oscillator information for a signal, if it exists.
+
+        Returns:
+            A tuple of (oscillator_id, fixed frequency, parameter uid) if a hardware oscillator is associated with the signal, or None otherwise.
+
+                Either fixed frequency or parameter uid can be None, but not both.
+        """
 
 class SweepParameter:
     def __init__(self, uid: str, values: ArrayLike, driven_by: list[str]):
@@ -66,7 +85,6 @@ class Signal:
     def __init__(
         self,
         uid: str,
-        sampling_rate: float,
         awg_key: int,
         device_uid: str,
         oscillator: Oscillator | None,
@@ -119,6 +137,22 @@ def build_experiment(
     Returns:
         An object containing the Rust experiment
     """
+
+def serialize_experiment(
+    experiment: Experiment,
+    packed: bool = False,
+) -> bytes:
+    """Serialize an experiment to Cap'n Proto bytes."""
+
+def build_experiment_capnp(
+    capnp_data: bytes,
+    signals: list[Signal],
+    devices: list[Device],
+    awgs: list[AwgInfo],
+    desktop_setup: bool,
+    packed: bool = False,
+) -> ExperimentInfo:
+    """Build a scheduled experiment from Cap'n Proto bytes."""
 
 class ExperimentIr:
     """A representation of the experiment IR."""

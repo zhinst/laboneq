@@ -177,6 +177,10 @@ class FolderStore(LogbookStore):
             return NotImplemented
         return self._folder == other._folder
 
+    @property
+    def folder(self) -> Path:
+        return self._folder
+
 
 class FolderLogbookOpener(SerializeOpener):
     """A serialization file opener for the FolderStore and FolderLogbook.

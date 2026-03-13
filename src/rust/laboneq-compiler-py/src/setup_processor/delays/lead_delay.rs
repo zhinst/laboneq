@@ -30,7 +30,7 @@ pub(super) fn get_lead_delay(
                 DEFAULT_HDAWG_LEAD_DESKTOP_SETUP
             }
         }
-        DeviceKind::PrettyPrinterDevice => DEFAULT_TESTDEVICE_LEAD,
+        DeviceKind::Zqcs => DEFAULT_TESTDEVICE_LEAD,
         DeviceKind::Uhfqa => DEFAULT_UHFQA_LEAD_PQSC,
         DeviceKind::Shfqa => DEFAULT_SHFQA_LEAD_PQSC,
         DeviceKind::Shfsg => DEFAULT_SHFSG_LEAD_PQSC,

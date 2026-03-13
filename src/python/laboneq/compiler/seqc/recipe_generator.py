@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Dict, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from zhinst.core import __version__ as zhinst_version
 
@@ -13,7 +13,6 @@ from laboneq._version import get_version
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.integration_times import IntegrationTimes
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC, NeartimeStep
 from laboneq.compiler.seqc.types import SignalDelays
 from laboneq.compiler.workflow.precompensation_helpers import (
@@ -44,19 +43,13 @@ from laboneq.data.recipe import (
     RealtimeExecutionInit,
     Recipe,
     RoutedOutput,
-    TriggeringMode,
 )
 
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
-    from laboneq._rust.codegenerator import (
-        FeedbackRegisterConfig,
-    )
+    from laboneq._rust.codegenerator import ChannelProperties, FeedbackRegisterConfig
     from laboneq._rust.codegenerator import (
         IntegrationUnitAllocation as IntegrationUnitAllocationCodeGen,
-    )
-    from laboneq.compiler.workflow.compiler import (
-        LeaderProperties,
     )
     from laboneq.data.compilation_job import OutputRoute as CompilerOutputRoute
 
@@ -65,47 +58,38 @@ _logger = logging.getLogger(__name__)
 
 
 class RecipeGenerator:
-    def __init__(
-        self,
-    ):
+    def __init__(self, experiment_rs: compiler_rs.ExperimentInfo):
+        self._experiment_rs = experiment_rs
+        self._sampling_rates_by_device = {}
+        for signal_id in experiment_rs.signals():
+            device_id = experiment_rs.signal_device_uid(signal_id)
+            self._sampling_rates_by_device[device_id] = (
+                experiment_rs.signal_sampling_rate(signal_id)
+            )
+
         self._recipe = Recipe()
         self._recipe.versions.target_labone = zhinst_version
         self._recipe.versions.laboneq = get_version()
 
-    def add_oscillator_params(self, awgs: list[AWGInfo], experiment_dao: ExperimentDAO):
-        for signal_id in experiment_dao.signals():
-            signal_info = experiment_dao.signal_info(signal_id)
-            oscillator_info = experiment_dao.signal_oscillator(signal_id)
-            if oscillator_info is None:
-                continue
-            if oscillator_info.is_hardware:
-                oscs = next(
-                    (
-                        awg.oscs
-                        for awg in awgs
-                        for signal in awg.signals
-                        if signal.id == signal_id
-                    ),
-                    {},
-                )
-
-                if isinstance(oscillator_info.frequency, ParameterInfo):
-                    frequency, param = None, oscillator_info.frequency.uid
-                else:
-                    frequency, param = oscillator_info.frequency, None
-
-                for ch in signal_info.channels:
+    def add_oscillator_params(
+        self,
+        channel_properties: dict[str, list[ChannelProperties]],
+    ):
+        for device_uid, channels in channel_properties.items():
+            for channel_prop in channels:
+                if channel_prop.hw_oscillator_index is not None:
+                    osc_id, fixed_freq, param_uid = (
+                        self._experiment_rs.signal_hw_oscillator(channel_prop.signal)
+                    )
                     self._recipe.oscillator_params.append(
                         OscillatorParam(
-                            id=oscillator_info.uid,
-                            device_id=signal_info.device.uid,
-                            channel=ch,
-                            signal_id=signal_id,
-                            # TODO(2K): remove default 0, ensure all HW oscillators are allocated,
-                            # or error out earlier
-                            allocated_index=oscs.get(oscillator_info.uid, 0),
-                            frequency=frequency,
-                            param=param,
+                            id=osc_id,
+                            device_id=device_uid,
+                            channel=channel_prop.channel,
+                            signal_id=channel_prop.signal,
+                            allocated_index=channel_prop.hw_oscillator_index,
+                            frequency=fixed_freq,
+                            param=param_uid,
                         )
                     )
 
@@ -168,22 +152,7 @@ class RecipeGenerator:
     def add_connectivity_from_experiment(
         self,
         experiment_dao: ExperimentDAO,
-        leader_properties: LeaderProperties,
-        clock_settings: Dict[str, Any],
     ):
-        if leader_properties.global_leader is not None:
-            initialization = self._find_initialization(leader_properties.global_leader)
-            initialization.config.repetitions = 1
-            if leader_properties.is_desktop_setup:
-                initialization.config.triggering_mode = TriggeringMode.DESKTOP_LEADER
-        if leader_properties.is_desktop_setup:
-            # Internal followers are followers on the same device as the leader. This
-            # is necessary for the standalone SHFQC, where the SHFSG part does neither
-            # appear in the PQSC device connections nor the DIO connections.
-            for f in leader_properties.internal_followers:
-                initialization = self._find_initialization(f)
-                initialization.config.triggering_mode = TriggeringMode.INTERNAL_FOLLOWER
-
         # ppc device uid -> acquire signal ids
         ppc_signals: dict[str, list[str]] = {}
         for signal_id in experiment_dao.signals():
@@ -205,14 +174,12 @@ class RecipeGenerator:
         for device in experiment_dao.device_infos():
             device_uid = device.uid
             initialization = self._find_initialization(device_uid)
-
-            if (
-                device.device_type.value == "hdawg"
-                and clock_settings["use_2GHz_for_HDAWG"]
-            ):
-                initialization.config.sampling_rate = (
-                    DeviceType.HDAWG.sampling_rate_2GHz
-                )
+            initialization.config.lead_delay = self._experiment_rs.device_lead_delay(
+                device.physical_device_uid
+            )
+            initialization.config.sampling_rate = self._sampling_rates_by_device.get(
+                device_uid
+            )
 
             if device.device_type.value == "shfppc":
                 ppchannels: dict[int, dict[str, Any]] = {}  # keyed by ppc channel idx
@@ -252,22 +219,6 @@ class RecipeGenerator:
                         amplifier_pump_dict
                     )
                 initialization.ppchannels = list(ppchannels.values())
-
-        for follower in experiment_dao.dio_followers():
-            initialization = self._find_initialization(follower)
-            if leader_properties.is_desktop_setup:
-                initialization.config.triggering_mode = (
-                    TriggeringMode.DESKTOP_DIO_FOLLOWER
-                )
-            else:
-                initialization.config.triggering_mode = TriggeringMode.DIO_FOLLOWER
-
-        for pqsc_device_id in experiment_dao.pqscs():
-            for follower_uid in experiment_dao.pqsc_followers(pqsc_device_id):
-                follower_device_init = self._find_initialization(follower_uid)
-                follower_device_init.config.triggering_mode = (
-                    TriggeringMode.ZSYNC_FOLLOWER
-                )
 
     def add_output(
         self,
@@ -490,13 +441,9 @@ class RecipeGenerator:
     def from_experiment(
         self,
         experiment_dao: ExperimentDAO,
-        leader_properties: LeaderProperties,
-        clock_settings: Dict[str, Any],
     ):
         self.add_devices_from_experiment(experiment_dao)
-        self.add_connectivity_from_experiment(
-            experiment_dao, leader_properties, clock_settings
-        )
+        self.add_connectivity_from_experiment(experiment_dao)
         self._recipe.is_spectroscopy = is_spectroscopy(experiment_dao.acquisition_type)
 
     def add_total_execution_time(self, total_execution_time):
@@ -517,8 +464,7 @@ class RecipeGenerator:
 def calc_outputs(
     experiment_dao: ExperimentDAO,
     combined_compiler_output: CombinedRTOutputSeqC,
-    sampling_rate_tracker: SamplingRateTracker,
-    experiment_rs,
+    experiment_rs: compiler_rs.ExperimentInfo,
 ):
     all_channels = {}
 
@@ -529,7 +475,7 @@ def calc_outputs(
         if signal_info.type == SignalInfoType.INTEGRATION:
             continue
         oscillator_is_hardware = (
-            signal_info.oscillator is not None and signal_info.oscillator.is_hardware
+            experiment_rs.signal_hw_oscillator(signal_id) is not None
         )
 
         voltage_offset = experiment_dao.voltage_offset(signal_id)
@@ -553,9 +499,7 @@ def calc_outputs(
         precompensation = experiment_rs.signal_precompensation(signal_id)
         warnings = verify_precompensation_parameters(
             precompensation,
-            sampling_rate_tracker.sampling_rate_for_device(
-                signal_info.device.uid, signal_info.type
-            ),
+            experiment_rs.signal_sampling_rate(signal_id),
             signal_id,
         )
         if warnings:
@@ -576,9 +520,10 @@ def calc_outputs(
                     for router in signal_info.output_routing
                     if router.to_channel == channel
                 ],
-                "enable_output_mute": signal_info.automute,
+                "enable_output_mute": experiment_rs.signal_automute(signal_id),
                 "marker_mode": None,
                 "precompensation": precompensation,
+                "modulation": oscillator_is_hardware,
             }
             channel_properties = next(
                 (cp for cp in device_channel_properties if cp.channel == channel),
@@ -586,13 +531,6 @@ def calc_outputs(
             )
             if channel_properties:
                 output["marker_mode"] = channel_properties.marker_mode
-
-            signal_is_modulated = signal_info.oscillator is not None
-
-            if oscillator_is_hardware and signal_is_modulated:
-                output["modulation"] = True
-            else:
-                output["modulation"] = False
 
             # default mixer calib
             if (
@@ -694,20 +632,15 @@ def calc_inputs(experiment_dao: ExperimentDAO, signal_delays: SignalDelays):
 def generate_recipe(
     awgs: list[AWGInfo],
     experiment_dao: ExperimentDAO,
-    leader_properties: LeaderProperties,
-    clock_settings: dict[str, Any],
-    sampling_rate_tracker: SamplingRateTracker,
-    experiment_rs: compiler_rs.Experiment,
+    experiment_rs: compiler_rs.ExperimentInfo,
     combined_compiler_output: CombinedRTOutputSeqC,
 ) -> Recipe:
-    recipe_generator = RecipeGenerator()
-    recipe_generator.from_experiment(experiment_dao, leader_properties, clock_settings)
+    recipe_generator = RecipeGenerator(experiment_rs)
+    recipe_generator.from_experiment(experiment_dao)
 
-    recipe_generator.add_oscillator_params(awgs, experiment_dao)
+    recipe_generator.add_oscillator_params(combined_compiler_output.channel_properties)
 
-    for output in calc_outputs(
-        experiment_dao, combined_compiler_output, sampling_rate_tracker, experiment_rs
-    ):
+    for output in calc_outputs(experiment_dao, combined_compiler_output, experiment_rs):
         _logger.debug("Adding output %s", output)
         recipe_generator.add_output(
             output["device_id"],

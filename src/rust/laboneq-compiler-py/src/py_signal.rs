@@ -32,7 +32,6 @@ use numeric_array::NumericArray;
 #[pyclass(name = "Signal", frozen)]
 pub struct SignalPy {
     pub uid: String,
-    pub sampling_rate: f64,
     pub awg_key: i64,
     pub device_uid: String,
     pub oscillator: Option<Py<OscillatorPy>>,
@@ -59,7 +58,6 @@ impl SignalPy {
     pub fn new(
         py: Python,
         uid: String,
-        sampling_rate: f64,
         awg_key: i64,
         device_uid: &str,
         oscillator: Option<Py<OscillatorPy>>,
@@ -99,7 +97,6 @@ impl SignalPy {
 
         Ok(Self {
             uid,
-            sampling_rate,
             awg_key,
             device_uid: device_uid.to_string(),
             oscillator,
@@ -264,7 +261,6 @@ pub(super) fn py_signal_to_signal(
             builder.id_store.get_or_insert(&signal_py.uid),
         ),
         awg_key: AwgKey(signal_py.awg_key as u64),
-        sampling_rate: signal_py.sampling_rate,
         oscillator,
         device_uid: builder.id_store.get_or_insert(&signal_py.device_uid).into(),
         lo_frequency,

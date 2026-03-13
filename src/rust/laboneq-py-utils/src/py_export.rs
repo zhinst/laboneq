@@ -76,7 +76,7 @@ pub fn pulse_def_to_py(
             kwargs.set_item("samples", py.None())?;
         }
         PulseKind::Sampled(sampled) => {
-            kwargs.set_item("samples", sampled.samples.clone_ref(py))?;
+            kwargs.set_item("samples", sampled.samples.to_py(py)?)?;
             kwargs.set_item("function", py.None())?;
             kwargs.set_item("length", py.None())?;
         }

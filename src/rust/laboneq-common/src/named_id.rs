@@ -23,9 +23,10 @@ impl NamedId {
     /// This is only for testing and debugging purposes.
     #[cfg(feature = "test_utils")]
     pub fn debug_id(uid: u32) -> Self {
-        NamedId {
-            uid: SymbolU32::try_from_usize(uid as usize).unwrap(),
-        }
+        let Some(uid) = SymbolU32::try_from_usize(uid as usize) else {
+            unreachable!()
+        };
+        NamedId { uid }
     }
 }
 

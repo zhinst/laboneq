@@ -319,6 +319,7 @@ pub(crate) fn fanout_for_awg(node: &IrNode, awg: &AwgCore) -> IrNode {
 
 #[cfg(test)]
 mod tests {
+    use laboneq_common::device_options::DeviceOptions;
     use laboneq_common::named_id::NamedId;
 
     use super::*;
@@ -406,8 +407,9 @@ mod tests {
             signals.iter().map(|s| Arc::new(s.clone())).collect(),
             2e9,
             Arc::new(Device::new("test_device".to_string().into(), device_kind)),
-            HashMap::new(),
             None,
+            DeviceOptions::default(),
+            HashMap::new(),
             false,
         )
     }

@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from typing import Dict, TypeVar
+from typing import Any, Dict, TypeVar
 
 import numpy as np
 
@@ -15,16 +15,8 @@ from laboneq.compiler import DeviceType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.path import LogicalSignalGroups_Path, insert_logical_signal_prefix
 from laboneq.core.types.enums import acquisition_type as acq_type
+from laboneq.core.types.enums.modulation_type import ModulationType
 from laboneq.core.types.units import Quantity
-from laboneq.data.calibration import (
-    AmplifierPump,
-    MixerCalibration,
-    ModulationType,
-    Oscillator,
-    PortMode,
-    Precompensation,
-    SignalCalibration,
-)
 from laboneq.data.compilation_job import (
     AmplifierPumpInfo,
     ChunkingInfo,
@@ -40,22 +32,15 @@ from laboneq.data.compilation_job import (
     SignalInfoType,
     SignalRange,
 )
-from laboneq.data.experiment_description import (
-    Acquire,
-    AcquireLoopRt,
-    Delay,
-    ExecutionType,
-    Experiment,
-    ExperimentSignal,
-    PlayPulse,
-    PrngLoop,
-    PulseFunctional,
-    PulseSampled,
-    Section,
-    SignalOperation,
-    Sweep,
+from laboneq.data.parameter import (
+    LinearSweepParameter as DataLinearSweepParameter,
 )
-from laboneq.data.parameter import LinearSweepParameter, Parameter, SweepParameter
+from laboneq.data.parameter import (
+    Parameter as DataParameter,
+)
+from laboneq.data.parameter import (
+    SweepParameter as DataSweepParameter,
+)
 from laboneq.data.setup_description import (
     IODirection,
     LogicalSignal,
@@ -63,6 +48,32 @@ from laboneq.data.setup_description import (
     Setup,
 )
 from laboneq.data.setup_description.setup_helper import SetupHelper
+from laboneq.dsl.calibration import (
+    AmplifierPump,
+    MixerCalibration,
+    Oscillator,
+    Precompensation,
+    SignalCalibration,
+)
+from laboneq.dsl.enums import ExecutionType
+from laboneq.dsl.experiment import Experiment
+from laboneq.dsl.experiment.acquire import Acquire
+from laboneq.dsl.experiment.delay import Delay
+from laboneq.dsl.experiment.experiment_signal import ExperimentSignal
+from laboneq.dsl.experiment.operation import Operation
+from laboneq.dsl.experiment.play_pulse import PlayPulse
+from laboneq.dsl.experiment.pulse import PulseFunctional, PulseSampled
+from laboneq.dsl.experiment.section import (
+    AcquireLoopRt,
+    PRNGLoop,
+    Section,
+    Sweep,
+)
+from laboneq.dsl.parameter import (
+    LinearSweepParameter,
+    Parameter,
+    SweepParameter,
+)
 from laboneq.implementation.payload_builder.experiment_info_builder.device_info_builder import (
     DeviceInfoBuilder,
 )
@@ -105,10 +116,16 @@ class ExperimentInfoBuilder:
         # Rust migration helper fields:
         # Parameters defined in the experiment.
         self._dsl_parameters: dict[str, Parameter] = {}
+        self._calibration_items: dict[str, Any] = {}
 
     def load_experiment(self) -> ExperimentInfo:
+        self._calibration_items = {
+            sig.uid: sig.calibration
+            for sig in self._experiment.signals.values()
+            if sig.calibration is not None
+        }
         self._check_physical_channel_calibration_conflict()
-        for signal in self._experiment.signals:
+        for signal in self._experiment.signals.values():
             self._load_signal(signal)
 
         for section in self._experiment.sections:
@@ -121,7 +138,6 @@ class ExperimentInfoBuilder:
             devices=list(self._device_info.device_mapping.values()),
             signals=sorted(self._signal_infos.values(), key=lambda s: s.uid),
             acquisition_type=self._acquisition_type,
-            global_leader_device=self._device_info.global_leader,
             chunking=self._chunking_info,
             src=self._experiment,
             dsl_parameters=list(self._dsl_parameters.values()),
@@ -129,22 +145,102 @@ class ExperimentInfoBuilder:
         self._resolve_oscillator_modulation_type(experiment_info)
         return experiment_info
 
-    def _check_physical_channel_calibration_conflict(self):
-        PHYSICAL_CHANNEL_CALIBRATION_FIELDS = (
-            "local_oscillator_frequency",
-            "port_delay",
-            "port_mode",
-            "range",
-            "voltage_offset",
-            "amplitude",
-            # # skip validation of these structured fields
-            "mixer_calibration",
-            "precompensation",
-            "amplifier_pump",
+    @staticmethod
+    def _enum_value(value: Any) -> str | None:
+        if value is None:
+            return None
+        value = getattr(value, "value", value)
+        if isinstance(value, str):
+            return value.lower()
+        return value
+
+    def _get_or_create_signal_calibration(self, signal_uid: str) -> Any:
+        calibration = self._calibration_items.get(signal_uid)
+        if calibration is None:
+            calibration = SignalCalibration()
+            self._calibration_items[signal_uid] = calibration
+            self._experiment.signals[signal_uid].calibration = calibration
+        return calibration
+
+    @staticmethod
+    def _get_lo_frequency(calibration: Any) -> Any:
+        local_oscillator = getattr(calibration, "local_oscillator", None)
+        if local_oscillator is not None:
+            return local_oscillator.frequency
+        if hasattr(calibration, "local_oscillator_frequency"):
+            return calibration.local_oscillator_frequency
+        return None
+
+    @staticmethod
+    def _set_lo_frequency(calibration: Any, frequency: Any):
+        if hasattr(calibration, "local_oscillator_frequency"):
+            calibration.local_oscillator_frequency = frequency
+            return
+        local_oscillator = getattr(calibration, "local_oscillator", None)
+        if local_oscillator is None:
+            calibration.local_oscillator = Oscillator(frequency=frequency)
+        else:
+            local_oscillator.frequency = frequency
+
+    @staticmethod
+    def _get_output_routes(calibration: Any) -> list[Any]:
+        # Prefer DSL output routing fields; when calibration is an AttributeOverrider,
+        # data-shaped base fields may exist as empty lists and would otherwise mask
+        # DSL routes from the overriding experiment calibration.
+        routes = getattr(calibration, "added_outputs", None)
+        if routes is not None:
+            return routes
+        routes = getattr(calibration, "output_routing", None)
+        return routes or []
+
+    @staticmethod
+    def _route_source(route: Any) -> str | None:
+        return getattr(route, "source_signal", None) or getattr(route, "source", None)
+
+    @staticmethod
+    def _route_amplitude(route: Any) -> Any:
+        amplitude = getattr(route, "amplitude", None)
+        if amplitude is None:
+            amplitude = getattr(route, "amplitude_scaling", None)
+        return amplitude
+
+    @staticmethod
+    def _route_phase(route: Any) -> Any:
+        phase = getattr(route, "phase", None)
+        if phase is None:
+            phase = getattr(route, "phase_shift", None)
+        return phase
+
+    @staticmethod
+    def _is_parameter(value: Any) -> bool:
+        return isinstance(
+            value,
+            (
+                Parameter,
+                SweepParameter,
+                LinearSweepParameter,
+                DataParameter,
+                DataSweepParameter,
+                DataLinearSweepParameter,
+            ),
         )
 
+    def _check_physical_channel_calibration_conflict(self):
+        field_accessors: dict[str, Any] = {
+            "local_oscillator_frequency": self._get_lo_frequency,
+            "port_delay": lambda cal: getattr(cal, "port_delay", None),
+            "port_mode": lambda cal: getattr(cal, "port_mode", None),
+            "range": lambda cal: getattr(cal, "range", None),
+            "voltage_offset": lambda cal: getattr(cal, "voltage_offset", None),
+            "amplitude": lambda cal: getattr(cal, "amplitude", None),
+            # skip validation of structured fields
+            "mixer_calibration": lambda cal: getattr(cal, "mixer_calibration", None),
+            "precompensation": lambda cal: getattr(cal, "precompensation", None),
+            "amplifier_pump": lambda cal: getattr(cal, "amplifier_pump", None),
+        }
+
         exp_signals_by_pc = {}
-        for signal in self._experiment.signals:
+        for signal in self._experiment.signals.values():
             try:
                 mapped_ls_path: str = self._signal_mappings[signal.uid]
             except KeyError as e:
@@ -159,18 +255,18 @@ class ExperimentInfoBuilder:
         # Merge the calibration of those ExperimentSignals that touch the same
         # PhysicalChannel.
         for (pc_group, pc_name), exp_signals in exp_signals_by_pc.items():
-            for field_ in PHYSICAL_CHANNEL_CALIBRATION_FIELDS:
+            for field_, accessor in field_accessors.items():
                 unique_value = None
                 conflicting = False
                 for exp_signal in exp_signals:
-                    exp_cal = self._experiment.calibration.items.get(exp_signal.uid)
+                    exp_cal = self._calibration_items.get(exp_signal.uid)
                     if exp_cal is None:
                         continue
-                    value = getattr(exp_cal, field_)
+                    value = accessor(exp_cal)
                     if value is not None:
                         if unique_value is None:
                             unique_value = value
-                        elif unique_value != value:
+                        elif self._enum_value(unique_value) != self._enum_value(value):
                             conflicting = True
                             break
                 if conflicting:
@@ -178,12 +274,12 @@ class ExperimentInfoBuilder:
                         exp_signal.uid
                         for exp_signal in exp_signals
                         if (
-                            other_signal_cal := self._experiment.calibration.items.get(
+                            other_signal_cal := self._calibration_items.get(
                                 exp_signal.uid
                             )
                         )
                         is not None
-                        and getattr(other_signal_cal, field_) is not None
+                        and accessor(other_signal_cal) is not None
                     ]
                     pc_uid = f"{pc_group}/{pc_name}"
                     raise LabOneQException(
@@ -194,10 +290,11 @@ class ExperimentInfoBuilder:
                 if unique_value is not None:
                     # Make sure all the experiment signals agree.
                     for exp_signal in exp_signals:
-                        exp_cal = self._experiment.calibration.items.setdefault(
-                            exp_signal.uid, SignalCalibration()
-                        )
-                        setattr(exp_cal, field_, unique_value)
+                        exp_cal = self._get_or_create_signal_calibration(exp_signal.uid)
+                        if field_ == "local_oscillator_frequency":
+                            self._set_lo_frequency(exp_cal, unique_value)
+                        else:
+                            setattr(exp_cal, field_, unique_value)
 
     def _get_signal_calibration(
         self, exp_signal: ExperimentSignal, logical_signal: LogicalSignal
@@ -206,7 +303,7 @@ class ExperimentInfoBuilder:
             logical_signal
         )
 
-        exp_calib = self._experiment.calibration.items.get(exp_signal.uid)
+        exp_calib = self._calibration_items.get(exp_signal.uid)
 
         if baseline_calib is None:
             calibration = exp_calib
@@ -223,12 +320,13 @@ class ExperimentInfoBuilder:
         return calibration
 
     def _load_oscillator(self, oscillator: Oscillator) -> OscillatorInfo:
-        if oscillator.modulation_type == ModulationType.HARDWARE:
+        modulation_type = self._enum_value(oscillator.modulation_type)
+        if modulation_type == ModulationType.HARDWARE.value.lower():
             is_hw = True
-        elif oscillator.modulation_type == ModulationType.SOFTWARE:
+        elif modulation_type == ModulationType.SOFTWARE.value.lower():
             is_hw = False
         else:
-            if oscillator.modulation_type not in (None, ModulationType.AUTO):
+            if modulation_type not in (None, ModulationType.AUTO.value.lower()):
                 raise LabOneQException(
                     f"Invalid modulation type '{oscillator.modulation_type}' for"
                     f" oscillator '{oscillator.uid}'"
@@ -249,15 +347,12 @@ class ExperimentInfoBuilder:
         return oscillator_info
 
     def _load_mixer_cal(self, mixer_cal: MixerCalibration) -> MixerCalibrationInfo:
+        voltage_offsets = mixer_cal.voltage_offsets or []
+        correction_matrix = mixer_cal.correction_matrix or []
         return MixerCalibrationInfo(
-            voltage_offsets=tuple(
-                self.opt_param(offset) for offset in mixer_cal.voltage_offsets
-            ),
+            voltage_offsets=tuple(self.opt_param(offset) for offset in voltage_offsets),
             correction_matrix=tuple(
-                [
-                    [self.opt_param(ij) for ij in row]
-                    for row in mixer_cal.correction_matrix
-                ]
+                [[self.opt_param(ij) for ij in row] for row in correction_matrix]
             ),
         )
 
@@ -328,7 +423,7 @@ class ExperimentInfoBuilder:
                 signal_info.precompensation = self._load_precompensation(precomp)
 
             signal_info.lo_frequency = self.opt_param(
-                calibration.local_oscillator_frequency, nt_only=True
+                self._get_lo_frequency(calibration), nt_only=True
             )
 
             if isinstance(signal_range := calibration.range, Quantity):
@@ -363,7 +458,8 @@ class ExperimentInfoBuilder:
                     )
 
             # Output router and adder (RTR SHFSG/QC). Requires: RTR option
-            if calibration.output_routing:
+            output_routes = self._get_output_routes(calibration)
+            if output_routes:
                 for port in physical_channel.ports:
                     if (
                         not re.match(r"SGCHANNELS/\d/OUTPUT", port.path)
@@ -372,8 +468,14 @@ class ExperimentInfoBuilder:
                         msg = f"Error on signal {mapped_ls_path}: Output routing can be only applied to output SGCHANNELS."
                         raise LabOneQException(msg)
             output_routers_per_channel = defaultdict(set)
-            for output_router in calibration.output_routing:
-                source_signal = output_router.source_signal
+            for output_router in output_routes:
+                source_signal = self._route_source(output_router)
+                if source_signal is None:
+                    msg = (
+                        f"Error on signal {mapped_ls_path}: Output routing source signal"
+                        " is not set."
+                    )
+                    raise LabOneQException(msg)
                 if LogicalSignalGroups_Path not in source_signal:
                     source_signal = insert_logical_signal_prefix(source_signal)
 
@@ -382,7 +484,7 @@ class ExperimentInfoBuilder:
                         source_signal
                     )
                 except KeyError:
-                    msg = f"Error on signal {mapped_ls_path}: Output routing source signal {output_router.source_signal} does not exist."
+                    msg = f"Error on signal {mapped_ls_path}: Output routing source signal {self._route_source(output_router)} does not exist."
                     raise LabOneQException(msg) from None
                 from_pc = (
                     self._setup_helper.instruments.physical_channel_by_logical_signal(
@@ -409,28 +511,30 @@ class ExperimentInfoBuilder:
                 if len(output_routers_per_channel[to_port.channel]) > 3:
                     msg = f"Error on signal {mapped_ls_path}: Maximum of three signals can be routed per output SGCHANNELS."
                     raise LabOneQException(msg)
-                if isinstance(output_router.amplitude, Parameter):
-                    if isinstance(output_router.amplitude, SweepParameter):
-                        if (
-                            output_router.amplitude.uid
-                            not in self._sweep_params_min_maxes
-                        ):
-                            self._sweep_params_min_maxes[
-                                output_router.amplitude.uid
-                            ] = (
-                                np.min(output_router.amplitude.values),
-                                np.max(output_router.amplitude.values),
+                route_amplitude = self._route_amplitude(output_router)
+                if self._is_parameter(route_amplitude):
+                    # TODO(DSL cutover): Remove Data* once setup calibration uses DSL types.
+                    if isinstance(
+                        route_amplitude, (SweepParameter, DataSweepParameter)
+                    ):
+                        if route_amplitude.uid not in self._sweep_params_min_maxes:
+                            self._sweep_params_min_maxes[route_amplitude.uid] = (
+                                np.min(route_amplitude.values),
+                                np.max(route_amplitude.values),
                             )
                         min_val, max_val = self._sweep_params_min_maxes[
-                            output_router.amplitude.uid
+                            route_amplitude.uid
                         ]
-                    elif isinstance(output_router.amplitude, LinearSweepParameter):
-                        min_val = output_router.amplitude.start
-                        max_val = output_router.amplitude.stop
+                    elif isinstance(
+                        route_amplitude,
+                        (LinearSweepParameter, DataLinearSweepParameter),
+                    ):
+                        min_val = route_amplitude.start
+                        max_val = route_amplitude.stop
                     if min_val < 0.0 or max_val > 1.0:
                         msg = "Output route amplitude value must be between 0 and 1."
                         raise LabOneQException(
-                            f"Invalid sweep parameter {output_router.amplitude.uid}: {msg}"
+                            f"Invalid sweep parameter {route_amplitude.uid}: {msg}"
                         )
                 signal_info.output_routing.append(
                     OutputRoute(
@@ -440,24 +544,12 @@ class ExperimentInfoBuilder:
                         from_signal=self._ls_to_exp_sig_mapping.get(
                             self._setup_helper.logical_signal_path(source_signal)
                         ),
-                        amplitude=self.opt_param(output_router.amplitude, nt_only=True),
-                        phase=self.opt_param(output_router.phase, nt_only=True),
+                        amplitude=self.opt_param(route_amplitude, nt_only=True),
+                        phase=self.opt_param(
+                            self._route_phase(output_router), nt_only=True
+                        ),
                     )
                 )
-            if calibration.automute:
-                if physical_channel.direction == IODirection.IN:
-                    raise LabOneQException(
-                        "Automute can only be applied to output channels."
-                    )
-                if calibration.port_mode not in (PortMode.RF, None):
-                    raise LabOneQException(
-                        "Automute can only be applied when with `PortMode.RF`."
-                    )
-                if not DeviceType.from_device_info_type(
-                    signal_info.device.device_type
-                ).supports_output_mute:
-                    msg = f"Automute is not available on device {signal_info.device.device_type.value.upper()}."
-                    raise LabOneQException(msg)
             signal_info.automute = calibration.automute
 
         signal_info.channels = sorted((port.channel for port in physical_channel.ports))
@@ -467,8 +559,9 @@ class ExperimentInfoBuilder:
 
         self._signal_infos[signal.uid] = signal_info
 
-    def _add_parameter(self, value: Parameter, nt_only=False) -> ParameterInfo:
-        if isinstance(value, LinearSweepParameter):
+    def _add_parameter(self, value: Any, nt_only=False) -> ParameterInfo:
+        # TODO(DSL cutover): Remove Data* once setup calibration uses DSL types.
+        if isinstance(value, (LinearSweepParameter, DataLinearSweepParameter)):
             if value.count > 1:
                 step = (value.stop - value.start) / (value.count - 1)
             else:
@@ -481,14 +574,14 @@ class ExperimentInfoBuilder:
                 values=np.linspace(value.start, value.stop, value.count),
             )
         else:
-            assert isinstance(value, SweepParameter)
+            assert isinstance(value, (SweepParameter, DataSweepParameter))
             param_info = ParameterInfo(
                 uid=value.uid,
                 values=value.values,
                 axis_name=value.axis_name,
             )
 
-            for parent_param in value.driven_by:
+            for parent_param in value.driven_by or []:
                 self._add_parameter(parent_param)
 
         if value.uid not in self._params:
@@ -502,7 +595,7 @@ class ExperimentInfoBuilder:
         self._dsl_parameters[value.uid] = value
         return param_info
 
-    def opt_param(self, value: T | Parameter, nt_only=False) -> T | ParameterInfo:
+    def opt_param(self, value: T | Any, nt_only=False) -> T | ParameterInfo:
         """Pass through numbers, but convert `Parameter` to `ParameterInfo`
 
         Args:
@@ -513,13 +606,11 @@ class ExperimentInfoBuilder:
         Returns:
             the value or a `ParameterInfo`
         """
-        if isinstance(value, Parameter):
+        if self._is_parameter(value):
             return self._add_parameter(value, nt_only)
         return value
 
-    def opt_param_ref(
-        self, value: float | int | complex | Parameter
-    ) -> float | int | complex | UIDReference:
+    def opt_param_ref(self, value: float | int | complex | Any):
         val_or_param_info = self.opt_param(value, False)
         if isinstance(val_or_param_info, ParameterInfo):
             return UIDReference(val_or_param_info.uid)
@@ -545,7 +636,7 @@ class ExperimentInfoBuilder:
 
     def _visit_operation(
         self,
-        operation: SignalOperation,
+        operation: Operation,
     ):
         """Visit a signal operation and extract parameter information."""
         if isinstance(operation, Delay):
@@ -597,10 +688,18 @@ class ExperimentInfoBuilder:
                 )
             for parameter in section.parameters:
                 self._add_parameter(parameter)
-                if isinstance(parameter, (SweepParameter, LinearSweepParameter)):
+                if isinstance(
+                    parameter,
+                    (
+                        SweepParameter,
+                        LinearSweepParameter,
+                        DataSweepParameter,
+                        DataLinearSweepParameter,
+                    ),
+                ):
                     count = len(parameter)
 
-        if isinstance(section, PrngLoop):
+        if isinstance(section, PRNGLoop):
             count = section.prng_sample.count
 
         _auto_chunking = getattr(section, "auto_chunking", False)
@@ -697,7 +796,7 @@ class ExperimentInfoBuilder:
             if osc.is_hardware is not None:
                 continue
             if signal.device.device_type is DeviceInfoType.SHFQA:
-                has_lrt = "LRT" in signal.device.dev_opts
+                has_lrt = "LRT" in signal.device.options
                 max_acq_len = self._max_acquire_lengths.get(signal.uid, 0.0)
                 is_long_readout = max_acq_len > self._LRT_HW_MODULATION_THRESHOLD
                 if (

@@ -18,7 +18,7 @@
 //!     However, once it reaches the propagation stage, it should be transformed into [`LabOneQError`]
 //!   - When an external error (i.e. originating from code in a different crate) happens, it is either
 //!     immediately mapped to an appropriate variant of [`LabOneQError`], or is otherwise turned into an internal
-//!     error type, and then processed according to the above guidlines for internal errors.
+//!     error type, and then processed according to the above guidelines for internal errors.
 //!   - Once everything is [`LabOneQError`], error propagation is easy with the ? operator
 //!   - While propagating, a stack of context messages can be built to better describe the error. In contrast
 //!     to anyhow, this does not build an error chain.

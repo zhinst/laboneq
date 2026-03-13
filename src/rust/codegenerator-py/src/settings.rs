@@ -46,6 +46,9 @@ pub(crate) fn code_generator_settings_from_dict(
     let shf_output_mute_min_duration = settings_py
         .get_item("SHF_OUTPUT_MUTE_MIN_DURATION")?
         .extract::<f64>()?;
+    let ignore_resource_exhaustion = settings_py
+        .get_item("IGNORE_RESOURCE_LIMITATION_ERRORS")?
+        .extract::<bool>()?;
     let out = CodeGeneratorSettings::new(
         hdawg_min_playwave_hint,
         hdawg_min_playzero_hint,
@@ -58,6 +61,7 @@ pub(crate) fn code_generator_settings_from_dict(
         use_amplitude_increment,
         emit_timing_comments,
         shf_output_mute_min_duration,
+        ignore_resource_exhaustion,
     );
     Ok(out)
 }

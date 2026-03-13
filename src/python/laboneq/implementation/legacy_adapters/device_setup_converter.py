@@ -67,11 +67,10 @@ def convert_logical_signal_groups_with_ls_mapping(
     return mapping, legacy_to_new
 
 
-def convert_dataserver(target: legacy_servers.DataServer, leader_uid: str) -> Server:
+def convert_dataserver(target: legacy_servers.DataServer) -> Server:
     return Server(
         uid=target.uid,
         host=target.host,
-        leader_uid=leader_uid,
         port=int(target.port),
     )
 
@@ -105,8 +104,8 @@ def convert_device_type(target: ZIStandardInstrument) -> DeviceType:
         return DeviceType.SHFPPC
     if isinstance(target, legacy_instruments.SHFSG):
         return DeviceType.SHFSG
-    if isinstance(target, legacy_instruments.PRETTYPRINTERDEVICE):
-        return DeviceType.PRETTYPRINTERDEVICE
+    if isinstance(target, legacy_instruments.ZQCS):
+        return DeviceType.ZQCS
     if isinstance(target, legacy_instruments.NonQC):
         return DeviceType.UNMANAGED
     raise_not_implemented(target)
@@ -167,7 +166,7 @@ class PortConverter:
             return devices.pqsc_ports()
         elif isinstance(target, legacy_instruments.QHUB):
             return devices.qhub_ports()
-        elif isinstance(target, legacy_instruments.PRETTYPRINTERDEVICE):
+        elif isinstance(target, legacy_instruments.ZQCS):
             return devices.test_device_ports(
                 [port.uid for port in target.ports if port.uid is not None]
             )
@@ -499,9 +498,7 @@ def convert_device_setup_to_setup(
     #       the logical signal groups.
     servers = {}
     for name, server in device_setup.servers.items():
-        servers[name] = convert_dataserver(
-            server, device_setup._server_leader_instrument(name)
-        )
+        servers[name] = convert_dataserver(server)
 
     calibration = calibration_converter.convert_calibration(
         device_setup.get_calibration(),
@@ -520,10 +517,7 @@ def convert_device_setup_to_setup(
         )
         for instr in device_setup.instruments
         if isinstance(instr, ZIStandardInstrument)
-        and (
-            instr.server_uid is not None
-            or isinstance(instr, legacy_instruments.PRETTYPRINTERDEVICE)
-        )
+        and (instr.server_uid is not None or isinstance(instr, legacy_instruments.ZQCS))
     ]
 
     instruments = [converter.instrument for converter in converters]

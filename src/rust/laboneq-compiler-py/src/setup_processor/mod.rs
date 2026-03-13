@@ -6,4 +6,4 @@ mod precompensation;
 mod processor;
 
 pub(crate) use crate::setup_processor::delays::DelayRegistry;
-pub(crate) use processor::process_signals;
+pub(crate) use processor::process_setup;

@@ -10,7 +10,7 @@ use laboneq_common::types::DeviceKind;
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::Operation;
 use laboneq_dsl::types::{HandleUid, MatchTarget, SignalUid};
-use laboneq_ir::system::Device;
+use laboneq_ir::system::AwgDevice;
 
 /// Resolves [`Operation::Match`] nodes in the experiment tree.
 ///
@@ -95,7 +95,7 @@ fn collect_signals_in_node(node: &ExperimentNode, signals: &mut HashSet<SignalUi
 /// Determines if local feedback is possible for SHFQC.
 ///
 /// Local feedback is possible if only one SHFQC device is involved in the match branches.
-fn local_feedback_possible(feedback_device: &Device, match_devices: &[&Device]) -> bool {
+fn local_feedback_possible(feedback_device: &AwgDevice, match_devices: &[&AwgDevice]) -> bool {
     // SHFQC: SHFQA + SHFSG who share the same physical device UID
     matches!(
         feedback_device.kind(),
@@ -105,7 +105,7 @@ fn local_feedback_possible(feedback_device: &Device, match_devices: &[&Device]) 
             == feedback_device.physical_device_uid()
 }
 
-fn collect_devices<'a>(signals: impl Iterator<Item = &'a SignalView<'a>>) -> Vec<&'a Device> {
+fn collect_devices<'a>(signals: impl Iterator<Item = &'a SignalView<'a>>) -> Vec<&'a AwgDevice> {
     let mut device_uids = HashSet::new();
     signals
         .filter_map(|s| {
@@ -128,7 +128,7 @@ mod tests {
     use laboneq_dsl::node_structure;
     use laboneq_dsl::operation::{Acquire, Match, Reserve};
     use laboneq_dsl::types::AcquisitionType;
-    use laboneq_ir::device::builder::DeviceBuilder;
+    use laboneq_ir::device::builder::AwgDeviceBuilder;
     use laboneq_ir::signal::SignalKind;
     use laboneq_ir::signal::builder::SignalBuilder;
     use laboneq_ir::system::DeviceSetup;
@@ -139,15 +139,15 @@ mod tests {
         shfsg_signal: SignalUid,
         hdawg_signal: SignalUid,
     ) -> DeviceSetup {
-        let shfqa_device = DeviceBuilder::new(0.into(), PhysicalDeviceUid(0), DeviceKind::Shfqa)
+        let shfqa_device = AwgDeviceBuilder::new(0.into(), PhysicalDeviceUid(0), DeviceKind::Shfqa)
             .shfqc(true)
             .build();
 
-        let shfsg_device = DeviceBuilder::new(1.into(), PhysicalDeviceUid(0), DeviceKind::Shfsg)
+        let shfsg_device = AwgDeviceBuilder::new(1.into(), PhysicalDeviceUid(0), DeviceKind::Shfsg)
             .shfqc(true)
             .build();
 
-        let hdawg_device = DeviceBuilder::new(2.into(), PhysicalDeviceUid(1), DeviceKind::Hdawg)
+        let hdawg_device = AwgDeviceBuilder::new(2.into(), PhysicalDeviceUid(1), DeviceKind::Hdawg)
             .shfqc(false)
             .build();
 

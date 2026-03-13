@@ -11,14 +11,13 @@ import networkx as nx
 from matplotlib.axes._axes import Axes
 from matplotlib.patches import Patch
 
-from laboneq._automation.element import AutomationElement
-from laboneq._automation.element import AutomationElementStatus as Status
 from laboneq._automation.layer import AutomationLayer, RootLayer
 from laboneq._automation.node import AutomationNode, RootNode
 from laboneq._automation.serialization import (
     load_automation_parameters_from_file,
     save_automation_parameters_to_file,
 )
+from laboneq._automation.status import AutomationStatus as Status
 from laboneq._automation.utils.dict_parser import nested_update
 from laboneq._automation.utils.plot_utils import hierarchical_layout
 from laboneq.core.utilities.add_exception_note import add_note
@@ -68,14 +67,14 @@ class Automation:
         self._layer_graph.add_node(self.ROOT_LAYER.key)
         self._layer_lookup[self.ROOT_LAYER.key] = self.ROOT_LAYER
 
-    def __getitem__(self, elem_id: str) -> AutomationElement:
-        """Get the automation element by its ID.
+    def __getitem__(self, elem_id: str) -> AutomationLayer | AutomationNode:
+        """Get the automation layer or node by its ID.
 
         Arguments:
             elem_id: The element ID (layer key or node ID).
 
         Returns:
-            The automation element.
+            The automation layer or node.
 
         Raises:
             KeyError: If `elem_id` is not in the automation framework.
@@ -250,9 +249,14 @@ class Automation:
         # Verify that dependencies have common node keys
         for dep_layer_key in layer.depends_on:
             dep_layer = self.get_layer(dep_layer_key)
-            if dep_layer.key != self.ROOT_NODE.key and set(layer.node_keys).isdisjoint(
-                set(dep_layer.node_keys)
-            ):
+            layers_overlap = any(
+                (a == b)
+                or (isinstance(a, tuple) and b in a)
+                or (isinstance(b, tuple) and a in b)
+                for a in layer.node_keys
+                for b in dep_layer.node_keys
+            )
+            if dep_layer.key != self.ROOT_NODE.key and not layers_overlap:
                 raise ValueError(
                     f"Layer `{layer.key}` cannot depend on layer "
                     f"`{dep_layer_key}` because they have no common node "
@@ -296,16 +300,28 @@ class Automation:
                     if curr_layer_key in visited:
                         continue
                     visited.add(curr_layer_key)
+
                     prev_layer = self.get_layer(curr_layer_key)
-                    prev_node = prev_layer.nodes.get(node_key)
-                    if prev_node is not None:
-                        self._node_graph.add_edge(prev_node.id, node.id)
-                        any_ancestor_found = True
-                        break
-                    elif prev_layer.nodes.get(self.ROOT_NODE.key) is not None:
-                        # Reached root without finding the node; stop this chain.
-                        break
-                    else:
+
+                    for prev_node in prev_layer.nodes.values():
+                        if prev_node.key == node_key or any(
+                            prev_node.key == n
+                            for n in node_key
+                            if isinstance(node_key, tuple)
+                        ):
+                            self._node_graph.add_edge(prev_node.id, node.id)
+                            any_ancestor_found = True
+                        elif any(
+                            node_key == n
+                            for n in prev_node.key
+                            if isinstance(prev_node.key, tuple)
+                        ):
+                            self._node_graph.add_edge(prev_node.id, node.id)
+                            any_ancestor_found = True
+                        elif prev_layer.nodes.get(self.ROOT_NODE.key) is not None:
+                            # Reached root without finding the node; stop this chain.
+                            break
+                    if not any_ancestor_found:
                         to_search.extend(prev_layer.depends_on)
             if not any_ancestor_found:
                 # Node not found in any dep chain — connect directly to root.
@@ -415,6 +431,7 @@ class Automation:
         *,
         node_keys: list[str] | None = None,
         parameters: dict[str, dict[str, Any]] | None = None,
+        force: bool = False,
         **kwargs,
     ) -> tuple[str, dict]:
         """Run the automation layer.
@@ -424,6 +441,8 @@ class Automation:
             node_keys: The node keys (optional). By default, the whole layer is run.
             parameters: The layer parameters (optional). By default, the parameters
                 from the layer are used.
+            force: Force layer run (optional). The layer is run regardless of
+                the status of the previous layer.
 
         Returns:
             new_layer_key: The key of the next layer to be executed.
@@ -432,7 +451,7 @@ class Automation:
         layer = self.get_layer(layer_key)
 
         # Verify that the layer is runnable
-        if not layer.is_runnable(self, node_keys=node_keys):
+        if not layer.is_runnable(self, node_keys=node_keys) and not force:
             return "__end__", {}
 
         # Set temporary node keys
@@ -527,7 +546,6 @@ class Automation:
     def reset(self):
         """Reset the automation framework."""
         for layer in self.layers():
-            layer.sequential = False
             layer.results = {}
 
         for node in self.nodes():
@@ -571,6 +589,30 @@ class Automation:
             auto_params_file = auto_folder / f"{timestamp}-{self.name}-params.yml"
         save_automation_parameters_to_file(self.automation_parameters, auto_params_file)
 
+    def _get_layered_graph(
+        self, graph_type: Literal["nodes", "layers"] = "nodes"
+    ) -> tuple[nx.DiGraph, dict[int, list]]:
+        """Get node or layer graph.
+
+        Arguments:
+            graph_type: Whether to get a graph of automation nodes or layers.
+
+        Returns:
+            A tuple with the graph and a lookup dictionary of enumerated layer keys.
+        """
+        if graph_type == "nodes":
+            G = self._node_graph.copy()
+            layers = {
+                i: [f"{layer.key}_{node_key}" for node_key in layer.node_keys]
+                for i, layer in enumerate(self._layer_lookup.values())
+            }
+        else:
+            G = self._layer_graph.copy()
+            layers = {
+                i: [layer.key] for i, layer in enumerate(self._layer_lookup.values())
+            }
+        return G, layers
+
     def plot(
         self,
         graph_type: Literal["nodes", "layers"] = "nodes",
@@ -591,20 +633,7 @@ class Automation:
         if ax is None:
             _, ax = plt.subplots(figsize=figsize)
 
-        if graph_type == "nodes":
-            G = self._node_graph.copy()
-            lookup = self._node_lookup.copy()
-            layers = {
-                i: [f"{layer.key}_{node_key}" for node_key in layer.node_keys]
-                for i, layer in enumerate(self._layer_lookup.values())
-            }
-        else:
-            G = self._layer_graph.copy()
-            lookup = self._layer_lookup
-            layers = {
-                i: [layer.key] for i, layer in enumerate(self._layer_lookup.values())
-            }
-
+        G, layers = self._get_layered_graph(graph_type)
         node_list = list(G)
         edge_list = G.edges()
 
@@ -621,8 +650,10 @@ class Automation:
             Status.DEACTIVATED: "gray",
             Status.DEACTIVATED_FAIL: "darkred",
         }
+        lookup = self._node_lookup.copy()
         if graph_type == "layers":
             status_color_map |= {Status.MIXED: "yellow"}
+            lookup = self._layer_lookup.copy()
 
         # Generate a list of colors for each node, in node order
         node_colors = [

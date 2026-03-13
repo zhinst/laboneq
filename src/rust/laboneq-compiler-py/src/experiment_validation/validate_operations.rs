@@ -4,7 +4,6 @@
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::{Acquire, Operation, PlayPulse};
 use laboneq_dsl::types::{ComplexOrFloat, MarkerSelector, SectionUid, Trigger, ValueOrParameter};
-use pyo3::prelude::*;
 use std::collections::{HashMap, HashSet};
 
 use laboneq_common::types::DeviceKind;
@@ -240,7 +239,7 @@ fn check_phase_on_rf_signal_support(
 
     if !matches!(signal.signal_kind(), SignalKind::Rf)
         || !signal.is_hardware_modulated()
-        || matches!(signal.device_kind(), DeviceKind::PrettyPrinterDevice)
+        || matches!(signal.device_kind(), DeviceKind::Zqcs)
     {
         return Ok(());
     }
@@ -321,15 +320,12 @@ fn check_no_play_on_acquire_line(
     }
 }
 
-fn all_zero_or_one_samples(samples: &Py<PyAny>) -> Result<bool> {
-    Python::attach(|py| {
-        let v = NumericArray::from_py(samples.bind(py))?;
-        match v {
-            NumericArray::Float64(v) => Ok(v.iter().all(|&x| x == 0.0 || x == 1.0)),
-            NumericArray::Integer64(v) => Ok(v.iter().all(|&x| x == 0 || x == 1)),
-            _ => Err(Error::new("Marker waveform cannot contain complex values")),
-        }
-    })
+fn all_zero_or_one_samples(samples: &NumericArray) -> Result<bool> {
+    match samples {
+        NumericArray::Float64(v) => Ok(v.iter().all(|&x| x == 0.0 || x == 1.0)),
+        NumericArray::Integer64(v) => Ok(v.iter().all(|&x| x == 0 || x == 1)),
+        _ => Err(Error::new("Marker waveform cannot contain complex values")),
+    }
 }
 
 fn check_arbitrary_marker_is_valid(

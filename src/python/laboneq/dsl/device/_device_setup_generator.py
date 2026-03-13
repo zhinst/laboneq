@@ -23,13 +23,13 @@ from laboneq.dsl.device.connection import InternalConnection, SignalConnection
 from laboneq.dsl.device.instruments import (
     HDAWG,
     PQSC,
-    PRETTYPRINTERDEVICE,
     QHUB,
     SHFPPC,
     SHFQA,
     SHFQC,
     SHFSG,
     UHFQA,
+    ZQCS,
     NonQC,
 )
 from laboneq.dsl.device.servers import DataServer
@@ -45,7 +45,7 @@ _logger = logging.getLogger(__name__)
 
 # Terminal Symbols
 T_HDAWG_DEVICE = "HDAWG"
-T_PRETTYPRINTER_DEVICE = "PRETTYPRINTERDEVICE"
+T_ZQCS_DEVICE = "ZQCS"
 T_UHFQA_DEVICE = "UHFQA"
 T_SHFQA_DEVICE = "SHFQA"
 T_SHFSG_DEVICE = "SHFSG"
@@ -55,7 +55,6 @@ T_PQSC_DEVICE = "PQSC"
 T_QHUB_DEVICE = "QHUB"
 T_ALL_DEVICE_TYPES = [
     T_HDAWG_DEVICE,
-    T_PRETTYPRINTER_DEVICE,
     T_UHFQA_DEVICE,
     T_SHFQA_DEVICE,
     T_SHFSG_DEVICE,
@@ -63,6 +62,7 @@ T_ALL_DEVICE_TYPES = [
     T_SHFPPC_DEVICE,
     T_PQSC_DEVICE,
     T_QHUB_DEVICE,
+    T_ZQCS_DEVICE,
 ]
 T_UID = "uid"
 T_ADDRESS = "address"
@@ -235,7 +235,7 @@ def make_zi_devices(
         T_SHFQA_DEVICE: (SHFQA, T_EXTCLK, _make_connection),
         T_SHFSG_DEVICE: (SHFSG, T_EXTCLK, _make_connection),
         T_SHFQC_DEVICE: (SHFQC, T_EXTCLK, _make_connection),
-        T_PRETTYPRINTER_DEVICE: (PRETTYPRINTERDEVICE, None, _make_connection),
+        T_ZQCS_DEVICE: (ZQCS, None, _make_connection),
         T_SHFPPC_DEVICE: (SHFPPC, T_EXTCLK, _make_ppc_connection),
         T_PQSC_DEVICE: (PQSC, T_INTCLK, _make_connection),
         T_QHUB_DEVICE: (QHUB, T_INTCLK, _make_connection),

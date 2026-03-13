@@ -332,7 +332,7 @@ fn is_linear_sweep(frequencies: &[f64]) -> bool {
 
 fn evaluate_sweep_properties(
     nodes: &Vec<(usize, &mut IrNode)>,
-    osc_allocation: &HashMap<SignalUid, u16>,
+    awg: &AwgCore,
 ) -> Result<SweepInfo> {
     let mut node_id_to_osc_index: HashMap<usize, Vec<OscillatorIteration>> = HashMap::new();
     let mut osc_sweep_info = HashMap::new();
@@ -342,8 +342,8 @@ fn evaluate_sweep_properties(
     for (iteration, node) in nodes.iter() {
         if let NodeKind::SetOscillatorFrequency(ob) = node.data() {
             for signal_freq in ob.iter() {
-                if let Some(osc_index) = osc_allocation.get(&signal_freq.signal.uid) {
-                    let entry = osc_max_iteration.entry(*osc_index).or_insert(0);
+                if let Some(osc_index) = awg.oscillator_index(&signal_freq.signal.uid) {
+                    let entry = osc_max_iteration.entry(osc_index).or_insert(0);
                     if *entry < *iteration {
                         *entry = *iteration;
                     }
@@ -356,9 +356,8 @@ fn evaluate_sweep_properties(
         if let NodeKind::SetOscillatorFrequency(ob) = node.data() {
             let mut osc_frequencies = BTreeMap::new();
             for signal_freq in ob.iter() {
-                if let Some(osc_index) = osc_allocation.get(&signal_freq.signal.uid) {
-                    osc_frequencies
-                        .insert(*osc_index, (signal_freq.frequency, &signal_freq.signal));
+                if let Some(osc_index) = awg.oscillator_index(&signal_freq.signal.uid) {
+                    osc_frequencies.insert(osc_index, (signal_freq.frequency, &signal_freq.signal));
                 }
             }
             if osc_frequencies.is_empty() {
@@ -502,8 +501,8 @@ pub(crate) fn handle_oscillator_sweeps(
     awg: &AwgCore,
     cut_points: &mut HashSet<Samples>,
 ) -> Result<()> {
-    let signal_osc_index_allocation = &awg.oscillator_index_by_signal_uid();
-    if signal_osc_index_allocation.is_empty() {
+    if awg.signals.iter().all(|s| !s.is_hw_modulated()) {
+        // No hardware oscillators, skip
         return Ok(());
     }
     let mut nodes = vec![];
@@ -511,7 +510,7 @@ pub(crate) fn handle_oscillator_sweeps(
     if nodes.is_empty() {
         return Ok(());
     }
-    let sweep_info = evaluate_sweep_properties(&nodes, signal_osc_index_allocation)?;
+    let sweep_info = evaluate_sweep_properties(&nodes, awg)?;
     check_device_compatibility(awg.device_kind(), &sweep_info)?;
     replace_hw_oscillator_sweep_nodes(
         nodes.into_iter().map(|(_, node)| node).collect(),
@@ -537,6 +536,7 @@ mod tests {
             oscillator: Some(cjob::Oscillator {
                 uid: "osc".to_string(),
                 kind,
+                frequency: 0.0.into(),
             }),
             signal_delay: 0,
             start_delay: 0,
@@ -696,6 +696,7 @@ mod tests {
             LinearParameterInfo, Loop, LoopIteration, NodeKind, OscillatorFrequencySweepStep,
             SectionInfo, SetOscillatorFrequency, SignalFrequency,
         };
+        use laboneq_common::device_options::DeviceOptions;
         use std::sync::Arc;
 
         fn assert_set_oscillator_sweep(
@@ -720,6 +721,7 @@ mod tests {
                         oscillator: Some(Oscillator {
                             uid: "osc".to_string(),
                             kind: OscillatorKind::HARDWARE,
+                            frequency: 0.0.into(),
                         }),
                         signal_delay: 0,
                         start_delay: 0,
@@ -756,7 +758,7 @@ mod tests {
         /// Test that oscillator frequency sweeps are correctly calculated and replaced in the IR tree.
         #[test]
         fn test_osc_freq_sweep_parameter_calculator() {
-            let awg = AwgCore::new(
+            let mut awg = AwgCore::new(
                 0,
                 vec![Arc::new(Signal {
                     uid: 0.into(),
@@ -765,6 +767,7 @@ mod tests {
                     oscillator: Some(Oscillator {
                         uid: "osc".to_string(),
                         kind: OscillatorKind::HARDWARE,
+                        frequency: 0.0.into(),
                     }),
                     signal_delay: 0,
                     start_delay: 0,
@@ -775,10 +778,13 @@ mod tests {
                     "test_device".to_string().into(),
                     DeviceKind::SHFSG,
                 )),
-                HashMap::from([("osc".to_string(), 0)]),
                 None,
+                DeviceOptions::default(),
+                HashMap::new(),
                 false,
             );
+            awg.add_oscillator_index(0.into(), 0);
+
             let n_iterations = 3;
             let start_freq = 1e9;
             let freq_step = 0.5e9;

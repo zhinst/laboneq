@@ -86,7 +86,14 @@ impl PartialEq for NumericLiteral {
             (NumericLiteral::Complex(a), NumericLiteral::Complex(b)) => a == b,
             (NumericLiteral::Int(a), NumericLiteral::Float(b)) => *a as f64 == *b,
             (NumericLiteral::Float(a), NumericLiteral::Int(b)) => *a == *b as f64,
-            _ => false,
+            (NumericLiteral::Float(a), NumericLiteral::Complex(b)) => *a == b.re && b.im == 0.0,
+            (NumericLiteral::Complex(a), NumericLiteral::Float(b)) => a.re == *b && a.im == 0.0,
+            (NumericLiteral::Int(a), NumericLiteral::Complex(b)) => {
+                *a as f64 == b.re && b.im == 0.0
+            }
+            (NumericLiteral::Complex(a), NumericLiteral::Int(b)) => {
+                a.re == *b as f64 && a.im == 0.0
+            }
         }
     }
 }

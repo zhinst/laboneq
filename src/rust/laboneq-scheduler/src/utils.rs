@@ -5,6 +5,7 @@ use laboneq_dsl::types::SignalUid;
 use laboneq_units::tinysample::{TINYSAMPLE_DURATION, TinySamples, tiny_samples};
 use num_integer::{Integer, div_ceil, div_floor};
 // Re-export for convenience
+use crate::error::{Error, Result};
 pub(crate) use num_integer::lcm;
 
 fn is_valid_sampling_rate(rate: f64) -> bool {
@@ -15,6 +16,19 @@ pub(crate) trait SignalGridInfo {
     fn uid(&self) -> SignalUid;
     fn sampling_rate(&self) -> f64;
     fn sample_multiple(&self) -> u16;
+}
+
+pub(crate) fn check_tinysample_commensurability(sampling_rate: f64) -> Result<()> {
+    let num_tinysamples_per_sample = (1.0 / (sampling_rate * TINYSAMPLE_DURATION)).round();
+    let delta = (num_tinysamples_per_sample - (1.0 / (sampling_rate * TINYSAMPLE_DURATION))).abs();
+    if delta > 1e-11 {
+        let msg = format!(
+            "TINYSAMPLE is not commensurable with sampling rate of {}, has {} tinysamples per sample, which is not an integer",
+            sampling_rate, num_tinysamples_per_sample
+        );
+        return Err(Error::new(msg));
+    }
+    Ok(())
 }
 
 /// Compute the signal and sequencer grids for a set of signals.
@@ -130,12 +144,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use laboneq_common::{
-        device_traits::{
-            HDAWG_TRAITS, PRETTYPRINTERDEVICE_TRAITS, SHFQA_TRAITS, SHFSG_TRAITS, UHFQA_TRAITS,
-        },
-        named_id::NamedId,
-    };
+    use laboneq_common::{device_traits, named_id::NamedId};
 
     #[derive(Debug, Clone)]
     struct MySignal {
@@ -197,9 +206,18 @@ mod tests {
     #[test]
     fn test_compute_grid_common_rates() {
         let signals = [
-            MySignal::new(HDAWG_TRAITS.sampling_rate, HDAWG_TRAITS.sample_multiple),
-            MySignal::new(SHFSG_TRAITS.sampling_rate, SHFSG_TRAITS.sample_multiple),
-            MySignal::new(UHFQA_TRAITS.sampling_rate, UHFQA_TRAITS.sample_multiple),
+            MySignal::new(
+                device_traits::HDAWG_SAMPLING_RATE_WITHOUT_SHF.value(),
+                device_traits::HDAWG_TRAITS.sample_multiple,
+            ),
+            MySignal::new(
+                device_traits::SHFSG_SAMPLING_RATE.value(),
+                device_traits::SHFSG_TRAITS.sample_multiple,
+            ),
+            MySignal::new(
+                device_traits::UHFQA_SAMPLING_RATE.value(),
+                device_traits::UHFQA_TRAITS.sample_multiple,
+            ),
         ];
         let (signal_grid, sequencer_grid) = compute_grid(signals.iter());
         // 2.4 GHz -> 1500, 2.0 GHz -> 1800, 1.8 GHz -> 2000
@@ -224,38 +242,38 @@ mod tests {
     fn test_compute_signal_grids() {
         let sampling_rate_expected_grids = [
             (
-                HDAWG_TRAITS.sampling_rate,
-                HDAWG_TRAITS.sample_multiple,
+                device_traits::HDAWG_SAMPLING_RATE_WITHOUT_SHF,
+                device_traits::HDAWG_TRAITS.sample_multiple,
                 tiny_samples(1500),
                 tiny_samples(24000),
             ),
             (
-                2.0e9,
-                HDAWG_TRAITS.sample_multiple,
+                device_traits::HDAWG_SAMPLING_RATE_WITH_SHF,
+                device_traits::HDAWG_TRAITS.sample_multiple,
                 tiny_samples(1800),
                 tiny_samples(28800),
             ), // HDAWG with 2 Ghz
             (
-                UHFQA_TRAITS.sampling_rate,
-                UHFQA_TRAITS.sample_multiple,
+                device_traits::UHFQA_SAMPLING_RATE,
+                device_traits::UHFQA_TRAITS.sample_multiple,
                 tiny_samples(2000),
                 tiny_samples(16000),
             ),
             (
-                SHFQA_TRAITS.sampling_rate,
-                SHFQA_TRAITS.sample_multiple,
+                device_traits::SHFQA_SAMPLING_RATE,
+                device_traits::SHFQA_TRAITS.sample_multiple,
                 tiny_samples(1800),
                 tiny_samples(28800),
             ),
             (
-                SHFSG_TRAITS.sampling_rate,
-                SHFSG_TRAITS.sample_multiple,
+                device_traits::SHFSG_SAMPLING_RATE,
+                device_traits::SHFSG_TRAITS.sample_multiple,
                 tiny_samples(1800),
                 tiny_samples(28800),
             ),
             (
-                PRETTYPRINTERDEVICE_TRAITS.sampling_rate,
-                PRETTYPRINTERDEVICE_TRAITS.sample_multiple,
+                device_traits::ZQCS_OUTPUT_SAMPLING_RATE,
+                device_traits::ZQCS_TRAITS.sample_multiple,
                 tiny_samples(1800),
                 tiny_samples(7200),
             ),
@@ -266,7 +284,7 @@ mod tests {
             (sampling_rate, sample_multiple, expected_signal_grid, expected_sequencer_grid),
         ) in sampling_rate_expected_grids.iter().enumerate()
         {
-            let signal = MySignal::new(*sampling_rate, *sample_multiple);
+            let signal = MySignal::new(sampling_rate.value(), *sample_multiple);
             let (signal_grid, sequencer_grid) = compute_signal_grids(&signal);
             assert_eq!(
                 signal_grid, *expected_signal_grid,

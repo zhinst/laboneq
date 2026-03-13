@@ -24,6 +24,7 @@ pub(crate) fn generate_event_list(
     ctx: &CodeGenContext,
 ) -> Result<AwgEventList> {
     let mut state = GeneratorState {
+        awg,
         loop_step_starts_added: HashMap::new(),
         loop_step_ends_added: HashMap::new(),
         state: None,
@@ -40,14 +41,15 @@ pub(crate) fn generate_event_list(
         }))
 }
 
-struct GeneratorState {
+struct GeneratorState<'a> {
+    pub awg: &'a AwgCore,
     pub loop_step_starts_added: HashMap<Samples, HashSet<SectionId>>,
     pub loop_step_ends_added: HashMap<Samples, HashSet<SectionId>>,
     pub state: Option<u16>,
     pub waveforms: HashMap<u64, Rc<StaticWaveformSignature>>,
 }
 
-fn playwave_to_event(mut ob: PlayWave, awg: &AwgCore, state: &mut GeneratorState) -> PlayWaveEvent {
+fn playwave_to_event(mut ob: PlayWave, state: &mut GeneratorState) -> PlayWaveEvent {
     let wave = state.waveforms.entry(ob.waveform.uid()).or_insert_with(|| {
         let sig_string = ob.waveform.signature_string();
         Rc::new(StaticWaveformSignature::new(
@@ -57,15 +59,18 @@ fn playwave_to_event(mut ob: PlayWave, awg: &AwgCore, state: &mut GeneratorState
         ))
     });
     let hw_osc = if let Some(osc_name) = ob.oscillator.take() {
-        let index = *awg
-            .osc_allocation
-            .get(&osc_name)
-            .expect("Internal error: Missing hardware oscillator allocation");
-        let out = HwOscillator {
+        let osc_index = ob.signals.iter().find_map(|signal| {
+            if let Some(osc) = &signal.oscillator
+                && osc.uid == osc_name
+            {
+                return Some(state.awg.oscillator_index(&signal.uid).unwrap());
+            }
+            None
+        });
+        Some(HwOscillator {
             uid: osc_name,
-            index,
-        };
-        Some(out)
+            index: osc_index.expect("Internal error: Oscillator index not found"),
+        })
     } else {
         None
     };
@@ -96,7 +101,7 @@ fn generate_output_recursive(
         }
         NodeKind::PlayWave(ob) => {
             let end = node.offset() + ob.length();
-            let e = playwave_to_event(ob, awg, state);
+            let e = playwave_to_event(ob, state);
             let event = AwgEvent {
                 start: *node.offset(),
                 end,
@@ -133,7 +138,7 @@ fn generate_output_recursive(
             {
                 let out = HwOscillator {
                     uid: osc.uid.clone(),
-                    index: *awg.osc_allocation.get(&osc.uid).expect("Missing index"),
+                    index: state.awg.oscillator_index(&ob.signal.uid).unwrap(),
                 };
                 hw_osc = Some(out);
             }
@@ -376,7 +381,7 @@ fn generate_output_recursive(
                         .collect(),
                     play_wave_events: waveforms
                         .into_iter()
-                        .map(|wf| playwave_to_event(wf, awg, state))
+                        .map(|wf| playwave_to_event(wf, state))
                         .collect(),
                 };
             let event = AwgEvent {

@@ -108,6 +108,9 @@ pub(crate) fn calculate_awg_delays(
 
 #[cfg(test)]
 mod tests {
+    use laboneq_common::device_options::DeviceOptions;
+    use laboneq_common::device_traits::SHFQA_SAMPLING_RATE;
+
     use super::*;
     use crate::{
         device_traits::SHFQA_TRAITS,
@@ -133,8 +136,9 @@ mod tests {
             signals.iter().map(|s| Arc::new(s.clone())).collect(),
             2e9,
             Arc::new(Device::new("".to_string().into(), DeviceKind::SHFQA)),
-            HashMap::new(),
             None,
+            DeviceOptions::default(),
+            HashMap::new(),
             false,
         )
     }
@@ -168,7 +172,7 @@ mod tests {
     /// Test that values between 0 and the minimum play wave are rounded to 0.
     #[test]
     fn test_calculate_delays_minimum_awg_delay() {
-        let delay = (SHFQA_TRAITS.min_play_wave / 2) / SHFQA_TRAITS.sampling_rate as u32;
+        let delay = (SHFQA_TRAITS.min_play_wave / 2) / SHFQA_SAMPLING_RATE.value() as u32;
         let awg = create_awg_core(vec![create_signal(1, SignalKind::IQ, delay.into())]);
         let timing =
             calculate_awg_delays(&awg, &HashMap::new()).expect("Failed to calculate AWG delays");

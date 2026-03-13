@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
 from laboneq.dsl.device import SystemProfile
-from laboneq.dsl.device.instruments import PRETTYPRINTERDEVICE
+from laboneq.dsl.device.instruments import ZQCS
 from laboneq.dsl.device.system_profile_builder import build_profile
 
 if TYPE_CHECKING:
@@ -73,9 +73,9 @@ def update_system_profile(
         return None
 
     if len(device_setup.instruments) == 1 and isinstance(
-        device_setup.instruments[0], PRETTYPRINTERDEVICE
+        device_setup.instruments[0], ZQCS
     ):
-        system_type = "PrettyPrinter"
+        system_type = "ZQCS"
     else:
         system_type = "QCCS"
 

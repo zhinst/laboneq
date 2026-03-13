@@ -4,6 +4,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use laboneq_common::device_options::DeviceOptions;
 use num_complex::Complex;
 
 use codegenerator_utils::pulse_parameters::PulseParameterDeduplicator;
@@ -22,8 +23,8 @@ use laboneq_units::tinysample::{TinySamples, tiny_samples};
 use crate::Result;
 use crate::awg_processor::process_awgs;
 use crate::ir::compilation_job::{
-    AwgCore, Device, Marker, Oscillator, OscillatorKind, PulseDef, Signal, SignalKind,
-    SweepParameter, TriggerMode,
+    AwgCore, ChannelIndex, Device, Marker, Oscillator, OscillatorKind, PulseDef, Signal,
+    SignalKind, SweepParameter, TriggerMode,
 };
 use crate::ir::experiment::{AcquisitionType, PulseParametersId, SweepCommand};
 use crate::ir::{
@@ -43,12 +44,8 @@ pub struct CodegenIr {
 
 pub struct AwgInfo {
     pub uid: u16,
-    pub sampling_rate: f64,
     pub device: Arc<Device>,
-    // Mapping from HW oscillator to an assigned index
-    pub osc_allocation: HashMap<String, u16>,
     pub trigger_mode: TriggerMode,
-    pub is_reference_clock_internal: bool,
     pub signals: HashSet<SignalUid>,
 }
 
@@ -61,6 +58,29 @@ pub fn ir_to_codegen_ir(
     let ir_signals = experiment.device_setup.signals();
     let id_store = &experiment.id_store;
 
+    // Device UID - DeviceOptions, sampling_rate, device is SHFQC
+    let settings_per_device: HashMap<String, (DeviceOptions, f64, bool)> = experiment
+        .device_setup
+        .signals()
+        .map(|signal| {
+            let device = experiment
+                .device_setup
+                .device_by_uid(&signal.device_uid)
+                .unwrap();
+            (
+                id_store.resolve(signal.device_uid).unwrap().to_string(),
+                (
+                    device
+                        .options()
+                        .expect("Expected device options to be set")
+                        .clone(),
+                    signal.sampling_rate,
+                    device.is_shfqc(),
+                ),
+            )
+        })
+        .collect();
+
     let mut signals_by_awg: HashMap<SignalUid, Signal> = ir_signals
         .map(|signal| (signal.uid, signal_to_codegen_signal(signal, id_store)))
         .collect();
@@ -72,22 +92,42 @@ pub fn ir_to_codegen_ir(
             .iter()
             .map(|uid| signals_by_awg.remove(uid).unwrap().into())
             .collect();
+        let (options, sampling_rate, is_shfqc) = settings_per_device
+            .get(&awg_info.device.uid().to_string())
+            .unwrap();
+
+        // Store the original channel map for this AWG.
+        // This is needed due to the fact that signal channels are modified during the code generation,
+        // but we need the original channels for output.
+        // TODO: Reverse this and do not modify the signal channels and store QA generator channels in a separate map.
+        // The signal channels for QA are modified in `allocate_shfqa_generator_channels()`, which should be refactor
+        // to not modify the original signals.
+        let channel_map = signals
+            .iter()
+            .map(|s| {
+                (
+                    s.uid,
+                    s.channels.iter().map(|c| *c as ChannelIndex).collect(),
+                )
+            })
+            .collect();
 
         let awg = AwgCore::new(
             awg_info.uid,
             signals,
-            awg_info.sampling_rate,
+            *sampling_rate,
             awg_info.device,
-            awg_info.osc_allocation,
             Some(awg_info.trigger_mode),
-            awg_info.is_reference_clock_internal,
+            options.clone(),
+            channel_map,
+            *is_shfqc,
         );
         awgs.push(awg);
     }
     // We must process the AWGs before building the tree, since
     // the signals are shared in the nodes.
     // TODO: Refactor to avoid this somewhat awkward ordering.
-    process_awgs(&mut awgs);
+    process_awgs(&mut awgs)?;
 
     let sweep_parameters = experiment
         .parameters
@@ -127,6 +167,7 @@ fn signal_to_codegen_signal(signal: &SignalCommon, id_store: &NamedIdStore) -> S
                 OscillatorKindCommon::Software => OscillatorKind::SOFTWARE,
                 OscillatorKindCommon::Hardware => OscillatorKind::HARDWARE,
             },
+            frequency: osc.frequency.fixed_value(),
         }),
         start_delay: length_to_samples(signal.start_delay.value(), signal.sampling_rate),
         signal_delay: length_to_samples(signal.signal_delay.value(), signal.sampling_rate),

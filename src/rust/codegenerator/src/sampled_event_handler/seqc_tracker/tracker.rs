@@ -70,7 +70,11 @@ impl SeqCTracker {
         };
 
         if let Some(duration_min) = automute_playzeros_min_duration {
-            tracker.automute = Some(OutputMute::new(tracker.device_kind.traits(), duration_min)?);
+            tracker.automute = Some(OutputMute::new(
+                tracker.device_kind.traits(),
+                awg.sampling_rate,
+                duration_min,
+            )?);
         }
 
         Ok(tracker)

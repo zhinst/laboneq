@@ -8,21 +8,16 @@ import logging
 import math
 from bisect import bisect_left
 from collections import Counter
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
-
-import numpy as np
+from typing import TYPE_CHECKING
 
 # reporter import is required to register the CompilationReportGenerator hook
 import laboneq.compiler.workflow.reporter  # noqa: F401
 from laboneq.compiler.common import compiler_settings
-from laboneq.compiler.common.compiler_settings import TINYSAMPLE
 from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.resource_usage import ResourceLimitationError
 from laboneq.compiler.common.result_shape import construct_result_shape_info
 from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-from laboneq.compiler.scheduler.sampling_rate_tracker import SamplingRateTracker
 from laboneq.compiler.workflow.compiler_hooks import (
     GenerateRecipeArgs,
     all_compiler_hooks,
@@ -41,8 +36,6 @@ from laboneq.data.compilation_job import (
     CompilationJob,
     DeviceInfo,
     DeviceInfoType,
-    OscillatorInfo,
-    ReferenceClockSourceInfo,
     SignalInfo,
 )
 from laboneq.data.recipe import Recipe
@@ -80,71 +73,6 @@ def _chunk_count_trial(requested: int, candidates: list[int]) -> int:
     return candidates[min(idx, len(candidates) - 1)]
 
 
-def _awg_oscs(device: DeviceInfo, awg_index: int) -> tuple[list[int], str | None]:
-    if device.device_type == DeviceInfoType.UHFQA:
-        return [0], None
-    if device.device_type == DeviceInfoType.HDAWG:
-        if "MF" in device.dev_opts:
-            return list(range(awg_index * 4, awg_index * 4 + 4)), None
-        else:
-            return [awg_index], "Missing MF option?"
-    if device.device_type == DeviceInfoType.SHFQA:
-        if "LRT" in device.dev_opts:
-            return list(range(6)), None
-        else:
-            return [0], "Missing LRT option?"
-    if device.device_type == DeviceInfoType.SHFSG:
-        return list(range(8)), None
-    return [], None
-
-
-def _allocate_oscillators(awg: AWGInfo, dao: ExperimentDAO):
-    assert isinstance(awg.awg_id, int)
-    available_oscs: list[int] | None = None
-    opt_msg: str | None = None
-    oscs: dict[str, OscillatorInfo] = {}
-    for signal_id in set(sc[0] for sc in awg.signal_channels):
-        signal_info = dao.signal_info(signal_id)
-        if available_oscs is None:
-            available_oscs, opt_msg = _awg_oscs(signal_info.device, awg.awg_id)
-        if (osc_info := signal_info.oscillator) is not None:
-            if osc_info.is_hardware is not True:
-                continue
-            if osc_info.frequency is None:
-                # TODO(2K): What does None frequency represent?
-                # Ignore such oscillators for now.
-                continue
-            if osc_info.uid not in oscs:
-                oscs[osc_info.uid] = osc_info
-
-    awg_osc_map: dict[str, tuple[int, Any]] = {}
-    # Ensure stable order of oscillator ids for allocation
-    for osc_uid in sorted(oscs.keys()):
-        osc_info = oscs[osc_uid]
-        assert available_oscs is not None
-        if len(available_oscs) == 0 and len(awg_osc_map) == 1:
-            known_osc, known_freq = next(iter(awg_osc_map.values()))
-            if (
-                isinstance(known_freq, float)
-                and isinstance(osc_info.frequency, float)
-                and np.isclose(known_freq, osc_info.frequency)
-            ):
-                # TODO(2K): This is a workaround for the case where measure and
-                # acquire signals on the same QA AWG, or two RF signals on the
-                # same HD AWG have different oscillators, but the same fixed
-                # frequency. In principle, this shouldn't be allowed, but previous
-                # code did allow it, and there are test cases relying on it.
-                awg_osc_map[osc_info.uid] = (known_osc, known_freq)
-                continue
-        if len(available_oscs) == 0:
-            msg = f"No free HW osc available for oscillator '{osc_info.uid}' on device '{awg.device_id}', AWG {awg.awg_id}."
-            if opt_msg is not None:
-                msg += " " + opt_msg
-            raise LabOneQException(msg)
-        awg_osc_map[osc_info.uid] = (available_oscs.pop(0), osc_info.frequency)
-    awg.oscs = {k: v[0] for k, v in awg_osc_map.items()}
-
-
 def calc_awgs(dao: ExperimentDAO) -> AWGMapping:
     awgs: dict[AwgKey, AWGInfo] = {}
     for signal_id in dao.signals():
@@ -163,19 +91,12 @@ def calc_awgs(dao: ExperimentDAO) -> AWGMapping:
                     awg_id=awg_id,
                     device_type=device_type,
                     signal_type=None,
-                    dev_type=signal_info.device.seqc_dev_type,
-                    dev_opts=signal_info.device.seqc_dev_opts,
-                    sampling_rate=None,
                     device_class=device_type.device_class,
                     awg_allocation=[awg_id],
                 )
                 awgs[key] = awg
 
             awg.signal_channels.append((signal_id, channel))
-
-    for awg in awgs.values():
-        _allocate_oscillators(awg, dao)
-
     return list(awgs.values())
 
 
@@ -185,44 +106,6 @@ def calc_awg_number(channel, device_type: DeviceType):
     return int(math.floor(channel / device_type.channels_per_awg))
 
 
-@dataclass
-class LeaderProperties:
-    global_leader: str | None = None
-    is_desktop_setup: bool = False
-    internal_followers: list[str] = field(default_factory=list)
-
-
-@dataclass
-class IntegrationUnitAllocation:
-    device_id: str
-    awg_nr: int
-    channels: list[int]
-    kernel_count: int
-    has_local_bus: bool
-
-
-def get_total_rounded_delay(delay, signal_id, device_type, sampling_rate):
-    if delay < 0:
-        raise RuntimeError(f"Negative signal delay for signal {signal_id} specified.")
-    # Quantize to granularity and round ties towards zero
-    samples = delay * sampling_rate
-    samples_rounded = (
-        math.ceil(samples / device_type.sample_multiple + 0.5) - 1
-    ) * device_type.sample_multiple
-    delay_rounded = samples_rounded / sampling_rate
-    if abs(samples - samples_rounded) > 1:
-        _logger.debug(
-            "Signal delay %.2f ns of %s on a %s will be rounded to "
-            + "%.2f ns, a multiple of %d samples.",
-            delay * 1e9,
-            signal_id,
-            device_type.name,
-            delay_rounded * 1e9,
-            device_type.sample_multiple,
-        )
-    return delay_rounded
-
-
 class Compiler:
     def __init__(self, settings: dict | None = None):
         self._device_setup_fingerprint: str = ""
@@ -230,29 +113,17 @@ class Compiler:
         self._execution: Statement = None
         self._chunking_info: ChunkingInfo | None = None
         self._settings = compiler_settings.from_dict(settings)
-        self._sampling_rate_tracker: SamplingRateTracker = None
+        self._is_desktop_setup: bool = False
 
-        self._leader_properties = LeaderProperties()
-        self._clock_settings: dict[str, Any] = {}
         self._awgs: AWGMapping = []
         self._signal_objects: dict[str, SignalObj] = {}
         self._has_uhfqa: bool = False
 
         _logger.info("Starting LabOne Q Compiler run...")
-        self._check_tinysamples()
 
     @classmethod
     def from_user_settings(cls, settings: dict) -> Compiler:
         return cls(compiler_settings.filter_user_settings(settings))
-
-    def _check_tinysamples(self):
-        for t in DeviceType:
-            num_tinysamples_per_sample = (1 / t.sampling_rate) / TINYSAMPLE
-            delta = abs(round(num_tinysamples_per_sample) - num_tinysamples_per_sample)
-            if delta > 1e-11:
-                raise RuntimeError(
-                    f"TINYSAMPLE is not commensurable with sampling rate of {t}, has {num_tinysamples_per_sample} tinysamples per sample, which is not an integer"
-                )
 
     def use_experiment(self, experiment: CompilationJob):
         if isinstance(experiment, CompilationJob):
@@ -279,10 +150,7 @@ class Compiler:
         has_qhub = type_counter["qhub"] > 0
         has_hdawg = type_counter["hdawg"] > 0
         has_uhfqa = type_counter["uhfqa"] > 0
-        has_shfsg = type_counter["shfsg"] > 0
-        has_shfqa = type_counter["shfqa"] > 0
         shf_types = {"shfsg", "shfqa", "shfqc"}
-        has_shf = bool(shf_types.intersection(set(device_type_list)))
 
         # Basic validity checks
         signal_infos = [
@@ -306,10 +174,10 @@ class Compiler:
         standalone_qc = len(device_infos_without_ppc) <= 2 and all(
             dev.is_qc for dev in device_infos_without_ppc
         )
-        if "prettyprinterdevice" in used_devices:
-            self._leader_properties.is_desktop_setup = True
+        if "zqcs" in used_devices:
+            self._is_desktop_setup = True
         else:
-            self._leader_properties.is_desktop_setup = (
+            self._is_desktop_setup = (
                 not has_pqsc
                 and not has_qhub
                 and (
@@ -324,78 +192,39 @@ class Compiler:
         if (
             not has_pqsc
             and not has_qhub
-            and not self._leader_properties.is_desktop_setup
+            and not self._is_desktop_setup
             and used_devices != {"uhfqa"}
             and bool(used_devices)  # Allow empty experiment (used in tests)
-            and "prettyprinterdevice" not in used_devices
+            and "zqcs" not in used_devices
         ):
             raise RuntimeError(
                 f"Unsupported device combination {used_devices} for small setup"
             )
 
-        leader = experiment_dao.global_leader_device()
-        if self._leader_properties.is_desktop_setup:
-            if leader is None:
-                if has_hdawg:
-                    leader = self._get_first_instr_of(device_infos, "hdawg").uid
-                elif has_shfqa:
-                    leader = self._get_first_instr_of(device_infos, "shfqa").uid
-                    if has_shfsg:  # SHFQC
-                        self._leader_properties.internal_followers = [
-                            self._get_first_instr_of(device_infos, "shfsg").uid
-                        ]
-                elif has_shfsg:
-                    leader = self._get_first_instr_of(device_infos, "shfsg").uid
+        if has_hdawg and self._is_desktop_setup:
+            triggering_hdawg = self._get_first_instr_of(device_infos, "hdawg").uid
 
-            _logger.debug("Using desktop setup configuration with leader %s", leader)
+            has_signal_on_awg_0_of_triggering_hdawg = False
+            for signal_id in experiment_dao.signals():
+                signal_info = experiment_dao.signal_info(signal_id)
+                if signal_info.device.uid == triggering_hdawg and (
+                    0 in signal_info.channels or 1 in signal_info.channels
+                ):
+                    has_signal_on_awg_0_of_triggering_hdawg = True
+                    break
 
-            if has_hdawg:
-                has_signal_on_awg_0_of_leader = False
-                for signal_id in experiment_dao.signals():
-                    signal_info = experiment_dao.signal_info(signal_id)
-                    if signal_info.device.uid == leader and (
-                        0 in signal_info.channels or 1 in signal_info.channels
-                    ):
-                        has_signal_on_awg_0_of_leader = True
-                        break
+            if not has_signal_on_awg_0_of_triggering_hdawg:
+                signal_id = "__small_system_trigger__"
+                device_id = triggering_hdawg
+                signal_type = "iq"
+                channels = [0, 1]
+                experiment_dao.add_signal(device_id, channels, signal_id, signal_type)
+                _logger.debug(
+                    "No pulses played on channels 1 or 2 of %s, adding dummy signal %s to ensure triggering of the setup",
+                    triggering_hdawg,
+                    signal_id,
+                )
 
-                if not has_signal_on_awg_0_of_leader:
-                    signal_id = "__small_system_trigger__"
-                    device_id = leader
-                    signal_type = "iq"
-                    channels = [0, 1]
-                    experiment_dao.add_signal(
-                        device_id, channels, signal_id, signal_type
-                    )
-                    _logger.debug(
-                        "No pulses played on channels 1 or 2 of %s, adding dummy signal %s to ensure triggering of the setup",
-                        leader,
-                        signal_id,
-                    )
-
-            is_hdawg_solo = type_counter["hdawg"] == 1 and not has_shf and not has_uhfqa
-            if is_hdawg_solo:
-                first_hdawg = self._get_first_instr_of(device_infos, "hdawg")
-                if first_hdawg.reference_clock_source is None:
-                    self._clock_settings[first_hdawg.uid] = (
-                        ReferenceClockSourceInfo.INTERNAL
-                    )
-            else:
-                if not has_hdawg and has_shfsg:  # SHFSG or SHFQC solo
-                    first_shfsg = self._get_first_instr_of(device_infos, "shfsg")
-                    if first_shfsg.reference_clock_source is None:
-                        self._clock_settings[first_shfsg.uid] = (
-                            ReferenceClockSourceInfo.INTERNAL
-                        )
-                if not has_hdawg and has_shfqa:  # SHFQA or SHFQC solo
-                    first_shfqa = self._get_first_instr_of(device_infos, "shfqa")
-                    if first_shfqa.reference_clock_source is None:
-                        self._clock_settings[first_shfqa.uid] = (
-                            ReferenceClockSourceInfo.INTERNAL
-                        )
-
-        self._clock_settings["use_2GHz_for_HDAWG"] = has_shf
-        self._leader_properties.global_leader = leader
         self._has_uhfqa = has_uhfqa
 
     def _compile_whole_or_with_chunks(
@@ -434,9 +263,6 @@ class Compiler:
             generate_recipe_args = GenerateRecipeArgs(
                 awgs=awgs,
                 experiment_dao=self._experiment_dao,
-                leader_properties=self._leader_properties,
-                clock_settings=self._clock_settings,
-                sampling_rate_tracker=self._sampling_rate_tracker,
                 experiment_rs=experiment,
                 combined_compiler_output=combined_output,
             )
@@ -464,7 +290,6 @@ class Compiler:
 
     def _process_experiment(self) -> ScheduledExperiment:
         dao = self._experiment_dao
-        self._sampling_rate_tracker = SamplingRateTracker(dao, self._clock_settings)
         self._awgs = self._calc_awgs(dao)
         self._signal_objects = self._generate_signal_objects()
         compiler_module = resolve_compiler_module(
@@ -472,10 +297,9 @@ class Compiler:
         )
         experiment = build_rs_experiment(
             experiment_dao=dao,
-            sampling_rate_tracker=self._sampling_rate_tracker,
             signal_objects=self._signal_objects,
             compiler_module=compiler_module,
-            desktop_setup=self._leader_properties.is_desktop_setup,
+            desktop_setup=self._is_desktop_setup,
         )
 
         chunking = self._chunking_info
@@ -563,39 +387,16 @@ class Compiler:
 
         for signal_id in self._experiment_dao.signals():
             signal_info: SignalInfo = self._experiment_dao.signal_info(signal_id)
-            delay_signal = signal_info.delay_signal
-
             device_type = DeviceType.from_device_info_type(
                 signal_info.device.device_type
             )
             device_id = signal_info.device.uid
 
-            sampling_rate = self._sampling_rate_tracker.sampling_rate_for_device(
-                device_id, signal_info.type
-            )
-
-            if delay_signal is not None:
-                delay_signal = get_total_rounded_delay(
-                    delay_signal, signal_id, device_type, sampling_rate
-                )
-            else:
-                delay_signal = 0.0
-
             awg = awgs_by_signal_id[signal_id]
             awg.trigger_mode = TriggerMode.NONE
             device_info = self._experiment_dao.device_info(device_id)
 
-            ref_clk_src = self._clock_settings.get(
-                device_id, device_info.reference_clock_source
-            )
-            ref_clk_str: str | None = None
-            if ref_clk_src == ReferenceClockSourceInfo.INTERNAL:
-                ref_clk_str = "internal"
-            if ref_clk_src == ReferenceClockSourceInfo.EXTERNAL:
-                ref_clk_str = "external"
-            awg.reference_clock_source = ref_clk_str
-
-            if self._leader_properties.is_desktop_setup:
+            if self._is_desktop_setup:
                 awg.trigger_mode = {
                     DeviceType.HDAWG: TriggerMode.DIO_TRIGGER
                     if self._has_uhfqa
@@ -604,7 +405,6 @@ class Compiler:
                     DeviceType.SHFQA: TriggerMode.INTERNAL_TRIGGER_WAIT,
                     DeviceType.UHFQA: TriggerMode.DIO_WAIT,
                 }.get(device_type, TriggerMode.NONE)
-            awg.sampling_rate = sampling_rate
 
             signal_type = signal_info.type.value
 
@@ -612,24 +412,12 @@ class Compiler:
                 "Adding signal %s with signal type %s", signal_id, signal_type
             )
 
-            oscillator_info = self._experiment_dao.signal_oscillator(signal_id)
             channels = copy.deepcopy(signal_info.channels)
-            hw_oscillator = (
-                oscillator_info.uid
-                if oscillator_info is not None and oscillator_info.is_hardware
-                else None
-            )
-            oscillator_id = oscillator_info.uid if oscillator_info is not None else None
-            oscillator_is_hardware = (
-                oscillator_info.is_hardware if oscillator_info is not None else None
-            )
-
             port_delay = self._experiment_dao.port_delay(signal_id)
             local_oscillator_frequency = self._experiment_dao.lo_frequency(signal_id)
 
             signal_obj = SignalObj(
                 id=signal_id,
-                delay_signal=delay_signal,
                 signal_type=signal_type,
                 awg=awg,
                 channels=channels,
@@ -637,9 +425,6 @@ class Compiler:
                     int(c): p for c, p in signal_info.channel_to_port.items()
                 },
                 port_delay=port_delay or 0.0,
-                hw_oscillator=hw_oscillator,
-                oscillator_id=oscillator_id,
-                oscillator_is_hardware=oscillator_is_hardware,
                 is_qc=device_info.is_qc,
                 automute=signal_info.automute,
                 local_oscillator_frequency=local_oscillator_frequency,

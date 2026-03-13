@@ -7,10 +7,11 @@ from collections import defaultdict
 
 from laboneq.compiler import Compiler
 from laboneq.data.compilation_job import CompilationJob
-from laboneq.data.experiment_description import Experiment
-from laboneq.data.parameter import Parameter, SweepParameter
+from laboneq.data.parameter import SweepParameter as DataSweepParameter
 from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.data.setup_description import Setup
+from laboneq.dsl.experiment import Experiment
+from laboneq.dsl.parameter import Parameter, SweepParameter
 from laboneq.executor.execution_from_experiment import ExecutionFactoryFromExperiment
 from laboneq.implementation.payload_builder.experiment_info_builder.experiment_info_builder import (
     ExperimentInfoBuilder,
@@ -42,11 +43,12 @@ def _make_driver_parameter_map(
     """Make a mapping from driver UIDs to the parameters they drive."""
     driver_map: dict[str, set[str]] = defaultdict(set)
 
-    def collect_driving_parameters(parameter: SweepParameter) -> set[str]:
+    def collect_driving_parameters(parameter: Parameter) -> set[str]:
         drivers = set()
-        if not isinstance(parameter, SweepParameter):
+        # TODO(DSL cutover): Remove DataSweepParameter once setup calibration uses DSL types.
+        if not isinstance(parameter, (SweepParameter, DataSweepParameter)):
             return drivers
-        for driver in parameter.driven_by:
+        for driver in parameter.driven_by or []:
             driver_map[driver.uid].add(parameter.uid)
             drivers.add(driver.uid)
             drivers.update(collect_driving_parameters(driver))

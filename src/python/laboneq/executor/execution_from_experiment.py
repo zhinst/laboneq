@@ -6,7 +6,13 @@ from __future__ import annotations
 import numpy as np
 
 from laboneq.core.utilities.prng import PRNG
-from laboneq.data.experiment_description import (
+from laboneq.data.parameter import (
+    LinearSweepParameter as DataLinearSweepParameter,
+)
+from laboneq.data.parameter import (
+    SweepParameter as DataSweepParameter,
+)
+from laboneq.dsl.experiment import (
     Acquire,
     AcquireLoopRt,
     Call,
@@ -16,14 +22,14 @@ from laboneq.data.experiment_description import (
     Match,
     Operation,
     PlayPulse,
-    PrngLoop,
     Reserve,
     Section,
     SetNode,
     Sweep,
 )
-from laboneq.data.parameter import LinearSweepParameter, Parameter, SweepParameter
-from laboneq.data.prng import PRNGSample
+from laboneq.dsl.experiment.section import PRNGLoop
+from laboneq.dsl.parameter import LinearSweepParameter, Parameter, SweepParameter
+from laboneq.dsl.prng import PRNGSample
 from laboneq.executor import executor
 
 
@@ -90,7 +96,7 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
                 state = child.state
                 body = self._sub_scope(self._handle_children, child.children)
                 self._append_statement(executor.CaseSection(state=state, body=body))
-            elif isinstance(child, PrngLoop):
+            elif isinstance(child, PRNGLoop):
                 prng_sample = child.prng_sample
                 count = prng_sample.count
                 loop_body = self._sub_scope(self._handle_prng_loop, child)
@@ -103,26 +109,33 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
         seen_params = set()
         for parameter in sweep.parameters:
             seen_params.add(parameter.uid)
-            self._append_statement(self._statement_from_param(parameter))
+            self._append_statement(self._statement_from_param(parameter, True))
 
             for driven_param in self._driver_parameter_map.get(parameter.uid, []):
                 if driven_param.uid in seen_params:
                     continue
                 seen_params.add(driven_param.uid)
-                self._append_statement(self._statement_from_param(driven_param))
+                self._append_statement(self._statement_from_param(driven_param, False))
         self._handle_children(sweep.children)
 
-    def _handle_prng_loop(self, loop: PrngLoop):
-        self._append_statement(self._statement_from_param(loop.prng_sample))
+    def _handle_prng_loop(self, loop: PRNGLoop):
+        self._append_statement(self._statement_from_param(loop.prng_sample, True))
         self._handle_children(loop.children)
 
     def _statement_from_param(
-        self, parameter: SweepParameter | LinearSweepParameter | PRNGSample
+        self,
+        parameter: SweepParameter
+        | LinearSweepParameter
+        | DataSweepParameter
+        | DataLinearSweepParameter
+        | PRNGSample,
+        is_user_registered: bool,
     ):
-        if isinstance(parameter, SweepParameter):
+        # TODO(DSL cutover): Remove Data* once setup calibration uses DSL types.
+        if isinstance(parameter, (SweepParameter, DataSweepParameter)):
             values = parameter.values
             axis_name = parameter.axis_name
-        elif isinstance(parameter, LinearSweepParameter):
+        elif isinstance(parameter, (LinearSweepParameter, DataLinearSweepParameter)):
             values = np.linspace(parameter.start, parameter.stop, parameter.count)
             axis_name = parameter.axis_name
         elif isinstance(parameter, PRNGSample):
@@ -133,7 +146,10 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
         else:
             raise TypeError(f"Unrecognized parameter type: {type(parameter)}")
         return executor.SetSoftwareParam(
-            name=parameter.uid, values=values, axis_name=axis_name
+            name=parameter.uid,
+            axis_name=axis_name,
+            values=values,
+            is_user_registered=is_user_registered,
         )
 
     def _statement_from_operation(self, operation):

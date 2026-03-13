@@ -10,7 +10,6 @@ from laboneq.data.compilation_job import (
     AmplifierPumpInfo,
     ChunkingInfo,
     DeviceInfo,
-    DeviceInfoType,
     ExperimentInfo,
     ParameterInfo,
     SignalInfo,
@@ -19,8 +18,8 @@ from laboneq.data.compilation_job import (
 )
 
 if TYPE_CHECKING:
-    from laboneq.data.experiment_description import Experiment
-    from laboneq.data.parameter import Parameter
+    from laboneq.dsl.experiment import Experiment
+    from laboneq.dsl.parameter import Parameter
 
 
 class ExperimentDAO:
@@ -36,13 +35,6 @@ class ExperimentDAO:
         self._devices: dict[str, DeviceInfo] = {}
         self._chunking: ChunkingInfo | None = None
         self._signals: dict[str, SignalInfo] = {}
-        self._global_leader_device_id: str | None = None
-
-        self._global_leader_device_id = (
-            experiment.global_leader_device.uid
-            if experiment.global_leader_device is not None
-            else None
-        )
 
         for dev in experiment.devices:
             assert dev.uid not in self._devices
@@ -71,9 +63,6 @@ class ExperimentDAO:
     def signals(self) -> list[str]:
         return sorted([s.uid for s in self._signals.values()])
 
-    def global_leader_device(self) -> str:
-        return self._global_leader_device_id
-
     def device_info(self, device_id) -> DeviceInfo:
         return self._devices[device_id]
 
@@ -82,33 +71,6 @@ class ExperimentDAO:
 
     def signal_info(self, signal_id: str) -> SignalInfo:
         return self._signals[signal_id]
-
-    def pqscs(self) -> list[str]:
-        return [
-            d.uid
-            for d in self.device_infos()
-            if d.device_type in [DeviceInfoType.PQSC, DeviceInfoType.QHUB]
-        ]
-
-    def pqsc_followers(self, pqsc_device_uid: str) -> list[str]:
-        assert pqsc_device_uid in self.pqscs()
-        return [
-            d.uid
-            for d in self.device_infos()
-            if d.device_type
-            in [DeviceInfoType.HDAWG, DeviceInfoType.SHFQA, DeviceInfoType.SHFSG]
-        ]
-
-    def dio_followers(self) -> list[str]:
-        return [
-            follower_uid
-            for leader in self.device_infos()
-            for follower_uid in leader.followers
-            if leader.device_type not in [DeviceInfoType.PQSC, DeviceInfoType.QHUB]
-        ]
-
-    def signal_oscillator(self, signal_id):
-        return self._signals[signal_id].oscillator
 
     def voltage_offset(self, signal_id) -> float | ParameterInfo:
         return self._signals[signal_id].voltage_offset

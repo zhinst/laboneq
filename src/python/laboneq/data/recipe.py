@@ -19,14 +19,6 @@ class RefClkType(Enum):
     _100MHZ = 100_000_000
 
 
-class TriggeringMode(Enum):
-    ZSYNC_FOLLOWER = 1
-    DIO_FOLLOWER = 2
-    DESKTOP_LEADER = 3
-    DESKTOP_DIO_FOLLOWER = 4
-    INTERNAL_FOLLOWER = 5
-
-
 @dataclass(frozen=True)
 class NtStepKey:
     indices: tuple[int, ...]
@@ -100,8 +92,7 @@ class Measurement:
 
 @dataclass
 class Config:
-    repetitions: int = 1
-    triggering_mode: TriggeringMode = TriggeringMode.DIO_FOLLOWER
+    lead_delay: float = 0.0
     sampling_rate: float | None = None
 
 

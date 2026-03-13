@@ -8,7 +8,10 @@ from typing import TYPE_CHECKING, Any
 
 from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.validators import dicts_equal
-from laboneq.data.scheduled_experiment import CodegenWaveform, ScheduledExperiment
+from laboneq.data.scheduled_experiment import (
+    CodegenWaveform,
+    ScheduledExperiment,
+)
 
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
@@ -18,6 +21,23 @@ if TYPE_CHECKING:
     from laboneq.dsl.experiment import Experiment
     from laboneq.dsl.experiment.pulse import Pulse
     from laboneq.dsl.parameter import Parameter
+
+
+@dataclass(frozen=True)
+class ResultProperties:
+    """Data structure containing some information about measurement results.
+
+    Attributes:
+        shape: The shape of the result array.
+        axis_names: This tuple has the same length as `shape`, and each entry describes what
+                    the respective axis corresponds to. Usually they are ids of sweep parameters,
+                    but can also contain other things - "samples" in case of raw acquisition, and the id of
+                    the RT acquisition loop in case of single-shot readout. A dimension can also have more
+                    than 1 associated names, if it corresponds to a parallel sweep over multiple parameters.
+    """
+
+    shape: tuple[int, ...]
+    axis_names: tuple[str | tuple[str, ...], ...]
 
 
 @dataclass(init=True, repr=True, order=True)
@@ -189,6 +209,19 @@ class CompiledExperiment:
             `.scheduled_experiment` instead.
         """
         return self.scheduled_experiment.schedule
+
+    @property
+    def result_properties(self) -> dict[str, ResultProperties]:
+        """Properties of results for each handle."""
+        return {
+            handle: ResultProperties(
+                shape=properties.shape,
+                axis_names=tuple(
+                    x if isinstance(x, str) else tuple(x) for x in properties.axis_names
+                ),
+            )
+            for handle, properties in self.scheduled_experiment.result_shape_info.shapes.items()
+        }
 
     def __eq__(self, other):
         if other is self:

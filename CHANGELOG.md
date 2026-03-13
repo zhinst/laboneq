@@ -1,3 +1,19 @@
+# LabOne Q 26.4.0b3 (2026-03-13)
+
+## Features
+
+- Added a new attribute `result_properties` for `CompiledExperiment` that for each result handle contains information about the result array (the shape and the axis names).
+- Added support for injecting serialized experiment results into workflows via the `inject_results` option, enabling reuse of previously recorded runs for emulation or testing.
+
+## Bug Fixes
+
+- Fixed a bug where instance variables were treated incorrectly.
+- Fixed a bug where `axis_name` in experiment results contained names of internal derived parameters.
+- Fixed a bug where near-time frequency sweep of QA acquire oscillator with hardware modulation did not work on SHFQA devices with the LRT option without requiring spectroscopy acquisition type.
+- Fixed a bug where loops using SW oscillators were incorrectly compressed (re-rolled),
+  causing all sweep iterations to reuse the same pre-computed waveform regardless of
+  the accumulated oscillator phase.
+
 # LabOne Q 26.4.0b2 (2026-02-27)
 
 ## Features

@@ -35,22 +35,18 @@ def _ref_clk_from_ds(
 def _split_shfqc(
     device: Instrument, physical_device_id: int
 ) -> Tuple[DeviceInfo, DeviceInfo]:
-    dev_type, dev_opts = devices.parse_device_options(device.device_options)
     shfqa = DeviceInfo(
         uid=device.uid,
         device_type=DeviceInfoType.SHFQA,
-        dev_type=dev_type,
-        dev_opts=dev_opts,
+        options=device.device_options or "",
         reference_clock_source=_ref_clk_from_ds(device.reference_clock.source),
         is_qc=True,
         physical_device_uid=physical_device_id,
     )
-    dev_type, dev_opts = devices.parse_device_options(device.device_options)
     shfsg = DeviceInfo(
         uid=device.uid + VIRTUAL_SHFSG_UID_SUFFIX,
         device_type=DeviceInfoType.SHFSG,
-        dev_type=dev_type,
-        dev_opts=dev_opts,
+        options=device.device_options or "",
         reference_clock_source=_ref_clk_from_ds(device.reference_clock.source),
         is_qc=True,
         physical_device_uid=physical_device_id,
@@ -59,12 +55,10 @@ def _split_shfqc(
 
 
 def _build_non_shfqc(device: Instrument, physical_device_id: int) -> DeviceInfo:
-    dev_type, dev_opts = devices.parse_device_options(device.device_options)
     return DeviceInfo(
         uid=device.uid,
         device_type=DeviceInfoType(device.device_type.name.lower()),
-        dev_type=dev_type,
-        dev_opts=dev_opts,
+        options=device.device_options or "",
         reference_clock_source=_ref_clk_from_ds(device.reference_clock.source),
         is_qc=False,
         physical_device_uid=physical_device_id,
@@ -82,24 +76,13 @@ class DeviceInfoBuilder:
         self._device_mapping: dict[str, DeviceInfo] = {}
         self._device_by_ls: dict[LogicalSignal, DeviceInfo] = {}
         self._build_devices_and_connections()
-        self._global_leader: DeviceInfo | None = self._find_global_leader()
 
     @property
     def device_mapping(self) -> Mapping[str, DeviceInfo]:
         return self._device_mapping
 
-    @property
-    def global_leader(self) -> DeviceInfo | None:
-        return self._global_leader
-
     def device_by_ls(self, ls: LogicalSignal) -> DeviceInfo:
         return self._device_by_ls[ls]
-
-    def _find_global_leader(self) -> DeviceInfo | None:
-        for server in self._setup.servers.values():
-            if server.leader_uid is not None:
-                return self._device_mapping.get(server.leader_uid)
-        return None
 
     def _build_devices_and_connections(self):
         """Build devices and assign leader - follower relationships."""

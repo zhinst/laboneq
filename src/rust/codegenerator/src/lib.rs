@@ -22,6 +22,7 @@ mod event_list;
 mod generator;
 mod integration_units;
 mod ir_adapter;
+mod oscillator_allocation;
 pub mod result;
 mod triggers;
 

@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::num::NonZeroU32;
-use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use anyhow::Context;
@@ -45,7 +44,7 @@ use numeric_array::NumericArray;
 use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::PyComplex;
-use pyo3::types::{PyDict, PyList, PyString};
+use pyo3::types::{IntoPyDict, PyDict, PyList, PyString};
 
 pub(super) struct ExperimentBuilder<'py> {
     // List of root sections
@@ -60,6 +59,7 @@ pub(super) struct ExperimentBuilder<'py> {
     // Parameters that drive other parameters
     pub driving_parameters: HashMap<ParameterUid, HashSet<ParameterUid>>,
     pub dsl_types: DslTypes<'py>,
+    pub np: Bound<'py, PyModule>,
 }
 
 impl<'py> ExperimentBuilder<'py> {
@@ -73,6 +73,7 @@ impl<'py> ExperimentBuilder<'py> {
             py_object_store: PyObjectInterner::new(),
             dsl_types: DslTypes::new(py).unwrap(),
             driving_parameters: HashMap::new(),
+            np: PyModule::import(py, "numpy").unwrap(),
         }
     }
 
@@ -155,60 +156,60 @@ pub(crate) struct DslTypes<'a> {
 }
 
 impl<'a> DslTypes<'a> {
-    fn new(py: Python<'a>) -> Result<DslTypes<'a>> {
+    pub(crate) fn new(py: Python<'a>) -> Result<DslTypes<'a>> {
         let linear_sweep_parameter_py = py
-            .import(intern!(py, "laboneq.data.parameter"))?
+            .import(intern!(py, "laboneq.dsl.parameter"))?
             .getattr(intern!(py, "LinearSweepParameter"))?;
         let sweep_parameter_py: Bound<'_, PyAny> = py
-            .import(intern!(py, "laboneq.data.parameter"))?
+            .import(intern!(py, "laboneq.dsl.parameter"))?
             .getattr(intern!(py, "SweepParameter"))?;
         let parameter_py: Bound<'_, PyAny> = py
-            .import(intern!(py, "laboneq.data.parameter"))?
+            .import(intern!(py, "laboneq.dsl.parameter"))?
             .getattr(intern!(py, "Parameter"))?;
         let sweep_py = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
+            .import(intern!(py, "laboneq.dsl.experiment.section"))?
             .getattr(intern!(py, "Sweep"))?;
         let section_py = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
+            .import(intern!(py, "laboneq.dsl.experiment.section"))?
             .getattr(intern!(py, "Section"))?;
         let delay_py = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
+            .import(intern!(py, "laboneq.dsl.experiment.delay"))?
             .getattr(intern!(py, "Delay"))?;
         let reserve_py = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
+            .import(intern!(py, "laboneq.dsl.experiment.reserve"))?
             .getattr(intern!(py, "Reserve"))?;
         let acquire_py = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
+            .import(intern!(py, "laboneq.dsl.experiment.acquire"))?
             .getattr(intern!(py, "Acquire"))?;
         let play_pulse_py = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
+            .import(intern!(py, "laboneq.dsl.experiment.play_pulse"))?
             .getattr(intern!(py, "PlayPulse"))?;
         let match_py = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
+            .import(intern!(py, "laboneq.dsl.experiment.section"))?
             .getattr(intern!(py, "Match"))?;
         let case_py = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
+            .import(intern!(py, "laboneq.dsl.experiment.section"))?
             .getattr(intern!(py, "Case"))?;
         let pulse_functional_py = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
+            .import(intern!(py, "laboneq.dsl.experiment.pulse"))?
             .getattr(intern!(py, "PulseFunctional"))?;
         let acquire_loop_rt_py = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
+            .import(intern!(py, "laboneq.dsl.experiment.section"))?
             .getattr(intern!(py, "AcquireLoopRt"))?;
         let neartime_callback = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
+            .import(intern!(py, "laboneq.dsl.experiment.call"))?
             .getattr(intern!(py, "Call"))?;
         let prng_setup_py = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
-            .getattr(intern!(py, "PrngSetup"))?;
+            .import(intern!(py, "laboneq.dsl.experiment.section"))?
+            .getattr(intern!(py, "PRNGSetup"))?;
         let prng_loop_py = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
-            .getattr(intern!(py, "PrngLoop"))?;
+            .import(intern!(py, "laboneq.dsl.experiment.section"))?
+            .getattr(intern!(py, "PRNGLoop"))?;
         let set_node_py = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
+            .import(intern!(py, "laboneq.dsl.experiment.set_node"))?
             .getattr(intern!(py, "SetNode"))?;
         let reset_oscillator_phase_py = py
-            .import(intern!(py, "laboneq.data.experiment_description"))?
+            .import(intern!(py, "laboneq.dsl.experiment.reset_oscillator_phase"))?
             .getattr(intern!(py, "ResetOscillatorPhase"))?;
         let type_map = HashMap::from([
             (DslType::LinearSweepParameter, linear_sweep_parameter_py),
@@ -239,6 +240,8 @@ impl<'a> DslTypes<'a> {
             .unwrap_or_else(|| panic!("DSL type not found: {dsl_type:?}"))
     }
 }
+
+use crate::py_helpers::is_exact_type;
 
 fn extract_numeric_value(obj: &Bound<'_, PyAny>) -> Result<NumericLiteral> {
     if let Ok(v) = obj.extract::<i64>() {
@@ -275,7 +278,15 @@ where
         let value = ValueOrParameter::<T>::Value(value.try_into().map_err(Error::new)?);
         return Ok(Some(value));
     }
-    if obj.is_instance(builder.dsl_types.laboneq_type(DslType::Parameter))? {
+    if is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::Parameter))?
+        || is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::SweepParameter))?
+        || is_exact_type(
+            obj,
+            builder
+                .dsl_types
+                .laboneq_type(DslType::LinearSweepParameter),
+        )?
+    {
         let parameter_uid = extract_parameter(obj, builder)?;
         return Ok(Some(ValueOrParameter::Parameter(parameter_uid)));
     }
@@ -328,7 +339,7 @@ fn extract_parameter(
         .laboneq_type(DslType::LinearSweepParameter);
     let sweep_parameter_py = builder.dsl_types.laboneq_type(DslType::SweepParameter);
 
-    if obj.is_instance(linear_sweep_parameter_py)? {
+    if is_exact_type(obj, linear_sweep_parameter_py)? {
         let start = extract_numeric_value(&obj.getattr(intern!(py, "start"))?)?;
         let stop = extract_numeric_value(&obj.getattr(intern!(py, "stop"))?)?;
         let count = obj.getattr(intern!(py, "count"))?.extract::<usize>()?;
@@ -358,7 +369,7 @@ fn extract_parameter(
         let parameter = SweepParameter::new(uid, values).map_err(Error::new)?;
         builder.parameters.insert(parameter.uid, parameter);
         return Ok(uid);
-    } else if obj.is_instance(sweep_parameter_py)? {
+    } else if is_exact_type(obj, sweep_parameter_py)? {
         let values = NumericArray::from_py(&obj.getattr(intern!(py, "values"))?)?;
         let parameter = SweepParameter::new(uid, values).map_err(Error::new)?;
         builder.parameters.insert(parameter.uid, parameter);
@@ -380,11 +391,15 @@ fn register_driving_parameters(
     builder: &mut ExperimentBuilder,
 ) -> Result<()> {
     let sweep_parameter_py = builder.dsl_types.laboneq_type(DslType::SweepParameter);
-    if !obj.is_instance(sweep_parameter_py)? {
+    if !is_exact_type(obj, sweep_parameter_py)? {
         return Ok(());
     }
     let py = obj.py();
-    for driving_param in obj.getattr(intern!(py, "driven_by"))?.try_iter()? {
+    let driven_by = obj.getattr(intern!(py, "driven_by"))?;
+    if driven_by.is_none() {
+        return Ok(());
+    }
+    for driving_param in driven_by.try_iter()? {
         let driving_param = driving_param?;
         let p_uid = ParameterUid(
             builder.register_uid(
@@ -536,6 +551,29 @@ fn extract_pulse_parameters(
     Ok(out)
 }
 
+/// Convert an (N, 2) numpy float64 I/Q array to a 1-D complex128 array.
+pub(crate) fn iq_to_complex<'py>(
+    np: &Bound<'py, PyModule>,
+    arr: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let shape: Vec<usize> = arr.getattr(intern!(arr.py(), "shape"))?.extract()?;
+    if shape.len() != 2 || shape[1] != 2 {
+        return Err(PyErr::from(Error::new(format!(
+            "Sampled pulse must have shape (N,) or (N, 2), got {:?}",
+            shape
+        ))));
+    }
+    let py = arr.py();
+    let arr64 = np.call_method(
+        intern!(py, "ascontiguousarray"),
+        (arr,),
+        Some(&[("dtype", "float64")].into_py_dict(py)?),
+    )?;
+    arr64
+        .call_method1(intern!(py, "view"), (intern!(py, "complex128"),))?
+        .call_method1(intern!(py, "reshape"), (-1i64,))
+}
+
 /// Convert `Pulse` and its subclasses
 fn extract_pulse(
     obj: &Bound<'_, PyAny>,
@@ -543,16 +581,21 @@ fn extract_pulse(
 ) -> Result<(PulseUid, HashMap<PulseParameterUid, PulseParameterValue>)> {
     let py = obj.py();
     let uid = PulseUid(builder.register_uid(obj.getattr(intern!(py, "uid"))?.extract::<&str>()?));
-    let pulse_parameters =
-        if obj.is_instance(builder.dsl_types.laboneq_type(DslType::PulseFunctional))? {
-            extract_pulse_parameters(&obj.getattr(intern!(py, "pulse_parameters"))?, builder)?
-        } else {
-            HashMap::new()
-        };
+    let pulse_parameters = if is_exact_type(
+        obj,
+        builder.dsl_types.laboneq_type(DslType::PulseFunctional),
+    )? {
+        extract_pulse_parameters(&obj.getattr(intern!(py, "pulse_parameters"))?, builder)?
+    } else {
+        HashMap::new()
+    };
     if builder.pulses.contains_key(&uid) {
         return Ok((uid, pulse_parameters));
     }
-    let pulse = if obj.is_instance(builder.dsl_types.laboneq_type(DslType::PulseFunctional))? {
+    let pulse = if is_exact_type(
+        obj,
+        builder.dsl_types.laboneq_type(DslType::PulseFunctional),
+    )? {
         let function_py = obj.getattr(intern!(py, "function"))?;
         let function = function_py.extract::<&str>()?;
         let pulse_function = match function {
@@ -575,12 +618,19 @@ fn extract_pulse(
         }
     } else {
         let samples_py_arr = obj.getattr(intern!(py, "samples"))?;
-        let length = samples_py_arr.len()?;
+        let arr = builder
+            .np
+            .call_method1(intern!(py, "asarray"), (&samples_py_arr,))?;
+        let ndim: usize = arr.getattr(intern!(py, "ndim"))?.extract()?;
+        let samples_1d = if ndim > 1 {
+            iq_to_complex(&builder.np, &arr)?
+        } else {
+            arr
+        };
         PulseDef {
             uid,
             kind: PulseKind::Sampled(SampledPulse {
-                samples: Arc::new(samples_py_arr.into()),
-                length,
+                samples: NumericArray::from_py(&samples_1d)?,
             }),
             amplitude: 1.0.into(),
             can_compress: obj
@@ -1072,75 +1122,38 @@ fn extract_reset_oscillator_phase(
 }
 
 fn extract_object(obj: &Bound<'_, PyAny>, builder: &mut ExperimentBuilder) -> Result<Operation> {
-    let variant = if obj
-        .get_type()
-        .is(builder.dsl_types.laboneq_type(DslType::PlayPulse))
-    {
+    let variant = if is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::PlayPulse))? {
         Operation::PlayPulse(extract_play_pulse(obj, builder)?)
-    } else if obj
-        .get_type()
-        .is(builder.dsl_types.laboneq_type(DslType::Section))
-    {
+    } else if is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::Section))? {
         Operation::Section(extract_section(obj, builder)?)
-    } else if obj
-        .get_type()
-        .is(builder.dsl_types.laboneq_type(DslType::Delay))
-    {
+    } else if is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::Delay))? {
         Operation::Delay(extract_delay(obj, builder)?)
-    } else if obj
-        .get_type()
-        .is(builder.dsl_types.laboneq_type(DslType::Reserve))
-    {
+    } else if is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::Reserve))? {
         Operation::Reserve(extract_reserve(obj, builder)?)
-    } else if obj
-        .get_type()
-        .is(builder.dsl_types.laboneq_type(DslType::Acquire))
-    {
+    } else if is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::Acquire))? {
         Operation::Acquire(extract_acquire(obj, builder)?)
-    } else if obj
-        .get_type()
-        .is(builder.dsl_types.laboneq_type(DslType::Match))
-    {
+    } else if is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::Match))? {
         Operation::Match(extract_match(obj, builder)?)
-    } else if obj
-        .get_type()
-        .is(builder.dsl_types.laboneq_type(DslType::Case))
-    {
+    } else if is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::Case))? {
         Operation::Case(extract_case(obj, builder)?)
-    } else if obj
-        .get_type()
-        .is(builder.dsl_types.laboneq_type(DslType::AcquireLoopRt))
-    {
+    } else if is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::AcquireLoopRt))? {
         Operation::AveragingLoop(extract_averaging_loop(obj, builder)?)
-    } else if obj
-        .get_type()
-        .is(builder.dsl_types.laboneq_type(DslType::Sweep))
-    {
+    } else if is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::Sweep))? {
         Operation::Sweep(extract_sweep(obj, builder)?)
-    } else if obj
-        .get_type()
-        .is(builder.dsl_types.laboneq_type(DslType::Call))
-    {
+    } else if is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::Call))? {
         Operation::NearTimeCallback
-    } else if obj
-        .get_type()
-        .is(builder.dsl_types.laboneq_type(DslType::PrngSetup))
-    {
+    } else if is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::PrngSetup))? {
         Operation::PrngSetup(extract_prng_setup(obj, builder)?)
-    } else if obj
-        .get_type()
-        .is(builder.dsl_types.laboneq_type(DslType::PrngLoop))
-    {
+    } else if is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::PrngLoop))? {
         Operation::PrngLoop(extract_prng_loop(obj, builder)?)
-    } else if obj
-        .get_type()
-        .is(builder.dsl_types.laboneq_type(DslType::SetNode))
-    {
+    } else if is_exact_type(obj, builder.dsl_types.laboneq_type(DslType::SetNode))? {
         Operation::SetNode
-    } else if obj.get_type().is(builder
-        .dsl_types
-        .laboneq_type(DslType::ResetOscillatorPhase))
-    {
+    } else if is_exact_type(
+        obj,
+        builder
+            .dsl_types
+            .laboneq_type(DslType::ResetOscillatorPhase),
+    )? {
         Operation::ResetOscillatorPhase(extract_reset_oscillator_phase(obj, builder)?)
     } else {
         return Err(Error::new(format!("Unknown experiment object type: {obj}")));
@@ -1195,11 +1208,14 @@ pub(super) fn register_experiment_signals<'py>(
     builder: &mut ExperimentBuilder<'py>,
 ) -> Result<()> {
     let mut signal_uid_objects = vec![];
-    for experiment_signal in experiment
-        .getattr(intern!(experiment.py(), "signals"))?
-        .try_iter()?
-    {
-        let signal_uid = experiment_signal?.getattr(intern!(experiment.py(), "uid"))?;
+    let signals = experiment.getattr(intern!(experiment.py(), "signals"))?;
+    for experiment_signal in crate::py_helpers::signal_iterable(&signals)?.try_iter()? {
+        let experiment_signal = experiment_signal?;
+        let signal_uid = if experiment_signal.hasattr(intern!(experiment.py(), "uid"))? {
+            experiment_signal.getattr(intern!(experiment.py(), "uid"))?
+        } else {
+            experiment_signal
+        };
         signal_uid_objects.push(signal_uid);
     }
     let mut signal_uid_strings = signal_uid_objects

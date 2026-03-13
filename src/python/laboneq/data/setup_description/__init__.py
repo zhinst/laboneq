@@ -33,7 +33,7 @@ class DeviceType(EnumReprMixin, Enum):
     UHFQA = "uhfqa"
     SHFQC = "shfqc"
     SHFPPC = "shfppc"
-    PRETTYPRINTERDEVICE = "prettyprinterdevice"
+    ZQCS = "zqcs"
     UNMANAGED = "unmanaged"
 
 
@@ -100,7 +100,6 @@ class Server:
     uid: str
     host: str
     port: int
-    leader_uid: str
 
 
 @dataclass

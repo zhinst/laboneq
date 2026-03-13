@@ -16,10 +16,18 @@ pub const DEFAULT_SHFQA_LEAD_PQSC: Duration<Second> = seconds(80e-9);
 pub const DEFAULT_SHFSG_LEAD_PQSC: Duration<Second> = seconds(80e-9);
 pub const DEFAULT_TESTDEVICE_LEAD: Duration<Second> = seconds(1200e-9);
 
+/// Default sampling rates for various devices and channels
+pub const SHFSG_SAMPLING_RATE: Frequency<Hertz> = hertz(2e9);
+pub const SHFQA_SAMPLING_RATE: Frequency<Hertz> = hertz(2e9);
+pub const HDAWG_SAMPLING_RATE_WITH_SHF: Frequency<Hertz> = hertz(2.0e9);
+pub const HDAWG_SAMPLING_RATE_WITHOUT_SHF: Frequency<Hertz> = hertz(2.4e9);
+pub const UHFQA_SAMPLING_RATE: Frequency<Hertz> = hertz(1.8e9);
+pub const ZQCS_OUTPUT_SAMPLING_RATE: Frequency<Hertz> = hertz(2e9);
+pub const ZQCS_INPUT_SAMPLING_RATE: Frequency<Hertz> = hertz(4e9);
+
 /// Commonly used device traits
 pub struct DeviceTraits {
     pub channels_per_awg: u16,
-    pub sampling_rate: f64,
     pub sample_multiple: u16,
     pub device_class: u8,
     pub oscillator_set_latency: Duration<Second>,
@@ -39,7 +47,7 @@ impl DeviceTraits {
             DeviceKind::Uhfqa => &UHFQA_TRAITS,
             DeviceKind::Shfsg => &SHFSG_TRAITS,
             DeviceKind::Shfqa => &SHFQA_TRAITS,
-            DeviceKind::PrettyPrinterDevice => &PRETTYPRINTERDEVICE_TRAITS,
+            DeviceKind::Zqcs => &ZQCS_TRAITS,
         }
     }
 
@@ -53,7 +61,6 @@ impl DeviceTraits {
 }
 
 pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
-    sampling_rate: 2.4e9,
     channels_per_awg: 2,
     sample_multiple: 16,
     device_class: 0,
@@ -67,7 +74,6 @@ pub const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
 };
 
 pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
-    sampling_rate: 1.8e9,
     channels_per_awg: 2,
     sample_multiple: 8,
     device_class: 0,
@@ -81,7 +87,6 @@ pub const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
 };
 
 pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
-    sampling_rate: 2e9,
     channels_per_awg: 1,
     sample_multiple: 16,
     device_class: 0,
@@ -95,7 +100,6 @@ pub const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
 };
 
 pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
-    sampling_rate: 2e9,
     channels_per_awg: 1,
     sample_multiple: 16,
     device_class: 0,
@@ -108,13 +112,12 @@ pub const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     supports_precompensation: false,
 };
 
-pub const PRETTYPRINTERDEVICE_TRAITS: DeviceTraits = DeviceTraits {
-    sampling_rate: 2e9,
+pub const ZQCS_TRAITS: DeviceTraits = DeviceTraits {
     channels_per_awg: 1,
     sample_multiple: 4,
     device_class: 1,
     oscillator_set_latency: seconds(36e-9),
-    oscillator_reset_duration: seconds(32e-9),
+    oscillator_reset_duration: seconds(36e-9),
     lo_frequency_granularity: None,
     lo_frequency_range: None,
     integration_dsp_latency: None,

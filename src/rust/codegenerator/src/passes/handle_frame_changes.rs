@@ -401,6 +401,7 @@ mod tests {
             oscillator: Some(cjob::Oscillator {
                 uid: "osc1".to_string(),
                 kind: cjob::OscillatorKind::HARDWARE,
+                frequency: 0.0.into(),
             }),
             automute: false,
         });
