@@ -1,10 +1,12 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::num::NonZero;
 use std::{collections::HashMap, sync::Arc};
 
 use indexmap::IndexMap;
 use laboneq_common::device_options::DeviceOptions;
+use laboneq_dsl::types::ParameterUid;
 
 pub use crate::handle_feedback_registers::Acquisition;
 use crate::ir::SignalUid;
@@ -28,7 +30,6 @@ pub struct SeqCGenOutput<T: SampleWaveforms> {
     pub total_execution_time: f64,
     pub result_handle_maps: HashMap<ResultSource, Vec<Vec<String>>>,
     pub measurements: Vec<Measurement>,
-    pub integration_unit_allocations: Vec<IntegrationUnitAllocation>,
 }
 
 pub struct AwgCodeGenerationResult<T: SampleWaveforms> {
@@ -38,11 +39,14 @@ pub struct AwgCodeGenerationResult<T: SampleWaveforms> {
     pub command_table: Option<CommandTable>,
     pub shf_sweeper_config: Option<ShfPpcSweepJson>,
     pub sampled_waveforms: Vec<SampledWaveform<T::Signature>>,
-    pub integration_weights: Vec<T::IntegrationWeight>,
+    pub integration_kernels: Vec<T::SampledIntegrationKernel>,
     pub signal_delays: HashMap<SignalUid, f64>,
     pub integration_lengths: HashMap<SignalUid, SignalIntegrationInfo>,
     pub feedback_register_config: FeedbackRegisterConfig,
-    pub channel_properties: Vec<ChannelProperties>,
+    pub output_channel_properties: Vec<ChannelProperties>,
+    pub input_channel_properties: Vec<InputChannelProperties>,
+    pub integration_weights: Vec<IntegrationWeight>,
+    pub integrator_allocations: Vec<IntegratorAllocation>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -132,11 +136,12 @@ pub struct ResultSource {
     pub integrator_idx: Option<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct IntegrationUnitAllocation {
+#[derive(Debug, Clone, PartialEq)]
+pub struct IntegratorAllocation {
     pub signal: SignalUid,
-    pub channels: Vec<u8>,
-    pub kernel_count: u8,
+    pub integration_units: Vec<ChannelIndex>,
+    pub kernel_count: NonZero<ChannelIndex>,
+    pub thresholds: Vec<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -151,4 +156,27 @@ pub struct ChannelProperties {
     pub channel: ChannelIndex,
     pub marker_mode: Option<MarkerMode>,
     pub hw_oscillator_index: Option<u16>,
+    // Near-time sweep values.
+    // Controller accepts either a fixed value or a parameter.
+    pub amplitude: Option<FixedValueOrParameter<f64>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InputChannelProperties {
+    pub signal: SignalUid,
+    pub channel: ChannelIndex,
+    pub hw_oscillator_index: Option<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FixedValueOrParameter<T> {
+    Value(T),
+    Parameter(ParameterUid),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntegrationWeight {
+    pub integration_units: Vec<ChannelIndex>,
+    pub basename: String,
+    pub downsampling_factor: u8,
 }

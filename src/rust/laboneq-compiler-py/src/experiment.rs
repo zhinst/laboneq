@@ -4,10 +4,9 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::NamedIdStore;
-use laboneq_py_utils::pulse::PulseDef;
 
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::types::{ExternalParameterUid, ParameterUid, PulseUid, SweepParameter};
+use laboneq_dsl::types::{ExternalParameterUid, ParameterUid, PulseDef, PulseUid, SweepParameter};
 use laboneq_py_utils::py_object_interner::PyObjectInterner;
 
 pub(crate) struct Experiment {

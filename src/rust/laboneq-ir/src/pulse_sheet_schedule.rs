@@ -5,6 +5,7 @@
 //!
 //! This module generates a Schedule containing:
 //! - event_list: Time-ordered list of scheduler events
+//! - event_list_truncated: Whether event generation stopped at the configured limit
 //! - section_info: Section metadata with preorder map
 //! - section_signals_with_children: Signal hierarchy per section
 //! - sampling_rates: Sampling rates per device type
@@ -57,6 +58,9 @@ pub mod event_type {
 pub struct PulseSheetSchedule {
     /// Time-ordered list of scheduler events
     pub event_list: EventList,
+
+    /// Whether event generation stopped early due to the max_events budget.
+    pub event_list_truncated: bool,
 
     /// Section metadata with display names and preorder
     pub section_info: HashMap<String, SectionInfo>,
@@ -258,6 +262,46 @@ struct EventListGenerator<'a> {
     section_display_names: &'a HashMap<SectionUid, String>,
 }
 
+enum TraversalResult<T> {
+    Complete(T),
+    Truncated(T),
+}
+
+impl<T> TraversalResult<T> {
+    fn complete(value: T) -> Self {
+        Self::Complete(value)
+    }
+
+    fn truncated(value: T) -> Self {
+        Self::Truncated(value)
+    }
+
+    fn from_parts(value: T, truncated: bool) -> Self {
+        if truncated {
+            Self::Truncated(value)
+        } else {
+            Self::Complete(value)
+        }
+    }
+
+    fn into_parts(self) -> (T, bool) {
+        match self {
+            Self::Complete(value) => (value, false),
+            Self::Truncated(value) => (value, true),
+        }
+    }
+
+    fn map<U, F>(self, f: F) -> TraversalResult<U>
+    where
+        F: FnOnce(T) -> U,
+    {
+        match self {
+            Self::Complete(value) => TraversalResult::Complete(f(value)),
+            Self::Truncated(value) => TraversalResult::Truncated(f(value)),
+        }
+    }
+}
+
 // =============================================================================
 // EVENTLISTGENERATOR IMPLEMENTATION
 // =============================================================================
@@ -284,18 +328,6 @@ impl<'a> EventListGenerator<'a> {
         }
         *max_events = max_events.saturating_sub(count);
         true
-    }
-
-    fn generate(
-        root: &IrNode,
-        expand_loops: bool,
-        max_events: usize,
-        id_store: &'a NamedIdStore,
-        section_display_names: &'a HashMap<SectionUid, String>,
-    ) -> EventList {
-        let mut generator = Self::new(expand_loops, id_store, section_display_names);
-        let mut remaining = max_events;
-        generator.visit_node(root, TinySamples::default(), &mut remaining)
     }
 
     fn resolve_signal(&self, signal: &SignalUid) -> String {
@@ -331,6 +363,7 @@ impl<'a> EventListGenerator<'a> {
         self.id_counter += 1;
         id
     }
+
     fn current_section_name(&self) -> Option<&str> {
         self.section_stack.last().map(|s| s.as_str())
     }
@@ -340,11 +373,7 @@ impl<'a> EventListGenerator<'a> {
         node: &IrNode,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> EventList {
-        if *max_events == 0 {
-            return Vec::new();
-        }
-
+    ) -> TraversalResult<EventList> {
         let section_info = node.kind.section_info();
         let pushed_section = if let Some(info) = &section_info {
             let section_name = self.resolve_section(info.uid);
@@ -368,9 +397,9 @@ impl<'a> EventListGenerator<'a> {
             IrKind::Acquire(acquire) => self.visit_acquire(node, acquire, start, max_events),
             IrKind::Match(match_ir) => self.visit_match(node, match_ir, start, max_events),
             IrKind::Case(case_ir) => self.visit_case(node, case_ir, start, max_events),
-            IrKind::SetOscillatorFrequency(_) => Vec::new(),
-            IrKind::InitialOscillatorFrequency(_) => Vec::new(),
-            IrKind::InitialLocalOscillatorFrequency(_) => Vec::new(),
+            IrKind::SetOscillatorFrequency(_) => TraversalResult::complete(Vec::new()),
+            IrKind::InitialOscillatorFrequency(_) => TraversalResult::complete(Vec::new()),
+            IrKind::InitialLocalOscillatorFrequency(_) => TraversalResult::complete(Vec::new()),
             IrKind::ChangeOscillatorPhase(change) => {
                 self.visit_change_oscillator_phase(node, change, start, max_events)
             }
@@ -391,19 +420,20 @@ impl<'a> EventListGenerator<'a> {
         node: &IrNode,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> EventList {
+    ) -> TraversalResult<EventList> {
         let mut events = Vec::new();
 
         for child in &node.children {
-            if *max_events == 0 {
-                break;
+            match self.visit_node(&child.node, start + child.offset, max_events) {
+                TraversalResult::Complete(mut child_events) => events.append(&mut child_events),
+                TraversalResult::Truncated(mut child_events) => {
+                    events.append(&mut child_events);
+                    return TraversalResult::truncated(events);
+                }
             }
-
-            let child_events = self.visit_node(&child.node, start + child.offset, max_events);
-            events.extend(child_events);
         }
 
-        events
+        TraversalResult::complete(events)
     }
 
     fn generate_children_events(
@@ -412,8 +442,9 @@ impl<'a> EventListGenerator<'a> {
         start: TinySamples,
         max_events: &mut usize,
         wrap_subsections: bool,
-    ) -> Vec<EventList> {
+    ) -> TraversalResult<Vec<EventList>> {
         let mut event_lists = Vec::new();
+        let mut truncated = false;
 
         if wrap_subsections {
             let subsection_count = node
@@ -421,16 +452,20 @@ impl<'a> EventListGenerator<'a> {
                 .iter()
                 .filter(|c| c.node.kind.section_info().is_some())
                 .count();
-            *max_events = max_events.saturating_sub(subsection_count * 2);
+            if !Self::try_reserve_events(max_events, subsection_count * 2) {
+                return TraversalResult::truncated(vec![Vec::new(); node.children.len()]);
+            }
         }
 
         for child in &node.children {
-            if *max_events == 0 {
-                break;
+            match self.visit_node(&child.node, start + child.offset, max_events) {
+                TraversalResult::Complete(child_events) => event_lists.push(child_events),
+                TraversalResult::Truncated(child_events) => {
+                    event_lists.push(child_events);
+                    truncated = true;
+                    break;
+                }
             }
-
-            let child_events = self.visit_node(&child.node, start + child.offset, max_events);
-            event_lists.push(child_events);
         }
 
         while event_lists.len() < node.children.len() {
@@ -439,45 +474,45 @@ impl<'a> EventListGenerator<'a> {
 
         if wrap_subsections {
             for (i, child) in node.children.iter().enumerate() {
-                if let Some(info) = child.node.kind.section_info()
-                    && *max_events >= 2
-                {
-                    let start_id = self.next_id();
-                    let end_id = self.next_id();
-                    let parent_section = self.current_section_name().unwrap().to_string();
-                    let subsection_name = self.resolve_section(info.uid);
+                let Some(info) = child.node.kind.section_info() else {
+                    continue;
+                };
 
-                    let subsection_start =
-                        SchedulerEvent::new(event_type::SUBSECTION_START, start + child.offset)
-                            .with_id(start_id)
-                            .with_section_name(&parent_section)
-                            .with_chain_element_id(start_id)
-                            .with_extra(
-                                "subsection_name".to_string(),
-                                serde_json::Value::String(subsection_name.clone()),
-                            );
+                let start_id = self.next_id();
+                let end_id = self.next_id();
+                let parent_section = self.current_section_name().unwrap().to_string();
+                let subsection_name = self.resolve_section(info.uid);
 
-                    let subsection_end = SchedulerEvent::new(
-                        event_type::SUBSECTION_END,
-                        start + child.offset + child.node.length,
-                    )
-                    .with_id(end_id)
-                    .with_section_name(&parent_section)
-                    .with_chain_element_id(start_id)
-                    .with_extra(
-                        "subsection_name".to_string(),
-                        serde_json::Value::String(subsection_name),
-                    );
+                let subsection_start =
+                    SchedulerEvent::new(event_type::SUBSECTION_START, start + child.offset)
+                        .with_id(start_id)
+                        .with_section_name(&parent_section)
+                        .with_chain_element_id(start_id)
+                        .with_extra(
+                            "subsection_name".to_string(),
+                            serde_json::Value::String(subsection_name.clone()),
+                        );
 
-                    let mut wrapped = vec![subsection_start];
-                    wrapped.append(&mut event_lists[i]);
-                    wrapped.push(subsection_end);
-                    event_lists[i] = wrapped;
-                }
+                let subsection_end = SchedulerEvent::new(
+                    event_type::SUBSECTION_END,
+                    start + child.offset + child.node.length,
+                )
+                .with_id(end_id)
+                .with_section_name(&parent_section)
+                .with_chain_element_id(start_id)
+                .with_extra(
+                    "subsection_name".to_string(),
+                    serde_json::Value::String(subsection_name),
+                );
+
+                let mut wrapped = vec![subsection_start];
+                wrapped.append(&mut event_lists[i]);
+                wrapped.push(subsection_end);
+                event_lists[i] = wrapped;
             }
         }
 
-        event_lists
+        TraversalResult::from_parts(event_lists, truncated)
     }
 
     fn visit_root(
@@ -485,7 +520,7 @@ impl<'a> EventListGenerator<'a> {
         node: &IrNode,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> EventList {
+    ) -> TraversalResult<EventList> {
         self.generic_visit(node, start, max_events)
     }
 
@@ -495,12 +530,14 @@ impl<'a> EventListGenerator<'a> {
         section: &crate::ir::Section,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> EventList {
+    ) -> TraversalResult<EventList> {
         if !Self::try_reserve_events(max_events, 2) {
-            return Vec::new();
+            return TraversalResult::truncated(Vec::new());
         }
 
-        let children_events = self.generate_children_events(node, start, max_events, true);
+        let (children_events, mut truncated) = self
+            .generate_children_events(node, start, max_events, true)
+            .into_parts();
 
         let mut trigger_set_events = Vec::new();
         let mut trigger_clear_events = Vec::new();
@@ -510,13 +547,14 @@ impl<'a> EventListGenerator<'a> {
         // causes a crash when the JS tries to look up the removed section.
         // A zero-length trigger SET+CLEAR at the same instant is a no-op anyway.
         let has_length = node.length > TinySamples::default();
-        for trigger in section.triggers.iter().filter(|_| has_length) {
+        'triggers: for trigger in section.triggers.iter().filter(|_| has_length) {
             let signal_name = self.resolve_signal(&trigger.signal);
             let active_bits = extract_active_bits(trigger.state);
 
             for bit_position in active_bits {
                 if !Self::try_reserve_events(max_events, 2) {
-                    break;
+                    truncated = true;
+                    break 'triggers;
                 }
 
                 let mut set_event =
@@ -569,7 +607,7 @@ impl<'a> EventListGenerator<'a> {
         events.extend(trigger_clear_events);
         events.push(section_end);
 
-        events
+        TraversalResult::from_parts(events, truncated)
     }
 
     fn visit_unrolled_loop(
@@ -577,16 +615,18 @@ impl<'a> EventListGenerator<'a> {
         node: &IrNode,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> Vec<EventList> {
+    ) -> TraversalResult<Vec<EventList>> {
         let mut children_event_lists = Vec::new();
         for child in &node.children {
-            if *max_events == 0 {
-                break;
+            match self.visit_node(&child.node, start + child.offset, max_events) {
+                TraversalResult::Complete(child_events) => children_event_lists.push(child_events),
+                TraversalResult::Truncated(child_events) => {
+                    children_event_lists.push(child_events);
+                    return TraversalResult::truncated(children_event_lists);
+                }
             }
-            let child_events = self.visit_node(&child.node, start + child.offset, max_events);
-            children_event_lists.push(child_events);
         }
-        children_event_lists
+        TraversalResult::complete(children_event_lists)
     }
 
     fn visit_compressed_loop(
@@ -595,19 +635,19 @@ impl<'a> EventListGenerator<'a> {
         loop_ir: &crate::ir::Loop,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> Vec<EventList> {
+    ) -> TraversalResult<Vec<EventList>> {
         let mut children_event_lists = Vec::new();
 
         if node.children.is_empty() {
-            return children_event_lists;
+            return TraversalResult::complete(children_event_lists);
         }
 
         let first_child = &node.children[0];
-        let first_events =
-            self.visit_node(&first_child.node, start + first_child.offset, max_events);
+        let (mut first_events, first_truncated) = self
+            .visit_node(&first_child.node, start + first_child.offset, max_events)
+            .into_parts();
 
-        let mut events_mut = first_events;
-        if let Some(last_event) = events_mut
+        if let Some(last_event) = first_events
             .iter_mut()
             .rev()
             .find(|e| e.event_type == event_type::LOOP_ITERATION_END)
@@ -617,7 +657,11 @@ impl<'a> EventListGenerator<'a> {
                 .insert("compressed".to_string(), serde_json::json!(true));
         }
 
-        children_event_lists.push(events_mut);
+        children_event_lists.push(first_events);
+
+        if first_truncated {
+            return TraversalResult::truncated(children_event_lists);
+        }
 
         if self.expand_loops && node.children.len() == 1 {
             let prototype = &node.children[0].node;
@@ -625,22 +669,27 @@ impl<'a> EventListGenerator<'a> {
             let mut iteration_start = start + first_child.offset;
 
             for _ in 1..loop_ir.iterations.get() {
-                if *max_events == 0 {
-                    break;
-                }
-
                 iteration_start = iteration_start + prototype_length;
-                let iteration_events = self.visit_node(prototype, iteration_start, max_events);
+                let (iteration_events, iteration_truncated) = self
+                    .visit_node(prototype, iteration_start, max_events)
+                    .into_parts();
 
                 if iteration_events.is_empty() {
+                    if iteration_truncated {
+                        return TraversalResult::truncated(children_event_lists);
+                    }
                     break;
                 }
 
                 children_event_lists.push(iteration_events);
+
+                if iteration_truncated {
+                    return TraversalResult::truncated(children_event_lists);
+                }
             }
         }
 
-        children_event_lists
+        TraversalResult::complete(children_event_lists)
     }
 
     fn visit_loop(
@@ -649,19 +698,20 @@ impl<'a> EventListGenerator<'a> {
         loop_ir: &crate::ir::Loop,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> EventList {
+    ) -> TraversalResult<EventList> {
         let section_name = self.resolve_section(&loop_ir.uid);
         self.iteration_counter.insert(section_name.clone(), 0);
 
         if !Self::try_reserve_events(max_events, 3) {
-            return Vec::new();
+            return TraversalResult::truncated(Vec::new());
         }
 
-        let mut children_event_lists = if loop_ir.compressed() {
+        let (mut children_event_lists, truncated) = if loop_ir.compressed() {
             self.visit_compressed_loop(node, loop_ir, start, max_events)
         } else {
             self.visit_unrolled_loop(node, start, max_events)
-        };
+        }
+        .into_parts();
 
         for event_list in &mut children_event_lists {
             for event in event_list {
@@ -701,7 +751,7 @@ impl<'a> EventListGenerator<'a> {
         events.push(loop_end);
         events.push(section_end);
 
-        events
+        TraversalResult::from_parts(events, truncated)
     }
 
     fn visit_loop_iteration(
@@ -709,10 +759,10 @@ impl<'a> EventListGenerator<'a> {
         node: &IrNode,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> EventList {
+    ) -> TraversalResult<EventList> {
         let section_name = match self.current_section_name() {
             Some(name) => name.to_string(),
-            None => return Vec::new(),
+            None => return TraversalResult::complete(Vec::new()),
         };
 
         let iteration = *self.iteration_counter.get(&section_name).unwrap_or(&0);
@@ -725,16 +775,18 @@ impl<'a> EventListGenerator<'a> {
         let event_count = if needs_iteration_end { 3 } else { 2 };
 
         if !Self::try_reserve_events(max_events, event_count) {
-            return Vec::new();
+            return TraversalResult::truncated(Vec::new());
         }
 
         let budget_before_children = *max_events;
-        let children_event_lists = self.generate_children_events(node, start, max_events, true);
+        let (children_event_lists, truncated) = self
+            .generate_children_events(node, start, max_events, true)
+            .into_parts();
         let children_events: EventList = children_event_lists.into_iter().flatten().collect();
 
         if children_events.is_empty() {
             *max_events = budget_before_children.saturating_add(event_count);
-            return Vec::new();
+            return TraversalResult::from_parts(Vec::new(), truncated);
         }
 
         self.iteration_counter
@@ -765,7 +817,7 @@ impl<'a> EventListGenerator<'a> {
             events.push(iteration_end);
         }
 
-        events
+        TraversalResult::from_parts(events, truncated)
     }
 
     fn visit_loop_iteration_preamble(
@@ -773,7 +825,7 @@ impl<'a> EventListGenerator<'a> {
         node: &IrNode,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> EventList {
+    ) -> TraversalResult<EventList> {
         self.generic_visit(node, start, max_events)
     }
 
@@ -783,7 +835,7 @@ impl<'a> EventListGenerator<'a> {
         change: &crate::ir::ChangeOscillatorPhase,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> EventList {
+    ) -> TraversalResult<EventList> {
         let signal_name = self.resolve_signal(&change.signal);
 
         let mut test_extras = HashMap::new();
@@ -795,7 +847,7 @@ impl<'a> EventListGenerator<'a> {
         Self::add_optional_param(&mut test_extras, &change.set, "set_oscillator_phase");
 
         if test_extras.is_empty() {
-            return Vec::new();
+            return TraversalResult::complete(Vec::new());
         }
 
         let incr_phase_param_name = change
@@ -843,7 +895,7 @@ impl<'a> EventListGenerator<'a> {
         play_pulse: &crate::ir::PlayPulse,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> EventList {
+    ) -> TraversalResult<EventList> {
         let signal_name = self.resolve_signal(&play_pulse.signal);
         let pulse_uid = self
             .id_store
@@ -935,7 +987,7 @@ impl<'a> EventListGenerator<'a> {
         acquire: &crate::ir::Acquire,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> EventList {
+    ) -> TraversalResult<EventList> {
         let signal_name = self.resolve_signal(&acquire.signal);
         let handle = self
             .id_store
@@ -995,7 +1047,7 @@ impl<'a> EventListGenerator<'a> {
         signal: &SignalUid,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> EventList {
+    ) -> TraversalResult<EventList> {
         let signal_name = self.resolve_signal(signal);
         self.emit_bracketed_events_with_common(
             BracketedEventParams::new(
@@ -1051,13 +1103,13 @@ impl<'a> EventListGenerator<'a> {
         max_events: &mut usize,
         build_common_extras: F,
         build_start_only_extras: G,
-    ) -> EventList
+    ) -> TraversalResult<EventList>
     where
         F: FnOnce(&mut HashMap<String, serde_json::Value>),
         G: FnOnce(&mut HashMap<String, serde_json::Value>),
     {
         if !Self::try_reserve_events(max_events, 2) {
-            return Vec::new();
+            return TraversalResult::truncated(Vec::new());
         }
 
         let start_id = self.next_id();
@@ -1089,7 +1141,7 @@ impl<'a> EventListGenerator<'a> {
             end_event.section_name = Some(sn.clone());
         }
 
-        vec![start_event, end_event]
+        TraversalResult::complete(vec![start_event, end_event])
     }
 
     fn add_optional_param(
@@ -1110,52 +1162,53 @@ impl<'a> EventListGenerator<'a> {
         match_ir: &crate::ir::Match,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> EventList {
+    ) -> TraversalResult<EventList> {
         let section = crate::ir::Section {
             uid: match_ir.uid,
             triggers: Vec::new(),
             prng_setup: None,
         };
 
-        let mut events = self.visit_section(node, &section, start, max_events);
+        self.visit_section(node, &section, start, max_events)
+            .map(|mut events| {
+                if let Some(section_start) = events.first_mut()
+                    && section_start.event_type == event_type::SECTION_START
+                {
+                    match &match_ir.target {
+                        crate::ir::MatchTarget::Handle(handle) => {
+                            let handle_name = self
+                                .id_store
+                                .resolve(*handle)
+                                .unwrap_or(UNKNOWN_LABEL)
+                                .to_string();
+                            section_start
+                                .extra
+                                .insert("handle".to_string(), serde_json::json!(handle_name));
+                            section_start
+                                .extra
+                                .insert("local".to_string(), serde_json::json!(match_ir.local));
+                        }
+                        crate::ir::MatchTarget::UserRegister(reg) => {
+                            section_start
+                                .extra
+                                .insert("user_register".to_string(), serde_json::json!(reg));
+                        }
+                        crate::ir::MatchTarget::PrngSample(sample) => {
+                            let sample_name = self
+                                .id_store
+                                .resolve(*sample)
+                                .unwrap_or(UNKNOWN_LABEL)
+                                .to_string();
+                            section_start
+                                .extra
+                                .insert("prng_sample".to_string(), serde_json::json!(sample_name));
+                        }
+                        crate::ir::MatchTarget::SweepParameter(_) => {}
+                    }
+                }
 
-        if let Some(section_start) = events.first_mut()
-            && section_start.event_type == event_type::SECTION_START
-        {
-            match &match_ir.target {
-                crate::ir::MatchTarget::Handle(handle) => {
-                    let handle_name = self
-                        .id_store
-                        .resolve(*handle)
-                        .unwrap_or(UNKNOWN_LABEL)
-                        .to_string();
-                    section_start
-                        .extra
-                        .insert("handle".to_string(), serde_json::json!(handle_name));
-                    section_start
-                        .extra
-                        .insert("local".to_string(), serde_json::json!(match_ir.local));
-                }
-                crate::ir::MatchTarget::UserRegister(reg) => {
-                    section_start
-                        .extra
-                        .insert("user_register".to_string(), serde_json::json!(reg));
-                }
-                crate::ir::MatchTarget::PrngSample(sample) => {
-                    let sample_name = self
-                        .id_store
-                        .resolve(*sample)
-                        .unwrap_or(UNKNOWN_LABEL)
-                        .to_string();
-                    section_start
-                        .extra
-                        .insert("prng_sample".to_string(), serde_json::json!(sample_name));
-                }
-                crate::ir::MatchTarget::SweepParameter(_) => {}
-            }
-        }
-
-        events
+                events
+            })
     }
 
     fn visit_case(
@@ -1164,25 +1217,25 @@ impl<'a> EventListGenerator<'a> {
         case_ir: &crate::ir::Case,
         start: TinySamples,
         max_events: &mut usize,
-    ) -> EventList {
+    ) -> TraversalResult<EventList> {
         let section = crate::ir::Section {
             uid: case_ir.uid,
             triggers: Vec::new(),
             prng_setup: None,
         };
 
-        let mut events = self.visit_section(node, &section, start, max_events);
+        self.visit_section(node, &section, start, max_events)
+            .map(|mut events| {
+                for event in &mut events {
+                    event
+                        .extra
+                        .insert("state".to_string(), serde_json::json!(case_ir.state));
+                }
 
-        for event in &mut events {
-            event
-                .extra
-                .insert("state".to_string(), serde_json::json!(case_ir.state));
-        }
-
-        events
+                events
+            })
     }
 }
-
 // =============================================================================
 // HELPER FUNCTIONS
 // =============================================================================
@@ -1323,7 +1376,8 @@ impl PulseSheetSchedule {
     /// * `id_store` - ID store for resolving UIDs
     ///
     /// # Returns
-    /// A Schedule containing event_list, section_info, and section_signals_with_children.
+    /// A Schedule containing event_list, truncation metadata, section_info, and
+    /// section_signals_with_children.
     /// Note: sampling_rates should be added separately by Python.
     ///
     /// # Performance Note
@@ -1339,13 +1393,12 @@ impl PulseSheetSchedule {
         id_store: &NamedIdStore,
     ) -> Self {
         let section_display_names = build_section_display_names(root, id_store);
-        let event_list = EventListGenerator::generate(
-            root,
-            expand_loops,
-            max_events,
-            id_store,
-            &section_display_names,
-        );
+        let mut event_generator =
+            EventListGenerator::new(expand_loops, id_store, &section_display_names);
+        let mut remaining = max_events;
+        let (event_list, event_list_truncated) = event_generator
+            .visit_node(root, TinySamples::default(), &mut remaining)
+            .into_parts();
 
         let section_info = Self::generate_section_info(root, &section_display_names);
         let section_signals =
@@ -1354,6 +1407,7 @@ impl PulseSheetSchedule {
 
         PulseSheetSchedule {
             event_list,
+            event_list_truncated,
             section_info,
             section_signals_with_children: section_signals,
             sampling_rates,
@@ -1588,8 +1642,11 @@ mod tests {
         };
         let node = IrNode::new(IrKind::Section(section), tiny_samples(1000));
 
-        let events = generator.visit_node(&node, tiny_samples(0), &mut 100);
+        let (events, truncated) = generator
+            .visit_node(&node, tiny_samples(0), &mut 100)
+            .into_parts();
 
+        assert!(!truncated);
         let ids: Vec<usize> = events.iter().filter_map(|e| e.id).collect();
         let unique_ids: std::collections::HashSet<_> = ids.iter().collect();
         assert_eq!(ids.len(), unique_ids.len());
@@ -1741,8 +1798,11 @@ mod tests {
         let mut generator = setup_generator(&store, false);
 
         let root = build_comprehensive_ir_tree(&store);
-        let events = generator.visit_node(&root, tiny_samples(0), &mut 10000);
+        let (events, truncated) = generator
+            .visit_node(&root, tiny_samples(0), &mut 10000)
+            .into_parts();
 
+        assert!(!truncated);
         assert!(!events.is_empty());
 
         let event_types: std::collections::HashSet<_> =

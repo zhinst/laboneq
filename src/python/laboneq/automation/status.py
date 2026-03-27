@@ -6,7 +6,6 @@ from enum import Enum
 
 class AutomationStatus(Enum):
     ROOT = "root"
-    EMPTY = "empty"
     FAILED = "failed"
     READY = "ready"
     PASSED = "passed"
@@ -20,7 +19,7 @@ class AutomationStatus(Enum):
 
     @classmethod
     def inactive(cls) -> list["AutomationStatus"]:
-        return [cls.EMPTY, cls.DEACTIVATED, cls.DEACTIVATED_FAIL]
+        return [cls.DEACTIVATED, cls.DEACTIVATED_FAIL]
 
     @classmethod
     def active(cls) -> list["AutomationStatus"]:

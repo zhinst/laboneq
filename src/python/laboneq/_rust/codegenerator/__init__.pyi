@@ -9,7 +9,6 @@ import numpy.typing as npt
 
 from laboneq._rust.compiler import ExperimentIr
 from laboneq.compiler.seqc.waveform_sampler import SampledWaveformSignature
-from laboneq.data.awg_info import AWGInfo
 from laboneq.data.compilation_job import Marker
 
 class PulseParameters:
@@ -54,7 +53,7 @@ class SampledWaveform:
     signature: SampledWaveformSignature
     signature_string: str
 
-class IntegrationWeight:
+class IntegrationKernel:
     basename: str
     samples_i: npt.ArrayLike
     samples_q: npt.ArrayLike
@@ -77,8 +76,10 @@ class FeedbackRegisterConfig:
 class ChannelProperties:
     signal: str
     channel: int
+    direction: Literal["IN", "OUT"]
     marker_mode: Literal["TRIGGER", "MARKER"] | None
     hw_oscillator_index: int | None
+    amplitude: float | str | None  # Can be a float or a parameter name
 
 class AwgProperties:
     key: tuple[str, int]  # (device UID, AWG index)
@@ -92,6 +93,11 @@ class SeqcProgram:
     awg_index: int
     sampling_rate: float
 
+class IntegrationWeight:
+    channels: list[int]
+    basename: str
+    downsampling_factor: int | None
+
 class AwgCodeGenerationResult:
     awg_properties: AwgProperties
     seqc: SeqcProgram
@@ -99,15 +105,17 @@ class AwgCodeGenerationResult:
     command_table: dict[str, object] | None
     shf_sweeper_config: dict[str, object] | None
     sampled_waveforms: list[SampledWaveform]
-    integration_weights: list[IntegrationWeight]
+    integration_kernels: list[IntegrationKernel]
     # Signal delays in seconds to be applied to the signal
-    signal_delays: dict[str, float] = {}
+    signal_delays: dict[str, float]
     # Signal integration lengths in seconds
     # This is a mapping from signal name to SignalIntegrationInfo
-    integration_lengths: dict[str, SignalIntegrationInfo] = {}
+    integration_lengths: dict[str, SignalIntegrationInfo]
     parameter_phase_increment_map: dict[str, list[int]] | None
     feedback_register_config: FeedbackRegisterConfig
-    channel_properties: list[ChannelProperties] = {}
+    channel_properties: list[ChannelProperties]
+    integration_weights: list[IntegrationWeight]
+    integration_unit_allocations: list[IntegrationUnitAllocation] = []
 
 class Measurement:
     """Measurement information for a device.
@@ -129,8 +137,9 @@ class ResultSource:
 
 class IntegrationUnitAllocation:
     signal: str
-    integrator_channels: list[int]
+    integration_units: list[int]
     kernel_count: int
+    thresholds: list[float]
 
 class SeqCGenOutput:
     """Output of the SeqC code generation process.
@@ -141,24 +150,20 @@ class SeqCGenOutput:
         result_handle_maps: For each result source contains a mask that identifies the
                            acquire handles corresponding to incoming stream of data.
         measurements: List of Measurement objects.
-        integration_unit_allocations: Integration unit allocations for signals.
     """
 
     awg_results: list[AwgCodeGenerationResult]
     total_execution_time: float = 0.0
     result_handle_maps: dict[ResultSource, list[list[str]]] = {}
     measurements: list[Measurement] = []
-    integration_unit_allocations: list[IntegrationUnitAllocation] = []
 
 def generate_code(
     ir_experiment: ExperimentIr,
-    awgs: list[AWGInfo],
     settings: dict[str, bool | int | float],
 ) -> SeqCGenOutput:
     """Generate SeqC code for given AWGs.
 
     Arguments:
         ir_experiment: The Rust lib experiment IR.
-        awgs: List of target awgs.
         settings: Compiler settings as dictionary.
     """

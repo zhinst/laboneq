@@ -8,7 +8,9 @@
 
 pub mod pulse {
     pub mod v1 {
+        capnp::generated_code!(pub mod calibration_capnp, "pulse/v1/calibration_capnp.rs");
         capnp::generated_code!(pub mod common_capnp, "pulse/v1/common_capnp.rs");
+        capnp::generated_code!(pub mod device_setup_capnp, "pulse/v1/device_setup_capnp.rs");
         capnp::generated_code!(pub mod experiment_capnp, "pulse/v1/experiment_capnp.rs");
         capnp::generated_code!(pub mod operation_capnp, "pulse/v1/operation_capnp.rs");
 

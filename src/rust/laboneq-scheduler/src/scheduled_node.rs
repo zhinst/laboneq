@@ -26,6 +26,19 @@ impl Node {
         }
     }
 
+    pub(crate) fn new_with_capacity(
+        kind: IrKind,
+        mut schedule: ScheduleInfo,
+        capacity: usize,
+    ) -> Self {
+        schedule.signals.extend(kind.signals().into_iter().cloned());
+        Self {
+            kind,
+            schedule,
+            children: Vec::with_capacity(capacity),
+        }
+    }
+
     pub(crate) fn add_child(&mut self, offset: TinySamples, child: Node) {
         self.schedule.signals.extend(&child.schedule.signals);
         self.children.push(NodeChild {
@@ -43,6 +56,43 @@ impl Node {
         self.schedule
             .try_length()
             .expect("Expected node to have length")
+    }
+
+    /// Takes the children of the node, leaving it with an empty children vector.
+    pub(crate) fn take_children(&mut self) -> Vec<NodeChild> {
+        std::mem::take(&mut self.children)
+    }
+}
+
+/// Rc version of Node implementing helper methods for easier handling of reference counted nodes.
+impl Node {
+    pub(crate) fn add_rc_child(&mut self, offset: TinySamples, child: Rc<Node>) {
+        self.schedule.signals.extend(&child.schedule.signals);
+        self.children.push(NodeChild {
+            offset,
+            node: child,
+        });
+    }
+
+    /// Returns a clone of the node with a new reference counted pointer.
+    ///
+    /// Wrapper around `Rc::clone`.
+    pub(crate) fn clone_ref(self: &Rc<Node>) -> Rc<Node> {
+        Rc::clone(self)
+    }
+
+    /// Unwraps the node if it is uniquely owned, otherwise clones it.
+    ///
+    /// Wrapper around `Rc::unwrap_or_clone`.
+    pub(crate) fn unwrap_or_clone(self: Rc<Node>) -> Node {
+        Rc::unwrap_or_clone(self)
+    }
+
+    /// Unwraps the node if it is uniquely owned, otherwise clones it.
+    ///
+    /// Wrapper around `Rc::try_unwrap`.
+    pub(crate) fn try_unwrap(self: Rc<Node>) -> Option<Node> {
+        Rc::try_unwrap(self).ok()
     }
 }
 

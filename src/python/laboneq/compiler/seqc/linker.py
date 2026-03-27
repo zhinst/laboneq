@@ -71,10 +71,10 @@ class CombinedRTOutputSeqC(CombinedOutput):
     measurements: list[codegen_rs.Measurement] = field(default_factory=list)
     total_execution_time: float = 0
     max_execution_time_per_step: float = 0
-    integration_unit_allocations: list[codegen_rs.IntegrationUnitAllocation] = field(
-        default_factory=list
-    )
-    channel_properties: dict[str, list[codegen_rs.ChannelProperties]] = field(
+    integration_unit_allocations: dict[
+        AwgKey, list[codegen_rs.IntegrationUnitAllocation]
+    ] = field(default_factory=dict)
+    channel_properties: dict[AwgKey, list[codegen_rs.ChannelProperties]] = field(
         default_factory=dict
     )
 
@@ -138,10 +138,10 @@ class SeqCGenOutput(RTCompilerOutput):
     shfppc_sweep_configurations: dict[AwgKey, dict[str, object]]
     total_execution_time: float = 0
     measurements: list[codegen_rs.Measurement] = field(default_factory=list)
-    integration_unit_allocations: list[codegen_rs.IntegrationUnitAllocation] = field(
-        default_factory=list
-    )
-    channel_properties: dict[str, list[codegen_rs.ChannelProperties]] = field(
+    integration_unit_allocations: dict[
+        AwgKey, list[codegen_rs.IntegrationUnitAllocation]
+    ] = field(default_factory=dict)
+    channel_properties: dict[AwgKey, list[codegen_rs.ChannelProperties]] = field(
         default_factory=dict
     )
     awg_properties: dict[AwgKey, codegen_rs.AwgProperties] = field(default_factory=dict)
@@ -168,7 +168,7 @@ def _check_compatibility(this: SeqCGenOutput, new: SeqCGenOutput):
         raise LabOneQException(
             "SHFPPC sweep configurations do not match between real-time iterations"
         )
-    if set(this.integration_unit_allocations) != set(new.integration_unit_allocations):
+    if this.integration_unit_allocations != new.integration_unit_allocations:
         raise LabOneQException(
             "Integration unit allocations do not match between real-time iterations"
         )
@@ -293,8 +293,7 @@ class SeqCLinker(ILinker):
                     for name, wave in previous.waves.items()
                     if any(
                         index_name.id in name
-                        for l in previous_integration_weights.values()
-                        for index_name in l
+                        for index_name in previous_integration_weights
                     )
                 }
 
@@ -304,9 +303,7 @@ class SeqCLinker(ILinker):
                     name: wave
                     for name, wave in new.waves.items()
                     if any(
-                        index_name.id in name
-                        for l in new_integration_weights.values()
-                        for index_name in l
+                        index_name.id in name for index_name in new_integration_weights
                     )
                 }
 

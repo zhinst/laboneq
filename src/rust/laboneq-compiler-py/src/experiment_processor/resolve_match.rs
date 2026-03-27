@@ -4,7 +4,6 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::error::{Error, Result};
-use crate::experiment_context::ExperimentContext;
 use crate::signal_view::SignalView;
 use laboneq_common::types::DeviceKind;
 use laboneq_dsl::ExperimentNode;
@@ -19,24 +18,22 @@ use laboneq_ir::system::AwgDevice;
 pub(super) fn resolve_match(
     node: &mut ExperimentNode,
     signals: &HashMap<SignalUid, SignalView>,
-    context: &ExperimentContext,
 ) -> Result<()> {
-    let mut seen_acquisitions = HashSet::new();
-    resolve_match_impl(node, signals, context, &mut seen_acquisitions)
+    let mut seen_acquisitions = HashMap::new();
+    resolve_match_impl(node, signals, &mut seen_acquisitions)
 }
 
 fn resolve_match_impl(
     node: &mut ExperimentNode,
     signals: &HashMap<SignalUid, SignalView>,
-    context: &ExperimentContext,
-    seen_acquisitions: &mut HashSet<HandleUid>,
+    seen_acquisitions: &mut HashMap<HandleUid, SignalUid>,
 ) -> Result<()> {
     let Operation::Match(obj) = &mut node.kind else {
         for child in node.children.iter_mut() {
             if let Operation::Acquire(acq) = &child.kind {
-                seen_acquisitions.insert(acq.handle);
+                seen_acquisitions.insert(acq.handle, acq.signal);
             }
-            resolve_match_impl(child.make_mut(), signals, context, seen_acquisitions)?;
+            resolve_match_impl(child.make_mut(), signals, seen_acquisitions)?;
         }
         return Ok(());
     };
@@ -48,7 +45,7 @@ fn resolve_match_impl(
     let MatchTarget::Handle(handle) = obj.target else {
         return Ok(());
     };
-    if !seen_acquisitions.contains(&handle) {
+    if !seen_acquisitions.contains_key(&handle) {
         return Err(Error::new(format!(
             "No acquisition found for handle '{}' used in match operation.",
             handle.0
@@ -61,7 +58,7 @@ fn resolve_match_impl(
     }
     let match_devices = collect_devices(contained_signals.iter().map(|s| signals.get(s).unwrap()));
     let feedback_device = &signals
-        .get(context.signal_by_handle(&handle).unwrap())
+        .get(seen_acquisitions.get(&handle).unwrap())
         .unwrap()
         .device();
     let local_feedback_allowed = local_feedback_possible(feedback_device, &match_devices);
@@ -121,13 +118,11 @@ fn collect_devices<'a>(signals: impl Iterator<Item = &'a SignalView<'a>>) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::experiment_context::ExperimentContext;
     use crate::signal_view::signal_views;
     use laboneq_common::named_id::NamedId;
     use laboneq_common::types::{AwgKey, PhysicalDeviceUid};
     use laboneq_dsl::node_structure;
     use laboneq_dsl::operation::{Acquire, Match, Reserve};
-    use laboneq_dsl::types::AcquisitionType;
     use laboneq_ir::device::builder::AwgDeviceBuilder;
     use laboneq_ir::signal::SignalKind;
     use laboneq_ir::signal::builder::SignalBuilder;
@@ -190,6 +185,7 @@ mod tests {
                 (hdawg_device.uid(), hdawg_device),
             ]),
             Vec::new(),
+            true,
         )
         .unwrap()
     }
@@ -200,15 +196,6 @@ mod tests {
             NamedId::debug_id(1).into(),
             NamedId::debug_id(2).into(),
         )
-    }
-
-    fn create_test_context(handle: HandleUid, signal: SignalUid) -> ExperimentContext {
-        let mut handle_to_signal = HashMap::new();
-        handle_to_signal.insert(handle, signal);
-        ExperimentContext {
-            handle_to_signal,
-            acquisition_type: AcquisitionType::Integration,
-        }
     }
 
     fn create_feedback_experiment(
@@ -256,12 +243,11 @@ mod tests {
         let (qa_acquire_uid, qa_measure_uid, hdawg_uid) = create_test_signals();
         let device_setup = create_device_setup(qa_acquire_uid, qa_measure_uid, hdawg_uid);
         let handle: HandleUid = NamedId::debug_id(1).into();
-        let context = create_test_context(handle, qa_acquire_uid);
 
         // Create experiment tree with match operation
         // Acquire on handle 1 (SHFQC), then match with operations on same device
         let mut node = create_feedback_experiment(qa_acquire_uid, qa_measure_uid, handle, None);
-        let result = resolve_match(&mut node, &signal_views(&device_setup), &context);
+        let result = resolve_match(&mut node, &signal_views(&device_setup));
         assert!(result.is_ok());
 
         // Check that local feedback was automatically enabled
@@ -279,7 +265,6 @@ mod tests {
         let (qa_acquire_uid, qa_measure_uid, hdawg_uid) = create_test_signals();
         let device_setup = create_device_setup(qa_acquire_uid, qa_measure_uid, hdawg_uid);
         let handle: HandleUid = NamedId::debug_id(1).into();
-        let context = create_test_context(handle, qa_acquire_uid);
 
         // Match with local feedback on different devices should error
         let mut root = create_feedback_experiment(
@@ -289,7 +274,7 @@ mod tests {
             Some(true), // local feedback explicitly enabled, should error
         );
 
-        let result = resolve_match(&mut root, &signal_views(&device_setup), &context);
+        let result = resolve_match(&mut root, &signal_views(&device_setup));
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -302,7 +287,6 @@ mod tests {
         let (qa_acquire_uid, qa_measure_uid, hdawg_uid) = create_test_signals();
         let device_setup = create_device_setup(qa_acquire_uid, qa_measure_uid, hdawg_uid);
         let handle: HandleUid = NamedId::debug_id(1).into();
-        let context = create_test_context(handle, qa_acquire_uid);
 
         let mut root = create_feedback_experiment(
             qa_acquire_uid,
@@ -311,7 +295,7 @@ mod tests {
             None, // local feedback unspecified, should be resolved to false
         );
 
-        resolve_match(&mut root, &signal_views(&device_setup), &context).unwrap();
+        resolve_match(&mut root, &signal_views(&device_setup)).unwrap();
 
         // Check that local feedback is disabled
         if let Operation::Match(match_op) = &root.children[1].kind {

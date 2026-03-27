@@ -10,8 +10,7 @@ use crate::signal_view::SignalView;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::{Acquire, Operation, PlayPulse};
-use laboneq_dsl::types::{Marker, PulseUid, SignalUid, ValueOrParameter};
-use laboneq_py_utils::pulse::{PulseDef, PulseKind};
+use laboneq_dsl::types::{Marker, PulseDef, PulseKind, PulseUid, SignalUid, ValueOrParameter};
 use laboneq_units::duration::{Duration, Second, seconds};
 
 /// Resolve missing pulses.

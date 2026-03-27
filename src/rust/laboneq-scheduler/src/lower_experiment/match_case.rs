@@ -1,6 +1,8 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
+
 use crate::error::{Error, Result};
 
 use crate::experiment_context::ExperimentContext;
@@ -10,9 +12,9 @@ use crate::schedule_info::ScheduleInfoBuilder;
 use laboneq_ir::{Case, IrKind, Match};
 
 use crate::{ScheduledNode, SignalInfo};
+use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::{Case as CaseDsl, Match as MatchDsl, Operation};
 use laboneq_dsl::types::{MatchTarget, NumericLiteral, SweepParameter};
-use laboneq_dsl::{ExperimentNode, NodeChild};
 use laboneq_units::tinysample::{seconds_to_tinysamples, tiny_samples};
 
 /// Grid size for local feedback
@@ -51,30 +53,39 @@ pub(super) fn lower_match(
         ));
     }
 
-    let mut root = ScheduledNode::new(IrKind::Match(match_), schedule_builder.build());
-    // Matching a sweep parameter requires special handling as each case
-    // maps to a specific iteration of a loop.
+    let mut root = ScheduledNode::new_with_capacity(
+        IrKind::Match(match_),
+        schedule_builder.build(),
+        node.children.len(),
+    );
+
     if let MatchTarget::SweepParameter(param_uid) = &section.target {
-        let matching_cases = find_matching_cases(
-            &node.children,
+        // Matching a sweep parameter requires special handling as each case
+        // maps to a specific iteration of a loop.
+
+        // 1. Sort the cases according to the order of the sweep parameter values
+        // 2. Handle each case and add it to the match node.
+        for case_iteration in sort_match_cases_to_parameter(
+            node,
             local_ctx
                 .parameter_resolver()
                 .try_resolve_parameter(param_uid)?,
-        )?;
-        for (target_case, iteration) in matching_cases {
-            let case = cast_case(&target_case.kind).unwrap();
+        )? {
+            let child = &node.children[case_iteration];
+            let case = cast_case(&child.kind).unwrap();
             let kind = IrKind::Case(Case {
                 uid: case.uid,
-                state: iteration,
+                state: case_iteration,
             });
-            let mut case_node = ScheduledNode::new(kind, ScheduleInfoBuilder::new().build());
+            let mut case_node = ScheduledNode::new_with_capacity(
+                kind,
+                ScheduleInfoBuilder::new().build(),
+                child.children.len(),
+            );
             let (children, reserved_signals) = local_ctx.with_section(case.uid, |local| {
-                lower_children(&target_case.children, ctx, local)
+                lower_children(&child.children, ctx, local)
             })?;
-            case_node
-                .schedule
-                .signals
-                .extend(reserved_signals.iter().cloned());
+            case_node.schedule.signals.extend(reserved_signals);
             for child in children {
                 case_node.add_child(tiny_samples(0), child);
             }
@@ -104,19 +115,17 @@ pub(super) fn lower_match(
                     ))
                 })?,
             });
-            let mut case_node = ScheduledNode::new(
+            let mut case_node = ScheduledNode::new_with_capacity(
                 kind,
                 ScheduleInfoBuilder::new()
                     .grid(local_ctx.system_grid)
                     .build(),
+                child.children.len(),
             );
             let (children, reserved_signals) = local_ctx.with_section(case.uid, |local| {
                 lower_children(&child.children, ctx, local)
             })?;
-            case_node
-                .schedule
-                .signals
-                .extend(reserved_signals.iter().cloned());
+            case_node.schedule.signals.extend(reserved_signals);
             for child in children {
                 case_node.add_child(tiny_samples(0), child);
             }
@@ -130,41 +139,6 @@ pub(super) fn lower_match(
     }
     adjust_node_grids(&mut root);
     Ok(root)
-}
-
-/// Find the cases that match the values of a sweep parameter.
-///
-/// Each value of the sweep parameter must be covered by a case.
-fn find_matching_cases<'a>(
-    cases: &'a [NodeChild],
-    parameter: &SweepParameter,
-) -> Result<Vec<(&'a ExperimentNode, usize)>> {
-    // Map the iteration number of a loop to a specific case.
-    if parameter.len() > cases.len() {
-        let msg = format!(
-            "Using a match statement for sweep parameter must cover all values.
-        Match statement for parameter '{}' has {} cases, but parameter has {} values.",
-            parameter.uid.0,
-            cases.len(),
-            parameter.len(),
-        );
-        return Err(Error::new(msg));
-    }
-    let mut matches: Vec<(&'a ExperimentNode, usize)> = Vec::with_capacity(parameter.len());
-    for idx in 0..parameter.len() {
-        for child_node in cases {
-            let target_value: NumericLiteral = parameter
-                .value_numeric_at_index(idx)
-                .unwrap_or_else(|| panic!("Expected value to exist"));
-            let case = cast_case(&child_node.kind)
-                .ok_or_else(|| Error::new("Match must have only case operations."))?;
-            if case.state == target_value {
-                matches.push((child_node, idx));
-                break;
-            }
-        }
-    }
-    Ok(matches)
 }
 
 fn cast_case(kind: &Operation) -> Option<&CaseDsl> {
@@ -181,4 +155,30 @@ fn try_cast_match(kind: &Operation) -> &MatchDsl {
     } else {
         panic!("Expected a match operation.");
     }
+}
+
+fn sort_match_cases_to_parameter(
+    node: &ExperimentNode,
+    sweep_parameter: &SweepParameter,
+) -> Result<Vec<usize>> {
+    let mut state_to_index: HashMap<NumericLiteral, usize> =
+        HashMap::with_capacity(node.children.len());
+    for (idx, child) in node.children.iter().enumerate() {
+        let case = cast_case(&child.kind)
+            .ok_or_else(|| Error::new("Expected a case operation as child of match."))?;
+        state_to_index.insert(case.state.to_float(), idx);
+    }
+
+    let mut out = Vec::with_capacity(state_to_index.len());
+    for sweep_value in sweep_parameter.values() {
+        let target_idx = state_to_index.get(&sweep_value.to_float()).ok_or_else(|| {
+            Error::new(format!(
+                "Using a match statement for sweep parameter must cover all values.
+        Match statement for parameter '{}' is missing a case for value '{}'.",
+                sweep_parameter.uid.0, sweep_value,
+            ))
+        })?;
+        out.push(*target_idx);
+    }
+    Ok(out)
 }

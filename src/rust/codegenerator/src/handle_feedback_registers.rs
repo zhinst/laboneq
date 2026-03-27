@@ -3,10 +3,10 @@
 
 use laboneq_error::bail;
 
+use crate::integration_units::IntegrationUnitAllocation;
 use crate::ir::compilation_job::{AwgCore, AwgKey, DeviceUid, Signal};
 use crate::ir::experiment::Handle;
 use crate::ir::{IrNode, NodeKind, Samples, SignalUid};
-use crate::result::IntegrationUnitAllocation;
 use crate::{FeedbackRegister, FeedbackRegisterLayout, Result, SingleFeedbackRegisterLayoutItem};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -295,7 +295,7 @@ fn calculate_feedback_register_layout_impl(
 ) -> FeedbackRegisterLayout {
     let mut integration_unit_alloc = integration_unit_alloc.iter().collect::<Vec<_>>();
     // Sort by channels to have a deterministic allocation order
-    integration_unit_alloc.sort_by_key(|k| &k.channels);
+    integration_unit_alloc.sort_by_key(|k| &k.units);
 
     let mut feedback_register_layout = FeedbackRegisterLayout::default();
     for alloc in integration_unit_alloc {
@@ -315,7 +315,7 @@ fn calculate_feedback_register_layout_impl(
             }
         };
 
-        let bit_width = if feedback_alloc.is_local || alloc.kernel_count > 1 {
+        let bit_width = if feedback_alloc.is_local || alloc.kernel_count.get() > 1 {
             2
         } else {
             1
@@ -330,7 +330,7 @@ fn calculate_feedback_register_layout_impl(
             .or_default()
             .push(item);
 
-        if (bit_width as usize) < alloc.channels.len() {
+        if (bit_width as usize) < alloc.units.len() {
             // On UHFQA, with `AcquisitionType.INTEGRATION`, we have
             // 2 integrators per signal. For discrimination, that 2nd integrator is irrelevant, so
             // we mark that bit as a 'dummy' field.
@@ -356,8 +356,8 @@ mod tests {
     ) -> IntegrationUnitAllocation {
         IntegrationUnitAllocation {
             signal,
-            channels,
-            kernel_count,
+            units: channels,
+            kernel_count: kernel_count.try_into().expect("Kernel count must be > 0"),
         }
     }
 

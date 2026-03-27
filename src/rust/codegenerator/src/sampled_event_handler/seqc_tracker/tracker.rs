@@ -59,7 +59,7 @@ impl SeqCTracker {
             deferred_phase_changes,
             loop_stack_generators,
             sampling_rate: awg.sampling_rate,
-            device_kind: awg.device_kind.clone(),
+            device_kind: awg.device_kind,
             signal_type: awg.signal_kind,
             emit_timing_comments,
             current_time: 0,

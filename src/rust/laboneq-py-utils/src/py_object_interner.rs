@@ -43,11 +43,6 @@ impl<K: Copy + Eq + std::hash::Hash + From<ObjectUid>> PyObjectInterner<K> {
     pub fn resolve(&self, key: &K) -> Option<&Py<PyAny>> {
         self.values.get(key)
     }
-
-    /// Iterate over all interned keys.
-    pub fn keys(&self) -> impl Iterator<Item = K> + '_ {
-        self.values.keys().copied()
-    }
 }
 
 fn intern_py_object(value: &Bound<'_, PyAny>) -> PyResult<ObjectUid> {

@@ -28,7 +28,7 @@ mod triggers;
 
 pub use generator::generate_code;
 // Public for Python layer, not intended for external use
-pub use ir_adapter::{AwgInfo, CodegenIr, ir_to_codegen_ir};
+pub use ir_adapter::{CodegenIr, ir_to_codegen_ir};
 
 // Re-export for easier access
 pub use crate::sampled_event_handler::FeedbackRegister;
@@ -38,8 +38,8 @@ pub use crate::sampled_event_handler::SingleFeedbackRegisterLayoutItem;
 
 pub mod waveform_sampler {
     pub use crate::sample_waveforms::{
-        CompressedWaveformPart, IntegrationKernel, SampleWaveforms, SampledWaveformCollection,
-        SampledWaveformSignature, WaveformSamplingCandidate,
+        CompressedWaveformPart, IntegrationKernel, SampleWaveforms, SampledIntegrationKernel,
+        SampledWaveformCollection, SampledWaveformSignature, WaveformSamplingCandidate,
     };
 }
 

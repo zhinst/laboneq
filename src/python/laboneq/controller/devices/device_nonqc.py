@@ -14,7 +14,8 @@ class DeviceNonQC(DeviceBase):
     def is_standalone(self):
         return False
 
-    async def reset_to_idle(self):
+    async def reset_errors(self):
+        # Non-QC devices may not have error node, so we don't attempt to handle or reset errors.
         pass
 
     async def fetch_errors(self) -> str | list[str]:

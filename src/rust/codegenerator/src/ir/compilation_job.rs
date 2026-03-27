@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::device_traits;
 use crate::ir::SignalUid;
+use crate::result::FixedValueOrParameter;
 use crate::utils::normalize_f64;
 
 pub type Samples = i64;
@@ -133,8 +134,13 @@ impl Signal {
             .is_some_and(|x| matches!(x.kind, OscillatorKind::SOFTWARE))
     }
 
-    pub fn delay(&self) -> Samples {
+    pub(crate) fn delay(&self) -> Samples {
         self.start_delay + self.signal_delay
+    }
+
+    /// Returns true if the signal is an output signal (i.e., not an integration signal).
+    pub(crate) fn is_output(&self) -> bool {
+        self.kind != SignalKind::INTEGRATION
     }
 }
 
@@ -190,6 +196,18 @@ impl Device {
     }
 }
 
+/// Enum used to tell the code generator how the triggering scheme should be
+/// configured for a single AWG.
+///
+/// ZSync: The AWG core is triggered via ZSync.
+/// DioTrigger: Used to synchronize HDAWG cores in a standalone HDAWG or
+///     HDAWG+UHFQA setups. The generated SeqC code will be such that:
+///     1. The first HDAWG core emits a DIO signal and blocks until it is
+///        received.
+///     2. The rest of the AWG cores block until DIO trigger is received.
+/// DioWait: Used exclusively to make UHFQA AWG block until DIO trigger is received.
+/// InternalTriggerWait: Used for SHFQC internal triggering scheme.
+/// InternalReadyCheck: Used for standalone HDAWGs.
 #[derive(Clone, Copy, Debug)]
 pub enum TriggerMode {
     ZSync,
@@ -314,7 +332,74 @@ impl AwgCore {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct AwgCoreBuilder {
+    uid: u16,
+    signals: Vec<Arc<Signal>>,
+    sampling_rate: f64,
+    device: Arc<Device>,
+    trigger_mode: Option<TriggerMode>,
+    options: DeviceOptions,
+    signal_to_channel_mapping: HashMap<SignalUid, Vec<ChannelIndex>>,
+    is_shfqc: bool,
+}
+
+impl AwgCoreBuilder {
+    pub(crate) fn new(uid: u16, device: Arc<Device>, sampling_rate: f64) -> Self {
+        AwgCoreBuilder {
+            uid,
+            signals: Vec::new(),
+            sampling_rate,
+            device,
+            trigger_mode: None,
+            options: DeviceOptions::default(),
+            signal_to_channel_mapping: HashMap::new(),
+            is_shfqc: false,
+        }
+    }
+
+    pub(crate) fn add_signal(&mut self, signal: Arc<Signal>) -> &mut Self {
+        // Store the original channel map for this AWG.
+        // This is needed due to the fact that signal channels are modified during the code generation,
+        // but we need the original channels for output.
+        // TODO: Reverse this and do not modify the signal channels and store QA generator channels in a separate map.
+        // The signal channels for QA are modified in `allocate_shfqa_generator_channels()`, which should be refactor
+        // to not modify the original signals.
+        self.signal_to_channel_mapping
+            .insert(signal.uid, signal.channels.clone());
+        self.signals.push(signal);
+        self
+    }
+
+    pub(crate) fn trigger_mode(&mut self, trigger_mode: TriggerMode) -> &mut Self {
+        self.trigger_mode = Some(trigger_mode);
+        self
+    }
+
+    pub(crate) fn options(&mut self, options: DeviceOptions) -> &mut Self {
+        self.options = options;
+        self
+    }
+
+    pub(crate) fn is_shfqc(&mut self) -> &mut Self {
+        self.is_shfqc = true;
+        self
+    }
+
+    pub(crate) fn build(self) -> AwgCore {
+        AwgCore::new(
+            self.uid,
+            self.signals,
+            self.sampling_rate,
+            self.device,
+            self.trigger_mode,
+            self.options,
+            self.signal_to_channel_mapping,
+            self.is_shfqc,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Copy)]
 pub enum DeviceKind {
     HDAWG,
     SHFQA,
@@ -345,6 +430,7 @@ impl DeviceKind {
         matches!(self, DeviceKind::SHFQA | DeviceKind::UHFQA)
     }
 }
+
 impl std::str::FromStr for DeviceKind {
     type Err = LabOneQError;
 
@@ -356,6 +442,23 @@ impl std::str::FromStr for DeviceKind {
             "UHFQA" => Ok(DeviceKind::UHFQA),
             _ => Err(laboneq_error!(
                 "Unsupported device type: {s}. Supported types are: SHFQA, SHFSG, HDAWG, UHFQA"
+            )),
+        }
+    }
+}
+
+impl TryFrom<laboneq_common::types::DeviceKind> for DeviceKind {
+    type Error = LabOneQError;
+
+    fn try_from(value: laboneq_common::types::DeviceKind) -> Result<Self, Self::Error> {
+        match value {
+            laboneq_common::types::DeviceKind::Hdawg => Ok(DeviceKind::HDAWG),
+            laboneq_common::types::DeviceKind::Shfqa => Ok(DeviceKind::SHFQA),
+            laboneq_common::types::DeviceKind::Shfsg => Ok(DeviceKind::SHFSG),
+            laboneq_common::types::DeviceKind::Uhfqa => Ok(DeviceKind::UHFQA),
+            _ => Err(laboneq_error!(
+                "Unsupported device type: {:?}. Supported types are: SHFQA, SHFSG, HDAWG, UHFQA",
+                value
             )),
         }
     }
@@ -419,4 +522,11 @@ pub enum MixerType {
     IQ,
     /// Mixer only performs envelope modulation (UHFQA-style)
     UhfqaEnvelope,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct InitialSignalProperties {
+    pub uid: SignalUid,
+    pub amplitude: Option<FixedValueOrParameter<f64>>,
+    pub thresholds: Vec<f64>,
 }

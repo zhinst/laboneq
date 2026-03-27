@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::Result;
 use crate::ir::SignalUid;
-use crate::ir::compilation_job::{AwgCore, AwgKind, DeviceKind, Signal, SignalKind};
+use crate::ir::compilation_job::{AwgCore, AwgKind, DeviceKind, Signal};
 
 #[derive(Debug)]
 struct Channel {
@@ -140,7 +140,7 @@ fn validate_signal_oscillators(signal: &VirtualSignal, awg: &AwgCore) -> Result<
 fn get_signal_channels(signals: &[Arc<Signal>]) -> HashSet<Vec<u8>> {
     signals
         .iter()
-        .filter(|signal| signal.kind != SignalKind::INTEGRATION)
+        .filter(|signal| signal.is_output())
         .map(|signal| signal.channels.clone())
         .collect()
 }
@@ -182,7 +182,7 @@ pub(crate) fn create_virtual_signals(awg: &AwgCore) -> Result<Option<VirtualSign
     let mut virtual_signals: HashMap<Option<u8>, Vec<Channel>> = HashMap::new();
     let mut channel_to_id: HashMap<u8, u16> = HashMap::new();
     for signal_obj in awg.signals.iter() {
-        if signal_obj.kind == SignalKind::INTEGRATION {
+        if !signal_obj.is_output() {
             continue;
         }
         // The channels are 0..15 for an SHFQA

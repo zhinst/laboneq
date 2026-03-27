@@ -8,7 +8,6 @@ pub mod error;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::num::NonZeroU32;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::error::{Error, Result, create_error_message};
@@ -18,29 +17,25 @@ use crate::experiment_processor::process_experiment;
 use crate::experiment_validation::validate_experiment;
 use crate::parameter_store::create_parameter_store;
 use crate::py_awg::AwgInfoPy;
-use crate::py_conversion::ExperimentBuilder;
-use crate::py_conversion::register_experiment_signals;
-use crate::py_device::DevicePy;
+use crate::py_device_setup_capnp::DeviceSetupCapnpBuilderPy;
 use crate::py_experiment::ExperimentPy;
 use crate::py_signal::AmplifierPumpPy;
-use crate::py_signal::SweepParameterPy;
-use crate::py_signal::{OscillatorPy, py_signal_to_signal};
 use crate::qccs_feedback_calculator::QccsFeedbackCalculator;
 use crate::setup_processor::process_setup;
 use crate::signal_properties::SignalProperties;
 
-use laboneq_common::device_options::DeviceOptions;
 use laboneq_common::named_id::{NamedIdStore, resolve_ids};
-use laboneq_common::types::AuxiliaryDeviceKind;
-use laboneq_common::types::DeviceKind;
 use laboneq_dsl::device_setup::AuxiliaryDevice;
+use laboneq_dsl::types::ExternalParameterUid;
 use laboneq_ir::ExperimentIr;
 use laboneq_ir::awg::AwgCore;
 use laboneq_ir::pulse_sheet_schedule::PulseSheetSchedule;
 use laboneq_ir::system::AwgDevice;
 use laboneq_ir::system::DeviceSetup;
 use laboneq_py_utils::experiment_ir::ExperimentIrPy;
+use laboneq_py_utils::py_object_interner::PyObjectInterner;
 use laboneq_scheduler::{ChunkingInfo, ExperimentContext as SchedulerContext, schedule_experiment};
+
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
@@ -48,24 +43,20 @@ use pyo3::wrap_pyfunction;
 mod test_py;
 
 pub(crate) mod capnp_deserializer;
-use capnp_deserializer::fix_derived_parameters;
 pub(crate) mod capnp_serializer;
-mod experiment_equivalence;
-mod py_conversion;
-mod py_helpers;
-use py_conversion::build_experiment;
-mod py_signal;
-use py_signal::SignalPy;
 pub(crate) mod experiment;
 mod experiment_context;
 mod experiment_processor;
 mod experiment_validation;
 mod parameter_store;
 mod py_awg;
-mod py_device;
+mod py_conversion;
+mod py_helpers;
+mod py_signal;
 mod qccs_feedback_calculator;
 mod signal_view;
 use signal_view::signal_views;
+mod py_device_setup_capnp;
 mod py_experiment;
 mod setup_processor;
 mod signal_properties;
@@ -77,101 +68,21 @@ pub(crate) struct SetupProperties {
     awgs: Vec<AwgCore>,
 }
 
-/// Convert the Python experiment definition into internal representation.
-///
-/// Arguments:
-/// - `experiment`: The Python experiment definition (DSL)
-/// - `signals`: List of intermediate Python signal representations.
-/// - `devices`: List of intermediate Python device representations.
-/// - `awgs`: List of intermediate Python AWG representations.
-pub(crate) fn experiment_py_to_experiment(
-    experiment: &Bound<'_, PyAny>,
-    signals: Vec<Bound<'_, SignalPy>>,
-    devices: Vec<Bound<'_, DevicePy>>,
-    awgs: Vec<Bound<'_, AwgInfoPy>>,
-) -> Result<(Experiment, SetupProperties)> {
-    let mut builder = ExperimentBuilder::new(experiment.py());
-    // Register experiment signals first to get consistent UID ordering.
-    register_experiment_signals(experiment, &mut builder)?;
-
-    // Build devices
-    // NOTE: SHFQC split is already done at this point by the Python lib,
-    // shall be moved here later when the split logic is implemented in Rust.
-    let mut awg_devices = Vec::new();
-    let mut auxiliary_devices = Vec::new();
-    for device in devices {
-        let device = device.borrow();
-        if let Ok(device_kind) = DeviceKind::from_str(&device.kind) {
-            let mut device_builder = AwgDevice::builder(
-                builder.id_store.get_or_insert(&device.uid).into(),
-                device.physical_device_uid.into(),
-                device_kind,
-            )
-            .shfqc(device.is_shfqc)
-            .options(DeviceOptions::new(device.options.clone()));
-            if let Some(ref_clk) = &device.reference_clock {
-                device_builder =
-                    device_builder.reference_clock(ref_clk.parse().map_err(Error::new)?)
-            }
-            let device = device_builder.build();
-            awg_devices.push(device);
-        } else if let Ok(device_kind) = AuxiliaryDeviceKind::from_str(&device.kind) {
-            // For auxiliary device, we ignore the rest of the fields. They are
-            // processed separately in the Controller.
-            let device = AuxiliaryDevice::new(
-                builder.id_store.get_or_insert(&device.uid).into(),
-                device_kind,
-            );
-            auxiliary_devices.push(device);
-        } else {
-            return Err(Error::new(format!("Unknown device: '{}'", device.kind)));
-        }
-    }
-
-    let signals = signals
-        .into_iter()
-        .map(|s| {
-            let signal = py_signal_to_signal(s.py(), &s.borrow(), &mut builder)?;
-            Ok(signal)
-        })
-        .collect::<Result<_>>()?;
-
-    let awg_mapping = awgs.into_iter().map(|awg| {
-        let awg = awg.borrow();
-        AwgCore::new(awg.uid, awg.number.clone().into())
-    });
-
-    build_experiment(experiment, &mut builder)?;
-    Ok((
-        Experiment {
-            root: builder.root,
-            id_store: builder.id_store.into(),
-            parameters: builder.parameters,
-            pulses: builder.pulses,
-            py_object_store: builder.py_object_store.into(),
-        },
-        SetupProperties {
-            signals,
-            awg_devices,
-            auxiliary_devices,
-            awgs: awg_mapping.collect(),
-        },
-    ))
-}
-
 /// Serialize a Python experiment object to Cap'n Proto bytes.
-#[pyfunction(name = "serialize_experiment", signature = (experiment, packed=false))]
-fn serialize_experiment_py(experiment: &Bound<'_, PyAny>, packed: bool) -> Result<Vec<u8>> {
-    capnp_serializer::serialize_experiment(experiment, packed)
+#[pyfunction(name = "serialize_experiment", signature = (experiment, device_setup, packed=false))]
+fn serialize_experiment_py(
+    experiment: &Bound<'_, PyAny>,
+    device_setup: Bound<'_, DeviceSetupCapnpBuilderPy>,
+    packed: bool,
+) -> Result<Vec<u8>> {
+    capnp_serializer::serialize_experiment(experiment, device_setup, packed)
 }
 
 /// Build an experiment from Cap'n Proto bytes plus device/signal configuration.
-#[pyfunction(name = "build_experiment_capnp", signature = (capnp_data, signals, devices, awgs, desktop_setup, packed=false))]
+#[pyfunction(name = "build_experiment_capnp", signature = (capnp_data, awgs, desktop_setup, packed=false))]
 fn build_experiment_capnp_py(
     py: Python<'_>,
     capnp_data: &[u8],
-    signals: Vec<Bound<'_, SignalPy>>,
-    devices: Vec<Bound<'_, DevicePy>>,
     awgs: Vec<Bound<'_, AwgInfoPy>>,
     desktop_setup: bool,
     packed: bool,
@@ -179,83 +90,28 @@ fn build_experiment_capnp_py(
     // 1. Deserialize the experiment tree from Cap'n Proto.
     let deserialized = capnp_deserializer::deserialize_experiment(py, capnp_data, packed)?;
 
-    // 2. Use the deserialized NamedIdStore as the shared store for all ID resolution.
-    //    Create an ExperimentBuilder with the deserialized store so that signal/device
-    //    processing registers IDs into the same namespace.
-    let mut builder = ExperimentBuilder::new(py);
-    builder.id_store = deserialized.id_store;
-    builder.available_signals = deserialized.available_signals;
-    builder.parameters = deserialized.parameters;
-    builder.pulses = deserialized.pulses;
-    builder.root = deserialized.root;
+    // Register the PyObjects
+    let mut py_object_store = PyObjectInterner::<ExternalParameterUid>::new();
     for (uid, value) in deserialized.external_parameter_values {
-        builder.py_object_store.insert(uid, value);
+        py_object_store.insert(uid, value);
     }
-
-    // Build devices
-    // NOTE: SHFQC split is already done at this point by the Python lib,
-    // shall be moved here later when the split logic is implemented in Rust.
-    let mut awg_devices = Vec::new();
-    let mut auxiliary_devices = Vec::new();
-    for device in devices {
-        let device = device.borrow();
-        if let Ok(device_kind) = DeviceKind::from_str(&device.kind) {
-            let mut device_builder = AwgDevice::builder(
-                builder.id_store.get_or_insert(&device.uid).into(),
-                device.physical_device_uid.into(),
-                device_kind,
-            )
-            .shfqc(device.is_shfqc)
-            .options(DeviceOptions::new(device.options.clone()));
-            if let Some(ref_clk) = &device.reference_clock {
-                device_builder =
-                    device_builder.reference_clock(ref_clk.parse().map_err(Error::new)?)
-            }
-            let device = device_builder.build();
-            awg_devices.push(device);
-        } else if let Ok(device_kind) = AuxiliaryDeviceKind::from_str(&device.kind) {
-            // For auxiliary device, we ignore the rest of the fields. They are
-            // processed separately in the Controller.
-            let device = AuxiliaryDevice::new(
-                builder.id_store.get_or_insert(&device.uid).into(),
-                device_kind,
-            );
-            auxiliary_devices.push(device);
-        } else {
-            return Err(Error::new(format!("Unknown device: '{}'", device.kind)));
-        }
-    }
-
-    let signals = signals
-        .into_iter()
-        .map(|s| {
-            let signal = py_signal_to_signal(s.py(), &s.borrow(), &mut builder)?;
-            Ok(signal)
-        })
-        .collect::<Result<_>>()?;
 
     let awg_mapping = awgs.into_iter().map(|awg| {
         let awg = awg.borrow();
         AwgCore::new(awg.uid, awg.number.clone().into())
     });
 
-    // Post-pass: add derived sweep parameters that were registered during signal processing.
-    // Signal processing (py_signal_to_signal) populates builder.driving_parameters; this pass
-    // uses that map to augment sweep parameter lists — mirroring collect_derived_parameters in
-    // py_conversion.rs.
-    fix_derived_parameters(&mut builder.root, &builder.driving_parameters);
-
     let mut experiment = Experiment {
-        root: builder.root,
-        id_store: builder.id_store.into(),
-        parameters: builder.parameters,
-        pulses: builder.pulses,
-        py_object_store: builder.py_object_store.into(),
+        root: deserialized.root,
+        id_store: deserialized.id_store.into(),
+        parameters: deserialized.parameters,
+        pulses: deserialized.pulses,
+        py_object_store: py_object_store.into(),
     };
     let setup_properties = SetupProperties {
-        signals,
-        awg_devices,
-        auxiliary_devices,
+        signals: deserialized.signals,
+        awg_devices: deserialized.awg_devices,
+        auxiliary_devices: deserialized.auxiliary_devices,
         awgs: awg_mapping.collect(),
     };
 
@@ -264,11 +120,16 @@ fn build_experiment_capnp_py(
         Error::new(resolve_ids(&msg, &experiment.id_store))
     })?;
 
-    let processed_setup = process_setup(setup_properties, desktop_setup, &experiment.id_store)
-        .map_err(|e| {
-            let msg = create_error_message(e);
-            Error::new(resolve_ids(&msg, &experiment.id_store))
-        })?;
+    let processed_setup = process_setup(
+        setup_properties,
+        desktop_setup,
+        &experiment.id_store,
+        &context,
+    )
+    .map_err(|e| {
+        let msg = create_error_message(e);
+        Error::new(resolve_ids(&msg, &experiment.id_store))
+    })?;
     let device_setup = DeviceSetup::new(
         processed_setup
             .signals
@@ -281,67 +142,11 @@ fn build_experiment_capnp_py(
             .map(|d| (d.uid(), d))
             .collect(),
         processed_setup.awgs,
+        desktop_setup,
     )
     .map_err(Error::new)?;
 
-    process_experiment(&mut experiment, &device_setup, &context).map_err(|e| {
-        let msg = create_error_message(e);
-        Error::new(resolve_ids(&msg, &experiment.id_store))
-    })?;
-    validate_experiment(&experiment, &device_setup).map_err(|e| {
-        let msg = create_error_message(e);
-        Error::new(resolve_ids(&msg, &experiment.id_store))
-    })?;
-    Ok(ExperimentPy {
-        inner: experiment,
-        device_setup: Arc::new(device_setup),
-        context,
-        delay_compensation: processed_setup.on_device_delays,
-    })
-}
-
-#[pyfunction(name = "build_experiment")]
-fn build_experiment_py(
-    experiment: &Bound<'_, PyAny>,
-    signals: Vec<Bound<'_, SignalPy>>,
-    devices: Vec<Bound<'_, DevicePy>>,
-    awgs: Vec<Bound<'_, AwgInfoPy>>,
-    desktop_setup: bool,
-) -> Result<ExperimentPy> {
-    let (mut experiment, setup_properties) =
-        experiment_py_to_experiment(experiment, signals, devices, awgs).map_err(|e| {
-            // NOTE: The error message here does not resolve IDs, as the experiment's ID store is not yet built.
-            // and `experiment_py_to_experiment` has access to the actual UIDs before interning.
-            let msg = create_error_message(e);
-            Error::new(msg)
-        })?;
-
-    let context = experiment_context_from_experiment(&experiment).map_err(|e| {
-        let msg = create_error_message(e);
-        Error::new(resolve_ids(&msg, &experiment.id_store))
-    })?;
-
-    let processed_setup = process_setup(setup_properties, desktop_setup, &experiment.id_store)
-        .map_err(|e| {
-            let msg = create_error_message(e);
-            Error::new(resolve_ids(&msg, &experiment.id_store))
-        })?;
-    let device_setup = DeviceSetup::new(
-        processed_setup
-            .signals
-            .into_iter()
-            .map(|s| (s.uid, s))
-            .collect(),
-        processed_setup
-            .devices
-            .into_iter()
-            .map(|d| (d.uid(), d))
-            .collect(),
-        processed_setup.awgs,
-    )
-    .map_err(Error::new)?;
-
-    process_experiment(&mut experiment, &device_setup, &context).map_err(|e| {
+    process_experiment(&mut experiment, &device_setup).map_err(|e| {
         let msg = create_error_message(e);
         Error::new(resolve_ids(&msg, &experiment.id_store))
     })?;
@@ -394,7 +199,7 @@ fn schedule_experiment_py(
             id_store: &experiment.id_store,
             parameters: experiment.parameters.clone(),
             signals: &views,
-            handle_to_signal: &context.handle_to_signal,
+            handle_to_signal: context.handle_to_signal(),
         },
         &parameter_store,
         chunking_info,
@@ -407,14 +212,14 @@ fn schedule_experiment_py(
     let ir = ExperimentIr {
         root: result.root,
         parameters: result.parameters.values().cloned().collect(),
-        acquisition_type: context.acquisition_type,
+        pulses: experiment.pulses.values().cloned().collect(),
+        acquisition_type: *context.acquisition_type(),
         id_store: Arc::clone(&experiment.id_store),
         device_setup: Arc::clone(device_setup),
     };
     let ir_py = ExperimentIrPy {
         inner: ir,
         py_object_store: Arc::clone(&experiment.py_object_store),
-        pulses: experiment.pulses.values().cloned().collect(),
     };
     let out = ScheduleResult {
         used_parameters: parameter_store
@@ -440,6 +245,7 @@ fn schedule_experiment_py(
 /// # Returns
 /// A Python dict containing:
 /// - event_list: List of scheduler events
+/// - event_list_truncated: Whether event generation hit the max_events limit
 /// - section_info: Section metadata with preorder map
 /// - section_signals_with_children: Signal hierarchy per section
 #[pyfunction(name = "generate_pulse_sheet_schedule")]
@@ -533,18 +339,6 @@ fn json_to_py<'py>(py: Python<'py>, value: &serde_json::Value) -> Result<Bound<'
     }
 }
 
-/// Assert that two built experiments are semantically equivalent.
-/// Resolves all NamedId fields to strings before comparing.
-/// Panics with a descriptive message on mismatch.
-#[pyfunction(name = "assert_experiment_equivalent")]
-fn assert_experiment_equivalent_py(
-    lhs: &Bound<'_, ExperimentPy>,
-    rhs: &Bound<'_, ExperimentPy>,
-) -> PyResult<()> {
-    experiment_equivalence::assert_experiment_equivalent(&lhs.borrow().inner, &rhs.borrow().inner);
-    Ok(())
-}
-
 #[pyfunction(name = "init_logging")]
 fn init_logging_py(log_level: i64) -> PyResult<()> {
     laboneq_py_utils::logging::init_logging_py(log_level)
@@ -553,30 +347,25 @@ fn init_logging_py(log_level: i64) -> PyResult<()> {
 pub fn create_py_module<'py>(py: Python<'py>, name: &str) -> Result<Bound<'py, PyModule>> {
     use crate::py_signal::{
         BounceCompensationPy, ExponentialCompensationPy, FirCompensationPy, HighPassCompensationPy,
-        OutputRoutePy, PrecompensationPy,
+        PrecompensationPy,
     };
     use py_awg::AwgInfoPy;
+    use py_device_setup_capnp::DeviceSetupCapnpBuilderPy;
 
     let m = PyModule::new(py, name)?;
     m.add_function(wrap_pyfunction!(schedule_experiment_py, &m)?)?;
-    m.add_function(wrap_pyfunction!(build_experiment_py, &m)?)?;
     m.add_function(wrap_pyfunction!(serialize_experiment_py, &m)?)?;
     m.add_function(wrap_pyfunction!(build_experiment_capnp_py, &m)?)?;
     m.add_function(wrap_pyfunction!(generate_pulse_sheet_schedule, &m)?)?;
-    m.add_function(wrap_pyfunction!(assert_experiment_equivalent_py, &m)?)?;
     m.add_function(wrap_pyfunction!(init_logging_py, &m)?)?;
     // Intermediate migration objects, shall be removed later
-    m.add_class::<SignalPy>()?;
-    m.add_class::<DevicePy>()?;
     m.add_class::<AwgInfoPy>()?;
-    m.add_class::<OscillatorPy>()?;
-    m.add_class::<SweepParameterPy>()?;
     m.add_class::<AmplifierPumpPy>()?;
     m.add_class::<PrecompensationPy>()?;
     m.add_class::<HighPassCompensationPy>()?;
     m.add_class::<FirCompensationPy>()?;
     m.add_class::<ExponentialCompensationPy>()?;
     m.add_class::<BounceCompensationPy>()?;
-    m.add_class::<OutputRoutePy>()?;
+    m.add_class::<DeviceSetupCapnpBuilderPy>()?;
     Ok(m)
 }

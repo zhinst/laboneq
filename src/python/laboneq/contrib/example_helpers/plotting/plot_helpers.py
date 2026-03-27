@@ -40,32 +40,40 @@ def zi_mpl_theme():
 def _integration_weights_by_signal(
     compiled_experiment: CompiledExperiment,
 ) -> dict[str, list]:
-    assert compiled_experiment.scheduled_experiment is not None
-    assert hasattr(
-        compiled_experiment.scheduled_experiment.artifacts, "integration_weights"
-    )
-    rt_step_by_awg = {}
-    for (
-        rt_init
-    ) in compiled_experiment.scheduled_experiment.recipe.realtime_execution_init:
+    from laboneq.data.scheduled_experiment import WeightInfo
+
+    scheduled_exp = compiled_experiment.scheduled_experiment
+
+    awg_to_channel_signals = {}
+    for integrator in scheduled_exp.recipe.integrator_allocations:
+        key = (integrator.device_id, integrator.awg)
+        integration_unit_to_signals: dict[int, set[str]] = {}
+        for int_ch in integrator.channels:
+            integration_unit_to_signals.setdefault(int_ch, set()).add(
+                integrator.signal_id
+            )
+        awg_to_channel_signals.setdefault(key, dict()).update(
+            integration_unit_to_signals
+        )
+
+    rt_step_by_awg = set()
+    weight_info_by_signal: dict[str, list[WeightInfo]] = {}
+    for rt_init in scheduled_exp.recipe.realtime_execution_init:
         key = (rt_init.device_id, rt_init.awg_index)
+        integration_unit_to_signals = awg_to_channel_signals.get(key, {})
         if key not in rt_step_by_awg:
-            rt_step_by_awg[key] = rt_init.kernel_indices_ref
-    kernel_indices_ref = set(rt_step_by_awg.values())
-    kernel_name_by_signal = {}
-    for ref in kernel_indices_ref:
-        iw = compiled_experiment.scheduled_experiment.artifacts.integration_weights[ref]
-        for k, v in iw.items():
-            # ensure no failure if no integration kernel is defined
-            if v:
-                if not isinstance(v, list):
-                    v = [v]
-                kernel_name_by_signal.update({k: v})
+            rt_step_by_awg.add(key)
+            for iw in scheduled_exp.artifacts.integration_weights[
+                rt_init.kernel_indices_ref
+            ]:
+                for unit in iw.integration_units:
+                    for signal in integration_unit_to_signals.get(unit, set()):
+                        weight_info_by_signal.setdefault(signal, list()).append(iw)
 
     kernel_samples_by_signal: dict[str, list] = {
-        signal: [] for signal in kernel_name_by_signal
+        signal: [] for signal in weight_info_by_signal
     }
-    for signal, kernels in kernel_name_by_signal.items():
+    for signal, kernels in weight_info_by_signal.items():
         for kernel in kernels:
             waveform: None | np.ndarray = None
             for scale, suffix in [(1, ".wave"), (1, "_i.wave"), (1j, "_q.wave")]:

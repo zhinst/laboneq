@@ -78,6 +78,7 @@ DELAY_NODE_SPECTROSCOPY_MAX_SAMPLES = round(131.066e-6 * SAMPLE_FREQUENCY_HZ)
 INTEGRATION_DELAY_OFFSET = 212e-9  # LabOne Q calibrated value
 SPECTROSCOPY_DELAY_OFFSET = 220e-9  # LabOne Q calibrated value
 SCOPE_DELAY_OFFSET = INTEGRATION_DELAY_OFFSET  # Equality tested at FW level
+LRT_INTEGRATION_DELAY_OFFSET = 224e-9  # LabOne Q calibrated value
 
 MAX_INTEGRATION_WEIGHT_LENGTH = 4096
 
@@ -355,11 +356,12 @@ class QAChannel(SHFChannelBase):
             output_delay_path = "generator/delay"
             meas_delay_path = "readout/integration/delay"
             measurement_delay += output_delay
-            measurement_delay += (
-                INTEGRATION_DELAY_OFFSET
-                if acquisition_type != AcquisitionType.RAW
-                else SCOPE_DELAY_OFFSET
-            )
+            if acquisition_type == AcquisitionType.RAW:
+                measurement_delay += SCOPE_DELAY_OFFSET
+            elif ch_uses_lrt(self._device_uid, self._core_index, recipe_data):
+                measurement_delay += LRT_INTEGRATION_DELAY_OFFSET
+            else:
+                measurement_delay += INTEGRATION_DELAY_OFFSET
             set_input = set_input or set_output
             max_generator_delay = DELAY_NODE_GENERATOR_MAX_SAMPLES
             max_integrator_delay = DELAY_NODE_READOUT_INTEGRATION_MAX_SAMPLES
@@ -534,7 +536,6 @@ class QAChannel(SHFChannelBase):
                 self.prepare_upload_all_integration_weights(
                     recipe_data,
                     artifacts,
-                    recipe_data.recipe.integrator_allocations,
                     rt_exec_step.kernel_indices_ref,
                 )
             )
@@ -855,7 +856,6 @@ class QAChannel(SHFChannelBase):
         self,
         recipe_data: RecipeData,
         artifacts: ArtifactsCodegen,
-        integrator_allocations: list[IntegratorAllocation],
         kernel_ref: str | None,
     ) -> NodeCollector:
         nc = NodeCollector(base=f"{self._node_base}/readout/")
@@ -867,15 +867,10 @@ class QAChannel(SHFChannelBase):
         weights_info = get_weights_info(artifacts, kernel_ref)
         used_downsampling_factor = None
         integration_length = None
-        for signal_id, weight_names in weights_info.items():
-            integrator_allocation = next(
-                ia for ia in integrator_allocations if ia.signal_id == signal_id
-            )
-            [channel] = integrator_allocation.channels
+        for channel, weights in weights_info.items():
+            assert not (uses_lrt and len(weights) > 1)
 
-            assert not (uses_lrt and len(weight_names) > 1)
-
-            for index, weight in enumerate(weight_names):
+            for index, weight in enumerate(weights):
                 wave_name = weight.id + ".wave"
                 # Note conjugation here:
                 wave = get_wave(wave_name, artifacts.waves)
@@ -886,7 +881,7 @@ class QAChannel(SHFChannelBase):
                     max_pulse_len = max_len / SAMPLE_FREQUENCY_HZ
                     raise LabOneQControllerException(
                         f"{self._unit_repr}: Length {wave_len} of the integration weight"
-                        f" '{channel}' of channel {integrator_allocation.awg} exceeds"
+                        f" '{channel}' of channel {self._core_index} exceeds"
                         f" maximum of {max_len} samples ({max_pulse_len * 1e6:.3f} us)."
                     )
                 if uses_lrt:

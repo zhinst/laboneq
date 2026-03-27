@@ -9,7 +9,7 @@ import functools
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import count
-from typing import Any, Callable, Iterable, TypeVar
+from typing import Any, Callable, TypeVar
 
 T = TypeVar("T", bound=Callable[..., Any])
 
@@ -39,21 +39,6 @@ def cached_method(maxsize: int | None = 128, typed=False) -> Callable[[T], T]:
         return wrapper  # type: ignore
 
     return outer_wrapper
-
-
-def ensure_list(obj):
-    if not isinstance(obj, list):
-        return [obj]
-    return obj
-
-
-def flatten(l: Iterable):
-    """Flatten an arbitrarily nested list."""
-    for el in l:
-        if isinstance(el, Iterable) and not isinstance(el, (str, bytes)):
-            yield from flatten(el)
-        else:
-            yield el
 
 
 _iid_map: defaultdict[str, count] = defaultdict(count)

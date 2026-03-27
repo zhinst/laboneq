@@ -1,18 +1,20 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use laboneq_common::device_options::DeviceOptions;
+use laboneq_common::types::AwgKey as AwgKeyCommon;
+use laboneq_error::bail;
 use num_complex::Complex;
 
 use codegenerator_utils::pulse_parameters::PulseParameterDeduplicator;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_dsl::types::{
     AcquisitionType as AcquisitionTypeCommon, ComplexOrFloat, DeviceUid, MarkerSelector,
-    OscillatorKind as OscillatorKindCommon, ParameterUid, PulseUid, SectionUid, SignalUid,
-    SweepParameter as SweepParameterCommon, ValueOrParameter,
+    Oscillator as OscillatorCommon, OscillatorKind as OscillatorKindCommon, OscillatorUid,
+    ParameterUid, PulseDef as PulseDefCommon, PulseKind as PulseKindCommon, PulseUid, SectionUid,
+    SignalUid, SweepParameter as SweepParameterCommon, ValueOrParameter,
 };
 use laboneq_ir::node::IrNode as HirNode;
 use laboneq_ir::signal::{Signal as SignalCommon, SignalKind as SignalKindCommon};
@@ -23,8 +25,9 @@ use laboneq_units::tinysample::{TinySamples, tiny_samples};
 use crate::Result;
 use crate::awg_processor::process_awgs;
 use crate::ir::compilation_job::{
-    AwgCore, ChannelIndex, Device, Marker, Oscillator, OscillatorKind, PulseDef, Signal,
-    SignalKind, SweepParameter, TriggerMode,
+    AwgCore, AwgCoreBuilder, Device, DeviceKind, InitialSignalProperties, Marker, Oscillator,
+    OscillatorKind, PulseDef, PulseDefKind, PulseType, Signal, SignalKind, SweepParameter,
+    TriggerMode,
 };
 use crate::ir::experiment::{AcquisitionType, PulseParametersId, SweepCommand};
 use crate::ir::{
@@ -32,98 +35,75 @@ use crate::ir::{
     PhaseReset, PlayPulse, PpcDevice, PpcSweepStep, PrngSetup, Section, SectionId, SectionInfo,
     SetOscillatorFrequency, SignalFrequency,
 };
+use crate::result::FixedValueOrParameter;
 use crate::utils::length_to_samples;
 
 pub struct CodegenIr {
-    pub root: IrNode,
-    pub sweep_parameters: Vec<Arc<SweepParameter>>,
+    pub(crate) root: IrNode,
     pub pulse_parameters: PulseParameterDeduplicator,
     pub acquisition_type: AcquisitionType,
-    pub awg_cores: Vec<AwgCore>,
-}
-
-pub struct AwgInfo {
-    pub uid: u16,
-    pub device: Arc<Device>,
-    pub trigger_mode: TriggerMode,
-    pub signals: HashSet<SignalUid>,
+    pub(crate) awg_cores: Vec<AwgCore>,
+    pub(crate) initial_signal_properties: Vec<InitialSignalProperties>,
 }
 
 /// Lower a IR into a codegenerator IR.
-pub fn ir_to_codegen_ir(
-    experiment: &ExperimentIr,
-    awg_cores: Vec<AwgInfo>,
-    pulse_defs: Vec<&Arc<PulseDef>>,
-) -> Result<CodegenIr> {
-    let ir_signals = experiment.device_setup.signals();
+pub fn ir_to_codegen_ir(experiment: &ExperimentIr) -> Result<CodegenIr> {
+    let ir_signals = experiment.device_setup.signals().collect::<Vec<_>>();
     let id_store = &experiment.id_store;
 
-    // Device UID - DeviceOptions, sampling_rate, device is SHFQC
-    let settings_per_device: HashMap<String, (DeviceOptions, f64, bool)> = experiment
-        .device_setup
-        .signals()
-        .map(|signal| {
+    validate_unique_oscillators(&ir_signals)?;
+
+    let trigger_modes = eval_trigger_modes(
+        experiment
+            .device_setup
+            .awg_devices()
+            .filter_map(|device| device.kind().try_into().ok()),
+        experiment.device_setup.is_desktop_setup(),
+    );
+
+    let mut awg_core_builders: HashMap<AwgKeyCommon, AwgCoreBuilder> = HashMap::new();
+    for signal in ir_signals {
+        let awg = experiment.device_setup.awg_core(&signal.awg_key).unwrap();
+        let awg_signal = signal_to_codegen_signal(signal, id_store);
+
+        if let Some(awg_core) = awg_core_builders.get_mut(&awg.uid()) {
+            awg_core.add_signal(awg_signal.into());
+        } else {
             let device = experiment
                 .device_setup
                 .device_by_uid(&signal.device_uid)
                 .unwrap();
-            (
-                id_store.resolve(signal.device_uid).unwrap().to_string(),
-                (
-                    device
-                        .options()
-                        .expect("Expected device options to be set")
-                        .clone(),
-                    signal.sampling_rate,
-                    device.is_shfqc(),
-                ),
-            )
-        })
-        .collect();
-
-    let mut signals_by_awg: HashMap<SignalUid, Signal> = ir_signals
-        .map(|signal| (signal.uid, signal_to_codegen_signal(signal, id_store)))
-        .collect();
-
-    let mut awgs = vec![];
-    for awg_info in awg_cores {
-        let signals: Vec<Arc<Signal>> = awg_info
-            .signals
-            .iter()
-            .map(|uid| signals_by_awg.remove(uid).unwrap().into())
-            .collect();
-        let (options, sampling_rate, is_shfqc) = settings_per_device
-            .get(&awg_info.device.uid().to_string())
-            .unwrap();
-
-        // Store the original channel map for this AWG.
-        // This is needed due to the fact that signal channels are modified during the code generation,
-        // but we need the original channels for output.
-        // TODO: Reverse this and do not modify the signal channels and store QA generator channels in a separate map.
-        // The signal channels for QA are modified in `allocate_shfqa_generator_channels()`, which should be refactor
-        // to not modify the original signals.
-        let channel_map = signals
-            .iter()
-            .map(|s| {
-                (
-                    s.uid,
-                    s.channels.iter().map(|c| *c as ChannelIndex).collect(),
-                )
-            })
-            .collect();
-
-        let awg = AwgCore::new(
-            awg_info.uid,
-            signals,
-            *sampling_rate,
-            awg_info.device,
-            Some(awg_info.trigger_mode),
-            options.clone(),
-            channel_map,
-            *is_shfqc,
-        );
-        awgs.push(awg);
+            let awg_device_kind = device.kind().try_into()?;
+            let awg_device = Device::new(
+                id_store
+                    .resolve(signal.device_uid)
+                    .unwrap()
+                    .to_string()
+                    .into(),
+                awg_device_kind,
+            );
+            let awg_index = *awg.number().first().unwrap();
+            let mut awg_core =
+                AwgCoreBuilder::new(awg_index, awg_device.into(), signal.sampling_rate);
+            awg_core.options(
+                device
+                    .options()
+                    .expect("Expected device options to be set")
+                    .clone(),
+            );
+            awg_core.trigger_mode(*trigger_modes.get(&awg_device_kind).unwrap());
+            if device.is_shfqc() {
+                awg_core.is_shfqc();
+            }
+            awg_core.add_signal(awg_signal.into());
+            awg_core_builders.insert(awg.uid(), awg_core);
+        }
     }
+    let mut awgs = awg_core_builders
+        .into_values()
+        .map(|builder| builder.build())
+        .collect::<Vec<_>>();
+
     // We must process the AWGs before building the tree, since
     // the signals are shared in the nodes.
     // TODO: Refactor to avoid this somewhat awkward ordering.
@@ -135,21 +115,97 @@ pub fn ir_to_codegen_ir(
         .map(|param| Arc::new(transform_parameter_to_code_parameter(param, id_store)))
         .collect::<Vec<Arc<SweepParameter>>>();
 
+    let pulse_defs = experiment
+        .pulses
+        .iter()
+        .map(|pulse| convert_pulse_def(pulse, id_store).into())
+        .collect::<Vec<Arc<PulseDef>>>();
+
     let mut lowerer = IrToCodeIrLowerer::new(
         id_store,
         awgs.iter().flat_map(|awg| &awg.signals).collect(),
-        pulse_defs,
+        &pulse_defs,
         &sweep_parameters,
     );
+
     let codegen_ir = transform_ir(&mut lowerer, &experiment.root, tiny_samples(0))?;
     let result = CodegenIr {
         root: codegen_ir,
-        sweep_parameters,
         pulse_parameters: lowerer.pulse_parameter_deduplicator,
         acquisition_type: convert_acquisition_type(&experiment.acquisition_type),
         awg_cores: awgs,
+        initial_signal_properties: experiment
+            .device_setup
+            .signals()
+            .map(create_initial_signal_properties)
+            .collect(),
     };
     Ok(result)
+}
+
+fn validate_unique_oscillators(signals: &[&SignalCommon]) -> Result<()> {
+    let mut oscillator_map: HashMap<OscillatorUid, &OscillatorCommon> =
+        HashMap::with_capacity(signals.len());
+    for signal in signals {
+        if let Some(osc) = signal.oscillator.as_ref()
+            && let Some(osc_other) = oscillator_map.get(&osc.uid)
+            && *osc_other != osc
+        {
+            bail!(
+                "Found multiple, inconsistent oscillators with same UID '{}'",
+                osc.uid.0
+            );
+        } else if let Some(osc) = signal.oscillator.as_ref() {
+            oscillator_map.insert(osc.uid, osc);
+        }
+    }
+    Ok(())
+}
+
+fn create_initial_signal_properties(signal: &SignalCommon) -> InitialSignalProperties {
+    InitialSignalProperties {
+        uid: signal.uid,
+        amplitude: signal.amplitude.map(value_or_parameter_to_fixed),
+        thresholds: signal.thresholds.clone(),
+    }
+}
+
+fn value_or_parameter_to_fixed<T>(value: ValueOrParameter<T>) -> FixedValueOrParameter<T> {
+    match value {
+        ValueOrParameter::Value(v) => FixedValueOrParameter::Value(v),
+        ValueOrParameter::Parameter(p) => FixedValueOrParameter::Parameter(p),
+        ValueOrParameter::ResolvedParameter { value, .. } => FixedValueOrParameter::Value(value),
+    }
+}
+
+fn eval_trigger_modes(
+    devices: impl Iterator<Item = DeviceKind>,
+    is_desktop_bool: bool,
+) -> HashMap<DeviceKind, TriggerMode> {
+    let unique_devices = devices.collect::<std::collections::HashSet<_>>();
+    if !is_desktop_bool {
+        return unique_devices
+            .into_iter()
+            .map(|device| (device, TriggerMode::ZSync))
+            .collect();
+    }
+    unique_devices
+        .iter()
+        .map(|device| {
+            let trigger_mode = match device {
+                DeviceKind::HDAWG => {
+                    if unique_devices.contains(&DeviceKind::UHFQA) {
+                        TriggerMode::DioTrigger
+                    } else {
+                        TriggerMode::InternalReadyCheck
+                    }
+                }
+                DeviceKind::SHFSG | DeviceKind::SHFQA => TriggerMode::InternalTriggerWait,
+                DeviceKind::UHFQA => TriggerMode::DioWait,
+            };
+            (*device, trigger_mode)
+        })
+        .collect()
 }
 
 fn signal_to_codegen_signal(signal: &SignalCommon, id_store: &NamedIdStore) -> Signal {
@@ -166,6 +222,7 @@ fn signal_to_codegen_signal(signal: &SignalCommon, id_store: &NamedIdStore) -> S
             kind: match osc.kind {
                 OscillatorKindCommon::Software => OscillatorKind::SOFTWARE,
                 OscillatorKindCommon::Hardware => OscillatorKind::HARDWARE,
+                _ => panic!("Expect oscillator to be either hardware or software."),
             },
             frequency: osc.frequency.fixed_value(),
         }),
@@ -194,6 +251,21 @@ fn convert_acquisition_type(acquisition_type: &AcquisitionTypeCommon) -> Acquisi
         AcquisitionTypeCommon::SpectroscopyPsd => AcquisitionType::SPECTROSCOPY_PSD,
         AcquisitionTypeCommon::Spectroscopy => AcquisitionType::SPECTROSCOPY_IQ,
         AcquisitionTypeCommon::Discrimination => AcquisitionType::DISCRIMINATION,
+    }
+}
+
+fn convert_pulse_def(pulse: &PulseDefCommon, id_store: &NamedIdStore) -> PulseDef {
+    let uid = id_store.resolve_unchecked(pulse.uid);
+    let (kind, pulse_type) = match &pulse.kind {
+        PulseKindCommon::MarkerPulse { .. } => (PulseDefKind::Marker, Some(PulseType::Function)),
+        PulseKindCommon::Sampled { .. } => (PulseDefKind::Pulse, Some(PulseType::Samples)),
+        PulseKindCommon::LengthOnly { .. } => (PulseDefKind::Pulse, None),
+        _ => (PulseDefKind::Pulse, Some(PulseType::Function)),
+    };
+    PulseDef {
+        uid: uid.to_string(),
+        kind,
+        pulse_type,
     }
 }
 
@@ -292,7 +364,7 @@ impl<'a> IrToCodeIrLowerer<'a> {
     fn new(
         id_store: &'a NamedIdStore,
         signals: Vec<&'a Arc<Signal>>,
-        pulse_defs: Vec<&'a Arc<PulseDef>>,
+        pulse_defs: &'a [Arc<PulseDef>],
         parameters: &[Arc<SweepParameter>],
     ) -> Self {
         let signals_map = signals
@@ -300,7 +372,7 @@ impl<'a> IrToCodeIrLowerer<'a> {
             .map(|signal| (signal.uid, signal))
             .collect();
         let pulse_defs_map = pulse_defs
-            .into_iter()
+            .iter()
             .map(|pulse_def| (id_store.get(&pulse_def.uid).unwrap().into(), pulse_def))
             .collect();
         let parameter_map = parameters

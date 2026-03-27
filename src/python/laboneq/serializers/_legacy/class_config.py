@@ -94,7 +94,6 @@ def classes_by_short_name() -> OrderedDict[str, type]:
             "DeviceInfoType",
             "AmplifierPumpInfo",
             "DeviceInfo",
-            "OscillatorInfo",
             "SignalInfo",
             "MixerCalibrationInfo",
             "PrecompensationInfo",

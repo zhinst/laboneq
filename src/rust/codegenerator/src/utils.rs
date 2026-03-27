@@ -3,7 +3,7 @@
 
 use core::f64;
 // re-export for convenience
-pub(crate) use codegenerator_utils::normalize_f64;
+pub(crate) use laboneq_common::utils::normalize_f64;
 
 pub fn floor_to_grid(value: i64, grid: i64) -> i64 {
     value - value % grid

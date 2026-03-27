@@ -12,6 +12,7 @@ version.workspace = true
 [dependencies]
 laboneq-ir = { workspace = true }
 laboneq-dsl = { workspace = true }
+laboneq-common = { workspace = true }
 
 [lints]
 workspace = true

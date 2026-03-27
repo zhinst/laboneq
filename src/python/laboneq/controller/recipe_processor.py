@@ -921,7 +921,13 @@ def get_weights_info(
 ) -> dict[str, list[WeightInfo]]:
     if kernel_ref is None:
         return {}
-    return artifacts.integration_weights.get(kernel_ref, {})
+    # Group by channel
+    weights = artifacts.integration_weights.get(kernel_ref, {})
+    out = {}
+    for weight in weights:
+        for channel in weight.integration_units:
+            out.setdefault(channel, []).append(weight)
+    return out
 
 
 @overload

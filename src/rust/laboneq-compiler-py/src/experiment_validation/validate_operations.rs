@@ -3,7 +3,9 @@
 
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::{Acquire, Operation, PlayPulse};
-use laboneq_dsl::types::{ComplexOrFloat, MarkerSelector, SectionUid, Trigger, ValueOrParameter};
+use laboneq_dsl::types::{
+    ComplexOrFloat, MarkerSelector, PulseFunction, PulseKind, SectionUid, Trigger, ValueOrParameter,
+};
 use std::collections::{HashMap, HashSet};
 
 use laboneq_common::types::DeviceKind;
@@ -16,7 +18,6 @@ use crate::experiment_validation::{
     validate_pulses::*, validate_signals::*,
 };
 use laboneq_ir::signal::SignalKind;
-use laboneq_py_utils::pulse::{PulseFunction, PulseKind};
 
 /// Validates [Operation] variants in an experiment.
 pub(super) fn validate_experiment_operations(ctx: &ExperimentContext) -> Result<()> {

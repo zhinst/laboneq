@@ -23,6 +23,7 @@ use crate::error::Result;
 use crate::ir_unroll::unroll_loops;
 use crate::lower_experiment::lower_to_ir;
 use crate::parameter_store::ParameterStore;
+use crate::resolve_nt_match_case::resolve_nt_match_case;
 use crate::resolve_parameters::resolve_parameters;
 use crate::resolve_repetition_mode::resolve_repetition_mode;
 use crate::scheduled_to_ir::scheduled_node_to_ir_node;
@@ -55,6 +56,7 @@ pub fn schedule_experiment<T: SignalInfo>(
     let mut real_time_root = find_real_time_root(root)
         .expect("Experiment has no real-time section")
         .clone();
+    resolve_nt_match_case(&mut real_time_root, near_time_parameters);
     // TODO: Preferably move chunking after scheduling after Rust migration.
     // Currently not possible as the scheduling in called per chunk.
     if let Some(chunking_info) = &chunking_info {
@@ -67,11 +69,8 @@ pub fn schedule_experiment<T: SignalInfo>(
     resolve_repetition_mode(&mut scheduled_node)?;
     validate_ir(&scheduled_node)?;
     adjust_acquisition_lengths(&mut scheduled_node, context.signals, acquisition_type);
-    unroll_loops(
-        &mut scheduled_node,
-        &context.parameters,
-        near_time_parameters,
-    )?;
+    let mut scheduled_node =
+        unroll_loops(scheduled_node, &context.parameters, near_time_parameters)?;
     resolve_parameters(
         &mut scheduled_node,
         &context.parameters,

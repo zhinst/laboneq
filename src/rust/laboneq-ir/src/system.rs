@@ -14,19 +14,21 @@ pub use crate::device::AwgDevice;
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeviceSetup {
     signals: HashMap<SignalUid, Signal>,
-    devices: HashMap<DeviceUid, AwgDevice>,
+    awg_devices: HashMap<DeviceUid, AwgDevice>,
     awg_cores: HashMap<AwgKey, AwgCore>,
+    is_desktop_setup: bool,
 }
 
 impl DeviceSetup {
     pub fn new(
         signals: HashMap<SignalUid, Signal>,
-        devices: HashMap<DeviceUid, AwgDevice>,
+        awg_devices: HashMap<DeviceUid, AwgDevice>,
         awg_cores: Vec<AwgCore>,
+        is_desktop_setup: bool,
     ) -> Result<Self, String> {
         // Validate all signals reference existing devices
         for signal in signals.values() {
-            if !devices.contains_key(&signal.device_uid) {
+            if !awg_devices.contains_key(&signal.device_uid) {
                 return Err(format!(
                     "Signal '{}' references unknown device",
                     signal.uid.0
@@ -35,8 +37,9 @@ impl DeviceSetup {
         }
         Ok(Self {
             signals,
-            devices,
+            awg_devices,
             awg_cores: awg_cores.into_iter().map(|awg| (awg.uid(), awg)).collect(),
+            is_desktop_setup,
         })
     }
 
@@ -49,10 +52,18 @@ impl DeviceSetup {
     }
 
     pub fn device_by_uid(&self, uid: &DeviceUid) -> Option<&AwgDevice> {
-        self.devices.get(uid)
+        self.awg_devices.get(uid)
     }
 
     pub fn awg_core(&self, awg_key: &AwgKey) -> Option<&AwgCore> {
         self.awg_cores.get(awg_key)
+    }
+
+    pub fn is_desktop_setup(&self) -> bool {
+        self.is_desktop_setup
+    }
+
+    pub fn awg_devices(&self) -> impl Iterator<Item = &AwgDevice> {
+        self.awg_devices.values()
     }
 }

@@ -88,11 +88,11 @@ class CompilerArtifact:
 @dataclass
 class WeightInfo:
     id: str
+    integration_units: list[int]
     downsampling_factor: int | None
 
 
-SignalWeights = list[WeightInfo]
-AwgWeights = dict[str, SignalWeights]
+AwgWeights = list[WeightInfo]
 
 
 @dataclass

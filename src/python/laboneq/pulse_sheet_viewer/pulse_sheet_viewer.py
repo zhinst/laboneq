@@ -32,8 +32,11 @@ def _get_html_template():
 def _fill_maybe_missing_information(
     compiled_experiment: CompiledExperiment, max_events_to_publish: int
 ) -> CompiledExperiment:
-    if (compiled_experiment.schedule is None) or (
-        len(compiled_experiment.schedule["event_list"]) < max_events_to_publish
+    schedule = compiled_experiment.schedule
+    if (
+        (schedule is None)
+        or (len(schedule["event_list"]) < max_events_to_publish)
+        or ("event_list_truncated" not in schedule)
     ):
         _logger.info(
             "Recompiling the experiment due to missing extra information in the compiled experiment. "
@@ -56,6 +59,39 @@ def _fill_maybe_missing_information(
     return compiled_experiment
 
 
+def _warn_if_events_truncated(schedule: dict) -> None:
+    """Warn the user if the pulse sheet event list was truncated."""
+    if not schedule.get("event_list_truncated", False):
+        return
+
+    event_list = schedule["event_list"]
+    section_signals = schedule["section_signals_with_children"]
+
+    all_expected_signals = {sig for sigs in section_signals.values() for sig in sigs}
+    signals_in_events = {e["signal"] for e in event_list if e.get("signal") is not None}
+    missing_signals = all_expected_signals - signals_in_events
+
+    if missing_signals:
+        _logger.warning(
+            "Pulse sheet viewer: The event list was truncated to %d events. "
+            "%d of %d signals have no events and will not be shown: %s. "
+            "Increase `max_events_to_publish` in `show_pulse_sheet()` to "
+            "display all signals.",
+            len(event_list),
+            len(missing_signals),
+            len(all_expected_signals),
+            ", ".join(sorted(missing_signals)),
+        )
+        return
+
+    _logger.warning(
+        "Pulse sheet viewer: The event list was truncated to %d events. "
+        "Some later events are not shown. Increase `max_events_to_publish` in "
+        "`show_pulse_sheet()` to display the full schedule.",
+        len(event_list),
+    )
+
+
 def _interactive_psv_app(
     compiled_experiment: CompiledExperiment,
     max_simulation_length: float | None,
@@ -65,6 +101,7 @@ def _interactive_psv_app(
     compiled_experiment = _fill_maybe_missing_information(
         compiled_experiment, max_events_to_publish
     )
+    _warn_if_events_truncated(compiled_experiment.scheduled_experiment.schedule)
     html_text = PulseSheetViewer.generate_viewer_html_text(
         compiled_experiment.scheduled_experiment.schedule, name, interactive=True
     )
@@ -240,6 +277,7 @@ def show_pulse_sheet(
     compiled_experiment = _fill_maybe_missing_information(
         compiled_experiment, max_events_to_publish
     )
+    _warn_if_events_truncated(compiled_experiment.scheduled_experiment.schedule)
     if not interactive:
         PulseSheetViewer.generate_viewer_html_file(
             compiled_experiment.scheduled_experiment.schedule, name, filename

@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
-from enum import Enum, auto
+from enum import Enum
 from typing import TYPE_CHECKING
 
+from laboneq.dsl.device.device_setup import DeviceSetup
+
 if TYPE_CHECKING:
-    from laboneq.data.experiment_results import ExperimentResults
     from laboneq.data.scheduled_experiment import ScheduledExperiment
+    from laboneq.dsl.result.results import Results
 
 
 class SubmissionHandle:
@@ -28,29 +29,32 @@ class SubmissionHandle:
     def __hash__(self) -> int:
         return self.id
 
+    @property
+    def hex(self) -> str:
+        """Hexadecimal string representation of the handle ID."""
+        return "%032x" % self.id
+
 
 class SubmissionStatus(Enum):
     """The status of an experiment submission."""
 
-    PENDING = auto()
-    RUNNING = auto()
-    COMPLETED = auto()
-    FAILED = auto()
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
 
 
 class ControllerAPI(ABC):
     """Abstract base class defining the controller API for experiment management."""
 
     @abstractmethod
-    async def shutdown(self):
+    async def aclose(self):
         """Shut down the controller and release all resources."""
 
     @abstractmethod
-    async def update_neartime_callbacks(self, neartime_callbacks: dict[str, Callable]):
-        """Update the neartime callbacks used by the controller.
-
-        This is only present to support the legacy session, don't use it in new code.
-        """
+    async def get_device_setup(self) -> DeviceSetup:
+        """Retrieve the device setup describing the hardware the controller is connected to."""
 
     @abstractmethod
     async def submit_experiment(
@@ -70,7 +74,7 @@ class ControllerAPI(ABC):
         """Retrieve the current status of an experiment submission."""
 
     @abstractmethod
-    async def submission_results(self, handle: SubmissionHandle) -> ExperimentResults:
+    async def submission_results(self, handle: SubmissionHandle) -> Results:
         """Retrieve the results of a completed experiment.
 
         Blocks until the experiment is complete. On already completed experiments,

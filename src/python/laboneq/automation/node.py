@@ -3,7 +3,7 @@
 
 import attrs
 
-from laboneq._automation.status import AutomationStatus as Status
+from laboneq.automation.status import AutomationStatus as Status
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 

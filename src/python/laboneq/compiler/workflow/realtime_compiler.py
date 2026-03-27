@@ -18,11 +18,9 @@ from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.scheduler import Scheduler
 from laboneq.compiler.workflow.compiler_hooks import (
-    all_compiler_hooks,
     get_compiler_hooks,
     resolve_compiler_module,
 )
-from laboneq.data.compilation_job import SignalInfo
 
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
@@ -32,6 +30,7 @@ _logger = logging.getLogger(__name__)
 
 class Schedule(TypedDict):
     event_list: list[dict]
+    event_list_truncated: bool
     section_info: dict[str, dict]
     section_signals_with_children: dict[str, list[str]]
     sampling_rates: list[tuple[list[str], float]]
@@ -41,11 +40,9 @@ class RealtimeCompiler:
     def __init__(
         self,
         experiment,
-        signal_infos: list[SignalInfo],
         signal_objects: dict[str, SignalObj],
         settings: CompilerSettings | None = None,
     ):
-        self._signal_infos = signal_infos
         self._experiment = experiment
         self._signal_objects = signal_objects
         self._settings = settings if settings is not None else CompilerSettings()
@@ -59,26 +56,12 @@ class RealtimeCompiler:
     def _lower_ir_to_code(self, ir_rust):
         awgs = [signal_obj.awg for signal_obj in self._signal_objects.values()]
         device_classes = {awg.device_class for awg in awgs}
-        known_device_classes = set(h.device_class() for h in all_compiler_hooks())
-        unknown_devices = [
-            awg for awg in awgs if awg.device_class not in known_device_classes
-        ]
-
-        if len(unknown_devices) != 0:
-            raise Exception("Invalid device class encountered")
-
         for device_class in device_classes:
-            signals = [
-                s
-                for s in self._signal_objects.values()
-                if s.awg.device_class == device_class
-            ]
             self._code_generators[device_class] = get_compiler_hooks(
                 device_class
             ).code_generator()(
                 ir_rust,
                 settings=self._settings,
-                signals=signals,
             )
             self._code_generators[device_class].generate_code()
 
@@ -118,6 +101,7 @@ class RealtimeCompiler:
         )
         return Schedule(
             event_list=rust_schedule["event_list"],
+            event_list_truncated=rust_schedule["event_list_truncated"],
             section_info=rust_schedule["section_info"],
             section_signals_with_children=rust_schedule[
                 "section_signals_with_children"

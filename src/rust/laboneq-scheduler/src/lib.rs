@@ -11,6 +11,7 @@ mod experiment_context;
 mod ir_unroll;
 mod lower_experiment;
 mod parameter_resolver;
+mod resolve_nt_match_case;
 mod resolve_parameters;
 mod resolve_repetition_mode;
 mod schedule_info;

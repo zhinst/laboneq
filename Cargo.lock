@@ -29,9 +29,9 @@ dependencies = [
 
 [[package]]
 name = "arc-swap"
-version = "1.8.2"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9f3647c145568cec02c42054e07bdf9a5a698e15b466fb2341bfc393cd24aa5"
+checksum = "a07d1f37ff60921c83bdfc7407723bdefe89b44b98a9b772f225c8f9d67141a6"
 dependencies = [
  "rustversion",
 ]
@@ -53,9 +53,9 @@ dependencies = [
 
 [[package]]
 name = "capnp"
-version = "0.25.1"
+version = "0.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ae0593da254d02d0e69525b5eec7a59586753aa3bd2e54842eca33c6786330c"
+checksum = "c982cc37b8f646c753f3b0a24d4d40ca2eac8a9c2b9ea6fff524be67ddc184cb"
 dependencies = [
  "embedded-io",
 ]
@@ -71,9 +71,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.2.56"
+version = "1.2.57"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aebf35691d1bfb0ac386a69bac2fde4dd276fb618cf8bf4f5318fe285e821bb2"
+checksum = "7a0dd1ca384932ff3641c8718a02769f1698e7563dc6974ffd03346116310423"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -87,7 +87,7 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "codegenerator"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "codegenerator-utils",
  "derive_more",
@@ -112,7 +112,7 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-py"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "codegenerator",
  "codegenerator-utils",
@@ -129,8 +129,9 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-utils"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
+ "laboneq-common",
  "laboneq-dsl",
  "laboneq-ir",
 ]
@@ -283,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "interval-calculator"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "anyhow",
  "thiserror",
@@ -300,13 +301,13 @@ dependencies = [
 
 [[package]]
 name = "itoa"
-version = "1.0.17"
+version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
+checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "laboneq-capnp"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "capnp",
  "capnpc",
@@ -314,7 +315,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-common"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "laboneq-units",
  "regex",
@@ -323,7 +324,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-compiler-py"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "anyhow",
  "approx",
@@ -347,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-dsl"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "laboneq-common",
  "laboneq-units",
@@ -358,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-error"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "laboneq-log",
  "pyo3",
@@ -367,7 +368,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-ir"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "laboneq-common",
  "laboneq-dsl",
@@ -382,14 +383,14 @@ dependencies = [
 
 [[package]]
 name = "laboneq-log"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "laboneq-py-utils"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "laboneq-common",
  "laboneq-dsl",
@@ -404,7 +405,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-rust"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "codegenerator-py",
  "laboneq-compiler-py",
@@ -414,7 +415,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-scheduler"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "anyhow",
  "itertools",
@@ -433,7 +434,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-units"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -517,7 +518,7 @@ dependencies = [
 
 [[package]]
 name = "numeric-array"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 dependencies = [
  "approx",
  "num-complex",
@@ -544,9 +545,9 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.21.3"
+version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
+checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "portable-atomic"
@@ -556,9 +557,9 @@ checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
 
 [[package]]
 name = "portable-atomic-util"
-version = "0.2.5"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a9db96d7fa8782dd8c15ce32ffe8680bbd1e978a43bf51a34d39483540495f5"
+checksum = "091397be61a01d4be58e7841595bd4bfedb15f1cd54977d79b8271e94ed799a3"
 dependencies = [
  "portable-atomic",
 ]
@@ -690,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "rccow"
-version = "26.4.0-b3"
+version = "26.4.0-b4"
 
 [[package]]
 name = "regex"

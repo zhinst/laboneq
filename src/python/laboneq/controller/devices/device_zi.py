@@ -538,6 +538,8 @@ class DeviceBase(DeviceZI):
             )
             await self._apply_initialization(device_recipe_data=device_recipe_data)
 
+        await self.reset_errors()
+
         # Init warning nodes
         nodes = [node for node, _ in self._collect_warning_nodes()]
         if len(nodes) == 0:
@@ -691,10 +693,16 @@ class DeviceBase(DeviceZI):
         all_errors = await self._api.get_raw([error_node])
         return all_errors[error_node]
 
+    async def reset_errors(self):
+        # TODO(2K): Consider logic of keeping track of already fetched errors (similar to warning nodes)
+        # or better streaming the error updates via subscription, to allow proper queueuing of experiments.
+        if not self.is_secondary:
+            nc = NodeCollector(base=f"/{self.serial}/")
+            nc.add("raw/error/clear", 1, cache=False)
+            await self.set_async(nc)
+
     async def reset_to_idle(self):
-        nc = NodeCollector(base=f"/{self.serial}/")
-        nc.add("raw/error/clear", 1, cache=False)
-        await self.set_async(nc)
+        pass
 
     def load_factory_preset_control_nodes(self) -> list[NodeControlBase]:
         return []

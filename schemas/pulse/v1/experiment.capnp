@@ -7,6 +7,7 @@ using Common = import "common.capnp";
 using PulseDef = import "pulse.capnp";
 using Section = import "section.capnp";
 using Sweep = import "sweep.capnp";
+using DeviceSetup = import "device_setup.capnp";
 
 # Schema version. The schema is in 0.x development mode:
 # no compatibility guarantees exist between 0.x releases.
@@ -27,8 +28,8 @@ struct Experiment {
 
   metadata @0 :Metadata;
 
-  deviceSetup @1 :AnyPointer;
-  # Device setup definition. Reserved.
+  deviceSetup @1 :DeviceSetup.DeviceSetup;
+  # Device setup definition.
 
   signals @2 :List(ExperimentSignal);
   # Experiment signal declarations. Each signal is a logical channel used by operations

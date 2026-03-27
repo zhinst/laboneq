@@ -1,7 +1,7 @@
 # Copyright 2026 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from laboneq._automation.logic import AutomationLogic
+from laboneq.automation.logic import AutomationLogic
 
 
 def find_logic_class(class_name: str) -> type[AutomationLogic]:

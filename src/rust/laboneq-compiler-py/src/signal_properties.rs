@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use laboneq_common::types::AwgKey;
-use laboneq_dsl::signal_calibration::Precompensation;
+use laboneq_dsl::signal_calibration::{OutputRoute, PortMode, Precompensation};
 use laboneq_dsl::types::{
     AmplifierPump, DeviceUid, Oscillator, Quantity, SignalUid, ValueOrParameter,
 };
-use laboneq_ir::signal::{OutputRoute, PortMode, SignalKind};
+use laboneq_ir::signal::SignalKind;
 use laboneq_units::duration::{Duration, Second};
 use smallvec::SmallVec;
 
@@ -26,6 +26,7 @@ pub(crate) struct SignalProperties {
     pub kind: SignalKind,
 
     // Calibration parameters
+    pub amplitude: Option<ValueOrParameter<f64>>,
     pub oscillator: Option<Oscillator>,
     pub lo_frequency: Option<ValueOrParameter<f64>>,
     pub voltage_offset: Option<ValueOrParameter<f64>>,
@@ -34,6 +35,7 @@ pub(crate) struct SignalProperties {
     pub range: Option<Quantity>,
     pub precompensation: Option<Precompensation>,
     pub added_outputs: Vec<OutputRoute>,
+    pub thresholds: Vec<f64>,
 
     // Timing parameters
     pub port_delay: ValueOrParameter<Duration<Second>>,

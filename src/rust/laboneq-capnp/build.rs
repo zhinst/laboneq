@@ -6,7 +6,9 @@ fn main() {
     let schema_prefix = "pulse/v1";
 
     let schema_names = [
+        "calibration",
         "common",
+        "device_setup",
         "experiment",
         "operation",
         "pulse",

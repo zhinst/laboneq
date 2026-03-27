@@ -22,6 +22,22 @@ pub const fn seconds<T>(value: T) -> Duration<Second, T> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub struct Sample;
+
+impl Display for Sample {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "samples")
+    }
+}
+
+pub const fn samples(value: usize) -> Duration<Sample, usize> {
+    Duration {
+        value,
+        unit: Sample,
+    }
+}
+
 quantity!(Frequency);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]

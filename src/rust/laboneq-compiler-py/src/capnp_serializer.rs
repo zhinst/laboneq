@@ -18,11 +18,15 @@ use std::collections::HashMap;
 
 use crate::error::{Error, Result};
 use crate::py_conversion::{DslType, DslTypes};
+use crate::py_device_setup_capnp::{
+    DeviceSetupCapnpBuilderPy, InstrumentPayload, OscillatorPayload, SignalPayload,
+};
 use crate::py_helpers::is_exact_type;
 use numeric_array::NumericArray;
 
 use laboneq_capnp::pulse::v1::{
-    common_capnp, experiment_capnp, operation_capnp, pulse_capnp, section_capnp, sweep_capnp,
+    common_capnp, device_setup_capnp, experiment_capnp, operation_capnp, pulse_capnp,
+    section_capnp, sweep_capnp,
 };
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -114,8 +118,9 @@ struct EntityIndex {
     parameters: Vec<CollectedParameter>,
     /// uid string → final index
     parameter_indices: HashMap<String, u32>,
-    /// Maps driver parameter index → derived parameter indices it drives.
-    driving_parameters: HashMap<u32, Vec<u32>>,
+    /// Maps devived parameter index → driver parameter UID strings.
+    /// Indices cannot be used since not all drivers are necessarily collected as experiment parameters (e.g. intermediate parameters in a chain).
+    derived_parameters: HashMap<u32, Vec<String>>,
 
     // --- pulses ---
     pulses: Vec<CollectedPulse>,
@@ -133,7 +138,7 @@ impl EntityIndex {
         Self {
             parameters: Vec::new(),
             parameter_indices: HashMap::new(),
-            driving_parameters: HashMap::new(),
+            derived_parameters: HashMap::new(),
             pulses: Vec::new(),
             pulse_indices: HashMap::new(),
             handles: Vec::new(),
@@ -294,7 +299,28 @@ impl<'py> Serializer<'py> {
                     lin.set_count(*count);
                 }
                 SweepParameterKind::Explicit { values } => {
+                    let driven_by: Vec<u32> = self
+                        .entities
+                        .derived_parameters
+                        .get(&(i as u32))
+                        .map(|drivers| {
+                            drivers
+                                .iter()
+                                .flat_map(|driver_alias| {
+                                    // driver_alias is the alias of a root driver parameter. Look up its UID string for referencing.
+                                    self.entities.parameter_indices.get(driver_alias).cloned()
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
                     let mut explicit = pb.init_explicit_values();
+                    let mut driven_by_builder =
+                        explicit.reborrow().init_driven_by(driven_by.len() as u32);
+                    for (j, driver_idx) in driven_by.into_iter().enumerate() {
+                        driven_by_builder.set(j as u32, driver_idx);
+                    }
+
                     match values {
                         ExplicitValues::Real(vals) => {
                             let mut list = explicit.reborrow().init_real_values(vals.len() as u32);
@@ -633,14 +659,6 @@ impl<'py> Serializer<'py> {
             let param_idx = self.collect_parameter(&param)?;
             param_indices.push(param_idx);
         }
-        let mut all_param_indices = param_indices.clone();
-        for &driver_idx in &param_indices {
-            collect_derived_parameter_indices(
-                driver_idx,
-                &self.entities.driving_parameters,
-                &mut all_param_indices,
-            );
-        }
 
         let reset_oscillator_phase = obj
             .getattr(intern!(py, "reset_oscillator_phase"))?
@@ -660,10 +678,8 @@ impl<'py> Serializer<'py> {
         }
 
         {
-            let mut params_list = sweep
-                .reborrow()
-                .init_parameters(all_param_indices.len() as u32);
-            for (i, idx) in all_param_indices.iter().enumerate() {
+            let mut params_list = sweep.reborrow().init_parameters(param_indices.len() as u32);
+            for (i, idx) in param_indices.iter().enumerate() {
                 params_list.set(i as u32, *idx);
             }
         }
@@ -742,27 +758,13 @@ impl<'py> Serializer<'py> {
         // inside the loop without holding a borrow on the iterator.
         let drivers: Vec<Bound<'_, PyAny>> = driven_by.try_iter()?.collect::<PyResult<_>>()?;
         for driver in &drivers {
-            let driver_driven_by = driver.getattr_opt(intern!(py, "driven_by"))?;
-            if driver_driven_by.as_ref().is_none_or(|v| v.is_none()) {
-                // Driver is a root sweep parameter (not itself derived). Register it
-                // and record that it drives `idx`. Intermediate parameters in a chain
-                // (e.g. `par0`, `par1` from `delay_param * 1 * 1 * 1`) are skipped so
-                // they don't appear as standalone experiment parameters without a sweep,
-                // which would fail validation.
-                let driver_idx = self.collect_parameter(driver)?;
-                let entry = self
-                    .entities
-                    .driving_parameters
-                    .entry(driver_idx)
-                    .or_default();
-                if !entry.contains(&idx) {
-                    entry.push(idx);
-                }
-            } else {
-                // Driver is itself a derived (intermediate) parameter — skip registering
-                // it and recurse into its own drivers instead.
-                self.register_driving_parameters(idx, driver)?;
-            }
+            // Collect the driver chain recursively.
+            self.entities
+                .derived_parameters
+                .entry(idx)
+                .or_default()
+                .push(driver.getattr(intern!(py, "uid"))?.extract::<String>()?);
+            self.register_driving_parameters(idx, driver)?;
         }
         Ok(())
     }
@@ -1454,7 +1456,7 @@ impl<'py> Serializer<'py> {
                 let ndim: usize = arr.getattr(intern!(py, "ndim"))?.extract()?;
                 if ndim > 1 {
                     is_complex = true;
-                    crate::py_conversion::iq_to_complex(&self.np, &arr)
+                    crate::py_helpers::iq_to_complex(&self.np, &arr)
                         .map_err(|e| Error::new(e.to_string()))?
                         .call_method0(intern!(py, "tobytes"))?
                 } else {
@@ -1538,6 +1540,356 @@ impl<'py> Serializer<'py> {
         }
         set_sweep_value_from_py(obj, builder)
     }
+
+    fn serialize_device_setup(
+        &mut self,
+        obj: &Bound<'_, DeviceSetupCapnpBuilderPy>,
+        mut builder: experiment_capnp::experiment::Builder<'_>,
+    ) -> Result<()> {
+        let py = obj.py();
+        let obj = obj.borrow();
+        let mut device_setup_builder = builder.reborrow().init_device_setup();
+
+        self.serialize_instruments(py, &obj.instruments, &mut device_setup_builder)?;
+        self.serialize_oscillators(py, &obj.oscillators, &mut device_setup_builder)?;
+        self.serialize_device_signals(py, &obj.signals, &mut device_setup_builder)?;
+        Ok(())
+    }
+
+    fn serialize_oscillators(
+        &mut self,
+        py: Python,
+        oscillators: &[OscillatorPayload],
+        builder: &mut device_setup_capnp::device_setup::Builder<'_>,
+    ) -> Result<()> {
+        let mut osc_builder = builder
+            .reborrow()
+            .init_oscillators(oscillators.len() as u32);
+        for (i, osc) in oscillators.iter().enumerate() {
+            let mut o = osc_builder.reborrow().get(i as u32);
+            o.set_uid(osc.uid.to_str(py)?);
+            self.set_sweep_value_from_py_or_param(
+                osc.frequency.bind(py),
+                &mut o.reborrow().get_frequency().map_err(Error::new)?,
+            )?;
+            let modulation_type = if let Some(modulation) = &osc.modulation {
+                match modulation.extract::<&str>(py)? {
+                    "AUTO" => laboneq_capnp::pulse::v1::calibration_capnp::ModulationType::Auto,
+                    "HARDWARE" => {
+                        laboneq_capnp::pulse::v1::calibration_capnp::ModulationType::Hardware
+                    }
+                    "SOFTWARE" => {
+                        laboneq_capnp::pulse::v1::calibration_capnp::ModulationType::Software
+                    }
+                    other => {
+                        return Err(Error::new(format!(
+                            "Invalid modulation type: {}. Expected 'AUTO', 'HARDWARE', or 'SOFTWARE'.",
+                            other
+                        )));
+                    }
+                }
+            } else {
+                laboneq_capnp::pulse::v1::calibration_capnp::ModulationType::Auto
+            };
+            o.set_modulation_type(modulation_type);
+        }
+        Ok(())
+    }
+
+    fn serialize_instruments(
+        &mut self,
+        py: Python,
+        instruments: &[InstrumentPayload],
+        builder: &mut device_setup_capnp::device_setup::Builder<'_>,
+    ) -> Result<()> {
+        let mut instruments_builder = builder
+            .reborrow()
+            .init_instruments(instruments.len() as u32);
+        for (i, instrument) in instruments.iter().enumerate() {
+            let mut instrument_builder = instruments_builder.reborrow().get(i as u32);
+            instrument_builder.set_uid(instrument.uid.extract::<&str>(py)?);
+            instrument_builder.set_device_type(instrument.device_type.extract::<&str>(py)?);
+
+            let mut options_builder = instrument_builder
+                .reborrow()
+                .init_options(instrument.options.len() as u32);
+            for (j, option) in instrument.options.iter().enumerate() {
+                options_builder.set(j as u32, option.extract::<&str>(py)?);
+            }
+
+            if let Some(ref clock_source) = instrument.reference_clock_source {
+                match clock_source.extract::<&str>(py)? {
+                    "INTERNAL" => instrument_builder
+                        .set_reference_clock_source(device_setup_capnp::ReferenceClock::Internal),
+                    "EXTERNAL" => instrument_builder
+                        .set_reference_clock_source(device_setup_capnp::ReferenceClock::External),
+                    other => {
+                        return Err(Error::new(format!(
+                            "Invalid reference clock source: {}. Expected 'INTERNAL' or 'EXTERNAL'.",
+                            other
+                        )));
+                    }
+                }
+            }
+
+            instrument_builder.set_physical_device_uid(instrument.physical_device_uid);
+            instrument_builder.set_is_shfqc(instrument.is_shfqc);
+        }
+        Ok(())
+    }
+
+    fn serialize_device_signals(
+        &mut self,
+        py: Python,
+        signals: &[SignalPayload],
+        builder: &mut device_setup_capnp::device_setup::Builder<'_>,
+    ) -> Result<()> {
+        let mut signals_builder = builder.reborrow().init_signals(signals.len() as u32);
+
+        for (i, signal) in signals.iter().enumerate() {
+            let mut signal_builder = signals_builder.reborrow().get(i as u32);
+
+            signal_builder.set_uid(signal.uid.to_str(py)?);
+            signal_builder.set_instrument_uid(signal.instrument_uid.to_str(py)?);
+            signal_builder.set_channel_type(signal.channel_type.to_str(py)?);
+            signal_builder.set_awg_core(signal.awg_core);
+
+            let ports: Vec<&str> = signal
+                .ports
+                .iter()
+                .map(|p| p.to_str(py).map_err(Error::new))
+                .collect::<Result<Vec<&str>>>()?;
+            let mut ports_builder = signal_builder.reborrow().init_ports(ports.len() as u32);
+            for (j, port) in ports.iter().enumerate() {
+                ports_builder.set(j as u32, port);
+            }
+
+            self.serialize_signal_calibration(py, signal, &mut signal_builder)?;
+        }
+        Ok(())
+    }
+
+    fn serialize_signal_calibration(
+        &mut self,
+        py: Python,
+        signal: &SignalPayload,
+        builder: &mut device_setup_capnp::device_signal::Builder<'_>,
+    ) -> Result<()> {
+        let mut calibration_builder = builder.reborrow().init_calibration();
+        if let Some(osc_index) = &signal.oscillator_index {
+            let mut osc_builder = calibration_builder.reborrow().init_oscillator();
+            osc_builder.set_value(*osc_index as u32);
+        }
+
+        calibration_builder.set_delay_signal(signal.signal_delay);
+        calibration_builder.set_automute(signal.automute);
+
+        if let Some(amplitude) = &signal.amplitude {
+            self.set_sweep_value_from_py_or_param(
+                amplitude.bind(py),
+                &mut calibration_builder
+                    .reborrow()
+                    .get_amplitude()
+                    .map_err(Error::new)?,
+            )?;
+        }
+
+        if let Some(lo_freq) = &signal.lo_frequency {
+            self.set_sweep_value_from_py_or_param(
+                lo_freq.bind(py),
+                &mut calibration_builder
+                    .reborrow()
+                    .get_local_oscillator_frequency()
+                    .map_err(Error::new)?,
+            )?;
+        }
+
+        if let Some(port_delay) = &signal.port_delay {
+            self.set_sweep_value_from_py_or_param(
+                port_delay.bind(py),
+                &mut calibration_builder
+                    .reborrow()
+                    .get_port_delay()
+                    .map_err(Error::new)?,
+            )?;
+        }
+
+        if let Some(voltage_offset) = &signal.voltage_offset {
+            self.set_sweep_value_from_py_or_param(
+                voltage_offset.bind(py),
+                &mut calibration_builder
+                    .reborrow()
+                    .get_voltage_offset()
+                    .map_err(Error::new)?,
+            )?;
+        }
+
+        if let Some(port_mode) = &signal.port_mode {
+            match port_mode.extract::<&str>(py)? {
+                "RF" => calibration_builder
+                    .set_port_mode(laboneq_capnp::pulse::v1::calibration_capnp::PortMode::Rf),
+                "LF" => calibration_builder
+                    .set_port_mode(laboneq_capnp::pulse::v1::calibration_capnp::PortMode::Lf),
+                other => {
+                    return Err(Error::new(format!(
+                        "Invalid port mode: {}. Expected 'RF' or 'LF'.",
+                        other
+                    )));
+                }
+            }
+        } else {
+            calibration_builder
+                .set_port_mode(laboneq_capnp::pulse::v1::calibration_capnp::PortMode::Unspecified);
+        }
+
+        // Precompensation
+        if let Some(precompensation) = &signal.precompensation {
+            let precompensation = precompensation.borrow(py);
+            let mut precomp_builder = calibration_builder.reborrow().init_precompensation();
+            let mut exponential_builder = precomp_builder
+                .reborrow()
+                .init_exponentials(precompensation.exponential.len() as u32);
+
+            // Exponentials
+            for (i, exp) in precompensation.exponential.iter().enumerate() {
+                let exp = exp.borrow(py);
+                let mut exp_builder = exponential_builder.reborrow().get(i as u32);
+                exp_builder.set_amplitude(exp.amplitude);
+                exp_builder.set_timeconstant(exp.timeconstant);
+            }
+
+            // High-pass
+            if let Some(high_pass) = &precompensation.high_pass {
+                let high_pass = high_pass.borrow(py);
+                precomp_builder
+                    .reborrow()
+                    .init_high_pass()
+                    .set_timeconstant(high_pass.timeconstant);
+            }
+
+            // Bounce
+            if let Some(bounce) = &precompensation.bounce {
+                let bounce = bounce.borrow(py);
+                let mut bounce_builder = precomp_builder.reborrow().init_bounce();
+                bounce_builder.set_amplitude(bounce.amplitude);
+                bounce_builder.set_delay(bounce.delay);
+            }
+
+            // FIR
+            if let Some(fir) = &precompensation.fir {
+                let fir = fir.borrow(py);
+                let mut fir_builder = precomp_builder.reborrow().init_fir();
+                let mut coeff_builder = fir_builder
+                    .reborrow()
+                    .init_coefficients(fir.coefficients.len() as u32);
+                for (i, coeff) in fir.coefficients.iter().enumerate() {
+                    coeff_builder.set(i as u32, *coeff);
+                }
+            }
+        }
+
+        // Amplifier pump
+        if let Some(amplifier_pump) = &signal.amplifier_pump {
+            let amplifier_pump = amplifier_pump.borrow(py);
+            let mut pump_builder = calibration_builder.reborrow().init_amplifier_pump();
+            pump_builder.set_device_uid(amplifier_pump.device.as_str());
+            pump_builder.set_channel(amplifier_pump.channel);
+
+            self.set_sweep_value_from_py_or_param(
+                amplifier_pump.pump_power.bind(py),
+                &mut pump_builder
+                    .reborrow()
+                    .get_pump_power()
+                    .map_err(Error::new)?,
+            )?;
+
+            self.set_sweep_value_from_py_or_param(
+                amplifier_pump.pump_frequency.bind(py),
+                &mut pump_builder
+                    .reborrow()
+                    .get_pump_frequency()
+                    .map_err(Error::new)?,
+            )?;
+
+            self.set_sweep_value_from_py_or_param(
+                amplifier_pump.probe_power.bind(py),
+                &mut pump_builder
+                    .reborrow()
+                    .get_probe_power()
+                    .map_err(Error::new)?,
+            )?;
+
+            self.set_sweep_value_from_py_or_param(
+                amplifier_pump.probe_frequency.bind(py),
+                &mut pump_builder
+                    .reborrow()
+                    .get_probe_frequency()
+                    .map_err(Error::new)?,
+            )?;
+
+            self.set_sweep_value_from_py_or_param(
+                amplifier_pump.cancellation_phase.bind(py),
+                &mut pump_builder
+                    .reborrow()
+                    .get_cancellation_phase()
+                    .map_err(Error::new)?,
+            )?;
+
+            self.set_sweep_value_from_py_or_param(
+                amplifier_pump.cancellation_attenuation.bind(py),
+                &mut pump_builder
+                    .reborrow()
+                    .get_cancellation_attenuation()
+                    .map_err(Error::new)?,
+            )?;
+        }
+
+        // Range
+        if let Some((value, unit)) = &signal.range {
+            let mut range_builder = calibration_builder.reborrow().init_range();
+            range_builder.set_value(*value);
+            if let Some(unit_str) = unit {
+                range_builder.set_unit(unit_str);
+            }
+        }
+
+        // Added outputs
+        let mut added_outputs_builder = calibration_builder
+            .reborrow()
+            .init_added_outputs(signal.added_outputs.len() as u32);
+        for (i, output) in signal.added_outputs.iter().enumerate() {
+            let output = output.borrow(py);
+            let mut output_builder = added_outputs_builder.reborrow().get(i as u32);
+
+            output_builder.set_source_signal(output.source_signal.to_str(py)?);
+            self.set_sweep_value_from_py_or_param(
+                output.amplitude_scaling.bind(py),
+                &mut output_builder
+                    .reborrow()
+                    .get_amplitude_scaling()
+                    .map_err(Error::new)?,
+            )?;
+            self.set_sweep_value_from_py_or_param(
+                output.phase_shift.bind(py),
+                &mut output_builder
+                    .reborrow()
+                    .get_phase_shift()
+                    .map_err(Error::new)?,
+            )?;
+        }
+
+        // Discrimination threshold(s)
+        if let Some(threshold) = &signal.threshold {
+            let mut threshold_builder = calibration_builder
+                .reborrow()
+                .init_threshold(threshold.len() as u32);
+            for (i, value) in threshold.iter().enumerate() {
+                threshold_builder.set(i as u32, *value);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 // === Public entry point ===
@@ -1545,12 +1897,18 @@ impl<'py> Serializer<'py> {
 /// Serializes a Python experiment object tree to Cap'n Proto bytes.
 ///
 /// Returns the serialized bytes as a `Vec<u8>`.
-pub(crate) fn serialize_experiment(experiment: &Bound<'_, PyAny>, packed: bool) -> Result<Vec<u8>> {
+pub(crate) fn serialize_experiment(
+    experiment: &Bound<'_, PyAny>,
+    device_setup: Bound<'_, DeviceSetupCapnpBuilderPy>,
+    packed: bool,
+) -> Result<Vec<u8>> {
     let py = experiment.py();
     let mut ser = Serializer::new(py)?;
 
     let mut message = capnp::message::Builder::new_default();
     let mut exp_builder = message.init_root::<experiment_capnp::experiment::Builder<'_>>();
+
+    ser.serialize_device_setup(&device_setup, exp_builder.reborrow())?;
 
     // Signals are indexed first (sorted alphabetically for determinism) so that
     // signal references written during section tree traversal use final indices.
@@ -1751,21 +2109,6 @@ fn extract_acquisition_type_capnp(
             return Err(Error::new(format!("Unknown acquisition type: {name}")));
         }
     })
-}
-
-fn collect_derived_parameter_indices(
-    driver_idx: u32,
-    driving_parameters: &HashMap<u32, Vec<u32>>,
-    out: &mut Vec<u32>,
-) {
-    if let Some(derived) = driving_parameters.get(&driver_idx) {
-        for &derived_idx in derived {
-            if !out.contains(&derived_idx) {
-                out.push(derived_idx);
-                collect_derived_parameter_indices(derived_idx, driving_parameters, out);
-            }
-        }
-    }
 }
 
 fn extract_py_numeric(obj: &Bound<'_, PyAny>) -> Result<NumericValue> {

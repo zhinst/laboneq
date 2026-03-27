@@ -47,4 +47,14 @@ impl SweepParameter {
             values: self.values.slice(range).into(),
         }
     }
+
+    pub fn values(&self) -> Box<dyn Iterator<Item = NumericLiteral> + '_> {
+        match self.values.as_ref() {
+            NumericArray::Integer64(arr) => Box::new(arr.iter().map(|v| NumericLiteral::Int(*v))),
+            NumericArray::Float64(arr) => Box::new(arr.iter().map(|v| NumericLiteral::Float(*v))),
+            NumericArray::Complex64(arr) => {
+                Box::new(arr.iter().map(|v| NumericLiteral::Complex(*v)))
+            }
+        }
+    }
 }

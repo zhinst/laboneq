@@ -11,9 +11,8 @@ mod test_compute_delays {
     };
     use laboneq_dsl::signal_calibration::{
         BounceCompensation, ExponentialCompensation, FirCompensation, HighPassCompensation,
-        Precompensation,
+        OutputRoute, Precompensation,
     };
-    use laboneq_ir::signal::OutputRoute;
     use smallvec::SmallVec;
 
     use crate::setup_processor::delays::{

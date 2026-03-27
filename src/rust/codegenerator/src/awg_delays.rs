@@ -8,7 +8,7 @@ use laboneq_error::bail;
 use crate::Result;
 use crate::ir::Samples;
 use crate::ir::SignalUid;
-use crate::ir::compilation_job::{AwgCore, AwgKind, DeviceKind, SignalKind};
+use crate::ir::compilation_job::{AwgCore, AwgKind, DeviceKind};
 use crate::utils::samples_to_grid;
 
 #[derive(Default)]
@@ -76,7 +76,7 @@ pub(crate) fn calculate_awg_delays(
             );
         }
         signal_delays.insert(signal.uid, total_delay);
-        if signal.kind != SignalKind::INTEGRATION {
+        if signal.is_output() {
             // Evaluate the common lead time for the AWG.
             // The minimum of all delays is used for the AWG.
             let lead_time = if awg.device_kind() == &DeviceKind::UHFQA {

@@ -1,26 +1,22 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use codegenerator::AwgInfo;
+use codegenerator::generate_code;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::named_id::resolve_ids;
 use laboneq_error::LabOneQError;
 use laboneq_py_utils::experiment_ir::ExperimentIrPy;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use pyo3::types::PyList;
 use pyo3::wrap_pyfunction;
 use waveform_sampler::PlayHoldPy;
 use waveform_sampler::PlaySamplesPy;
-mod py_conversions;
-use codegenerator::generate_code;
 mod common_types;
-mod ir_compat;
 mod result;
 mod settings;
 
-use crate::ir_compat::ir_to_code_compat;
-use crate::py_conversions::extract_awg;
+use codegenerator::ir_to_codegen_ir;
+
 use crate::result::FeedbackRegisterConfigPy;
 use crate::result::MeasurementPy;
 use crate::result::ResultSourcePy;
@@ -36,42 +32,25 @@ pub(crate) fn to_pyerr(error: LabOneQError, id_store: &NamedIdStore) -> PyErr {
 }
 
 #[pyfunction(name = "generate_code")]
-#[allow(clippy::too_many_arguments)]
 fn generate_code_py(
     py: Python,
     ir_experiment: &ExperimentIrPy,
-    // list[AwgInfo]
-    awgs: &Bound<PyList>,
     // Dictionary with compiler settings
     settings: &Bound<PyDict>,
 ) -> PyResult<SeqCGenOutputPy> {
     let id_store = &ir_experiment.inner.id_store;
     let settings = code_generator_settings_from_dict(settings)?;
-
-    let awg_infos = awgs
-        .try_iter()?
-        .map(|awg| extract_awg(&awg.unwrap(), id_store).unwrap())
-        .collect::<Vec<AwgInfo>>();
-
-    let compat = ir_to_code_compat(ir_experiment, awg_infos).map_err(|e| to_pyerr(e, id_store))?;
+    let codegen_ir = ir_to_codegen_ir(&ir_experiment.inner).map_err(|e| to_pyerr(e, id_store))?;
     let sampler = WaveformSamplerPy::new(
         py,
-        &ir_experiment.pulses,
-        compat.acquisition_type.clone(),
-        &compat.pulse_parameters,
+        &ir_experiment.inner.pulses,
+        codegen_ir.acquisition_type.clone(),
+        &codegen_ir.pulse_parameters,
         &ir_experiment.py_object_store,
         &ir_experiment.inner.id_store,
     );
     let result = py
-        .detach(|| {
-            generate_code(
-                &compat.root,
-                compat.awg_cores,
-                compat.acquisition_type,
-                settings,
-                &sampler,
-            )
-        })
+        .detach(|| generate_code(codegen_ir, settings, &sampler))
         .map_err(|e| to_pyerr(e, id_store))?;
     Python::attach(|py| {
         let result = SeqCGenOutputPy::new(py, result, id_store);

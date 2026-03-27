@@ -30,7 +30,11 @@ from zhinst.comms_schemas.labone.core import (
     ShfGeneratorWaveformVectorData,
     ZIContext,
 )
-from zhinst.comms_schemas.labone.core.errors import NotFoundError
+from zhinst.comms_schemas.labone.core.errors import (
+    LabOneCoreError,
+    NotFoundError,
+    OverwhelmedError,
+)
 
 from laboneq.controller.devices.device_utils import (
     NodeActionSet,
@@ -646,10 +650,32 @@ class AsyncSubscriber:
         if get_initial:
             self._last[path] = await api_impl.get(path)
 
+    async def _get_and_process_erros(self, queue: DataQueue) -> AnnotatedValue:
+        while True:
+            value = await queue.get()
+            if not isinstance(value.value, LabOneCoreError):
+                return value  # Not an error, return the value
+            # TODO(2K): Workaround: hold-off errors appear in streaming data only for the subsequent
+            # experiment, so we ignore them here. They are captured and reported separately via the errors node.
+            # Remove the workaround once the root cause of hold-off errors lag in streaming data is fixed.
+            if (
+                not isinstance(value.value, OverwhelmedError)
+                or str(value.value)
+                != "Hold-off errors detected, triggers arriving too fast."
+            ):
+                _logger.warning(
+                    "Received error while waiting for data from %s: %s('%s')",
+                    queue.path,
+                    value.value.__class__.__name__,
+                    str(value.value),
+                )
+
     async def get(self, path: str, timeout_s: float | None = None) -> AnnotatedValue:
         queue = self._subscriptions.get(path)
         assert queue is not None, f"path {path} is not subscribed"
-        value = await asyncio.wait_for(queue.get(), timeout=timeout_s)
+        value = await asyncio.wait_for(
+            self._get_and_process_erros(queue), timeout=timeout_s
+        )
         self._last[path] = value
         return value
 

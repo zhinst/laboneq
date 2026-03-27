@@ -1,12 +1,8 @@
 # Copyright 2025 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Literal
-
-from numpy.typing import ArrayLike
-
-from laboneq.core.types.enums.port_mode import PortMode
 from laboneq.dsl.experiment import Experiment
+from laboneq.dsl.parameter import Parameter
 
 def init_logging(level: int) -> None:
     """Initialize logging with the given Python log level."""
@@ -30,25 +26,67 @@ class ExperimentInfo:
                 Either fixed frequency or parameter uid can be None, but not both.
         """
 
-class SweepParameter:
-    def __init__(self, uid: str, values: ArrayLike, driven_by: list[str]):
-        """A representation of a sweep parameter."""
+class DeviceSetupBuilder:
+    def __init__(self): ...
+    def add_instrument(
+        self,
+        uid: str,
+        device_uid: str,
+        physical_device_uid: int,
+        options: list[str] | None = None,
+        reference_clock_source: str | None = None,
+        is_shfqc: bool = False,
+    ) -> None: ...
+    def add_signal_with_calibration(
+        self,
+        uid: str,
+        ports: list[str],
+        instrument_uid: str,
+        channel_type: str,
+        awg_core: int,
+        oscillator: OscillatorRef | None = None,
+        lo_frequency: float | Parameter | None = None,
+        voltage_offset: float | Parameter | None = None,
+        amplifier_pump: AmplifierPump | None = None,
+        port_mode: str | None = None,
+        automute: bool = False,
+        signal_delay: float = 0.0,
+        port_delay: float | Parameter | None = None,
+        range: tuple[float, str | None] | None = None,
+        precompensation: Precompensation | None = None,
+        added_outputs: list[OutputRoute] | None = None,
+        threshold: list[float] | None = None,
+    ) -> None: ...
+    def create_oscillator(
+        self,
+        uid: str,
+        frequency: float | Parameter,
+        modulation: str | None = None,
+    ) -> OscillatorRef: ...
+    def create_output_route(
+        self,
+        source_signal: str,
+        amplitude_scaling: float | Parameter | None = None,
+        phase_shift: float | Parameter | None = None,
+    ) -> OutputRoute: ...
 
-class Oscillator:
-    def __init__(self, uid: str, frequency: float | SweepParameter, is_hardware: bool):
-        """A representation of an oscillator."""
+class OscillatorRef:
+    """Reference to a oscillator."""
+
+class OutputRoute:
+    """A representation of an output route."""
 
 class AmplifierPump:
     def __init__(
         self,
         device: str,
         channel: int,
-        pump_frequency: float | SweepParameter | None = None,
-        pump_power: float | SweepParameter | None = None,
-        cancellation_phase: float | SweepParameter | None = None,
-        cancellation_attenuation: float | SweepParameter | None = None,
-        probe_frequency: float | SweepParameter | None = None,
-        probe_power: float | SweepParameter | None = None,
+        pump_frequency: float | Parameter | None = None,
+        pump_power: float | Parameter | None = None,
+        cancellation_phase: float | Parameter | None = None,
+        cancellation_attenuation: float | Parameter | None = None,
+        probe_frequency: float | Parameter | None = None,
+        probe_power: float | Parameter | None = None,
     ):
         """A representation of an amplifier pump configuration."""
 
@@ -73,81 +111,19 @@ class FirCompensation:
 class BounceCompensation:
     def __init__(self, delay: float, amplitude: float): ...
 
-class OutputRoute:
-    def __init__(
-        self,
-        source_channel: int,
-        amplitude_scaling: float | SweepParameter,
-        phase_shift: float | SweepParameter,
-    ): ...
-
-class Signal:
-    def __init__(
-        self,
-        uid: str,
-        awg_key: int,
-        device_uid: str,
-        oscillator: Oscillator | None,
-        lo_frequency: float | SweepParameter | None,
-        voltage_offset: float | SweepParameter | None,
-        kind: Literal["RF", "IQ", "INTEGRATION"],
-        amplifier_pump: AmplifierPump | None,
-        channels: list[int],
-        port_mode: PortMode | None,
-        automute: bool,
-        signal_delay: float,
-        port_delay: float | SweepParameter,
-        # value, unit (e.g. (1.0, 'volt')) or None
-        range: tuple[float, str] | None,
-        precompensation: Precompensation | None,
-        added_outputs: list[OutputRoute],
-    ):
-        """A representation of signal properties."""
-
-class Device:
-    def __init__(
-        self,
-        uid: str,
-        physical_device_uid: int,
-        kind: str,
-        is_shfqc: bool,
-    ):
-        """A representation of device properties."""
-
 class AwgInfo:
     def __init__(self, uid: int, number: list[int]):
         """A representation of AWG properties."""
 
-def build_experiment(
-    experiment: Experiment,
-    signals: list[Signal],
-    devices: list[Device],
-    awgs: list[AwgInfo],
-    desktop_setup: bool,
-) -> ExperimentInfo:
-    """Build a scheduled experiment.
-
-    Args:
-        experiment: Experiment description.
-        signals: List of signals.
-        devices: List of devices.
-        awgs: List of AWG information.
-        desktop_setup: Whether the experiment is being built for a desktop setup.
-
-    Returns:
-        An object containing the Rust experiment
-    """
-
 def serialize_experiment(
     experiment: Experiment,
+    device_setup: DeviceSetupBuilder,
     packed: bool = False,
 ) -> bytes:
     """Serialize an experiment to Cap'n Proto bytes."""
 
 def build_experiment_capnp(
     capnp_data: bytes,
-    signals: list[Signal],
-    devices: list[Device],
     awgs: list[AwgInfo],
     desktop_setup: bool,
     packed: bool = False,
@@ -202,6 +178,7 @@ def generate_pulse_sheet_schedule(
     Returns:
         A Python dict containing:
         - event_list: List of scheduler events
+        - event_list_truncated: Whether event generation hit the MAX_EVENTS_TO_PUBLISH limit
         - section_info: Section metadata with preorder map
         - section_signals_with_children: Signal hierarchy per section
         - sampling_rates: Sampling rates per device type

@@ -1,3 +1,11 @@
+# LabOne Q 26.4.0b4 (2026-03-27)
+
+## Bug Fixes
+
+- Fixed a bug where acquisition delay was not compensated in LRT mode. Users no longer need to manually add a port delay offset to the acquire signal when using long readout.
+- Fixed a bug where hold-off errors from a previous experiment could cause subsequent experiments to crash.
+- Fixed a bug where match-case against a near-time sweep parameter always executed the first case only.
+
 # LabOne Q 26.4.0b3 (2026-03-13)
 
 ## Features

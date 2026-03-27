@@ -56,9 +56,42 @@ def create_experiment():
 
 
 def run_experiment():
-    exp, setup = create_experiment()
+    setup = simple_hdawg_setup()
+    exp = simple.Experiment(
+        uid="test",
+        signals=[
+            simple.ExperimentSignal(
+                "q0/drive",
+                map_to=setup.logical_signal_groups["q0"].logical_signals["drive"],
+            ),
+        ],
+    )
+    pulse = simple.pulse_library.drag(uid="x90")
+    param = simple.SweepParameter(uid="sweep_param123", values=[1.0, 1.0])
+    with exp.acquire_loop_rt(count=1):
+        with exp.sweep(parameter=[param]):
+            with exp.section(uid="section"):
+                exp.play(
+                    "q0/drive", pulse, pulse_parameters={"sigma": param, "beta": 0.5}
+                )
+
     laboneq_compile(setup, exp)  # Smoke test to ensure the experiment is valid
-    return exp
+
+    device_setup_rs = compiler_rs.DeviceSetupBuilder()
+    device_setup_rs.add_instrument(
+        uid="device_hdawg",
+        device_type="HDAWG",
+        physical_device_uid=0,
+        is_shfqc=False,
+    )
+    device_setup_rs.add_signal_with_calibration(
+        uid="q0/drive",
+        instrument_uid="device_hdawg",
+        channel_type="IQ",
+        ports=["0", "1"],
+        awg_core=0,
+    )
+    return compiler_rs.serialize_experiment(exp, device_setup_rs, packed=False)
 
 
 def create_derived_param_experiment_calibration():
@@ -87,37 +120,27 @@ def create_derived_param_experiment_calibration():
                 exp.play("q0/drive", simple.pulse_library.const())
 
     laboneq_compile(setup, exp)  # Smoke test to ensure the experiment is valid
-    signal = compiler_rs.Signal(
-        uid="q0/drive",
-        awg_key=0,
-        device_uid="device_hdawg",
-        oscillator=compiler_rs.Oscillator(
-            uid="osc",
-            frequency=compiler_rs.SweepParameter(
-                uid="derived_param", values=[1e9, 2e9], driven_by=["param"]
-            ),
-            is_hardware=True,
-        ),
-        lo_frequency=None,
-        voltage_offset=None,
-        amplifier_pump=None,
-        kind="IQ",
-        channels=[0, 1],
-        port_mode=None,
-        automute=False,
-        signal_delay=0.0,
-        port_delay=0.0,
-        range=None,
-        precompensation=None,
-        added_outputs=[],
-    )
-    device = compiler_rs.Device(
+
+    device_setup_rs = compiler_rs.DeviceSetupBuilder()
+    device_setup_rs.add_instrument(
         uid="device_hdawg",
+        device_type="HDAWG",
         physical_device_uid=0,
-        kind="HDAWG",
         is_shfqc=False,
     )
-    return exp, [signal], [device]
+    device_setup_rs.add_signal_with_calibration(
+        uid="q0/drive",
+        instrument_uid="device_hdawg",
+        channel_type="IQ",
+        awg_core=0,
+        ports=["0", "1"],
+        oscillator=device_setup_rs.create_oscillator(
+            uid="osc",
+            frequency=derived,
+            modulation="HARDWARE",
+        ),
+    )
+    return compiler_rs.serialize_experiment(exp, device_setup_rs, packed=False)
 
 
 def create_derived_param_experiment_operation_field():
@@ -144,31 +167,21 @@ def create_derived_param_experiment_operation_field():
                 exp.delay("q0/drive", time=derived)
 
     laboneq_compile(setup, exp)  # Smoke test to ensure the experiment is valid
-    signal = compiler_rs.Signal(
-        uid="q0/drive",
-        awg_key=0,
-        device_uid="device_hdawg",
-        oscillator=None,
-        lo_frequency=None,
-        voltage_offset=None,
-        amplifier_pump=None,
-        kind="IQ",
-        channels=[0, 1],
-        port_mode=None,
-        automute=False,
-        signal_delay=0.0,
-        port_delay=0.0,
-        range=None,
-        precompensation=None,
-        added_outputs=[],
-    )
-    device = compiler_rs.Device(
+    device_setup_rs = compiler_rs.DeviceSetupBuilder()
+    device_setup_rs.add_instrument(
         uid="device_hdawg",
+        device_type="HDAWG",
         physical_device_uid=0,
-        kind="HDAWG",
         is_shfqc=False,
     )
-    return exp, [signal], [device]
+    device_setup_rs.add_signal_with_calibration(
+        uid="q0/drive",
+        instrument_uid="device_hdawg",
+        channel_type="IQ",
+        ports=["0", "1"],
+        awg_core=0,
+    )
+    return compiler_rs.serialize_experiment(exp, device_setup_rs, packed=False)
 
 
 def create_missing_signal_experiment():
@@ -186,4 +199,11 @@ def create_missing_signal_experiment():
         with exp.section(uid="section"):
             exp.delay("q1/drive", time=1e-6)
 
-    return exp, [], []
+    device_setup_rs = compiler_rs.DeviceSetupBuilder()
+    device_setup_rs.add_instrument(
+        uid="device_hdawg",
+        device_type="HDAWG",
+        physical_device_uid=0,
+        is_shfqc=False,
+    )
+    return compiler_rs.serialize_experiment(exp, device_setup_rs, packed=False)

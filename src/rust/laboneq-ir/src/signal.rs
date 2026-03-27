@@ -3,7 +3,7 @@
 
 use laboneq_common::types::AwgKey;
 use laboneq_dsl::{
-    signal_calibration::Precompensation,
+    signal_calibration::{OutputRoute, PortMode, Precompensation},
     types::{AmplifierPump, DeviceUid, Oscillator, Quantity, SignalUid, ValueOrParameter},
 };
 use laboneq_units::duration::{Duration, Second};
@@ -24,6 +24,7 @@ pub struct Signal {
     pub kind: SignalKind,
 
     // Calibration parameters
+    pub amplitude: Option<ValueOrParameter<f64>>,
     pub oscillator: Option<Oscillator>,
     pub lo_frequency: Option<ValueOrParameter<f64>>,
     pub voltage_offset: Option<ValueOrParameter<f64>>,
@@ -32,6 +33,7 @@ pub struct Signal {
     pub range: Option<Quantity>,
     pub precompensation: Option<Precompensation>,
     pub added_outputs: Vec<OutputRoute>,
+    pub thresholds: Vec<f64>,
 
     // Timing parameters
     pub port_delay: ValueOrParameter<Duration<Second>>,
@@ -57,37 +59,6 @@ impl FromStr for SignalKind {
             _ => Err(format!("Unknown signal type: {}", s)),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum PortMode {
-    LF,
-    RF,
-}
-
-impl FromStr for PortMode {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "lf" => Ok(PortMode::LF),
-            "rf" => Ok(PortMode::RF),
-            _ => Err(format!("Unknown port mode: {}", s)),
-        }
-    }
-}
-
-/// Output routing for SHFSG outputs.
-///
-/// The routing must always be within the same device and can either be to another signal
-/// defined in the experiment, or to an additional output of the same device that is not
-/// defined in the experiment.
-#[derive(Debug, Clone, PartialEq)]
-pub struct OutputRoute {
-    /// Source channel on the source signal
-    pub source_channel: u16,
-    pub amplitude_scaling: Option<ValueOrParameter<f64>>,
-    pub phase_shift: Option<ValueOrParameter<f64>>,
 }
 
 pub mod builder {
@@ -121,12 +92,14 @@ pub mod builder {
                     channels: smallvec![],
                     port_mode: None,
                     automute: false,
+                    amplitude: None,
                     signal_delay: 0.0.into(),
                     port_delay: ValueOrParameter::Value(seconds(0.0)),
                     start_delay: 0.0.into(),
                     range: None,
                     precompensation: None,
                     added_outputs: vec![],
+                    thresholds: vec![],
                 },
             }
         }
@@ -178,6 +151,26 @@ pub mod builder {
 
         pub fn add_output(mut self, output_route: OutputRoute) -> Self {
             self.inner.added_outputs.push(output_route);
+            self
+        }
+
+        pub fn amplitude(mut self, amplitude: ValueOrParameter<f64>) -> Self {
+            self.inner.amplitude = Some(amplitude);
+            self
+        }
+
+        pub fn automute(mut self, automute: bool) -> Self {
+            self.inner.automute = automute;
+            self
+        }
+
+        pub fn port_mode(mut self, port_mode: PortMode) -> Self {
+            self.inner.port_mode = Some(port_mode);
+            self
+        }
+
+        pub fn channels(mut self, channels: Vec<u16>) -> Self {
+            self.inner.channels = SmallVec::from_vec(channels);
             self
         }
 

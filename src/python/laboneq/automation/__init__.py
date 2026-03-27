@@ -6,14 +6,16 @@
 The package provides tools and building blocks to define automation frameworks.
 """
 
-from laboneq._automation.automation import Automation
-from laboneq._automation.layer import AutomationLayer
-from laboneq._automation.node import AutomationNode
-from laboneq._automation.status import AutomationStatus
+from laboneq.automation.automation import Automation
+from laboneq.automation.layer import AutomationLayer
+from laboneq.automation.logic import AutomationLogic
+from laboneq.automation.node import AutomationNode
+from laboneq.automation.status import AutomationStatus
 
 __all__ = [
     "Automation",
     "AutomationLayer",
+    "AutomationLogic",
     "AutomationNode",
     "AutomationStatus",
 ]

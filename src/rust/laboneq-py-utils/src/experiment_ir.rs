@@ -3,11 +3,12 @@
 
 use std::sync::Arc;
 
-use laboneq_dsl::types::ExternalParameterUid;
-use laboneq_ir::ExperimentIr;
 use pyo3::prelude::*;
 
-use crate::{pulse::PulseDef, py_object_interner::PyObjectInterner};
+use laboneq_dsl::types::ExternalParameterUid;
+use laboneq_ir::ExperimentIr;
+
+use crate::py_object_interner::PyObjectInterner;
 
 /// A Python representation of the Experiment IR.
 ///
@@ -17,5 +18,13 @@ use crate::{pulse::PulseDef, py_object_interner::PyObjectInterner};
 pub struct ExperimentIrPy {
     pub inner: ExperimentIr,
     pub py_object_store: Arc<PyObjectInterner<ExternalParameterUid>>,
-    pub pulses: Vec<PulseDef>,
+}
+
+#[pymethods]
+impl ExperimentIrPy {
+    fn device_type_by_uid(&self, device_uid: &str) -> String {
+        let uid = self.inner.id_store.get(device_uid).unwrap().into();
+        let device = self.inner.device_setup.device_by_uid(&uid).unwrap();
+        device.kind().to_string()
+    }
 }

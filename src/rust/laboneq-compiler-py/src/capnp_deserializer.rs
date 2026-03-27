@@ -15,28 +15,40 @@
 //! auto-generated `_s_<n>` names registered in the `NamedIdStore`, matching
 //! the legacy compiler path.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::num::NonZeroU32;
-use std::sync::Arc;
 
 use crate::error::{Error, Result};
+use crate::signal_properties::SignalProperties;
 
 use laboneq_capnp::pulse::v1::{
-    common_capnp, experiment_capnp, operation_capnp, pulse_capnp, section_capnp, sweep_capnp,
+    calibration_capnp, common_capnp, device_setup_capnp, experiment_capnp, operation_capnp,
+    pulse_capnp, section_capnp, sweep_capnp,
 };
+use laboneq_common::device_options::DeviceOptions;
 use laboneq_common::named_id::{NamedId, NamedIdStore};
+use laboneq_common::types::{
+    AuxiliaryDeviceKind, AwgKey, DeviceKind, PhysicalDeviceUid, ReferenceClock,
+};
 use laboneq_dsl::ExperimentNode;
+use laboneq_dsl::device_setup::AuxiliaryDevice;
 use laboneq_dsl::operation::{
     Acquire, AveragingLoop, Case, Chunking, Delay, Match, Operation, PlayPulse, PrngLoop,
     PrngSetup, PulseParameterValue, Reserve, ResetOscillatorPhase, Section, Sweep,
 };
-use laboneq_dsl::types::{
-    AcquisitionType, AveragingMode, ComplexOrFloat, ExternalParameterUid, HandleUid, Marker,
-    MarkerSelector, MatchTarget, NumericLiteral, ParameterUid, PrngSampleUid, PulseParameterUid,
-    PulseUid, RepetitionMode, SectionAlignment, SectionUid, SignalUid, SweepParameter, Trigger,
-    ValueOrParameter,
+use laboneq_dsl::signal_calibration::{
+    BounceCompensation, ExponentialCompensation, FirCompensation, HighPassCompensation,
+    OutputRoute, PortMode, Precompensation, SignalCalibration,
 };
-use laboneq_py_utils::pulse::{FunctionalPulse, PulseDef, PulseFunction, PulseKind, SampledPulse};
+use laboneq_dsl::types::{
+    AcquisitionType, AmplifierPump, AveragingMode, ComplexOrFloat, ExternalParameterUid,
+    FunctionalPulse, HandleUid, Marker, MarkerSelector, MatchTarget, NumericLiteral, Oscillator,
+    OscillatorKind, ParameterUid, PrngSampleUid, PulseDef, PulseFunction, PulseKind,
+    PulseParameterUid, PulseUid, Quantity, RepetitionMode, SampledPulse, SectionAlignment,
+    SectionUid, SignalUid, SweepParameter, Trigger, Unit, ValueOrParameter,
+};
+use laboneq_ir::signal::SignalKind;
+use laboneq_ir::system::AwgDevice;
 use laboneq_units::duration::seconds;
 use num_complex::Complex64;
 use numeric_array::NumericArray;
@@ -51,8 +63,12 @@ pub(crate) struct DeserializedExperiment {
     pub id_store: NamedIdStore,
     pub parameters: HashMap<ParameterUid, SweepParameter>,
     pub pulses: HashMap<PulseUid, PulseDef>,
-    pub available_signals: HashSet<SignalUid>,
     pub external_parameter_values: ExternalParameterStore,
+
+    // Device setup properties
+    pub awg_devices: Vec<AwgDevice>,
+    pub auxiliary_devices: Vec<AuxiliaryDevice>,
+    pub signals: Vec<SignalProperties>,
 }
 
 // === Pure helper functions ===
@@ -231,33 +247,6 @@ fn deserialize_play_after_from_match(
 }
 
 // === Pure sweep / constant deserialization ===
-
-fn deserialize_sweep_parameter(
-    uid: ParameterUid,
-    reader: &sweep_capnp::sweep_parameter::Reader<'_>,
-) -> Result<SweepParameter> {
-    use sweep_capnp::sweep_parameter::Which;
-
-    let values = match reader.which().map_err(Error::new)? {
-        Which::None(()) => {
-            let alias = text_to_str(reader.get_uid().map_err(Error::new)?).unwrap_or("<unknown>");
-            return Err(Error::new(format!(
-                "Sweep parameter '{alias}' has no values"
-            )));
-        }
-        Which::Linear(linear) => {
-            let linear = linear.map_err(Error::new)?;
-            let count = linear.get_count() as usize;
-            deserialize_linear_sweep(&linear, count)?
-        }
-        Which::ExplicitValues(explicit) => {
-            let explicit = explicit.map_err(Error::new)?;
-            deserialize_explicit_sweep(&explicit)?
-        }
-    };
-
-    SweepParameter::new(uid, values).map_err(Error::new)
-}
 
 fn deserialize_linear_sweep(
     reader: &sweep_capnp::linear_sweep::Reader<'_>,
@@ -499,10 +488,15 @@ struct Deserializer<'py> {
     handle_ids: Vec<NamedId>,
     section_uid_gen: SectionUidGenerator,
     external_parameter_values: ExternalParameterStore,
-    available_signals: HashSet<SignalUid>,
     parameters: HashMap<ParameterUid, SweepParameter>,
     pulses: HashMap<PulseUid, PulseDef>,
     pulse_definition_params: HashMap<PulseUid, HashMap<PulseParameterUid, PulseParameterValue>>,
+    awg_devices: Vec<AwgDevice>,
+    auxiliary_devices: Vec<AuxiliaryDevice>,
+    signals: Vec<SignalProperties>,
+    oscillators: Vec<Oscillator>,
+    // A map of driver -> derived parameters.
+    driving_parameters: HashMap<ParameterUid, Vec<ParameterUid>>,
 }
 
 impl<'py> Deserializer<'py> {
@@ -516,10 +510,14 @@ impl<'py> Deserializer<'py> {
             handle_ids: Vec::new(),
             section_uid_gen: SectionUidGenerator::new(),
             external_parameter_values: ExternalParameterStore::new(),
-            available_signals: HashSet::new(),
             parameters: HashMap::new(),
             pulses: HashMap::new(),
             pulse_definition_params: HashMap::new(),
+            awg_devices: Vec::new(),
+            auxiliary_devices: Vec::new(),
+            signals: Vec::new(),
+            oscillators: Vec::new(),
+            driving_parameters: HashMap::new(),
         }
     }
 
@@ -530,15 +528,10 @@ impl<'py> Deserializer<'py> {
         experiment: &experiment_capnp::experiment::Reader<'_>,
     ) -> Result<DeserializedExperiment> {
         validate_schema_version(experiment)?;
-        if !experiment.get_device_setup().is_null() {
-            return Err(Error::new(
-                "Experiment.deviceSetup is reserved and must not be set".to_string(),
-            ));
-        }
         self.prepass_register_uids(experiment)?;
-        self.register_signals();
         self.deserialize_sweep_params(experiment)?;
         self.deserialize_pulses(experiment)?;
+        self.deserialize_device_setup(experiment)?;
         let root = self.deserialize_root_sections(experiment)?;
 
         Ok(DeserializedExperiment {
@@ -546,8 +539,10 @@ impl<'py> Deserializer<'py> {
             id_store: self.id_store,
             parameters: self.parameters,
             pulses: self.pulses,
-            available_signals: self.available_signals,
             external_parameter_values: self.external_parameter_values,
+            awg_devices: self.awg_devices,
+            auxiliary_devices: self.auxiliary_devices,
+            signals: self.signals,
         })
     }
 
@@ -633,13 +628,6 @@ impl<'py> Deserializer<'py> {
         Ok(())
     }
 
-    /// Register experiment signals by table index.
-    fn register_signals(&mut self) {
-        for &named_id in &self.signal_ids {
-            self.available_signals.insert(SignalUid(named_id));
-        }
-    }
-
     /// Deserialize sweep parameters.
     fn deserialize_sweep_params(
         &mut self,
@@ -649,10 +637,45 @@ impl<'py> Deserializer<'py> {
         for (idx, param) in sweep_params.iter().enumerate() {
             let named_id = self.resolve_parameter_index(idx as u32)?;
             let uid = ParameterUid(named_id);
-            let sweep_param = deserialize_sweep_parameter(uid, &param)?;
+            let sweep_param = self.deserialize_sweep_parameter(uid, &param)?;
             self.parameters.insert(uid, sweep_param);
         }
         Ok(())
+    }
+
+    fn deserialize_sweep_parameter(
+        &mut self,
+        uid: ParameterUid,
+        reader: &sweep_capnp::sweep_parameter::Reader<'_>,
+    ) -> Result<SweepParameter> {
+        use sweep_capnp::sweep_parameter::Which;
+
+        let values = match reader.which().map_err(Error::new)? {
+            Which::None(()) => {
+                let alias =
+                    text_to_str(reader.get_uid().map_err(Error::new)?).unwrap_or("<unknown>");
+                return Err(Error::new(format!(
+                    "Sweep parameter '{alias}' has no values"
+                )));
+            }
+            Which::Linear(linear) => {
+                let linear = linear.map_err(Error::new)?;
+                let count = linear.get_count() as usize;
+                deserialize_linear_sweep(&linear, count)?
+            }
+            Which::ExplicitValues(explicit) => {
+                let explicit = explicit.map_err(Error::new)?;
+                for driver_idx in explicit.get_driven_by().map_err(Error::new)?.iter() {
+                    let driver_id = self.resolve_parameter_index(driver_idx)?;
+                    self.driving_parameters
+                        .entry(driver_id.into())
+                        .or_default()
+                        .push(uid);
+                }
+                deserialize_explicit_sweep(&explicit)?
+            }
+        };
+        SweepParameter::new(uid, values).map_err(Error::new)
     }
 
     /// Deserialize pulse definitions.
@@ -974,9 +997,17 @@ impl<'py> Deserializer<'py> {
         let param_uids = reader.get_parameters().map_err(Error::new)?;
         let mut parameters = Vec::with_capacity(param_uids.len() as usize);
         for idx in param_uids.iter() {
-            parameters.push(ParameterUid(self.resolve_parameter_index(idx)?));
+            let param_uid = ParameterUid(self.resolve_parameter_index(idx)?);
+            parameters.push(param_uid);
+            // Also include all derived parameters driven by the explicitly listed parameters.
+            if let Some(derived_params) = self.driving_parameters.get(&param_uid) {
+                for &derived in derived_params {
+                    if !parameters.contains(&derived) {
+                        parameters.push(derived);
+                    }
+                }
+            }
         }
-
         if parameters.is_empty() {
             return Err(Error::new("Sweep must have at least one parameter"));
         }
@@ -1497,6 +1528,449 @@ impl<'py> Deserializer<'py> {
             )),
         }
     }
+
+    fn deserialize_device_setup(
+        &mut self,
+        reader: &experiment_capnp::experiment::Reader<'_>,
+    ) -> Result<()> {
+        let reader = reader.get_device_setup().map_err(Error::new)?;
+        reader
+            .get_instruments()
+            .map_err(Error::new)?
+            .iter()
+            .try_for_each(|instrument| {
+                self.deserialize_instrument(instrument)
+                    .map_err(|e| Error::new(format!("Failed to deserialize instrument: {e}")))
+            })?;
+
+        self.deserialize_oscillators(reader)?;
+        self.deserialize_signals(&reader)?;
+        Ok(())
+    }
+
+    fn deserialize_oscillators(
+        &mut self,
+        reader: device_setup_capnp::device_setup::Reader<'_>,
+    ) -> Result<()> {
+        for osc in reader.get_oscillators().map_err(Error::new)?.iter() {
+            let uid = text_to_str(osc.get_uid().map_err(Error::new)?)?;
+            let frequency = self
+                .deserialize_value_f64(&osc.get_frequency().map_err(Error::new)?)?
+                .unwrap_or(ValueOrParameter::Value(0.0));
+            let kind: OscillatorKind = match osc.get_modulation_type().map_err(Error::new)? {
+                calibration_capnp::ModulationType::Auto => OscillatorKind::Auto,
+                calibration_capnp::ModulationType::Hardware => OscillatorKind::Hardware,
+                calibration_capnp::ModulationType::Software => OscillatorKind::Software,
+            };
+            let osc = Oscillator {
+                uid: self.id_store.get_or_insert(uid).into(),
+                frequency,
+                kind,
+            };
+            self.oscillators.push(osc);
+        }
+        Ok(())
+    }
+
+    /// Deserialize signals from the device setup section
+    fn deserialize_signals(
+        &mut self,
+        reader: &device_setup_capnp::device_setup::Reader<'_>,
+    ) -> Result<()> {
+        let signals_reader = reader.get_signals().map_err(Error::new)?;
+        let mut signals = Vec::with_capacity(signals_reader.len() as usize);
+
+        for signal in signals_reader.iter() {
+            let uid = text_to_str(signal.get_uid().map_err(Error::new)?)?;
+            let awg_key = signal.get_awg_core();
+            let device_uid = signal.get_instrument_uid().map_err(Error::new)?;
+
+            // Ports
+            let ports: Vec<&str> = signal
+                .get_ports()
+                .map_err(Error::new)?
+                .iter()
+                .map(|p| text_to_str(p.map_err(Error::new)?))
+                .collect::<Result<Vec<_>>>()?;
+            // Ports are string integers, convert them to integers and store as channels
+            let channels = ports
+                .iter()
+                .map(|p| {
+                    p.parse::<u16>()
+                        .map_err(|e| Error::new(format!("Invalid port number '{p}': {e}")))
+                })
+                .collect::<Result<Vec<u16>>>()?;
+
+            // Signal kind
+            let kind = match signal
+                .get_channel_type()
+                .map_err(Error::new)?
+                .to_str()
+                .map_err(Error::new)?
+            {
+                "IQ" => SignalKind::Iq,
+                "INTEGRATION" => SignalKind::Integration,
+                "RF" => SignalKind::Rf,
+                other => {
+                    return Err(Error::new(format!(
+                        "Unknown channel type '{other}' for signal '{uid}'"
+                    )));
+                }
+            };
+
+            let calibration = self
+                .deserialize_signal_calibration(signal.get_calibration().map_err(Error::new)?)
+                .map_err(|e| {
+                    Error::new(format!(
+                        "Failed to deserialize calibration for signal '{uid}': {e}"
+                    ))
+                })?;
+
+            let signal_props = SignalProperties {
+                uid: self.id_store.get_or_insert(uid).into(),
+                awg_key: AwgKey(awg_key),
+                device_uid: self
+                    .id_store
+                    .get_or_insert(text_to_str(device_uid).map_err(Error::new)?)
+                    .into(),
+                channels: channels.into(),
+                kind,
+
+                // Calibration fields
+                amplitude: calibration.amplitude,
+                port_mode: calibration.port_mode,
+                oscillator: calibration.oscillator,
+                lo_frequency: calibration.lo_frequency,
+                voltage_offset: calibration.voltage_offset,
+                amplifier_pump: calibration.amplifier_pump,
+                automute: calibration.automute,
+                range: calibration.range,
+                precompensation: calibration.precompensation,
+                added_outputs: calibration.added_outputs,
+                port_delay: calibration.port_delay,
+                signal_delay: calibration.signal_delay,
+                thresholds: calibration.thresholds,
+            };
+
+            signals.push(signal_props);
+        }
+        self.signals = signals;
+        Ok(())
+    }
+
+    fn deserialize_signal_calibration(
+        &mut self,
+        reader: calibration_capnp::signal_calibration::Reader<'_>,
+    ) -> Result<SignalCalibration> {
+        let oscillator = self.deserialize_oscillator(reader.get_oscillator())?;
+        let automute = reader.get_automute();
+        let signal_delay = reader.get_delay_signal().into();
+        let lo_frequency = self.deserialize_value_f64(
+            &reader
+                .get_local_oscillator_frequency()
+                .map_err(Error::new)?,
+        )?;
+        let voltage_offset =
+            self.deserialize_value_f64(&reader.get_voltage_offset().map_err(Error::new)?)?;
+        let port_delay = self
+            .deserialize_value_duration(&reader.get_port_delay().map_err(Error::new)?)?
+            .unwrap_or(ValueOrParameter::Value(0.0.into()));
+        let range = reader
+            .has_range()
+            .then(|| self.deserialize_range(reader.get_range().map_err(Error::new)?))
+            .transpose()?;
+        let amplitude = self.deserialize_value_f64(&reader.get_amplitude().map_err(Error::new)?)?;
+
+        let added_outputs_reader = reader.get_added_outputs().map_err(Error::new)?;
+        let mut added_outputs = Vec::with_capacity(added_outputs_reader.len() as usize);
+        for added_output in added_outputs_reader.iter() {
+            added_outputs.push(self.deserialize_added_output(added_output)?);
+        }
+
+        let port_mode = match reader.get_port_mode().map_err(Error::new)? {
+            calibration_capnp::PortMode::Lf => Some(PortMode::LF),
+            calibration_capnp::PortMode::Rf => Some(PortMode::RF),
+            calibration_capnp::PortMode::Unspecified => None,
+        };
+
+        let precompensation = reader
+            .has_precompensation()
+            .then(|| {
+                self.deserialize_precompensation(reader.get_precompensation().map_err(Error::new)?)
+            })
+            .transpose()?;
+
+        let amplifier_pump = reader
+            .has_amplifier_pump()
+            .then(|| {
+                self.deserialize_amplifier_pump(reader.get_amplifier_pump().map_err(Error::new)?)
+            })
+            .transpose()?;
+
+        let thresholds = reader
+            .has_threshold()
+            .then(|| -> Result<Vec<f64>> {
+                Ok(reader.get_threshold().map_err(Error::new)?.iter().collect())
+            })
+            .transpose()?
+            .unwrap_or_default();
+
+        let calibration = SignalCalibration {
+            oscillator,
+            automute,
+            signal_delay,
+            lo_frequency,
+            voltage_offset,
+            port_delay,
+            range,
+            added_outputs,
+            port_mode,
+            precompensation,
+            amplifier_pump,
+            amplitude,
+            thresholds,
+        };
+        Ok(calibration)
+    }
+
+    fn deserialize_oscillator(
+        &self,
+        reader: calibration_capnp::signal_calibration::oscillator::Reader<'_>,
+    ) -> Result<Option<Oscillator>> {
+        use calibration_capnp::signal_calibration::oscillator::Which;
+
+        if let Which::Value(v) = reader.which().map_err(Error::new)? {
+            let osc_uid = self.oscillators.get(v as usize).ok_or_else(|| {
+                Error::new(format!(
+                    "Oscillator index {v} out of bounds for signal calibration"
+                ))
+            })?;
+            Ok(Some(osc_uid.clone()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn deserialize_range(
+        &self,
+        reader: calibration_capnp::signal_range::Reader<'_>,
+    ) -> Result<Quantity> {
+        let range_unit = if reader.has_unit() {
+            match reader
+                .get_unit()
+                .map_err(Error::new)?
+                .to_string()
+                .map_err(Error::new)?
+                .to_lowercase()
+                .as_str()
+            {
+                "dbm" => Some(Unit::Dbm),
+                "volt" => Some(Unit::Volt),
+                other => {
+                    return Err(Error::new(format!("Unknown range unit '{other}'",)));
+                }
+            }
+        } else {
+            None
+        };
+        let q = Quantity {
+            value: reader.get_value(),
+            unit: range_unit,
+        };
+        Ok(q)
+    }
+
+    fn deserialize_added_output(
+        &self,
+        reader: calibration_capnp::output_route::Reader<'_>,
+    ) -> Result<OutputRoute> {
+        let source_signal = text_to_str(reader.get_source_signal().map_err(Error::new)?)?;
+        let amplitude_scaling =
+            self.deserialize_value_f64(&reader.get_amplitude_scaling().map_err(Error::new)?)?;
+        let phase_shift =
+            self.deserialize_value_f64(&reader.get_phase_shift().map_err(Error::new)?)?;
+
+        let route = OutputRoute {
+            // The source signal should actually be a logical signal name (to match current DSL),
+            // but the serializer currently puts the port number here, so we parse it as a port for now. This will be fixed in the serializer later.
+            source_channel: source_signal.parse().map_err(Error::new)?,
+            amplitude_scaling,
+            phase_shift,
+        };
+        Ok(route)
+    }
+
+    fn deserialize_precompensation(
+        &self,
+        reader: calibration_capnp::precompensation::Reader<'_>,
+    ) -> Result<Precompensation> {
+        let bounce = reader
+            .has_bounce()
+            .then(|| reader.get_bounce())
+            .transpose()
+            .map_err(Error::new)?
+            .map(|b| BounceCompensation {
+                delay: b.get_delay(),
+                amplitude: b.get_amplitude(),
+            });
+
+        let exponentials = reader
+            .has_exponentials()
+            .then(|| reader.get_exponentials())
+            .transpose()
+            .map_err(Error::new)?
+            .map(|list| {
+                list.iter()
+                    .map(|exp| ExponentialCompensation {
+                        timeconstant: exp.get_timeconstant(),
+                        amplitude: exp.get_amplitude(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let fir = reader
+            .has_fir()
+            .then(|| {
+                let fir = reader.get_fir().map_err(Error::new)?;
+                let coefficients = fir
+                    .get_coefficients()
+                    .map_err(Error::new)?
+                    .into_iter()
+                    .collect::<Vec<f64>>();
+                Ok::<FirCompensation, Error>(FirCompensation { coefficients })
+            })
+            .transpose()?;
+
+        let high_pass = reader
+            .has_high_pass()
+            .then(|| reader.get_high_pass())
+            .transpose()
+            .map_err(Error::new)?
+            .map(|hp| HighPassCompensation {
+                timeconstant: hp.get_timeconstant(),
+            });
+
+        let precompensation = Precompensation {
+            bounce,
+            exponential: exponentials,
+            fir,
+            high_pass,
+        };
+        Ok(precompensation)
+    }
+
+    fn deserialize_amplifier_pump(
+        &mut self,
+        reader: calibration_capnp::amplifier_pump::Reader<'_>,
+    ) -> Result<AmplifierPump> {
+        let amplifier_pump = AmplifierPump {
+            device: self
+                .id_store
+                .get_or_insert(text_to_str(reader.get_device_uid().map_err(Error::new)?)?)
+                .into(),
+            channel: reader.get_channel(),
+            pump_power: self
+                .deserialize_value_f64(&reader.get_pump_power().map_err(Error::new)?)?,
+            pump_frequency: self
+                .deserialize_value_f64(&reader.get_pump_frequency().map_err(Error::new)?)?,
+            probe_power: self
+                .deserialize_value_f64(&reader.get_probe_power().map_err(Error::new)?)?,
+            probe_frequency: self
+                .deserialize_value_f64(&reader.get_probe_frequency().map_err(Error::new)?)?,
+            cancellation_phase: self
+                .deserialize_value_f64(&reader.get_cancellation_phase().map_err(Error::new)?)?,
+            cancellation_attenuation: self.deserialize_value_f64(
+                &reader.get_cancellation_attenuation().map_err(Error::new)?,
+            )?,
+        };
+        Ok(amplifier_pump)
+    }
+
+    /// Deserialize an instrument entry from the device setup section
+    ///
+    /// NOTE: SHFQC split is already done at this point by the Python lib,
+    /// shall be moved here later when the split logic is implemented in Rust.
+    fn deserialize_instrument(
+        &mut self,
+        instrument: device_setup_capnp::instrument::Reader<'_>,
+    ) -> Result<()> {
+        enum InstrumentKind {
+            DeviceKind(DeviceKind),
+            AuxiliaryDeviceKind(AuxiliaryDeviceKind),
+        }
+
+        fn deserialize_reference_clock_source(
+            reference_clock_source: device_setup_capnp::ReferenceClock,
+        ) -> Option<ReferenceClock> {
+            match reference_clock_source {
+                device_setup_capnp::ReferenceClock::External => Some(ReferenceClock::External),
+                device_setup_capnp::ReferenceClock::Internal => Some(ReferenceClock::Internal),
+                device_setup_capnp::ReferenceClock::Unspecified => None,
+            }
+        }
+
+        let uid = instrument
+            .get_uid()
+            .map_err(Error::new)?
+            .to_string()
+            .map_err(Error::new)?;
+
+        let device_type = instrument
+            .get_device_type()
+            .map_err(Error::new)?
+            .to_string()
+            .map_err(Error::new)?;
+
+        let options = instrument
+            .get_options()
+            .map_err(Error::new)?
+            .iter()
+            .flat_map(|s| s.map(|s| s.to_string().map_err(Error::new)))
+            .collect::<Result<Vec<_>>>()?;
+
+        let reference_clock_source = deserialize_reference_clock_source(
+            instrument
+                .get_reference_clock_source()
+                .map_err(Error::new)?,
+        );
+        let physical_device_uid = instrument.get_physical_device_uid();
+        let is_shfqc = instrument.get_is_shfqc();
+        let device_kind = match device_type.as_str() {
+            "SHFQA" => InstrumentKind::DeviceKind(DeviceKind::Shfqa),
+            "SHFSG" => InstrumentKind::DeviceKind(DeviceKind::Shfsg),
+            "HDAWG" => InstrumentKind::DeviceKind(DeviceKind::Hdawg),
+            "UHFQA" => InstrumentKind::DeviceKind(DeviceKind::Uhfqa),
+            "ZQCS" => InstrumentKind::DeviceKind(DeviceKind::Zqcs),
+            "PQSC" => InstrumentKind::AuxiliaryDeviceKind(AuxiliaryDeviceKind::Pqsc),
+            "QHUB" => InstrumentKind::AuxiliaryDeviceKind(AuxiliaryDeviceKind::Qhub),
+            "SHFPPC" => InstrumentKind::AuxiliaryDeviceKind(AuxiliaryDeviceKind::Shfppc),
+            device_type => return Err(Error::new(format!("Unknown device type: {device_type}"))),
+        };
+
+        match device_kind {
+            InstrumentKind::DeviceKind(kind) => {
+                let mut builder = AwgDevice::builder(
+                    self.id_store.get_or_insert(uid).into(),
+                    PhysicalDeviceUid(physical_device_uid),
+                    kind,
+                );
+                builder = builder.shfqc(is_shfqc);
+                builder = builder.options(DeviceOptions::new(options));
+                if let Some(reference_clock) = reference_clock_source {
+                    builder = builder.reference_clock(reference_clock);
+                }
+                let awg_device = builder.build();
+                self.awg_devices.push(awg_device);
+            }
+            InstrumentKind::AuxiliaryDeviceKind(aux_device_kind) => {
+                let aux_device =
+                    AuxiliaryDevice::new(self.id_store.get_or_insert(uid).into(), aux_device_kind);
+                self.auxiliary_devices.push(aux_device);
+            }
+        };
+        Ok(())
+    }
 }
 
 // === Entry point ===
@@ -1528,50 +2002,5 @@ pub(crate) fn deserialize_experiment(
             .get_root::<experiment_capnp::experiment::Reader<'_>>()
             .map_err(Error::new)?;
         Deserializer::new(py).deserialize(&experiment)
-    }
-}
-
-// === Post-processing ===
-
-/// Post-pass: add derived sweep parameters to each sweep section.
-///
-/// Mirrors `collect_derived_parameters` in `py_conversion.rs`. After signal
-/// processing in the capnp path, `builder.driving_parameters` is populated
-/// (by `py_signal_to_signal` / `extract_parameter`). This pass walks the
-/// deserialized tree and adds any missing derived parameters to each sweep's
-/// parameter list.
-pub(crate) fn fix_derived_parameters(
-    node: &mut ExperimentNode,
-    driving_parameters: &HashMap<ParameterUid, HashSet<ParameterUid>>,
-) {
-    if let Operation::Sweep(ref mut sweep) = node.kind {
-        let mut to_add = Vec::new();
-        for &param_uid in &sweep.parameters {
-            collect_derived_recursive(param_uid, driving_parameters, &mut to_add);
-        }
-        for d in to_add {
-            if !sweep.parameters.contains(&d) {
-                sweep.parameters.push(d);
-            }
-        }
-    }
-    for child in &mut node.children {
-        let child = Arc::make_mut(child);
-        fix_derived_parameters(child, driving_parameters);
-    }
-}
-
-fn collect_derived_recursive(
-    uid: ParameterUid,
-    driving_parameters: &HashMap<ParameterUid, HashSet<ParameterUid>>,
-    collected: &mut Vec<ParameterUid>,
-) {
-    if let Some(derived_set) = driving_parameters.get(&uid) {
-        for &d in derived_set {
-            if !collected.contains(&d) {
-                collected.push(d);
-                collect_derived_recursive(d, driving_parameters, collected);
-            }
-        }
     }
 }

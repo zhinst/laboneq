@@ -387,10 +387,7 @@ impl<'a> SampledEventHandler<'a> {
             None
         };
         Ok(SampledEventHandler {
-            command_table_tracker: CommandTableTracker::new(
-                awg.device_kind.clone(),
-                awg.signal_kind,
-            ),
+            command_table_tracker: CommandTableTracker::new(awg.device_kind, awg.signal_kind),
             shfppc_sweeper_config_tracker: SHFPPCSweeperConfigTracker::new(),
             seqc_tracker,
             declarations_generator,

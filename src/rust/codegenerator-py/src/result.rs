@@ -6,18 +6,18 @@
 //! This module defines the [`AwgCodeGenerationResultPy`] class, which is used to
 //! represent the result of the code generation process for an AWG.
 use laboneq_common::named_id::NamedIdStore;
-use pyo3::prelude::*;
+use pyo3::{IntoPyObjectExt, prelude::*};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use codegenerator::ir::compilation_job::ChannelIndex;
 use codegenerator::ir::compilation_job::DeviceUid;
 use codegenerator::ir::{Samples, compilation_job::AwgKind};
-use codegenerator::result::ParameterPhaseIncrement;
 use codegenerator::result::SeqCGenOutput;
 use codegenerator::result::ShfPpcSweepJson;
 use codegenerator::result::SignalType;
 use codegenerator::result::{AwgCodeGenerationResult, MarkerMode};
+use codegenerator::result::{FixedValueOrParameter, ParameterPhaseIncrement};
 
 use crate::waveform_sampler::WaveformSamplerPy;
 
@@ -84,17 +84,17 @@ impl SampledWaveformPy {
     }
 }
 
-#[pyclass(name = "IntegrationWeight")]
+#[pyclass(name = "IntegrationKernel")]
 #[derive(Debug)]
-pub(crate) struct IntegrationWeightPy {
+pub(crate) struct IntegrationKernelPy {
     #[pyo3(get)]
-    pub signals: HashSet<String>,
+    pub signals: Vec<String>,
     #[pyo3(get)]
     pub samples_i: Py<PyAny>,
     #[pyo3(get)]
     pub samples_q: Py<PyAny>,
     #[pyo3(get)]
-    pub downsampling_factor: Option<usize>,
+    pub downsampling_factor: Option<u8>,
     #[pyo3(get)]
     pub basename: String,
 }
@@ -103,8 +103,8 @@ pub(crate) struct IntegrationWeightPy {
 // - Py<PyAny> fields (samples_i, samples_q) use PyO3's thread-safe drop mechanism
 // - Other fields (HashSet, String, Option<usize>) are inherently Send/Sync
 // - No thread-local storage or thread-specific state
-unsafe impl Send for IntegrationWeightPy {}
-unsafe impl Sync for IntegrationWeightPy {}
+unsafe impl Send for IntegrationKernelPy {}
+unsafe impl Sync for IntegrationKernelPy {}
 
 #[pyclass(name = "SignalIntegrationInfo")]
 #[derive(Debug)]
@@ -141,7 +141,7 @@ impl PpcSweeperConfigPy {
 
 /// Result structure for single AWG code generation.
 #[pyclass(name = "AwgCodeGenerationResult", frozen)]
-pub struct AwgCodeGenerationResultPy {
+pub(crate) struct AwgCodeGenerationResultPy {
     #[pyo3(get)]
     awg_properties: AwgPropertiesPy,
     #[pyo3(get)]
@@ -152,8 +152,10 @@ pub struct AwgCodeGenerationResultPy {
     command_table: Option<String>,
     #[pyo3(get)]
     shf_sweeper_config: Option<Py<PpcSweeperConfigPy>>,
+    #[pyo3(get)]
     sampled_waveforms: Vec<Py<SampledWaveformPy>>,
-    integration_weights: Vec<Py<IntegrationWeightPy>>,
+    #[pyo3(get)]
+    integration_kernels: Vec<Py<IntegrationKernelPy>>,
     #[pyo3(get)]
     signal_delays: HashMap<String, f64>,
     #[pyo3(get)]
@@ -163,7 +165,11 @@ pub struct AwgCodeGenerationResultPy {
     #[pyo3(get)]
     feedback_register_config: FeedbackRegisterConfigPy,
     #[pyo3(get)]
-    channel_properties: Vec<ChannelPropertiesPy>,
+    channel_properties: Vec<Py<ChannelPropertiesPy>>,
+    #[pyo3(get)]
+    integration_weights: Vec<IntegrationWeightPy>,
+    #[pyo3(get)]
+    integration_unit_allocations: Vec<Py<IntegrationUnitAllocationPy>>,
 }
 
 #[pyclass(name = "AwgProperties", skip_from_py_object)]
@@ -194,7 +200,7 @@ impl AwgPropertiesPy {
 // SAFETY: Safe to Send/Sync across threads.
 // - All Py<T> fields rely on PyO3's delayed reference count mechanism for safe
 //   cross-thread drops (see https://docs.rs/pyo3/0.28.0/pyo3/struct.Py.html#impl-Drop-for-Py%3CT%3E)
-// - SampledWaveformPy and IntegrationWeightPy are themselves Send/Sync
+// - SampledWaveformPy and IntegrationKernelPy are themselves Send/Sync
 // - All other fields are standard Send/Sync types (String, Vec, HashMap, Option, etc.)
 // - No thread-local storage or thread-specific state
 // This enables passing compiled results to async executors and background threads.
@@ -202,7 +208,7 @@ unsafe impl Send for AwgCodeGenerationResultPy {}
 unsafe impl Sync for AwgCodeGenerationResultPy {}
 
 impl AwgCodeGenerationResultPy {
-    pub fn create(
+    pub(crate) fn create(
         py: Python,
         mut result: AwgCodeGenerationResult<WaveformSamplerPy>,
         id_store: &NamedIdStore,
@@ -226,13 +232,13 @@ impl AwgCodeGenerationResultPy {
                 .unwrap()
             })
             .collect();
-        let integration_weights: Vec<Py<IntegrationWeightPy>> = result
-            .integration_weights
+        let integration_kernels: Vec<Py<IntegrationKernelPy>> = result
+            .integration_kernels
             .into_iter()
             .map(|weight| {
                 Py::new(
                     py,
-                    IntegrationWeightPy {
+                    IntegrationKernelPy {
                         signals: weight
                             .signals
                             .iter()
@@ -326,17 +332,62 @@ impl AwgCodeGenerationResultPy {
             target_feedback_register: result.feedback_register_config.target_feedback_register,
         };
 
-        let channel_properties = result
-            .channel_properties
+        let mut channel_properties = Vec::with_capacity(
+            result.output_channel_properties.len() + result.input_channel_properties.len(),
+        ); // Mixed both input and output
+
+        for output in result.output_channel_properties.into_iter() {
+            channel_properties.push(
+                ChannelPropertiesPy {
+                    signal: id_store.resolve(output.signal).unwrap().to_string(),
+                    channel: output.channel,
+                    direction: "OUT".to_string(),
+                    marker_mode: output.marker_mode.map(|marker_mode| match marker_mode {
+                        MarkerMode::Trigger => "TRIGGER".to_string(),
+                        MarkerMode::Marker => "MARKER".to_string(),
+                    }),
+                    hw_oscillator_index: output.hw_oscillator_index,
+                    amplitude: output.amplitude.map(|amp| {
+                        fixed_value_or_parameterf64_to_pyany(py, &amp, id_store).unwrap()
+                    }),
+                }
+                .into_pyobject(py)
+                .unwrap()
+                .unbind(),
+            );
+        }
+
+        for properties in result.input_channel_properties.into_iter() {
+            channel_properties.push(
+                ChannelPropertiesPy {
+                    signal: id_store.resolve(properties.signal).unwrap().to_string(),
+                    channel: properties.channel,
+                    direction: "IN".to_string(),
+                    marker_mode: None, // Input channels don't have marker modes
+                    hw_oscillator_index: properties.hw_oscillator_index,
+                    amplitude: None, // Input channels don't have amplitude settings
+                }
+                .into_pyobject(py)
+                .unwrap()
+                .unbind(),
+            );
+        }
+
+        let integration_unit_allocations = result
+            .integrator_allocations
             .into_iter()
-            .map(|properties| ChannelPropertiesPy {
-                signal: id_store.resolve_unchecked(properties.signal).to_string(),
-                channel: properties.channel,
-                marker_mode: properties.marker_mode.map(|marker_mode| match marker_mode {
-                    MarkerMode::Trigger => "TRIGGER".to_string(),
-                    MarkerMode::Marker => "MARKER".to_string(),
-                }),
-                hw_oscillator_index: properties.hw_oscillator_index,
+            .map(|alloc| {
+                let alloc = IntegrationUnitAllocationPy {
+                    signal: id_store.resolve_unchecked(alloc.signal).to_string(),
+                    integration_units: alloc
+                        .integration_units
+                        .into_iter()
+                        .map(|c| c as u16)
+                        .collect(),
+                    kernel_count: alloc.kernel_count.get(),
+                    thresholds: alloc.thresholds,
+                };
+                Py::new(py, alloc).expect("Failed to create IntegrationUnitAllocationPy")
             })
             .collect();
 
@@ -364,27 +415,38 @@ impl AwgCodeGenerationResultPy {
             command_table,
             shf_sweeper_config,
             sampled_waveforms,
-            integration_weights,
+            integration_kernels,
             signal_delays,
             integration_lengths,
             parameter_phase_increment_map,
             feedback_register_config,
             channel_properties,
+            integration_weights: result
+                .integration_weights
+                .into_iter()
+                .map(|w| IntegrationWeightPy {
+                    integration_units: w.integration_units.into_iter().map(|c| c as u16).collect(),
+                    basename: w.basename,
+                    downsampling_factor: w.downsampling_factor,
+                })
+                .collect(),
+            integration_unit_allocations,
         };
         Ok(output)
     }
 }
 
-#[pymethods]
-impl AwgCodeGenerationResultPy {
-    #[getter]
-    fn sampled_waveforms(&self) -> &Vec<Py<SampledWaveformPy>> {
-        &self.sampled_waveforms
-    }
-
-    #[getter]
-    fn integration_weights(&self) -> &Vec<Py<IntegrationWeightPy>> {
-        &self.integration_weights
+fn fixed_value_or_parameterf64_to_pyany(
+    py: Python,
+    value: &FixedValueOrParameter<f64>,
+    id_store: &NamedIdStore,
+) -> PyResult<Py<PyAny>> {
+    match value {
+        FixedValueOrParameter::Value(v) => v.into_py_any(py),
+        FixedValueOrParameter::Parameter(p) => {
+            let param_string = id_store.resolve(*p).unwrap();
+            param_string.to_string().into_py_any(py)
+        }
     }
 }
 
@@ -397,8 +459,6 @@ pub struct SeqCGenOutputPy {
     result_handle_maps: HashMap<ResultSourcePy, Vec<Vec<String>>>,
     #[pyo3(get)]
     measurements: Vec<MeasurementPy>,
-    #[pyo3(get)]
-    integration_unit_allocations: Vec<IntegrationUnitAllocationPy>,
 }
 
 impl SeqCGenOutputPy {
@@ -441,20 +501,12 @@ impl SeqCGenOutputPy {
                 length: m.length,
             })
             .collect();
-        let mut integration_unit_allocations = Vec::new();
-        for alloc in results.integration_unit_allocations {
-            integration_unit_allocations.push(IntegrationUnitAllocationPy {
-                signal: id_store.resolve_unchecked(alloc.signal).to_string(),
-                integrator_channels: alloc.channels.into_iter().map(|c| c as i64).collect(),
-                kernel_count: alloc.kernel_count,
-            });
-        }
+
         SeqCGenOutputPy {
             awg_results,
             total_execution_time: results.total_execution_time,
             result_handle_maps,
             measurements,
-            integration_unit_allocations,
         }
     }
 }
@@ -499,31 +551,37 @@ pub(crate) struct ResultSourcePy {
 #[pyclass(
     name = "IntegrationUnitAllocation",
     eq,
-    hash,
+    ord,
     frozen,
     skip_from_py_object
 )]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub(crate) struct IntegrationUnitAllocationPy {
     #[pyo3(get)]
     pub signal: String,
     #[pyo3(get)]
-    pub integrator_channels: Vec<i64>,
+    pub integration_units: Vec<u16>,
     #[pyo3(get)]
     pub kernel_count: u8,
+    #[pyo3(get)]
+    pub thresholds: Vec<f64>,
 }
 
 #[pyclass(name = "ChannelProperties", skip_from_py_object)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug)]
 pub(crate) struct ChannelPropertiesPy {
     #[pyo3(get)]
     pub signal: String,
     #[pyo3(get)]
     pub channel: ChannelIndex,
     #[pyo3(get)]
+    pub direction: String,
+    #[pyo3(get)]
     pub marker_mode: Option<String>,
     #[pyo3(get)]
     pub hw_oscillator_index: Option<u16>,
+    #[pyo3(get)]
+    pub amplitude: Option<Py<PyAny>>, // Can be either a float or a parameter reference (string)
 }
 
 #[pyclass(name = "SeqCProgram", skip_from_py_object)]
@@ -541,4 +599,15 @@ pub(crate) struct SeqCProgramPy {
     sequencer: String,
     #[pyo3(get)]
     sampling_rate: Option<f64>,
+}
+
+#[pyclass(name = "IntegrationWeight", skip_from_py_object)]
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct IntegrationWeightPy {
+    #[pyo3(get)]
+    pub integration_units: Vec<u16>,
+    #[pyo3(get)]
+    pub basename: String,
+    #[pyo3(get)]
+    pub downsampling_factor: u8,
 }

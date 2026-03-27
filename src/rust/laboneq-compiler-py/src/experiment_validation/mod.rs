@@ -6,14 +6,13 @@ use crate::error::Result;
 use crate::experiment::Experiment;
 use crate::signal_view::{SignalView, signal_views};
 use laboneq_ir::system::DeviceSetup;
-use laboneq_py_utils::pulse::PulseDef;
 use std::collections::{HashMap, HashSet};
 
 mod validate_parameters;
 use laboneq_common::types::AwgKey;
 use laboneq_dsl::{
     ExperimentNode,
-    types::{ParameterUid, PulseUid, SectionUid, SignalUid, SweepParameter},
+    types::{ParameterUid, PulseDef, PulseUid, SectionUid, SignalUid, SweepParameter},
 };
 
 mod validate_operations;

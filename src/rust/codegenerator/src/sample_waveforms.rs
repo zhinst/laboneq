@@ -6,7 +6,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::Result;
-use crate::ir::compilation_job::{AwgCore, DeviceKind, Signal, SignalKind};
+use crate::ir::compilation_job::{AwgCore, DeviceKind, Signal};
 use crate::ir::experiment::PulseParametersId;
 use crate::ir::{IrNode, NodeKind, PlayAcquire, PlayHold, Samples, SignalUid};
 use crate::signature::{Uid, WaveformSignature};
@@ -80,7 +80,15 @@ pub struct IntegrationKernel<'a> {
     signals: Vec<SignalUid>,
 }
 
-impl IntegrationKernel<'_> {
+impl<'a> IntegrationKernel<'a> {
+    fn new(mut signals: Vec<SignalUid>, properties: KernelProperties<'a>) -> Self {
+        signals.sort(); // Ensure deterministic order of signals for testing and code generation
+        Self {
+            properties,
+            signals,
+        }
+    }
+
     pub fn pulse_id(&self) -> &str {
         self.properties.pulse_id
     }
@@ -93,25 +101,31 @@ impl IntegrationKernel<'_> {
         self.properties.oscillator_frequency
     }
 
-    pub fn signals(&self) -> &Vec<SignalUid> {
+    pub fn signals(&self) -> &[SignalUid] {
         &self.signals
     }
+}
+
+pub trait SampledIntegrationKernel: Send + Sync {
+    fn signals(&self) -> &[SignalUid];
+    fn basename(&self) -> &str;
+    fn downsampling_factor(&self) -> Option<u8>;
 }
 
 /// A trait for sampling waveforms.
 pub trait SampleWaveforms {
     type Signature: SampledWaveformSignature + Send + Sync;
-    type IntegrationWeight: Send + Sync;
+    type SampledIntegrationKernel: SampledIntegrationKernel;
     type PulseParameters: Sync;
 
     fn supports_waveform_sampling(awg: &AwgCore) -> bool;
 
     /// Calculates integration weights for a batch of integration kernels.
-    fn batch_calculate_integration_weights(
+    fn sample_integration_kernels(
         &self,
         awg: &AwgCore,
         kernels: Vec<IntegrationKernel<'_>>,
-    ) -> Result<Vec<Self::IntegrationWeight>>;
+    ) -> Result<Vec<Self::SampledIntegrationKernel>>;
 
     /// Samples and compresses a batch of waveform candidates.
     fn batch_sample_and_compress(
@@ -574,10 +588,7 @@ pub(crate) fn collect_integration_kernels<'a>(
     node: &'a IrNode,
     awg: &AwgCore,
 ) -> Result<Vec<IntegrationKernel<'a>>> {
-    let has_integration_signals = awg
-        .signals
-        .iter()
-        .any(|s| s.kind == SignalKind::INTEGRATION);
+    let has_integration_signals = awg.signals.iter().any(|s| !s.is_output());
     if !has_integration_signals {
         // No integration signals, no need to collect integration weights
         return Ok(vec![]);
@@ -605,10 +616,7 @@ pub(crate) fn collect_integration_kernels<'a>(
     }
     let kernels = unique_weights
         .into_iter()
-        .map(|(properties, signals)| IntegrationKernel {
-            properties,
-            signals,
-        })
+        .map(|(properties, signals)| IntegrationKernel::new(signals, properties))
         .collect();
     Ok(kernels)
 }

@@ -11,15 +11,15 @@ import networkx as nx
 from matplotlib.axes._axes import Axes
 from matplotlib.patches import Patch
 
-from laboneq._automation.layer import AutomationLayer, RootLayer
-from laboneq._automation.node import AutomationNode, RootNode
-from laboneq._automation.serialization import (
+from laboneq.automation.layer import AutomationLayer, RootLayer
+from laboneq.automation.node import AutomationNode, RootNode
+from laboneq.automation.serialization import (
     load_automation_parameters_from_file,
     save_automation_parameters_to_file,
 )
-from laboneq._automation.status import AutomationStatus as Status
-from laboneq._automation.utils.dict_parser import nested_update
-from laboneq._automation.utils.plot_utils import hierarchical_layout
+from laboneq.automation.status import AutomationStatus as Status
+from laboneq.automation.utils.dict_parser import nested_update
+from laboneq.automation.utils.plot_utils import hierarchical_layout
 from laboneq.core.utilities.add_exception_note import add_note
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.workflow.timestamps import local_timestamp
@@ -184,11 +184,11 @@ class Automation:
             if k != self.ROOT_LAYER.key or include_root
         )
 
-    def next_layer_key(self, layer_key: str) -> str:
+    def next_layer_key(self, layer_key: str) -> str | None:
         """Return the next layer key.
 
         !!! note
-            This method returns "__end__" once the end of the automation framework has
+            This method returns `None` once the end of the automation framework has
             been reached.
 
         Arguments:
@@ -205,7 +205,7 @@ class Automation:
             if next_idx < len(self._layer_lookup):
                 return list(self._layer_lookup.keys())[next_idx]
             else:
-                return "__end__"
+                return None
         else:
             err = KeyError(layer_key)
             add_note(err, f"Layer {layer_key!r} is not in the automation framework.")
@@ -411,7 +411,7 @@ class Automation:
         """Run the automation framework."""
         self.update_timestamp()
         new_layer_key = next(self.layer_keys(include_root=False))
-        while new_layer_key != "__end__":
+        while new_layer_key is not None:
             # Break when encountering such a layer
             layer = self.get_layer(new_layer_key)
             if layer.status in Status.inactive():
@@ -433,7 +433,7 @@ class Automation:
         parameters: dict[str, dict[str, Any]] | None = None,
         force: bool = False,
         **kwargs,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str | None, dict]:
         """Run the automation layer.
 
         Arguments:
@@ -452,7 +452,7 @@ class Automation:
 
         # Verify that the layer is runnable
         if not layer.is_runnable(self, node_keys=node_keys) and not force:
-            return "__end__", {}
+            return None, {}
 
         # Set temporary node keys
         original_node_keys = layer.node_keys
@@ -505,19 +505,18 @@ class Automation:
 
         return new_layer_key, new_params
 
-    def _run_layer(self, layer_key: str) -> tuple[str, dict]:
+    def _run_layer(self, layer_key: str) -> tuple[str | None, dict]:
         """Run the automation layer.
 
         !!! note
             This is an internal method that is meant to be called via `run_layer`.
 
         !!! important
-            When the end of the graph is reached, return the next layer key "__end__".
+            When the end of the graph is reached, return the new layer key `None`.
             The `next_layer_key` method does this automatically.
 
         Arguments:
             layer_key: The layer key.
-            node_keys: The node keys (optional). By default, the whole layer is run.
 
         Returns:
             new_layer_key: The key of the next layer to be executed.
@@ -642,7 +641,6 @@ class Automation:
         # Choose a color for each status
         status_color_map = {
             Status.ROOT: "blue",
-            Status.EMPTY: "white",
             Status.FAILED: "red",
             Status.READY: "orange",
             Status.PASSED: "green",

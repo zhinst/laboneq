@@ -11,6 +11,16 @@ pub enum NumericLiteral {
     Complex(Complex64),
 }
 
+impl NumericLiteral {
+    /// Convert Int variant to Float, leave others unchanged
+    pub fn to_float(self) -> NumericLiteral {
+        match self {
+            NumericLiteral::Int(v) => NumericLiteral::Float(v as f64),
+            other => other, // Float and Complex unchanged
+        }
+    }
+}
+
 impl Eq for NumericLiteral {}
 
 impl std::fmt::Display for NumericLiteral {
@@ -93,6 +103,23 @@ impl PartialEq for NumericLiteral {
             }
             (NumericLiteral::Complex(a), NumericLiteral::Int(b)) => {
                 a.re == *b as f64 && a.im == 0.0
+            }
+        }
+    }
+}
+
+impl std::hash::Hash for NumericLiteral {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        match self {
+            NumericLiteral::Int(v) => {
+                laboneq_common::utils::normalize_f64(*v as f64).hash(state);
+            }
+            NumericLiteral::Float(v) => {
+                laboneq_common::utils::normalize_f64(*v).hash(state);
+            }
+            NumericLiteral::Complex(v) => {
+                laboneq_common::utils::normalize_f64(v.re).hash(state);
+                laboneq_common::utils::normalize_f64(v.im).hash(state);
             }
         }
     }

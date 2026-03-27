@@ -41,9 +41,13 @@ impl<'a> ParameterResolver<'a> {
         if let Some(sweep_param) = self.iteration.get(param) {
             return Ok(*sweep_param);
         }
-        if self.nt_parameters.get(param).is_some() {
-            return Ok(0);
-        }
+        // In principle, the full list of NT param values is available in self.parameters,
+        // so the iteration index can be determined, but this should not be needed
+        assert!(
+            self.nt_parameters.get(param).is_none(),
+            "Cannot resolve NT iteration"
+        );
+
         unreachable!("Undefined parameter '{}'.", param.0)
     }
 

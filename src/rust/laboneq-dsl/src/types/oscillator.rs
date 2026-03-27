@@ -5,8 +5,19 @@ use crate::types::{OscillatorUid, ValueOrParameter};
 
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum OscillatorKind {
+    Auto,
     Hardware,
     Software,
+}
+
+impl std::fmt::Display for OscillatorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            OscillatorKind::Auto => write!(f, "Auto"),
+            OscillatorKind::Hardware => write!(f, "Hardware"),
+            OscillatorKind::Software => write!(f, "Software"),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

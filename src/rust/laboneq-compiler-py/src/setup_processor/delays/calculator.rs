@@ -5,9 +5,8 @@ use std::collections::HashMap;
 
 use laboneq_common::device_traits::DeviceTraits;
 use laboneq_common::types::{DeviceKind, PhysicalDeviceUid};
-use laboneq_dsl::signal_calibration::Precompensation;
+use laboneq_dsl::signal_calibration::{OutputRoute, Precompensation};
 use laboneq_dsl::types::SignalUid;
-use laboneq_ir::signal::OutputRoute;
 use laboneq_units::duration::{Duration, Second};
 use smallvec::SmallVec;
 

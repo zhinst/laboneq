@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_dsl::types::{AcquisitionType, SweepParameter};
+use laboneq_dsl::types::{AcquisitionType, PulseDef, SweepParameter};
 
 use crate::{node::IrNode, system::DeviceSetup};
 
@@ -15,6 +15,7 @@ pub struct ExperimentIr {
     // Remove when Python bindings are no longer needed
     pub id_store: Arc<NamedIdStore>,
     pub parameters: Vec<SweepParameter>,
+    pub pulses: Vec<PulseDef>,
     // NOTE: The usage of Arc here is to allow sharing the id_store across Python bindings
     // Remove when Python bindings are no longer needed
     pub device_setup: Arc<DeviceSetup>,

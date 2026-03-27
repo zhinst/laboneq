@@ -37,7 +37,7 @@ from laboneq.controller.recipe_processor import (
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.data.recipe import IntegratorAllocation, NtStepKey
+from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import ArtifactsCodegen
 
 if TYPE_CHECKING:
@@ -344,7 +344,6 @@ class UHFQAAwg(CoreBase):
                 # TODO(2K): Cleanup arguments to prepare_upload_all_integration_weights
                 self.prepare_upload_all_integration_weights(
                     artifacts,
-                    recipe_data.recipe.integrator_allocations,
                     rt_exec_step.kernel_indices_ref,
                 )
             )
@@ -436,32 +435,26 @@ class UHFQAAwg(CoreBase):
     def prepare_upload_all_integration_weights(
         self,
         artifacts: ArtifactsCodegen,
-        integrator_allocations: list[IntegratorAllocation],
         kernel_ref: str | None,
     ) -> NodeCollector:
         nc = NodeCollector(base=f"/{self._serial}/")
 
         weights_info = get_weights_info(artifacts, kernel_ref)
-        for signal_id, weight_names in weights_info.items():
-            integrator_allocation = next(
-                ia for ia in integrator_allocations if ia.signal_id == signal_id
-            )
-
+        for channel, weight_names in weights_info.items():
             for weight in weight_names:
-                for channel in integrator_allocation.channels:
-                    weight_wave_real = get_wave(weight.id + "_i.wave", artifacts.waves)
-                    weight_wave_imag = get_wave(weight.id + "_q.wave", artifacts.waves)
-                    nc.add(
-                        f"qas/0/integration/weights/{channel}/real",
-                        np.ascontiguousarray(weight_wave_real.samples),
-                        filename=weight.id + "_i.wave",
-                    )
-                    nc.add(
-                        f"qas/0/integration/weights/{channel}/imag",
-                        # Note conjugation here
-                        -np.ascontiguousarray(weight_wave_imag.samples),
-                        filename=weight.id + "_q.wave",
-                    )
+                weight_wave_real = get_wave(weight.id + "_i.wave", artifacts.waves)
+                weight_wave_imag = get_wave(weight.id + "_q.wave", artifacts.waves)
+                nc.add(
+                    f"qas/0/integration/weights/{channel}/real",
+                    np.ascontiguousarray(weight_wave_real.samples),
+                    filename=weight.id + "_i.wave",
+                )
+                nc.add(
+                    f"qas/0/integration/weights/{channel}/imag",
+                    # Note conjugation here
+                    -np.ascontiguousarray(weight_wave_imag.samples),
+                    filename=weight.id + "_q.wave",
+                )
 
         return nc
 

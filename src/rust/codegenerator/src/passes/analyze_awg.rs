@@ -175,7 +175,7 @@ fn traverse_awg_ir(node: &IrNode, info: &mut AwgCompilationInfo) -> Result<()> {
 }
 
 pub(crate) fn analyze_awg_ir(node: &IrNode, awg: &AwgCore) -> Result<AwgCompilationInfo> {
-    let mut info = AwgCompilationInfo::new(awg.device_kind().clone());
+    let mut info = AwgCompilationInfo::new(*awg.device_kind());
     traverse_awg_ir(node, &mut info)?;
     Ok(info)
 }

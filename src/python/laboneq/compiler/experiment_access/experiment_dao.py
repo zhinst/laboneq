@@ -19,13 +19,11 @@ from laboneq.data.compilation_job import (
 
 if TYPE_CHECKING:
     from laboneq.dsl.experiment import Experiment
-    from laboneq.dsl.parameter import Parameter
 
 
 class ExperimentDAO:
     def __init__(self, experiment: ExperimentInfo):
         self.source_experiment: Experiment | None = None
-        self.dsl_parameters: list[Parameter] = []
         self.source_experiment = experiment.src
         self.dsl_parameters = experiment.dsl_parameters
         self._uid = experiment.uid
@@ -89,12 +87,6 @@ class ExperimentDAO:
 
     def port_mode(self, signal_id):
         return self._signals[signal_id].port_mode
-
-    def threshold(self, signal_id):
-        return self._signals[signal_id].threshold
-
-    def amplitude(self, signal_id) -> float | ParameterInfo | None:
-        return self._signals[signal_id].amplitude
 
     def amplifier_pump(self, signal_id) -> AmplifierPumpInfo | None:
         return self._signals[signal_id].amplifier_pump

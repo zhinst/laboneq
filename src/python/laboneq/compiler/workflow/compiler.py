@@ -29,7 +29,6 @@ from laboneq.compiler.workflow.neartime_execution import (
 )
 from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums.trigger_mode import TriggerMode
 from laboneq.data.awg_info import AWGInfo, AwgKey
 from laboneq.data.compilation_job import (
     ChunkingInfo,
@@ -232,10 +231,6 @@ class Compiler:
     ) -> ScheduledExperiment:
         rt_compiler = RealtimeCompiler(
             experiment,
-            [
-                self._experiment_dao.signal_info(uid)
-                for uid in self._experiment_dao.signals()
-            ],
             self._signal_objects,
             self._settings,
         )
@@ -387,24 +382,10 @@ class Compiler:
 
         for signal_id in self._experiment_dao.signals():
             signal_info: SignalInfo = self._experiment_dao.signal_info(signal_id)
-            device_type = DeviceType.from_device_info_type(
-                signal_info.device.device_type
-            )
             device_id = signal_info.device.uid
 
             awg = awgs_by_signal_id[signal_id]
-            awg.trigger_mode = TriggerMode.NONE
             device_info = self._experiment_dao.device_info(device_id)
-
-            if self._is_desktop_setup:
-                awg.trigger_mode = {
-                    DeviceType.HDAWG: TriggerMode.DIO_TRIGGER
-                    if self._has_uhfqa
-                    else TriggerMode.INTERNAL_READY_CHECK,
-                    DeviceType.SHFSG: TriggerMode.INTERNAL_TRIGGER_WAIT,
-                    DeviceType.SHFQA: TriggerMode.INTERNAL_TRIGGER_WAIT,
-                    DeviceType.UHFQA: TriggerMode.DIO_WAIT,
-                }.get(device_type, TriggerMode.NONE)
 
             signal_type = signal_info.type.value
 

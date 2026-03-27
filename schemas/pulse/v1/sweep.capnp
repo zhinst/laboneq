@@ -73,4 +73,7 @@ struct ExplicitSweep {
     intValues @2 :List(Int64);
     # Integer-valued sweep points.
   }
+
+  drivenBy @3 :List(Common.Id);
+  # `Experiment.sweep_parameters` index.
 }

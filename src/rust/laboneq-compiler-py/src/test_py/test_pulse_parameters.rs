@@ -9,7 +9,7 @@ use laboneq_dsl::{
 use pyo3::ffi::c_str;
 
 use super::load_module;
-use crate::experiment_py_to_experiment;
+use crate::capnp_deserializer::deserialize_experiment;
 use pyo3::prelude::*;
 
 use crate::include_py_file;
@@ -28,21 +28,20 @@ fn test_pulse_parameters_handling() {
     Python::attach(|py| {
         let module = load_module(py, py_testfile);
         let run_experiment = module.getattr("run_experiment").unwrap();
-        let experiment = run_experiment.call0().unwrap();
+        let capnp_data = run_experiment.call0().unwrap();
 
-        // Test Experiment building
-        let (experiment, _) =
-            experiment_py_to_experiment(&experiment, vec![], vec![], vec![]).unwrap();
-        let id_store = experiment.id_store;
+        let deserialized =
+            deserialize_experiment(py, capnp_data.extract::<&[u8]>().unwrap(), false).unwrap();
+        let id_store = deserialized.id_store;
         // Test sweep parameter collection
-        let parameter = experiment.parameters.iter().next().unwrap().1;
+        let parameter = deserialized.parameters.iter().next().unwrap().1;
         assert_eq!(id_store.resolve(parameter.uid).unwrap(), "sweep_param123");
 
         // Test pulse parameters
         let mut asserted_sigma = false;
         let mut asserted_beta = false;
 
-        visit_node(&experiment.root, &mut |node: &ExperimentNode| {
+        visit_node(&deserialized.root, &mut |node: &ExperimentNode| {
             if let Operation::PlayPulse(play) = &node.kind {
                 for (param_uid, param) in &play.parameters {
                     let param_name = id_store.resolve(*param_uid).unwrap();

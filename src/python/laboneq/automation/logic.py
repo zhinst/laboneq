@@ -6,11 +6,11 @@ from typing import TYPE_CHECKING
 
 import attrs
 
-from laboneq._automation.utils.dict_parser import nested_parameter_update
+from laboneq.automation.utils.dict_parser import nested_parameter_update
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 if TYPE_CHECKING:
-    from laboneq._automation import AutomationLayer
+    from laboneq.automation import AutomationLayer
 
 
 @classformatter
@@ -27,7 +27,7 @@ class AutomationLogic(ABC):
     iterations: int | None = None
 
     @abstractmethod
-    def run_executable(self, layer: "AutomationLayer") -> tuple[str, dict]:
+    def run_executable(self, layer: "AutomationLayer") -> tuple[str | None, dict]:
         """Run the executable.
 
         Arguments:

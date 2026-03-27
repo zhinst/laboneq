@@ -20,10 +20,9 @@ from laboneq.compiler.common.integration_times import (
     IntegrationTimes,
     SignalIntegrationInfo,
 )
-from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.seqc.linker import AwgWeights, SeqCGenOutput, SeqCProgram
 from laboneq.core.types.enums.wave_type import WaveType
-from laboneq.data.awg_info import AWGInfo, AwgKey
+from laboneq.data.awg_info import AwgKey
 from laboneq.data.scheduled_experiment import (
     COMPLEX_USAGE,
     CodegenWaveform,
@@ -46,7 +45,6 @@ class CodeGenerator(ICodeGenerator):
     def __init__(
         self,
         experiment_ir: compiler_rs.ExperimentIr,
-        signals: list[SignalObj],
         settings: CompilerSettings | dict | None = None,
     ):
         if settings is not None:
@@ -57,9 +55,7 @@ class CodeGenerator(ICodeGenerator):
         else:
             self._settings = CompilerSettings()
         self._experiment_ir = experiment_ir
-        self._awgs: dict[AwgKey, AWGInfo] = {
-            signal.awg.key: signal.awg for signal in signals
-        }
+        self._awg_keys: list[AwgKey] = []
         self._awg_properties: dict[AwgKey, codegen_rs.AwgProperties] = {}
         self._src: dict[AwgKey, SeqCProgram] = {}
         self._wave_indices_all: dict[AwgKey, dict[str, tuple[int, WaveType]]] = {}
@@ -73,8 +69,7 @@ class CodeGenerator(ICodeGenerator):
         self._sampled_waveforms: dict[AwgKey, list[SampledWaveform]] = {}
         self._integration_times: dict[str, SignalIntegrationInfo] = {}
         self._signal_delays: SignalDelays = {}
-        # awg key -> signal id -> kernel index -> kernel data
-        self._integration_weights: dict[AwgKey, list[codegen_rs.IntegrationWeight]] = (
+        self._integration_kernels: dict[AwgKey, list[codegen_rs.IntegrationKernel]] = (
             defaultdict(dict)
         )
         self._result_handle_maps: dict[ResultSource, list[set[str]]] = {}
@@ -84,19 +79,20 @@ class CodeGenerator(ICodeGenerator):
         self._shfppc_sweep_configs: dict[AwgKey, dict[str, object]] = {}
         self._total_execution_time: float | None = None
         self._measurements: list[codegen_rs.Measurement] = []
-        self._integration_unit_allocations: list[
-            codegen_rs.IntegrationUnitAllocation
-        ] = []
+        self._integration_unit_allocations: dict[
+            AwgKey, list[codegen_rs.IntegrationUnitAllocation]
+        ] = {}
         # Channel properties by device UID
-        self._channel_properties: dict[str, list[codegen_rs.ChannelProperties]] = (
+        self._channel_properties: dict[AwgKey, list[codegen_rs.ChannelProperties]] = (
             defaultdict(list)
         )
+        self._integration_weights: dict[AwgKey, AwgWeights] = {}
 
     def get_output(self):
         return SeqCGenOutput(
             awg_properties=self._awg_properties,
             signal_delays=self.signal_delays(),
-            integration_weights=self.integration_weights(),
+            integration_weights=self._integration_weights,
             integration_times=self.integration_times(),
             result_handle_maps=self.result_handle_maps(),
             src=self.src(),
@@ -113,42 +109,6 @@ class CodeGenerator(ICodeGenerator):
             integration_unit_allocations=self._integration_unit_allocations,
             channel_properties=self._channel_properties,
         )
-
-    @staticmethod
-    def _sort_integration_weights_for_output(
-        awgs: list[AWGInfo],
-        integration_weights: dict[AwgKey, list[codegen_rs.IntegrationWeight]],
-    ) -> dict[AwgKey, dict[str, list[codegen_rs.IntegrationWeight]]]:
-        """Sort the integration weights for output to ensure determinism."""
-        integration_weights_grouped = {}
-        for awg in awgs:
-            iw_aw = {}
-            for integration_weight in integration_weights.get(awg.key, []):
-                for signal_id in integration_weight.signals:
-                    iw_aw.setdefault(signal_id, [])
-                    iw_aw[signal_id].append(integration_weight)
-            iw_aw = {
-                signal.id: iw_aw[signal.id]
-                for signal in awg.signals
-                if signal.id in iw_aw
-            }
-            integration_weights_grouped[awg.key] = iw_aw
-        return integration_weights_grouped
-
-    def integration_weights(self) -> dict[AwgKey, AwgWeights]:
-        integration_weights_sorted = self._sort_integration_weights_for_output(
-            self._awgs.values(), self._integration_weights
-        )
-        iws_awgs = {}
-        for awg_key, integration_weights in integration_weights_sorted.items():
-            awg_weights = AwgWeights()
-            for signal_id, weights in integration_weights.items():
-                awg_weights[signal_id] = [
-                    WeightInfo(iw.basename, iw.downsampling_factor or 1)
-                    for iw in weights
-                ]
-            iws_awgs[awg_key] = awg_weights
-        return iws_awgs
 
     def result_handle_maps(self) -> dict[ResultSource, list[set[str]]]:
         return self._result_handle_maps
@@ -199,24 +159,27 @@ class CodeGenerator(ICodeGenerator):
         self._append_to_pulse_map(signature_pulse_map, sig_string)
 
     def _gen_waves(self):
-        integration_weights_sorted = self._sort_integration_weights_for_output(
-            self._awgs.values(), self._integration_weights
-        )
-        for awg in self._awgs.values():
-            awg_properties = self._awg_properties[awg.key]
+        for awg_key in self._awg_keys:
+            device_type: str = self._experiment_ir.device_type_by_uid(awg_key.device_id)
+            awg_properties = self._awg_properties[awg_key]
             # Handle integration weights separately
-            integration_weights = integration_weights_sorted.get(awg.key, {})
-            for signal_obj in awg.signals:
-                for weight in integration_weights.get(signal_obj.id, []):
-                    if awg.device_type.supports_complex_waves:
+            integration_weights = self._integration_kernels.get(awg_key, [])
+            # Group by signal
+            weights_by_signal = defaultdict(list)
+            for weight in integration_weights:
+                for signal in weight.signals:
+                    weights_by_signal[signal].append(weight)
+            for signal, weights in weights_by_signal.items():
+                for weight in weights:
+                    if device_type == "SHFQA":
                         self._save_wave_bin(
                             CodeGenerator.SHFQA_COMPLEX_SAMPLE_SCALING
                             * (weight.samples_i - 1j * weight.samples_q),
                             None,
                             weight.basename,
                             "",
-                            device_id=awg.device_id,
-                            signal_id=signal_obj.id,
+                            device_id=awg_key.device_id,
+                            signal_id=signal,
                             downsampling_factor=weight.downsampling_factor,
                         )
                     else:
@@ -226,10 +189,10 @@ class CodeGenerator(ICodeGenerator):
                         self._save_wave_bin(
                             weight.samples_q, None, weight.basename, "_q"
                         )
-            for sampled_waveform in self._sampled_waveforms.get(awg.key, []):
+            for sampled_waveform in self._sampled_waveforms.get(awg_key, []):
                 sampled_signature = sampled_waveform.signature
                 sig_string = sampled_waveform.signature_string
-                if awg.device_type.supports_binary_waves:
+                if device_type != "SHFQA":
                     if awg_properties.signal_type == "SINGLE":
                         self._save_wave_bin(
                             sampled_signature.samples_i,
@@ -279,7 +242,7 @@ class CodeGenerator(ICodeGenerator):
                                 sig_string,
                                 "_marker2",
                             )
-                elif awg.device_type.supports_complex_waves:
+                else:
                     signal_id = min(sampled_waveform.signals)
                     self._save_wave_bin(
                         CodeGenerator.SHFQA_COMPLEX_SAMPLE_SCALING
@@ -290,14 +253,10 @@ class CodeGenerator(ICodeGenerator):
                         sampled_signature.pulse_map,
                         sig_string,
                         "",
-                        device_id=awg.device_id,
+                        device_id=awg_key.device_id,
                         signal_id=signal_id,
                         hold_start=sampled_signature.hold_start,
                         hold_length=sampled_signature.hold_length,
-                    )
-                else:
-                    raise RuntimeError(
-                        f"Device type {awg.device_type} has invalid supported waves config."
                     )
 
         # check that there are no duplicate filenames in the wave pool (QCSW-1079)
@@ -329,7 +288,6 @@ class CodeGenerator(ICodeGenerator):
 
         codegen_result = codegen_rs.generate_code(
             ir_experiment=self._experiment_ir,
-            awgs=list(self._awgs.values()),
             settings=settings,
         )
         self._total_execution_time = codegen_result.total_execution_time
@@ -340,15 +298,16 @@ class CodeGenerator(ICodeGenerator):
             for k, v in codegen_result.result_handle_maps.items()
         }
         self._measurements = codegen_result.measurements
-        self._integration_unit_allocations = codegen_result.integration_unit_allocations
 
         for awg_code_output in codegen_result.awg_results:
             awg_key = AwgKey(*awg_code_output.awg_properties.key)
+            self._integration_unit_allocations[awg_key] = (
+                awg_code_output.integration_unit_allocations
+            )
+            self._awg_keys.append(awg_key)
 
             self._awg_properties[awg_key] = awg_code_output.awg_properties
-            self._channel_properties[awg_key.device_id].extend(
-                awg_code_output.channel_properties
-            )
+            self._channel_properties[awg_key].extend(awg_code_output.channel_properties)
             for signal, delay in awg_code_output.signal_delays.items():
                 self._signal_delays[signal] = SignalDelay(on_device=delay)
             for signal, integration_time in awg_code_output.integration_lengths.items():
@@ -356,7 +315,15 @@ class CodeGenerator(ICodeGenerator):
                     is_play=integration_time.is_play,
                     length_in_samples=integration_time.length,
                 )
-            self._integration_weights[awg_key] = awg_code_output.integration_weights
+            self._integration_kernels[awg_key] = awg_code_output.integration_kernels
+            self._integration_weights[awg_key] = [
+                WeightInfo(
+                    id=iw.basename,
+                    integration_units=iw.integration_units,
+                    downsampling_factor=iw.downsampling_factor,
+                )
+                for iw in awg_code_output.integration_weights
+            ]
 
             self._sampled_waveforms[awg_key] = awg_code_output.sampled_waveforms
             seqc_program = awg_code_output.seqc

@@ -8,10 +8,16 @@ use laboneq_dsl::types::SignalUid;
 use laboneq_error::{bail, laboneq_error};
 
 use crate::Result;
-use crate::ir::compilation_job::{AwgCore, AwgKey, ChannelIndex, DeviceKind, SignalKind};
+use crate::ir::compilation_job::{AwgCore, AwgKey, ChannelIndex, DeviceKind};
 use crate::ir::experiment::AcquisitionType;
 use crate::ir::{IrNode, NodeKind};
-use crate::result::IntegrationUnitAllocation;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct IntegrationUnitAllocation {
+    pub signal: SignalUid,
+    pub units: Vec<u8>,
+    pub kernel_count: NonZero<ChannelIndex>,
+}
 
 /// Allocate integration units based on the acquisition nodes in the IR tree, the AWG cores,
 /// and the acquisition type.
@@ -25,7 +31,6 @@ pub(crate) fn allocate_integration_units(
 ) -> Result<Vec<IntegrationUnitAllocation>> {
     let mut kernels = KernelCollection::default();
     visit_nodes(node, &mut kernels)?;
-    // TODO: Why allocate e.g. on UHFQA when no kernels are used?
     let kernel_counts = kernels.kernel_counts;
     let awg_by_signal = awgs
         .iter()
@@ -38,13 +43,13 @@ pub(crate) fn allocate_integration_units(
         .flat_map(|awg| {
             awg.signals
                 .iter()
-                .filter(|s| matches!(s.kind, SignalKind::INTEGRATION))
+                .filter(|s| !s.is_output())
+                .filter(|s| kernel_counts.contains_key(&s.uid))
         })
         .collect();
 
     // Sort for alignment in feedback register, place qudits before qubits
-    integration_signals
-        .sort_by_key(|s| kernel_counts.get(&s.uid).map(|a| a.get()).unwrap_or(0) <= 1);
+    integration_signals.sort_by_key(|s| kernel_counts.get(&s.uid).map(|a| a.get() <= 1).unwrap());
 
     let mut integration_unit_alloc: HashMap<AwgKey, Vec<(SignalUid, Vec<ChannelIndex>)>> =
         HashMap::new();
@@ -68,11 +73,11 @@ pub(crate) fn allocate_integration_units(
         .into_values()
         .flat_map(|signals| {
             signals.into_iter().map(|(signal, channels)| {
-                let kernel_count = kernel_counts.get(&signal).map(|c| c.get());
+                let kernel_count = kernel_counts.get(&signal).copied().unwrap();
                 IntegrationUnitAllocation {
                     signal,
-                    channels,
-                    kernel_count: kernel_count.unwrap_or(0),
+                    units: channels,
+                    kernel_count,
                 }
             })
         })

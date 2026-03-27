@@ -5,10 +5,11 @@ use std::collections::HashMap;
 
 use laboneq_common::device_traits::DeviceTraits;
 use laboneq_common::types::{AwgKey, DeviceKind};
+use laboneq_dsl::signal_calibration::PortMode;
 use laboneq_dsl::types::{
     AmplifierPump, DeviceUid, Oscillator, OscillatorKind, SignalUid, ValueOrParameter,
 };
-use laboneq_ir::signal::{PortMode, Signal, SignalKind};
+use laboneq_ir::signal::{Signal, SignalKind};
 use laboneq_ir::system::{AwgDevice, DeviceSetup};
 use laboneq_scheduler::SignalInfo;
 

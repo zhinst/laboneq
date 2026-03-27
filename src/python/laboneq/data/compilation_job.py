@@ -16,7 +16,7 @@ from laboneq.data.calibration import CancellationSource
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
 
-    from laboneq.core.types.enums.acquisition_type import AcquisitionType
+    from laboneq.core.types.enums import AcquisitionType
     from laboneq.data.calibration import (
         BounceCompensation,
         ExponentialCompensation,
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         HighPassCompensation,
         PortMode,
     )
+    from laboneq.dsl.calibration.oscillator import Oscillator
     from laboneq.dsl.experiment import Experiment
     from laboneq.dsl.parameter import Parameter
     from laboneq.executor.executor import Statement
@@ -105,13 +106,6 @@ class DeviceInfo:
     reference_clock_source: ReferenceClockSourceInfo | None = None
     is_qc: bool | None = None
     followers: list[str] = field(default_factory=list)
-
-
-@dataclass
-class OscillatorInfo:
-    uid: str
-    frequency: float | ParameterInfo | None = None
-    is_hardware: bool | None = None
 
 
 @dataclass()
@@ -244,7 +238,7 @@ class AmplifierPumpInfo:
 class SignalInfo:
     uid: str
     device: DeviceInfo = None
-    oscillator: OscillatorInfo | None = None
+    oscillator: Oscillator | None = None
     channels: list[int] = field(default_factory=list)
     channel_to_port: dict[str, str] = field(default_factory=dict)
     type: SignalInfoType = None
@@ -290,6 +284,8 @@ class ExperimentInfo:
     src: Experiment | None = field(default=None)
     # All DSL parameters used in the experiment.
     dsl_parameters: list[Parameter] = field(default_factory=list)
+    # Map from driver -> driven parameters
+    driving_parameters: dict[str, set[str]] = field(default_factory=dict)
 
 
 @dataclass

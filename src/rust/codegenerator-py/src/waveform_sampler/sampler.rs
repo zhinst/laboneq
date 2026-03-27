@@ -4,12 +4,11 @@
 use codegenerator::ir::SignalUid;
 use codegenerator_utils::pulse_parameters::PulseParameterDeduplicator;
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_dsl::types::ExternalParameterUid;
+use laboneq_dsl::types::{ExternalParameterUid, PulseDef};
 use laboneq_error::{LabOneQError, PyErrorWithContext, WithContext, bail};
-use laboneq_py_utils::pulse::PulseDef;
 use laboneq_py_utils::py_export::pulse_def_to_py;
 use laboneq_py_utils::py_object_interner::PyObjectInterner;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use pyo3::types::{PyList, PyTuple};
@@ -22,8 +21,8 @@ use codegenerator::ir::compilation_job::{
 use codegenerator::ir::experiment::{AcquisitionType, PulseParametersId};
 use codegenerator::signature::{SamplesSignatureID, Uid, WaveformSignature};
 use codegenerator::waveform_sampler::{
-    CompressedWaveformPart, IntegrationKernel, SampleWaveforms, SampledWaveformCollection,
-    SampledWaveformSignature, WaveformSamplingCandidate,
+    CompressedWaveformPart, IntegrationKernel, SampleWaveforms, SampledIntegrationKernel,
+    SampledWaveformCollection, SampledWaveformSignature, WaveformSamplingCandidate,
 };
 use codegenerator::{Result, ir::Samples};
 
@@ -118,11 +117,25 @@ impl PlaySamplesPy {
 
 #[derive(Debug)]
 pub struct IntegrationWeight {
-    pub signals: HashSet<SignalUid>,
+    pub signals: Vec<SignalUid>,
     pub samples_i: Py<PyAny>,
     pub samples_q: Py<PyAny>,
-    pub downsampling_factor: Option<usize>,
+    pub downsampling_factor: Option<u8>,
     pub basename: String,
+}
+
+impl SampledIntegrationKernel for IntegrationWeight {
+    fn signals(&self) -> &[SignalUid] {
+        &self.signals
+    }
+
+    fn basename(&self) -> &str {
+        &self.basename
+    }
+
+    fn downsampling_factor(&self) -> Option<u8> {
+        self.downsampling_factor
+    }
 }
 
 /// WaveformSamplerPy is a wrapper around Python implementation of waveform sampling.
@@ -240,7 +253,7 @@ impl WaveformSamplerPy<'_> {
 
 impl SampleWaveforms for WaveformSamplerPy<'_> {
     type Signature = SampledWaveformSignaturePy;
-    type IntegrationWeight = IntegrationWeight;
+    type SampledIntegrationKernel = IntegrationWeight;
     type PulseParameters = PulseParametersPy;
 
     fn supports_waveform_sampling(awg: &AwgCore) -> bool {
@@ -374,11 +387,11 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
     /// Samples integration weights for the given kernels using the Python sampler.
     ///
     /// This function samples the given integration kernels into integration weights.
-    fn batch_calculate_integration_weights(
+    fn sample_integration_kernels(
         &self,
         awg: &AwgCore,
         kernels: Vec<IntegrationKernel<'_>>,
-    ) -> Result<Vec<Self::IntegrationWeight>> {
+    ) -> Result<Vec<Self::SampledIntegrationKernel>> {
         let integration_signals = awg
             .signals
             .iter()
@@ -392,8 +405,6 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
             }
             return Ok(vec![]);
         };
-        let signal_map: HashMap<SignalUid, &Arc<Signal>> =
-            integration_signals.iter().map(|s| (s.uid, *s)).collect();
         Python::attach(|py| {
             let mixer_type = mixer_type.map(|mixer| {
                 let mixer_type_py: MixerTypePy = mixer.into();
@@ -431,18 +442,7 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
                 bound_weights.push(BoundIntegrationWeight::new(
                     samples_i,
                     samples_q,
-                    kernel
-                        .signals()
-                        .iter()
-                        .map(|s| {
-                            signal_map
-                                .get(s)
-                                .expect(
-                                    "Internal error: Integration weight on non-integration signal",
-                                )
-                                .uid
-                        })
-                        .collect(),
+                    kernel.signals().to_vec(),
                 )?);
             }
             let out = create_integration_weights(py, bound_weights, awg.device_kind())?;
@@ -694,10 +694,14 @@ fn create_integration_weights(
     let mut integration_weights: Vec<IntegrationWeight> = Vec::with_capacity(bound_weights.len());
     if let Some(downsampling_factor) = common_downsampling_factor {
         for weight in bound_weights.into_iter() {
-            let (samples_i, samples_q) =
-                downsample_samples(py, weight.samples_i, weight.samples_q, downsampling_factor)?;
+            let (samples_i, samples_q) = downsample_samples(
+                py,
+                weight.samples_i,
+                weight.samples_q,
+                downsampling_factor as usize,
+            )?;
             let integration_weight = IntegrationWeight {
-                signals: weight.signals.iter().copied().collect(),
+                signals: weight.signals,
                 samples_i: samples_i.arr.unbind(),
                 samples_q: samples_q.arr.unbind(),
                 downsampling_factor: Some(downsampling_factor),
@@ -708,7 +712,7 @@ fn create_integration_weights(
     } else {
         for weight in bound_weights.into_iter() {
             let integration_weight = IntegrationWeight {
-                signals: weight.signals.iter().copied().collect(),
+                signals: weight.signals,
                 samples_i: weight.samples_i.arr.unbind(),
                 samples_q: weight.samples_q.arr.unbind(),
                 downsampling_factor: None,
@@ -743,7 +747,7 @@ fn downsample_samples<'py>(
 fn eval_common_downsampling_factor(
     weights: &Vec<BoundIntegrationWeight<'_>>,
     device: &DeviceKind,
-) -> Result<Option<usize>> {
+) -> Result<Option<u8>> {
     // The maximum length of integration weights for SHFQA, UHFQA.
     const INTEGRATION_WEIGHT_MAX_LENGTH: usize = 4096;
     // The maximum downsampling factor for SHFQA with LRT option.
@@ -767,7 +771,7 @@ fn eval_common_downsampling_factor(
     if common_downsampling_factor < 2 {
         return Ok(None);
     }
-    Ok(Some(common_downsampling_factor))
+    Ok(Some(common_downsampling_factor as u8)) // Safe to convert as we check the maximum downsampling factor for SHFQA above, which is 16 and fits into u8.
 }
 
 fn sample_integration_weight_py<'a>(py: Python<'a>) -> PyResult<Bound<'a, PyAny>> {

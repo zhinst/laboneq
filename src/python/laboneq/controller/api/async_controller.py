@@ -6,19 +6,26 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from laboneq.controller.controller import Controller
-from laboneq.controller.controller_api import (
+from laboneq.controller.api.controller_api import (
     ControllerAPI,
     SubmissionHandle,
     SubmissionStatus,
 )
+from laboneq.controller.controller import Controller
 from laboneq.controller.devices.device_collection import DEFAULT_TIMEOUT_S
 from laboneq.controller.runtime_context_impl import LegacySessionData
 from laboneq.controller.utilities.exception import LabOneQControllerException
+from laboneq.dsl.device.device_setup import DeviceSetup
+from laboneq.dsl.result.results import Results
+from laboneq.implementation.legacy_adapters.device_setup_converter import (
+    convert_device_setup_to_setup,
+)
+from laboneq.implementation.payload_builder.target_setup_generator import (
+    TargetSetupGenerator,
+)
 
 if TYPE_CHECKING:
     from laboneq.controller.controller import ControllerSubmission
-    from laboneq.data.execution_payload import TargetSetup
     from laboneq.data.experiment_results import ExperimentResults
     from laboneq.data.scheduled_experiment import ScheduledExperiment
 
@@ -28,9 +35,9 @@ class AsyncController(ControllerAPI):
 
     @staticmethod
     async def create(
-        target_setup: TargetSetup,
-        ignore_version_mismatch: bool,
-        neartime_callbacks: dict[str, Callable],
+        device_setup: DeviceSetup,
+        ignore_version_mismatch: bool = False,
+        neartime_callbacks: dict[str, Callable] | None = None,
         do_emulation: bool = True,
         reset_devices: bool = False,
         disable_runtime_checks: bool = True,
@@ -39,6 +46,10 @@ class AsyncController(ControllerAPI):
         """Create an instance of the AsyncController."""
         if timeout_s is None:
             timeout_s = DEFAULT_TIMEOUT_S
+        setup = convert_device_setup_to_setup(device_setup)
+        target_setup = TargetSetupGenerator.from_setup(setup)
+        if neartime_callbacks is None:
+            neartime_callbacks = {}
         controller = Controller(
             target_setup=target_setup,
             ignore_version_mismatch=ignore_version_mismatch,
@@ -50,12 +61,14 @@ class AsyncController(ControllerAPI):
             disable_runtime_checks=disable_runtime_checks,
             timeout_s=timeout_s,
         )
-        return AsyncController(controller=controller)
+        return AsyncController(device_setup=device_setup, controller=controller)
 
     def __init__(
         self,
+        device_setup: DeviceSetup,
         controller: Controller,
     ):
+        self._device_setup = device_setup
         # Keep reference to avoid garbage collection
         self._controller = controller
         self._submissions: dict[int, ControllerSubmission] = {}
@@ -72,12 +85,19 @@ class AsyncController(ControllerAPI):
         submission = self._submission(handle)
         return self._controller.submission_results(submission)
 
-    async def shutdown(self):
+    async def aclose(self):
         for handle_id in self._submissions.keys():
             await self.cancel_submission(SubmissionHandle(handle_id))
         await self._controller._disconnect_async()
 
+    async def get_device_setup(self) -> DeviceSetup:
+        return self._device_setup
+
     async def update_neartime_callbacks(self, neartime_callbacks: dict[str, Callable]):
+        """Update the neartime callbacks used by the controller.
+
+        This is only present to support the legacy session, don't use it in new code.
+        """
         self._controller._neartime_callbacks.update(neartime_callbacks)
 
     async def submit_experiment(
@@ -99,7 +119,7 @@ class AsyncController(ControllerAPI):
         status = (
             SubmissionStatus.COMPLETED
             if submission.completion_future.done()
-            else SubmissionStatus.PENDING
+            else SubmissionStatus.QUEUED
         )
         if status == SubmissionStatus.COMPLETED:
             results = self._get_results(handle)
@@ -108,11 +128,18 @@ class AsyncController(ControllerAPI):
         # TODO(2K): Implement RUNNING status
         return status
 
-    async def submission_results(self, handle: SubmissionHandle) -> ExperimentResults:
+    async def submission_results(self, handle: SubmissionHandle) -> Results:
         status = await self.submission_status(handle)
         if status not in [SubmissionStatus.COMPLETED, SubmissionStatus.FAILED]:
             await self.wait_for_completion(handle)
-        return self._get_results(handle)
+        experiment_results = self._get_results(handle)
+        return Results(
+            device_setup=self._device_setup,
+            acquired_results=experiment_results.acquired_results,
+            neartime_callback_results=experiment_results.neartime_callback_results,
+            execution_errors=experiment_results.execution_errors,
+            pipeline_jobs_timestamps=experiment_results.pipeline_jobs_timestamps,
+        )
 
     async def cancel_submission(self, handle: SubmissionHandle):
         self._submission(handle)  # Validate handle

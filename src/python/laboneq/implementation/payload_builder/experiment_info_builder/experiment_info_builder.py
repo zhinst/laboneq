@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any, Dict, TypeVar
 
 import numpy as np
@@ -15,16 +16,13 @@ from laboneq.compiler import DeviceType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.path import LogicalSignalGroups_Path, insert_logical_signal_prefix
 from laboneq.core.types.enums import acquisition_type as acq_type
-from laboneq.core.types.enums.modulation_type import ModulationType
 from laboneq.core.types.units import Quantity
 from laboneq.data.compilation_job import (
     AmplifierPumpInfo,
     ChunkingInfo,
     DeviceInfo,
-    DeviceInfoType,
     ExperimentInfo,
     MixerCalibrationInfo,
-    OscillatorInfo,
     OutputRoute,
     ParameterInfo,
     PrecompensationInfo,
@@ -62,7 +60,6 @@ from laboneq.dsl.experiment.delay import Delay
 from laboneq.dsl.experiment.experiment_signal import ExperimentSignal
 from laboneq.dsl.experiment.operation import Operation
 from laboneq.dsl.experiment.play_pulse import PlayPulse
-from laboneq.dsl.experiment.pulse import PulseFunctional, PulseSampled
 from laboneq.dsl.experiment.section import (
     AcquireLoopRt,
     PRNGLoop,
@@ -84,6 +81,13 @@ _logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
+@dataclass
+class OscillatorInfo:
+    uid: str
+    frequency: float | ParameterInfo | None = None
+    is_hardware: bool | None = None
+
+
 class ExperimentInfoBuilder:
     def __init__(
         self,
@@ -100,7 +104,6 @@ class ExperimentInfoBuilder:
         self._params: dict[str, ParameterInfo] = {}
         self._nt_only_params: set[str] = set()
         self._chunking_info: ChunkingInfo | None = None
-        self._oscillators: dict[str, OscillatorInfo] = {}
         self._signal_infos: dict[str, SignalInfo] = {}
 
         self._device_info = DeviceInfoBuilder(self._device_setup)
@@ -110,12 +113,10 @@ class ExperimentInfoBuilder:
 
         self._sweep_params_min_maxes: dict[str, tuple[float, float]] = {}
         self._acquisition_type: acq_type.AcquisitionType | None = None
-        # Max acquire length per signal (seconds), used for AUTO modulation
-        # type resolution on QA devices with LRT.
-        self._max_acquire_lengths: dict[str, float] = {}
         # Rust migration helper fields:
         # Parameters defined in the experiment.
         self._dsl_parameters: dict[str, Parameter] = {}
+        self._driving_parameters: dict[str, set[str]] = {}
         self._calibration_items: dict[str, Any] = {}
 
     def load_experiment(self) -> ExperimentInfo:
@@ -141,8 +142,8 @@ class ExperimentInfoBuilder:
             chunking=self._chunking_info,
             src=self._experiment,
             dsl_parameters=list(self._dsl_parameters.values()),
+            driving_parameters=self._driving_parameters,
         )
-        self._resolve_oscillator_modulation_type(experiment_info)
         return experiment_info
 
     @staticmethod
@@ -319,33 +320,6 @@ class ExperimentInfoBuilder:
             calibration = AttributeOverrider(baseline_calib, exp_calib)
         return calibration
 
-    def _load_oscillator(self, oscillator: Oscillator) -> OscillatorInfo:
-        modulation_type = self._enum_value(oscillator.modulation_type)
-        if modulation_type == ModulationType.HARDWARE.value.lower():
-            is_hw = True
-        elif modulation_type == ModulationType.SOFTWARE.value.lower():
-            is_hw = False
-        else:
-            if modulation_type not in (None, ModulationType.AUTO.value.lower()):
-                raise LabOneQException(
-                    f"Invalid modulation type '{oscillator.modulation_type}' for"
-                    f" oscillator '{oscillator.uid}'"
-                )
-            is_hw = None  # Unspecified for now, will resolve later
-
-        frequency = self.opt_param(oscillator.frequency, nt_only=False)
-        oscillator_info = OscillatorInfo(oscillator.uid, frequency, is_hw)
-        if oscillator.uid in self._oscillators:
-            if self._oscillators[oscillator.uid] != oscillator_info:
-                raise LabOneQException(
-                    f"Found multiple, inconsistent oscillators with same UID '{oscillator.uid}'."
-                )
-            oscillator_info = self._oscillators[oscillator.uid]
-        else:
-            self._oscillators[oscillator.uid] = oscillator_info
-
-        return oscillator_info
-
     def _load_mixer_cal(self, mixer_cal: MixerCalibration) -> MixerCalibrationInfo:
         voltage_offsets = mixer_cal.voltage_offsets or []
         correction_matrix = mixer_cal.correction_matrix or []
@@ -411,7 +385,8 @@ class ExperimentInfoBuilder:
             signal_info.delay_signal = calibration.delay_signal
 
             if (oscillator := calibration.oscillator) is not None:
-                signal_info.oscillator = self._load_oscillator(oscillator)
+                self.opt_param(oscillator.frequency, nt_only=False)
+                signal_info.oscillator = oscillator
 
             signal_info.voltage_offset = self.opt_param(
                 calibration.voltage_offset, nt_only=True
@@ -561,6 +536,16 @@ class ExperimentInfoBuilder:
 
     def _add_parameter(self, value: Any, nt_only=False) -> ParameterInfo:
         # TODO(DSL cutover): Remove Data* once setup calibration uses DSL types.
+
+        def recursive_drivers(param: Parameter) -> set[str]:
+            if not isinstance(param, (SweepParameter, DataSweepParameter)):
+                return set()
+            drivers = set()
+            for driver in param.driven_by or []:
+                drivers.add(driver.uid)
+                drivers.update(recursive_drivers(driver))
+            return drivers
+
         if isinstance(value, (LinearSweepParameter, DataLinearSweepParameter)):
             if value.count > 1:
                 step = (value.stop - value.start) / (value.count - 1)
@@ -582,7 +567,12 @@ class ExperimentInfoBuilder:
             )
 
             for parent_param in value.driven_by or []:
-                self._add_parameter(parent_param)
+                drivers = {parent_param.uid}
+                drivers.update(recursive_drivers(parent_param))
+                for driver_uid in drivers:
+                    self._driving_parameters.setdefault(driver_uid, set()).add(
+                        value.uid
+                    )
 
         if value.uid not in self._params:
             self._params[value.uid] = param_info
@@ -652,11 +642,6 @@ class ExperimentInfoBuilder:
             for params in pulse_params:
                 for param_value in (params or {}).values():
                     self.opt_param(param_value)
-            # Track acquire length for AUTO modulation type resolution
-            acquire_length = self._estimate_acquire_length(operation)
-            if acquire_length is not None and operation.signal is not None:
-                prev = self._max_acquire_lengths.get(operation.signal, 0.0)
-                self._max_acquire_lengths[operation.signal] = max(prev, acquire_length)
 
         elif isinstance(operation, PlayPulse):
             # Parametrized fields
@@ -747,105 +732,6 @@ class ExperimentInfoBuilder:
         for root_section in root_sections:
             traverse_set_execution_type_and_check_rt_loop(
                 root_section, in_realtime=False
-            )
-
-    #: Threshold above which AUTO modulation resolves to HARDWARE on QA devices
-    #: with LRT option. Below this, SOFTWARE is used for integration mode.
-    #: This corresponds to 4096 samples at the SHFQA's 2 GHz sampling rate.
-    _LRT_HW_MODULATION_THRESHOLD = 4096 / 2e9  # 2.048 us
-
-    @staticmethod
-    def _estimate_acquire_length(operation: Acquire) -> float | None:
-        """Best-effort estimate of the acquire length from DSL-level info.
-
-        Returns the length in seconds, or None if the length cannot be
-        determined at this stage.
-        """
-        # Explicit length takes precedence (used in spectroscopy mode).
-        if operation.length is not None:
-            return operation.length
-        # Try to derive length from kernel pulse(s).
-        if operation.kernel is not None:
-            kernels = (
-                operation.kernel
-                if isinstance(operation.kernel, list)
-                else [operation.kernel]
-            )
-            max_len = 0.0
-            for pulse in kernels:
-                if isinstance(pulse, PulseFunctional) and isinstance(
-                    pulse.length, (int, float)
-                ):
-                    max_len = max(max_len, float(pulse.length))
-                elif isinstance(pulse, PulseSampled) and pulse.samples is not None:
-                    # Acquire is always on an SHFQA device.
-                    samples = pulse.samples
-                    sample_count = len(samples)
-                    max_len = max(
-                        max_len,
-                        sample_count / DeviceType.SHFQA.sampling_rate,
-                    )
-            if max_len > 0:
-                return max_len
-        return None
-
-    def _resolve_oscillator_modulation_type(self, experiment_info: ExperimentInfo):
-        for signal in experiment_info.signals:
-            if (osc := signal.oscillator) is None:
-                continue
-            if osc.is_hardware is not None:
-                continue
-            if signal.device.device_type is DeviceInfoType.SHFQA:
-                has_lrt = "LRT" in signal.device.options
-                max_acq_len = self._max_acquire_lengths.get(signal.uid, 0.0)
-                is_long_readout = max_acq_len > self._LRT_HW_MODULATION_THRESHOLD
-                if (
-                    is_long_readout
-                    and not has_lrt
-                    and not acq_type.is_spectroscopy(self._acquisition_type)
-                ):
-                    raise LabOneQException(
-                        f"Acquisition length on signal '{signal.uid}' exceeds"
-                        f" {self._LRT_HW_MODULATION_THRESHOLD * 1e6:.3f} µs"
-                        f" (4096 samples) and"
-                        f" requires hardware modulation, but the device"
-                        f" '{signal.device.uid}' does not have the LRT option"
-                        f" installed. Either reduce the acquisition length or"
-                        f" set the oscillator modulation type explicitly."
-                    )
-                if (
-                    has_lrt
-                    and not acq_type.is_spectroscopy(self._acquisition_type)
-                    and is_long_readout
-                ):
-                    # Long readout on a device with LRT support: use hardware
-                    # modulation so that the NCO handles the long integration.
-                    osc.is_hardware = True
-                    if self._acquisition_type is acq_type.AcquisitionType.RAW:
-                        _logger.warning(
-                            f"Oscillator '{osc.uid}' on signal"
-                            f" '{signal.uid}' resolved to HARDWARE modulation"
-                            f" in RAW acquisition mode. Set"
-                            f" reset_oscillator_phase=True on the"
-                            f" acquire_loop_rt, or use"
-                            f" ModulationType.SOFTWARE explicitly, to avoid"
-                            f" the signal averaging out."
-                        )
-                else:
-                    osc.is_hardware = acq_type.is_spectroscopy(self._acquisition_type)
-            elif signal.device.device_type is DeviceInfoType.UHFQA:
-                osc.is_hardware = acq_type.is_spectroscopy(self._acquisition_type)
-            elif (
-                signal.type is SignalInfoType.RF
-                and signal.device.device_type is DeviceInfoType.HDAWG
-            ):
-                # for HDAWG RF signals SW modulation tends to be more useful
-                osc.is_hardware = False
-            else:
-                osc.is_hardware = True
-            _logger.info(
-                f"Resolved modulation type of oscillator '{osc.uid}' on signal"
-                f" '{signal.uid}' to {'HARDWARE' if osc.is_hardware else 'SOFTWARE'}"
             )
 
 

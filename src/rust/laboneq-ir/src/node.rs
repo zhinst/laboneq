@@ -22,6 +22,14 @@ impl IrNode {
         }
     }
 
+    pub fn new_with_capacity(kind: IrKind, length: TinySamples, capacity: usize) -> Self {
+        Self {
+            kind,
+            length,
+            children: Vec::with_capacity(capacity),
+        }
+    }
+
     pub fn add_child(&mut self, offset: TinySamples, child: IrNode) {
         self.children.push(NodeChild {
             offset,

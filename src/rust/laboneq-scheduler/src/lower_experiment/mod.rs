@@ -301,7 +301,7 @@ fn create_loop_iteration(
     local_ctx: &mut LocalContext,
     loop_signals: &HashSet<SignalUid>,
 ) -> Result<ScheduledNode> {
-    let mut iteration = ScheduledNode::new(
+    let mut iteration = ScheduledNode::new_with_capacity(
         IrKind::LoopIteration,
         ScheduleInfoBuilder::new()
             // Escalate to the system grid.
@@ -310,6 +310,7 @@ fn create_loop_iteration(
             .alignment_mode(*loop_info.alignment)
             .signals(loop_signals.iter().cloned().collect())
             .build(),
+        children.len() + 1, // +1 for preamble
     );
 
     iteration.add_child(tiny_samples(0), preamble);
@@ -400,7 +401,11 @@ fn lower_section(
         schedule_builder = schedule_builder.length(seconds_to_tinysamples(length));
     }
 
-    let mut root = ScheduledNode::new(IrKind::Section(ir_section), schedule_builder.build());
+    let mut root = ScheduledNode::new_with_capacity(
+        IrKind::Section(ir_section),
+        schedule_builder.build(),
+        children.len(),
+    );
 
     let (children, reserved_signals) = local_ctx.with_section(section.uid, |local_ctx| {
         lower_children(children, ctx, local_ctx)

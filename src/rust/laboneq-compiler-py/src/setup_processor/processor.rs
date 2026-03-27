@@ -6,15 +6,17 @@ use std::collections::{HashMap, HashSet};
 use laboneq_common::device_traits;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::types::{AuxiliaryDeviceKind, DeviceKind, ReferenceClock};
-use laboneq_dsl::types::{DeviceUid, SignalUid};
+use laboneq_dsl::types::{AcquisitionType, DeviceUid, OscillatorKind, SignalUid};
 use laboneq_ir::awg::AwgCore;
 use laboneq_ir::signal::{Signal, SignalKind};
 use laboneq_ir::system::AwgDevice;
-use laboneq_log::debug;
+use laboneq_log::{debug, info, warn};
 use laboneq_units::duration::{Duration, Frequency, Hertz, Second};
+use smallvec::SmallVec;
 
 use crate::SetupProperties;
 use crate::error::{Error, Result};
+use crate::experiment_context::ExperimentContext;
 use crate::setup_processor::DelayRegistry;
 use crate::setup_processor::delays::{SignalDelayProperties, compute_signal_delays};
 use crate::setup_processor::precompensation::{AssignedPrecompensation, adapt_precompensations};
@@ -31,6 +33,7 @@ pub(crate) fn process_setup(
     mut setup: SetupProperties,
     desktop_setup: bool,
     id_store: &NamedIdStore,
+    context: &ExperimentContext,
 ) -> Result<ProcessedSetup> {
     analyze_setup(&setup)?;
 
@@ -41,6 +44,14 @@ pub(crate) fn process_setup(
         .collect::<HashMap<_, _>>();
 
     let sampling_rates = eval_sampling_rates(&setup.signals, &device_map);
+
+    resolve_oscillator_modulation(
+        &mut setup.signals,
+        &device_map,
+        &sampling_rates,
+        context,
+        id_store,
+    )?;
 
     // Adapt precompensation before computing the delays, as the presence of precompensation can affect the delay calculations.
     adapt_precompensation_on_signals(&mut setup.signals, &device_map)?;
@@ -101,6 +112,139 @@ fn eval_sampling_rates(
             (signal.uid, sampling_rate)
         })
         .collect()
+}
+
+/// Resolves the modulation type for oscillators with AUTO modulation based on the device capabilities.
+fn resolve_oscillator_modulation(
+    signals: &mut [SignalProperties],
+    device_map: &HashMap<DeviceUid, &AwgDevice>,
+    sampling_rates: &HashMap<SignalUid, Frequency<Hertz>>,
+    context: &ExperimentContext,
+    id_store: &NamedIdStore,
+) -> Result<()> {
+    fn hw_channel_key(signal: &SignalProperties) -> (DeviceUid, SmallVec<[u16; 4]>) {
+        let mut channels = signal.channels.clone();
+        channels.sort();
+        (signal.device_uid, channels)
+    }
+
+    // Threshold above which AUTO modulation resolves to HARDWARE on QA devices
+    // with LRT option. Below this, SOFTWARE is used for integration mode.
+    // This corresponds to 4096 samples at the SHFQA's 2 GHz sampling rate.
+    const _LRT_HW_MODULATION_THRESHOLD: f64 = 4096.0 / 2e9; // 2.048 us
+
+    // Pre-compute which HW channels have any SHFQA signal with a long acquire.
+    // This ensures that all signals sharing a HW channel (e.g. measure + acquire)
+    // get consistent modulation resolution.
+    let shfqa_channels_with_long_readout = signals
+        .iter()
+        .filter(|s| {
+            let device = device_map.get(&s.device_uid).unwrap();
+            matches!(device.kind(), DeviceKind::Shfqa)
+        })
+        .filter_map(|signal| {
+            let sampling_rate = sampling_rates.get(&signal.uid).unwrap();
+            let max_acq_len = max_acquisition_length_seconds(&signal.uid, context, *sampling_rate);
+            let has_long_readout =
+                max_acq_len.is_some_and(|len| len.value() > _LRT_HW_MODULATION_THRESHOLD);
+            if has_long_readout {
+                return Some(hw_channel_key(signal));
+            }
+            None
+        })
+        .collect::<HashSet<_>>();
+
+    for signal in signals {
+        let hw_channel_key = hw_channel_key(signal);
+        if let Some(osc) = signal.oscillator.as_mut()
+            && osc.kind == OscillatorKind::Auto
+        {
+            let device = device_map.get(&signal.device_uid).unwrap();
+            let oscillator_kind: OscillatorKind = match device.kind() {
+                DeviceKind::Shfqa => {
+                    let has_lrt = device.options().is_some_and(|o| o.contains("LRT"));
+                    let has_long_readout =
+                        shfqa_channels_with_long_readout.contains(&hw_channel_key);
+
+                    if !has_long_readout {
+                        if context.acquisition_type().is_spectroscopy() {
+                            OscillatorKind::Hardware
+                        } else {
+                            OscillatorKind::Software
+                        }
+                    } else if !has_lrt && !context.acquisition_type().is_spectroscopy() {
+                        let msg = format!(
+                            "Acquisition length on signal '{}' exceeds \
+                        {} (4096 samples) and \
+                        requires hardware modulation, but the device \
+                        '{}' does not have the LRT option \
+                        installed. Either reduce the acquisition length or \
+                        set the oscillator modulation type explicitly.",
+                            signal.uid.0,
+                            _LRT_HW_MODULATION_THRESHOLD,
+                            device.uid().0
+                        );
+                        return Err(Error::new(msg));
+                    } else if has_lrt && !context.acquisition_type().is_spectroscopy() {
+                        if context.acquisition_type() == &AcquisitionType::Raw {
+                            warn!(
+                                "Oscillator '{}' on signal \
+                                 '{}' resolved to HARDWARE modulation \
+                                 in RAW acquisition mode. Set \
+                                reset_oscillator_phase=True on the \
+                                acquire_loop_rt, or use \
+                                ModulationType.SOFTWARE explicitly, to avoid \
+                                the signal averaging out.",
+                                id_store.resolve(osc.uid).unwrap(),
+                                id_store.resolve(signal.uid).unwrap()
+                            );
+                        }
+                        OscillatorKind::Hardware
+                    } else {
+                        OscillatorKind::Hardware
+                    }
+                }
+                DeviceKind::Uhfqa => {
+                    if context.acquisition_type().is_spectroscopy() {
+                        OscillatorKind::Hardware
+                    } else {
+                        OscillatorKind::Software
+                    }
+                }
+                DeviceKind::Hdawg => {
+                    if signal.kind == SignalKind::Rf {
+                        // For HDAWG RF signals, SW modulation tends to be more useful
+                        OscillatorKind::Software
+                    } else {
+                        OscillatorKind::Hardware
+                    }
+                }
+                _ => OscillatorKind::Hardware,
+            };
+            osc.kind = oscillator_kind;
+            info!(
+                "Resolved modulation type of oscillator on signal: '{}' to {}",
+                id_store.resolve(signal.uid).unwrap(),
+                osc.kind
+            );
+        }
+    }
+    Ok(())
+}
+
+fn max_acquisition_length_seconds(
+    signal_uid: &SignalUid,
+    context: &ExperimentContext,
+    sampling_rate: Frequency<Hertz>,
+) -> Option<Duration<Second>> {
+    if let Some((max_seconds, max_samples)) = context.maximum_acquisition_lengths(signal_uid) {
+        let longest = max_seconds
+            .value()
+            .max(*max_samples as f64 / sampling_rate.value());
+        Some(longest.into())
+    } else {
+        None
+    }
 }
 
 fn analyze_setup(setup: &SetupProperties) -> Result<()> {
@@ -166,6 +310,7 @@ fn process_signals(
                 port_mode: prop.port_mode,
                 port_delay: prop.port_delay,
                 start_delay: delays.signal_start_delay(prop.uid),
+                amplitude: prop.amplitude,
                 range: prop.range,
                 precompensation: prop.precompensation,
                 signal_delay,
@@ -178,6 +323,7 @@ fn process_signals(
                 voltage_offset: prop.voltage_offset,
                 kind: prop.kind,
                 added_outputs: prop.added_outputs,
+                thresholds: prop.thresholds,
             };
             Ok(signal)
         })

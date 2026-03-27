@@ -4,7 +4,6 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-use crate::utils::normalize_f64;
 use laboneq_dsl::operation::PulseParameterValue;
 use laboneq_dsl::types::{NumericLiteral, PulseParameterUid, ValueOrParameter};
 
@@ -14,10 +13,10 @@ pub fn hash_numeric_literal(literal: &NumericLiteral) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     match literal {
         NumericLiteral::Int(i) => i.hash(&mut hasher),
-        NumericLiteral::Float(f) => normalize_f64(*f).hash(&mut hasher),
+        NumericLiteral::Float(f) => laboneq_common::utils::normalize_f64(*f).hash(&mut hasher),
         NumericLiteral::Complex(c) => {
-            normalize_f64(c.re).hash(&mut hasher);
-            normalize_f64(c.im).hash(&mut hasher);
+            laboneq_common::utils::normalize_f64(c.re).hash(&mut hasher);
+            laboneq_common::utils::normalize_f64(c.im).hash(&mut hasher);
         }
     }
     hasher.finish()

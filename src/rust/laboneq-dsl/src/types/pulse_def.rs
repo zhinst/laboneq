@@ -1,12 +1,12 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_dsl::types::{NumericLiteral, PulseUid};
+use crate::types::{NumericLiteral, PulseUid};
 use numeric_array::NumericArray;
 
-use laboneq_units::duration::{Duration, Second};
+use laboneq_units::duration::{Duration, Sample, Second, samples};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct PulseDef {
     pub uid: PulseUid,
     pub kind: PulseKind,
@@ -19,7 +19,19 @@ pub struct PulseDef {
     pub amplitude: NumericLiteral,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+impl PulseDef {
+    pub fn length(&self) -> PulseLength {
+        match &self.kind {
+            PulseKind::Functional(func) => PulseLength::Seconds(func.length),
+            PulseKind::Sampled(obj) => PulseLength::Samples(samples(obj.samples.len())),
+            PulseKind::LengthOnly { length } | PulseKind::MarkerPulse { length } => {
+                PulseLength::Seconds(*length)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum PulseKind {
     Functional(FunctionalPulse),
     Sampled(SampledPulse),
@@ -27,7 +39,7 @@ pub enum PulseKind {
     MarkerPulse { length: Duration<Second> },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum PulseFunction {
     Constant,
     Custom { function: String },
@@ -37,13 +49,18 @@ impl PulseFunction {
     pub const CONSTANT_PULSE_NAME: &str = "const";
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct FunctionalPulse {
     pub length: Duration<Second>,
     pub function: PulseFunction,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct SampledPulse {
     pub samples: NumericArray,
+}
+
+pub enum PulseLength {
+    Seconds(Duration<Second>),
+    Samples(Duration<Sample, usize>),
 }

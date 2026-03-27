@@ -6,8 +6,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from laboneq.core.types.enums.trigger_mode import TriggerMode
-
 if TYPE_CHECKING:
     from laboneq.compiler.common.device_type import DeviceType
     from laboneq.compiler.common.signal_obj import SignalObj
@@ -26,7 +24,6 @@ class AWGInfo:
     awg_id: int | str  # actual type depends on device class
     device_type: DeviceType
     device_class: int = 0x0
-    trigger_mode: TriggerMode = TriggerMode.NONE
     signal_type: AWGSignalType | None = None
     awg_allocation: list[int] = field(default_factory=list)
     signal_channels: list[tuple[str, int]] = field(default_factory=list)

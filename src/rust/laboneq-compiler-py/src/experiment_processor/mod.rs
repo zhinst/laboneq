@@ -3,7 +3,6 @@
 
 use crate::error::Result;
 use crate::experiment::Experiment;
-use crate::experiment_context::ExperimentContext;
 use crate::signal_view::signal_views;
 
 mod resolve_averaging;
@@ -25,7 +24,6 @@ use resolve_timing_boundary::resolve_timing_boundary;
 pub(super) fn process_experiment(
     experiment: &mut Experiment,
     device_setup: &DeviceSetup,
-    context: &ExperimentContext,
 ) -> Result<()> {
     let signal_views = &signal_views(device_setup);
 
@@ -37,6 +35,6 @@ pub(super) fn process_experiment(
     )?;
     resolve_effective_triggers(&mut experiment.root)?;
     resolve_pulses(experiment, signal_views)?;
-    resolve_match(&mut experiment.root, signal_views, context)?;
+    resolve_match(&mut experiment.root, signal_views)?;
     Ok(())
 }

@@ -1,25 +1,25 @@
 # Copyright 2026 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from abc import abstractmethod
+from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Callable
 
 import attrs
 
-from laboneq._automation.logic import AutomationLogic
-from laboneq._automation.node import AutomationNode, RootNode
-from laboneq._automation.status import AutomationStatus as Status
-from laboneq._automation.utils.class_parser import find_logic_class
+from laboneq.automation.logic import AutomationLogic
+from laboneq.automation.node import AutomationNode, RootNode
+from laboneq.automation.status import AutomationStatus as Status
+from laboneq.automation.utils.class_parser import find_logic_class
 from laboneq.core.utilities.add_exception_note import add_note
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 if TYPE_CHECKING:
-    from laboneq._automation import Automation
+    from laboneq.automation import Automation
 
 
 @classformatter
 @attrs.define
-class AutomationLayer:
+class AutomationLayer(ABC):
     """A layer in the automation framework.
 
     Attributes:
@@ -33,7 +33,15 @@ class AutomationLayer:
     """
 
     function: Callable | None
-    node_keys: list[str | tuple[str, ...]]
+
+    def _node_keys_validator(
+        _self, _attribute: attrs.Attribute, value: list[str | tuple[str, ...]]
+    ) -> None:
+        if not value:
+            raise ValueError("The `node_keys` must be a non-empty list.")
+
+    node_keys: list[str | tuple[str, ...]] = attrs.field(validator=_node_keys_validator)
+
     key: str
     depends_on: set[str]
 
@@ -128,7 +136,6 @@ class AutomationLayer:
                 node = self.get_node(node_key)
                 if node.status in [
                     Status.ROOT,
-                    Status.EMPTY,
                     Status.DEACTIVATED,
                     Status.DEACTIVATED_FAIL,
                 ]:
@@ -145,7 +152,6 @@ class AutomationLayer:
         else:
             if self.status in [
                 Status.ROOT,
-                Status.EMPTY,
                 Status.DEACTIVATED,
                 Status.DEACTIVATED_FAIL,
             ]:
@@ -185,18 +191,16 @@ class AutomationLayer:
         """Get the layer status from its node statuses.
 
         The layer status is derived from the statuses of its nodes. The root layer has
-        status `ROOT`. Active nodes are nodes whose status is neither `EMPTY` nor
-        `DEACTIVATED`. Inactive nodes (`EMPTY`/`DEACTIVATED`/`DEACTIVATED_FAIL`) are
+        status `ROOT`. Active nodes are nodes whose status is neither `DEACTIVATED` nor
+        `DEACTIVATED_FAIL`. Inactive nodes (`DEACTIVATED`/`DEACTIVATED_FAIL`) are
         ignored when determining whether the layer is
         `READY`/`RUNNING`/`FAILED`/`PASSED`/`MIXED`.
 
         Aggregation rules in precedence order:
             `ROOT`:
                 All nodes are `ROOT`.
-            `EMPTY`:
-                The layer has no nodes, or all nodes are `EMPTY`.
             `DEACTIVATED`:
-                The layer has non-empty nodes, but there are no active nodes.
+                The layer has no active nodes.
             `DEACTIVATED_FAIL`:
                 The layer has all nodes deactivated due to failure.
             `RUNNING`:
@@ -220,13 +224,7 @@ class AutomationLayer:
             status == Status.ROOT for status in all_node_statuses
         ):
             return Status.ROOT
-        elif len(all_node_statuses) == 0 or all(
-            status == Status.EMPTY for status in all_node_statuses
-        ):
-            return Status.EMPTY
-        elif len(active_node_statuses) == 0 or all(
-            status == Status.DEACTIVATED for status in all_node_statuses
-        ):
+        elif all(status == Status.DEACTIVATED for status in all_node_statuses):
             return Status.DEACTIVATED
         elif all(status == Status.DEACTIVATED_FAIL for status in all_node_statuses):
             return Status.DEACTIVATED_FAIL
@@ -327,11 +325,7 @@ class RootLayer(AutomationLayer):
     @property
     def nodes(self) -> dict[str, AutomationNode]:
         """The node dictionary."""
-        if "root" not in self._node_lookup:
-            self._node_lookup["root"] = RootNode()
-        return {
-            k: self._node_lookup[k] for k in self.node_keys if k in self._node_lookup
-        }
+        return {"root": RootNode()}
 
     def run_executable(self, auto: "Automation"):
         pass

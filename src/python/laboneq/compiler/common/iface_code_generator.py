@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
     from laboneq.compiler.common.compiler_settings import CompilerSettings
     from laboneq.compiler.common.iface_compiler_output import RTCompilerOutput
-    from laboneq.compiler.common.signal_obj import SignalObj
 
 
 class ICodeGenerator(abc.ABC):
@@ -19,7 +18,6 @@ class ICodeGenerator(abc.ABC):
     def __init__(
         self,
         experiment_ir: compiler_rs.ExperimentIr,
-        signals: list[SignalObj],
         settings: CompilerSettings | dict | None = None,
     ): ...
 

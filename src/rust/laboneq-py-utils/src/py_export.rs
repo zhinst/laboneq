@@ -9,7 +9,8 @@ use laboneq_common::named_id::NamedIdStore;
 use laboneq_dsl::{
     operation::PulseParameterValue,
     types::{
-        ComplexOrFloat, ExternalParameterUid, NumericLiteral, PulseParameterUid, ValueOrParameter,
+        ComplexOrFloat, ExternalParameterUid, NumericLiteral, PulseDef, PulseFunction, PulseKind,
+        PulseParameterUid, ValueOrParameter,
     },
 };
 use pyo3::{
@@ -17,10 +18,7 @@ use pyo3::{
     types::{PyComplex, PyDict},
 };
 
-use crate::{
-    pulse::{PulseDef, PulseFunction, PulseKind},
-    py_object_interner::PyObjectInterner,
-};
+use crate::py_object_interner::PyObjectInterner;
 
 /// Convert a [`NumericLiteral`] to a Python object.
 pub fn numeric_literal_to_py(py: Python, value: &NumericLiteral) -> PyResult<Py<PyAny>> {

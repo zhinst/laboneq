@@ -18,8 +18,6 @@ class DeviceTraits:
     sampling_rate: float
     min_play_wave: int
     sample_multiple: int
-    supports_binary_waves: bool
-    supports_complex_waves: bool
     channels_per_awg: int
     is_qa_device: bool
     sampling_rate_2GHz: float = None
@@ -67,8 +65,6 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate_2GHz=2.0e9,
         min_play_wave=32,
         sample_multiple=16,
-        supports_binary_waves=True,
-        supports_complex_waves=False,
         channels_per_awg=2,
         # @2.4GHz, device grid of 16 samples
         # - 7x16 = 112 cycles (~ 46.7ns) for the setDouble sequence to ensure gapless playback (measured)
@@ -88,8 +84,6 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate=1.8e9,
         min_play_wave=16,
         sample_multiple=8,
-        supports_binary_waves=True,  # Todo (Pol): useful or not?
-        supports_complex_waves=False,
         channels_per_awg=2,
         # Verified by PW (2022-10-13) on dev2086, rev 68366. Observed ~25 ns.
         reset_osc_duration=40e-9,
@@ -112,8 +106,6 @@ class DeviceType(DeviceTraits, Enum):
         # sample_multiple=4,
         min_play_wave=32,
         sample_multiple=16,
-        supports_binary_waves=False,
-        supports_complex_waves=True,
         channels_per_awg=1,
         oscillator_set_latency=88e-9,
         # Verified by PW (2022-10-13) on dev12093, rev 68689. Observed ~50 ns.
@@ -131,8 +123,6 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate=2.0e9,
         min_play_wave=32,
         sample_multiple=16,
-        supports_binary_waves=True,
-        supports_complex_waves=False,
         channels_per_awg=1,
         oscillator_set_latency=88e-9,
         # todo (PW): exact worst-case runtime unknown.
@@ -149,8 +139,6 @@ class DeviceType(DeviceTraits, Enum):
         sampling_rate=2.0e9,
         min_play_wave=4,
         sample_multiple=4,
-        supports_binary_waves=False,
-        supports_complex_waves=False,
         channels_per_awg=1,
         is_qa_device=False,
         device_class=0x1,
