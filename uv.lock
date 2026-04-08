@@ -2052,7 +2052,7 @@ requires-dist = [
     { name = "zhinst-comms-schemas", specifier = "~=4.0.0" },
     { name = "zhinst-core", specifier = "~=26.1.0" },
     { name = "zhinst-timing-models", specifier = "~=26.1.0" },
-    { name = "zhinst-toolkit", specifier = "==1.2.0" },
+    { name = "zhinst-toolkit", specifier = ">=1.2.0" },
     { name = "zhinst-utils", specifier = "==0.7.1" },
 ]
 provides-extras = ["xarray"]

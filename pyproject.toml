@@ -59,7 +59,7 @@ dependencies = [
   "zhinst-comms-schemas~=4.0.0",
   "zhinst-core~=26.1.0",
   "zhinst-timing-models~=26.1.0",
-  "zhinst-toolkit ==1.2.0",
+  "zhinst-toolkit >=1.2.0",
   "zhinst-utils ==0.7.1",
 ]
 
@@ -269,6 +269,12 @@ showcontent = true
 [[tool.towncrier.type]]
 directory = "doc"
 name = "Documentation"
+showcontent = true
+
+# ZQCS-related changes are collected separately, and only for internal use.
+[[tool.towncrier.type]]
+directory = "zqcs"
+name = "ZQCS"
 showcontent = true
 
 # system tests, tooling, infrastructure, ...
