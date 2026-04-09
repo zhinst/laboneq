@@ -324,6 +324,7 @@ fn process_signals(
                 kind: prop.kind,
                 added_outputs: prop.added_outputs,
                 thresholds: prop.thresholds,
+                mixer_calibration: prop.mixer_calibration,
             };
             Ok(signal)
         })

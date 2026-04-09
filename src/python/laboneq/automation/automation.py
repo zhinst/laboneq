@@ -62,9 +62,9 @@ class Automation:
 
     def __attrs_post_init__(self):
         """Initialize the directed automation graph with a root."""
-        self._node_graph.add_node(self.ROOT_NODE.id)
+        self._node_graph.add_node(self.ROOT_NODE.id, subset=0)
         self._node_lookup[self.ROOT_NODE.id] = self.ROOT_NODE
-        self._layer_graph.add_node(self.ROOT_LAYER.key)
+        self._layer_graph.add_node(self.ROOT_LAYER.key, subset=0)
         self._layer_lookup[self.ROOT_LAYER.key] = self.ROOT_LAYER
 
     def __getitem__(self, elem_id: str) -> AutomationLayer | AutomationNode:
@@ -275,10 +275,12 @@ class Automation:
         Arguments:
             layer: The layer to add.
         """
+        subset = len(self._layer_lookup.keys())
         # Add layer to lookup
         self._layer_lookup[layer.key] = layer
         for previous_layer_key in layer.depends_on:
             # Add layer edge
+            self._layer_graph.add_node(layer.key, subset=subset)
             self._layer_graph.add_edge(previous_layer_key, layer.key)
 
         if layer.nodes is None:
@@ -309,6 +311,7 @@ class Automation:
                             for n in node_key
                             if isinstance(node_key, tuple)
                         ):
+                            self._node_graph.add_node(node.id, subset=subset)
                             self._node_graph.add_edge(prev_node.id, node.id)
                             any_ancestor_found = True
                         elif any(
@@ -316,6 +319,7 @@ class Automation:
                             for n in prev_node.key
                             if isinstance(prev_node.key, tuple)
                         ):
+                            self._node_graph.add_node(node.id, subset=subset)
                             self._node_graph.add_edge(prev_node.id, node.id)
                             any_ancestor_found = True
                         elif prev_layer.nodes.get(self.ROOT_NODE.key) is not None:
@@ -325,6 +329,7 @@ class Automation:
                         to_search.extend(prev_layer.depends_on)
             if not any_ancestor_found:
                 # Node not found in any dep chain — connect directly to root.
+                self._node_graph.add_node(node.id, subset=subset)
                 self._node_graph.add_edge(self.ROOT_NODE.id, node.id)
 
     def get_layer(self, layer_key: str) -> AutomationLayer:
@@ -429,7 +434,7 @@ class Automation:
         self,
         layer_key: str,
         *,
-        node_keys: list[str] | None = None,
+        node_keys: list[str | tuple[str, ...]] | None = None,
         parameters: dict[str, dict[str, Any]] | None = None,
         force: bool = False,
         **kwargs,
@@ -588,30 +593,6 @@ class Automation:
             auto_params_file = auto_folder / f"{timestamp}-{self.name}-params.yml"
         save_automation_parameters_to_file(self.automation_parameters, auto_params_file)
 
-    def _get_layered_graph(
-        self, graph_type: Literal["nodes", "layers"] = "nodes"
-    ) -> tuple[nx.DiGraph, dict[int, list]]:
-        """Get node or layer graph.
-
-        Arguments:
-            graph_type: Whether to get a graph of automation nodes or layers.
-
-        Returns:
-            A tuple with the graph and a lookup dictionary of enumerated layer keys.
-        """
-        if graph_type == "nodes":
-            G = self._node_graph.copy()
-            layers = {
-                i: [f"{layer.key}_{node_key}" for node_key in layer.node_keys]
-                for i, layer in enumerate(self._layer_lookup.values())
-            }
-        else:
-            G = self._layer_graph.copy()
-            layers = {
-                i: [layer.key] for i, layer in enumerate(self._layer_lookup.values())
-            }
-        return G, layers
-
     def plot(
         self,
         graph_type: Literal["nodes", "layers"] = "nodes",
@@ -632,11 +613,11 @@ class Automation:
         if ax is None:
             _, ax = plt.subplots(figsize=figsize)
 
-        G, layers = self._get_layered_graph(graph_type)
+        G = self._node_graph if graph_type == "nodes" else self._layer_graph
         node_list = list(G)
         edge_list = G.edges()
 
-        pos = hierarchical_layout(G, layers)
+        pos = hierarchical_layout(G)
 
         # Choose a color for each status
         status_color_map = {

@@ -204,6 +204,9 @@ pub struct Section {
     pub uid: SectionUid,
     pub triggers: Vec<Trigger>,
     pub prng_setup: Option<PrngSetup>,
+    // section_timing_mode is intentionally absent: it is a compile-time constraint
+    // enforced by the scheduler. By the time the IR is produced, all timing is
+    // already on-grid and the mode is no longer relevant.
 }
 
 #[derive(Debug, Clone, PartialEq)]

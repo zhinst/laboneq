@@ -13,6 +13,7 @@ version.workspace = true
 string-interner = { workspace = true }
 regex = { workspace = true }
 laboneq-units = { workspace = true }
+laboneq-error = { workspace = true }
 
 [lints]
 workspace = true

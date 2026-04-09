@@ -73,9 +73,6 @@ class ExperimentDAO:
     def voltage_offset(self, signal_id) -> float | ParameterInfo:
         return self._signals[signal_id].voltage_offset
 
-    def mixer_calibration(self, signal_id):
-        return self._signals[signal_id].mixer_calibration
-
     def lo_frequency(self, signal_id) -> float | ParameterInfo:
         return self._signals[signal_id].lo_frequency
 

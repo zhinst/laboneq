@@ -65,7 +65,7 @@ struct SectionItem {
 }
 
 # ========================================================================================
-# Alignment and Triggers
+# Alignment, Triggers and TimingMode
 
 enum Alignment {
   # Section content alignment mode. Controls where operations are placed within the
@@ -89,6 +89,12 @@ struct TriggerConfig {
 
   state @1 :UInt32;
   # Hardware-specific trigger state encoding.
+}
+
+enum SectionTimingMode {
+  unspecified @0;
+  relaxed @1;
+  strict @2;
 }
 
 # ========================================================================================
@@ -119,6 +125,8 @@ struct RegularSection {
 
   triggers @5 :List(TriggerConfig);
   # Trigger configurations for this section. See `TriggerConfig`.
+
+  sectionTimingMode @6 :SectionTimingMode;
 }
 
 struct AcquireLoopSection {
@@ -158,6 +166,9 @@ struct AcquireLoopSection {
 
   resetOscillatorPhase @8 :Bool;
   # Reset all oscillator phases to zero before the first iteration.
+
+  sectionTimingMode @9 :SectionTimingMode;
+
 }
 
 enum AveragingMode {
@@ -204,6 +215,8 @@ struct SweepSection {
     # Let the compiler automatically discover a suitable chunk count based on
     # available resources.
   }
+
+  sectionTimingMode @6 :SectionTimingMode;
 }
 
 struct MatchSection {
@@ -244,6 +257,10 @@ struct MatchSection {
     none @6 :Void;
     value @7 :Bool;
   }
+
+  sectionTimingMode @8 :SectionTimingMode;
+  # Timing mode for this match section. Controls whether rounding of the match
+  # section's total length (derived as the maximum of its case branches) is allowed.
 }
 
 struct CaseSection {
@@ -253,6 +270,10 @@ struct CaseSection {
 
   state @0 :Common.Value;
   # Discriminator result value to match against.
+
+  sectionTimingMode @1 :SectionTimingMode;
+  # Timing mode for this case branch. Controls whether rounding of pulse and delay
+  # lengths within this branch is allowed.
 }
 
 # ========================================================================================

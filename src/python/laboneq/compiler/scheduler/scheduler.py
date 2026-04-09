@@ -22,7 +22,7 @@ class Scheduler:
         self,
         experiment,
         nt_parameters: ParameterStore[str, float],
-    ):
+    ) -> tuple[compiler_rs.ExperimentIr, compiler_rs.PulseSheetSchedule | None]:
         if nt_parameters is None:
             nt_parameters = ParameterStore[str, float]()
 
@@ -40,4 +40,7 @@ class Scheduler:
         # Flush used `nt_parameters` so that they get registered
         for used_parameter in self._scheduled_experiment_rs.used_parameters:
             nt_parameters.mark_used(used_parameter)
-        return self._scheduled_experiment_rs.experiment_ir
+        return (
+            self._scheduled_experiment_rs.experiment_ir,
+            self._scheduled_experiment_rs.pulse_sheet_schedule,
+        )

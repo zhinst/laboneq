@@ -159,6 +159,14 @@ pub struct ChannelProperties {
     // Near-time sweep values.
     // Controller accepts either a fixed value or a parameter.
     pub amplitude: Option<FixedValueOrParameter<f64>>,
+    pub voltage_offset: FixedValueOrParameter<f64>,
+    pub gains: Option<Gains>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Gains {
+    pub diagonal: FixedValueOrParameter<f64>,
+    pub off_diagonal: FixedValueOrParameter<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

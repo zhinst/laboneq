@@ -5,7 +5,7 @@ use laboneq_dsl::{
     ExperimentNode,
     node::Node,
     operation::{Operation, Section},
-    types::SectionAlignment,
+    types::{SectionAlignment, SectionTimingMode},
 };
 use laboneq_ir::MatchTarget;
 
@@ -45,6 +45,7 @@ fn resolve_nt_match_case_impl(node: &mut ExperimentNode, near_time_parameters: &
                         play_after,
                         triggers: vec![],
                         on_system_grid: false,
+                        section_timing_mode: SectionTimingMode::Relaxed,
                     }));
                     section.children = case.make_mut().take_children();
                     *node = section;

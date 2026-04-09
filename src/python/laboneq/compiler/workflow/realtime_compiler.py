@@ -48,7 +48,6 @@ class RealtimeCompiler:
         self._settings = settings if settings is not None else CompilerSettings()
 
         self._code_generators: dict[int, ICodeGenerator] = {}
-        self._rust_experiment_ir = None
         self._compiler_module: compiler_rs = resolve_compiler_module(
             {s.awg.device_class for s in signal_objects.values()}
         )
@@ -61,7 +60,6 @@ class RealtimeCompiler:
                 device_class
             ).code_generator()(
                 ir_rust,
-                settings=self._settings,
             )
             self._code_generators[device_class].generate_code()
 
@@ -72,10 +70,15 @@ class RealtimeCompiler:
     ) -> RTCompilerOutputContainer:
         time_start = time.perf_counter()
         scheduler = Scheduler(compiler_module=self._compiler_module)
-        schedule_result = scheduler.run(self._experiment, near_time_parameters)
-        # Store the Rust ExperimentIr for schedule generation
-        self._rust_experiment_ir = schedule_result
-        schedule = self.prepare_schedule() if self._settings.OUTPUT_EXTRAS else None
+        schedule_result, pulse_sheet_schedule = scheduler.run(
+            self._experiment, near_time_parameters
+        )
+        pulse_sheet_schedule = (
+            _prepare_pulse_sheet_schedule(pulse_sheet_schedule)
+            if pulse_sheet_schedule is not None
+            else None
+        )
+
         time_delta = time.perf_counter() - time_start
         _logger.info(f"Schedule completed. [{time_delta:.3f} s]")
 
@@ -86,25 +89,19 @@ class RealtimeCompiler:
             for device_class, code_generator in self._code_generators.items()
         }
         compiler_output = RTCompilerOutputContainer(
-            codegen_output=outputs, schedule=schedule
+            codegen_output=outputs, schedule=pulse_sheet_schedule
         )
         time_delta = time.perf_counter() - time_start
         _logger.info(f"Code generation completed for all AWGs. [{time_delta:.3f} s]")
 
         return compiler_output
 
-    def prepare_schedule(self) -> Schedule:
-        rust_schedule = self._compiler_module.generate_pulse_sheet_schedule(
-            self._rust_experiment_ir,
-            expand_loops=self._settings.EXPAND_LOOPS_FOR_SCHEDULE,
-            max_events=int(self._settings.MAX_EVENTS_TO_PUBLISH),
-        )
-        return Schedule(
-            event_list=rust_schedule["event_list"],
-            event_list_truncated=rust_schedule["event_list_truncated"],
-            section_info=rust_schedule["section_info"],
-            section_signals_with_children=rust_schedule[
-                "section_signals_with_children"
-            ],
-            sampling_rates=rust_schedule["sampling_rates"],
-        )
+
+def _prepare_pulse_sheet_schedule(schedule: compiler_rs.PulseSheetSchedule) -> Schedule:
+    return Schedule(
+        event_list=schedule["event_list"],
+        event_list_truncated=schedule["event_list_truncated"],
+        section_info=schedule["section_info"],
+        section_signals_with_children=schedule["section_signals_with_children"],
+        sampling_rates=schedule["sampling_rates"],
+    )

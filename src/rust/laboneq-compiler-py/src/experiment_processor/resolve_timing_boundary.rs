@@ -61,10 +61,11 @@ mod tests {
 
     use super::*;
     use laboneq_common::named_id::NamedIdStore;
-    use laboneq_dsl::{
-        node_structure,
-        operation::{AveragingLoop, Operation},
-        types::{AcquisitionType, AveragingMode, RepetitionMode, SectionAlignment, SectionUid},
+    use laboneq_dsl::node_structure;
+    use laboneq_dsl::operation::AveragingLoop;
+    use laboneq_dsl::types::{
+        AcquisitionType, AveragingMode, RepetitionMode, SectionAlignment, SectionTimingMode,
+        SectionUid,
     };
 
     fn make_acquire_rt(store: &mut NamedIdStore) -> AveragingLoop {
@@ -76,6 +77,7 @@ mod tests {
             repetition_mode: RepetitionMode::Fastest,
             reset_oscillator_phase: false,
             alignment: SectionAlignment::Left,
+            section_timing_mode: SectionTimingMode::Relaxed,
         }
     }
 

@@ -16,6 +16,7 @@ from laboneq.core.types.enums import (
     RepetitionMode,
     SectionAlignment,
 )
+from laboneq.core.types.enums.section_timing_mode import SectionTimingMode
 from laboneq.dsl import Parameter
 from laboneq.dsl.calibration import Calibration
 from laboneq.dsl.device.io_units import LogicalSignal
@@ -116,6 +117,7 @@ def section(
     play_after: str | Section | list[str | Section] | None = None,
     trigger: dict[str, dict] | None = None,
     on_system_grid: bool = False,
+    section_timing_mode: SectionTimingMode | None = None,
 ) -> SectionContextManager:
     """Returns a new section context manager.
 
@@ -164,6 +166,11 @@ def section(
         on_system_grid:
             If True, the section boundaries are always rounded to the system grid,
             even if the contained signals would allow for tighter alignment.
+        section_timing_mode:
+            Controls how the compiler handles timing values that require padding
+            to fit the required grid. When set to `SectionTimingMode.STRICT`, the
+            compiler raises an error instead of silently padding.
+            Defaults to `SectionTimingMode.RELAXED` (silent rounding allowed).
 
     Returns:
         A section context manager.
@@ -177,6 +184,7 @@ def section(
         play_after=play_after,
         trigger=trigger,
         on_system_grid=on_system_grid,
+        section_timing_mode=section_timing_mode,
     )
 
 
@@ -189,6 +197,7 @@ def sweep(
     uid: str | None = None,
     name: str = "unnamed",
     alignment: SectionAlignment = SectionAlignment.LEFT,
+    section_timing_mode: SectionTimingMode | None = None,
 ) -> SweepSectionContextManager:
     """Returns a sweep context manager.
 
@@ -224,6 +233,11 @@ def sweep(
             this section. Left alignment positions operations and sections
             as early in time as possible, right alignment positions them
             as late as possible.
+        section_timing_mode:
+            Controls how the compiler handles timing values that require padding
+            to fit the required grid. When set to `SectionTimingMode.STRICT`, the
+            compiler raises an error instead of silently padding.
+            Defaults to `SectionTimingMode.RELAXED` (silent rounding allowed).
 
     Returns:
         A sweep section context manager.
@@ -236,6 +250,7 @@ def sweep(
         reset_oscillator_phase=reset_oscillator_phase,
         chunk_count=chunk_count,
         auto_chunking=auto_chunking,
+        section_timing_mode=section_timing_mode,
     )
 
 
@@ -249,6 +264,7 @@ def acquire_loop_rt(
     reset_oscillator_phase: bool = False,
     uid: str | None = None,
     name: str = "unnamed",
+    section_timing_mode: SectionTimingMode | None = None,
 ) -> AcquireLoopRtSectionContextManager:
     """Returns an acquire loop section context manager.
 
@@ -279,6 +295,11 @@ def acquire_loop_rt(
         name:
             A name for the section. The name need not be unique.
             The name is used as a prefix for generating a `uid` for the section if one is not specified.
+        section_timing_mode:
+            Controls how the compiler handles timing values that require padding
+            to fit the required grid. When set to `SectionTimingMode.STRICT`, the
+            compiler raises an error instead of silently padding.
+            Defaults to `SectionTimingMode.RELAXED` (silent rounding allowed).
 
     Returns:
         An real-time acquire loop context manager.
@@ -292,6 +313,7 @@ def acquire_loop_rt(
         uid=uid,
         name=name,
         reset_oscillator_phase=reset_oscillator_phase,
+        section_timing_mode=section_timing_mode,
     )
 
 
@@ -361,6 +383,7 @@ def case(
     *,
     uid: str | None = None,
     name: str = "unnamed",
+    section_timing_mode: SectionTimingMode | None = None,
 ) -> CaseSectionContextManager:
     """Returns a case section context manager.
 
@@ -379,13 +402,20 @@ def case(
         name:
             A name for the section. The name need not be unique.
             The name is used as a prefix for generating a `uid` for the section if one is not specified.
+        section_timing_mode:
+            Controls how the compiler handles timing values that require padding
+            to fit the required grid. When set to `SectionTimingMode.STRICT`, the
+            compiler raises an error instead of silently padding.
+            Defaults to `SectionTimingMode.RELAXED` (silent rounding allowed).
 
     Raises:
         LabOneQException:
             Upon entering the context manager if the case section would be created outside of a
             match section.
     """
-    return CaseSectionContextManager(state=state, uid=uid, name=name)
+    return CaseSectionContextManager(
+        state=state, uid=uid, name=name, section_timing_mode=section_timing_mode
+    )
 
 
 def call(funcname: str | Callable, **kwargs: object):

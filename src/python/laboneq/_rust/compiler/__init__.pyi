@@ -1,13 +1,15 @@
 # Copyright 2025 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from laboneq.dsl.experiment import Experiment
+from typing import TypedDict
+
+from laboneq.dsl.experiment import Experiment as DslExperiment
 from laboneq.dsl.parameter import Parameter
 
 def init_logging(level: int) -> None:
     """Initialize logging with the given Python log level."""
 
-class ExperimentInfo:
+class Experiment:
     """Object containing the information about the experiment."""
 
     def signals(self) -> list[str]: ...
@@ -25,13 +27,15 @@ class ExperimentInfo:
 
                 Either fixed frequency or parameter uid can be None, but not both.
         """
+    def signal_precompensation(self, signal_uid: str) -> Precompensation | None: ...
+    def signal_automute(self, signal_uid: str) -> bool: ...
 
 class DeviceSetupBuilder:
     def __init__(self): ...
     def add_instrument(
         self,
         uid: str,
-        device_uid: str,
+        device_type: str,
         physical_device_uid: int,
         options: list[str] | None = None,
         reference_clock_source: str | None = None,
@@ -44,6 +48,7 @@ class DeviceSetupBuilder:
         instrument_uid: str,
         channel_type: str,
         awg_core: int,
+        amplitude: float | Parameter | None = None,
         oscillator: OscillatorRef | None = None,
         lo_frequency: float | Parameter | None = None,
         voltage_offset: float | Parameter | None = None,
@@ -56,6 +61,7 @@ class DeviceSetupBuilder:
         precompensation: Precompensation | None = None,
         added_outputs: list[OutputRoute] | None = None,
         threshold: list[float] | None = None,
+        mixer_calibration: MixerCalibrationRef | None = None,
     ) -> None: ...
     def create_oscillator(
         self,
@@ -69,9 +75,17 @@ class DeviceSetupBuilder:
         amplitude_scaling: float | Parameter | None = None,
         phase_shift: float | Parameter | None = None,
     ) -> OutputRoute: ...
+    def create_mixer_calibration(
+        self,
+        voltage_offsets: list,
+        correction_matrix: list[list],
+    ) -> MixerCalibrationRef: ...
 
 class OscillatorRef:
     """Reference to a oscillator."""
+
+class MixerCalibrationRef:
+    """Reference to a mixer calibration configuration."""
 
 class OutputRoute:
     """A representation of an output route."""
@@ -81,26 +95,26 @@ class AmplifierPump:
         self,
         device: str,
         channel: int,
-        pump_frequency: float | Parameter | None = None,
-        pump_power: float | Parameter | None = None,
-        cancellation_phase: float | Parameter | None = None,
-        cancellation_attenuation: float | Parameter | None = None,
-        probe_frequency: float | Parameter | None = None,
-        probe_power: float | Parameter | None = None,
+        pump_power: float | Parameter | None,
+        pump_frequency: float | Parameter | None,
+        probe_power: float | Parameter | None,
+        probe_frequency: float | Parameter | None,
+        cancellation_phase: float | Parameter | None,
+        cancellation_attenuation: float | Parameter | None,
     ):
         """A representation of an amplifier pump configuration."""
 
 class Precompensation:
     def __init__(
         self,
-        exponential: list[ExponentialCompensation] = [],
         high_pass: HighPassCompensation | None = None,
-        bounce: BounceCompensation | None = None,
+        exponential: list[ExponentialCompensation] = [],
         fir: FirCompensation | None = None,
+        bounce: BounceCompensation | None = None,
     ): ...
 
 class ExponentialCompensation:
-    def __init__(timeconstant: float, amplitude: float): ...
+    def __init__(self, timeconstant: float, amplitude: float): ...
 
 class HighPassCompensation:
     def __init__(self, timeconstant: float): ...
@@ -116,7 +130,7 @@ class AwgInfo:
         """A representation of AWG properties."""
 
 def serialize_experiment(
-    experiment: Experiment,
+    experiment: DslExperiment,
     device_setup: DeviceSetupBuilder,
     packed: bool = False,
 ) -> bytes:
@@ -127,11 +141,28 @@ def build_experiment_capnp(
     awgs: list[AwgInfo],
     desktop_setup: bool,
     packed: bool = False,
-) -> ExperimentInfo:
+) -> Experiment:
     """Build a scheduled experiment from Cap'n Proto bytes."""
 
 class ExperimentIr:
     """A representation of the experiment IR."""
+
+class PulseSheetSchedule(TypedDict):
+    """A representation of the pulse sheet schedule for the Pulse Sheet Viewer.
+
+    Attributes:
+        event_list: List of scheduler events.
+        event_list_truncated: Whether event generation hit the MAX_EVENTS_TO_PUBLISH limit.
+        section_info: Section metadata with preorder map.
+        section_signals_with_children: Signal hierarchy per section.
+        sampling_rates: Sampling rates per device type.
+    """
+
+    event_list: list[dict]
+    event_list_truncated: bool
+    section_info: dict
+    section_signals_with_children: dict
+    sampling_rates: dict
 
 class ScheduleResult:
     """Result of an experiment scheduling.
@@ -139,13 +170,15 @@ class ScheduleResult:
     Attributes:
         used_parameters: Used near-time parameters in the experiment.
         experiment_ir: Experiment IR.
+        pulse_sheet_schedule: Optional pulse sheet schedule (event list + metadata) for the Pulse Sheet Viewer.
     """
 
     experiment_ir: ExperimentIr
     used_parameters: set[str]
+    pulse_sheet_schedule: PulseSheetSchedule | None
 
 def schedule_experiment(
-    experiment: ExperimentInfo,
+    experiment: Experiment,
     parameters: dict[str, float],
     chunking_info: tuple[int, int] | None,
 ) -> ScheduleResult:
@@ -160,26 +193,8 @@ def schedule_experiment(
         Scheduled experiment.
     """
 
-def generate_pulse_sheet_schedule(
-    ir_py: ExperimentIr,
-    expand_loops: bool,
-    max_events: int,
-) -> dict:
-    """Generate a schedule (event list + metadata) from an IR tree.
+class SpanBuffer:
+    """A buffer for collecting spans from LabOne Q Rust components."""
 
-    This function is used by the Python compiler to generate the event list
-    for the Pulse Sheet Viewer (PSV).
-
-    Args:
-        ir_py: The experiment IR from Python.
-        expand_loops: Whether to expand compressed loops (EXPAND_LOOPS_FOR_SCHEDULE flag).
-        max_events: Maximum number of events to generate (MAX_EVENTS_TO_PUBLISH setting).
-
-    Returns:
-        A Python dict containing:
-        - event_list: List of scheduler events
-        - event_list_truncated: Whether event generation hit the MAX_EVENTS_TO_PUBLISH limit
-        - section_info: Section metadata with preorder map
-        - section_signals_with_children: Signal hierarchy per section
-        - sampling_rates: Sampling rates per device type
-    """
+    def flush_spans(self) -> list[str]:
+        """Flush the collected spans as a list of JSON strings."""

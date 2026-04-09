@@ -12,7 +12,7 @@ from typing import cast
 import laboneq._rust.compiler as compiler_rs
 import laboneq._rust.test_compiler as test_compiler
 from laboneq import simple
-from laboneq.core.utilities.laboneq_compile import laboneq_compile
+from laboneq.core.utilities.compile_experiment import compile_experiment
 
 compiler_rs = cast(compiler_rs, test_compiler)
 
@@ -75,7 +75,7 @@ def run_experiment():
                     "q0/drive", pulse, pulse_parameters={"sigma": param, "beta": 0.5}
                 )
 
-    laboneq_compile(setup, exp)  # Smoke test to ensure the experiment is valid
+    compile_experiment(setup, exp)  # Smoke test to ensure the experiment is valid
 
     device_setup_rs = compiler_rs.DeviceSetupBuilder()
     device_setup_rs.add_instrument(
@@ -119,7 +119,7 @@ def create_derived_param_experiment_calibration():
             with exp.section(uid="section"):
                 exp.play("q0/drive", simple.pulse_library.const())
 
-    laboneq_compile(setup, exp)  # Smoke test to ensure the experiment is valid
+    compile_experiment(setup, exp)  # Smoke test to ensure the experiment is valid
 
     device_setup_rs = compiler_rs.DeviceSetupBuilder()
     device_setup_rs.add_instrument(
@@ -166,7 +166,7 @@ def create_derived_param_experiment_operation_field():
                 exp.play("q0/drive", simple.pulse_library.const())
                 exp.delay("q0/drive", time=derived)
 
-    laboneq_compile(setup, exp)  # Smoke test to ensure the experiment is valid
+    compile_experiment(setup, exp)  # Smoke test to ensure the experiment is valid
     device_setup_rs = compiler_rs.DeviceSetupBuilder()
     device_setup_rs.add_instrument(
         uid="device_hdawg",

@@ -1,8 +1,9 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use anyhow::Context;
 use itertools::Itertools;
-use laboneq_dsl::types::{HandleUid, SectionAlignment, SectionUid, SignalUid};
+use laboneq_dsl::types::{HandleUid, SectionAlignment, SectionTimingMode, SectionUid, SignalUid};
 use std::collections::HashMap;
 
 use laboneq_units::tinysample::{
@@ -13,11 +14,16 @@ use num_integer::lcm;
 use crate::error::{Error, Result};
 use crate::scheduled_node::NodeChild;
 use crate::timing_resolver::timing_result::TimingWarning;
-use crate::utils::{ceil_to_grid, floor_to_grid};
+use crate::utils::{ceil_to_grid, checked_ceil_to_grid, checked_floor_to_grid};
 use crate::{RepetitionMode, ScheduledNode};
 use laboneq_ir::{IrKind, MatchTarget};
 
 use super::{FeedbackCalculator, TimingResult};
+
+fn section_name(kind: &IrKind) -> String {
+    kind.section_info()
+        .map_or("unknown".to_string(), |s| s.uid.0.to_string())
+}
 
 /// Calculate the timing for the given node.
 ///
@@ -37,7 +43,7 @@ pub(crate) fn calculate_timing(
     feedback_calculator: Option<&impl FeedbackCalculator>,
 ) -> Result<TimingResult> {
     let mut result = TimingResult::new();
-    let mut ctx = Context {
+    let mut ctx = CalculatorContext {
         acquires_by_handle: HashMap::new(),
         feedback_calculator,
         active_section_stack: Vec::new(),
@@ -54,14 +60,14 @@ struct FeedbackAcquisitionOperation {
     signal: SignalUid,
 }
 
-struct Context<'a, T: FeedbackCalculator> {
+struct CalculatorContext<'a, T: FeedbackCalculator> {
     acquires_by_handle: HashMap<HandleUid, FeedbackAcquisitionOperation>,
     feedback_calculator: Option<&'a T>,
     active_section_stack: Vec<SectionUid>,
     timing_result: &'a mut TimingResult,
 }
 
-impl<T: FeedbackCalculator> Context<'_, T> {
+impl<T: FeedbackCalculator> CalculatorContext<'_, T> {
     fn enter_section(&mut self, section_uid: SectionUid) {
         self.active_section_stack.push(section_uid);
     }
@@ -102,12 +108,11 @@ impl<T: FeedbackCalculator> Context<'_, T> {
 fn calculate_node_timing(
     node: &mut ScheduledNode,
     absolute_start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) -> Result<TinySamples> {
     if let Some(s) = node.kind.section_info() {
         ctx.enter_section(*s.uid)
     };
-
     let absolute_start = match &node.kind {
         IrKind::Root => schedule_root(node, absolute_start, ctx),
         IrKind::LoopIterationPreamble => {
@@ -159,7 +164,7 @@ fn calculate_node_timing(
 fn update_absolute_start(
     child: &mut NodeChild,
     parent_absolute_start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) {
     let absolute_start = parent_absolute_start + child.offset;
     if absolute_start == child.node.schedule.absolute_start {
@@ -183,14 +188,25 @@ fn update_absolute_start(
 fn schedule_root(
     node: &mut ScheduledNode,
     absolute_start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) -> Result<TinySamples> {
     let mut length = tiny_samples(0);
     for child in node.children.iter_mut() {
         calculate_node_timing(child.node.make_mut(), absolute_start, ctx)?;
         length = length.max(child.node.schedule.length());
     }
-    length = ceil_to_grid(length.value(), node.schedule.grid.value()).into();
+    length = checked_ceil_to_grid(
+        length.value(),
+        node.schedule.grid.value(),
+        node.schedule.section_timing_mode,
+    )
+    .with_context(|| {
+        format!(
+            "While scheduling root section of length {}",
+            tinysamples_to_seconds(length)
+        )
+    })?
+    .into();
     node.schedule.resolve_length(length);
     Ok(absolute_start)
 }
@@ -243,7 +259,7 @@ fn schedule_loop_iteration_preamble(node: &mut ScheduledNode) -> Result<()> {
 fn schedule_section(
     node: &mut ScheduledNode,
     absolute_start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) -> Result<()> {
     match node.schedule.alignment_mode {
         SectionAlignment::Left => {
@@ -261,7 +277,7 @@ fn schedule_section(
 fn arrange_left_aligned(
     node: &mut ScheduledNode,
     absolute_start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) -> Result<()> {
     let mut signal_start_constraints = HashMap::new();
     let mut play_after_constraints = HashMap::new();
@@ -285,7 +301,19 @@ fn arrange_left_aligned(
         }
 
         // Align to grid
-        start = ceil_to_grid(start.value(), child.node.schedule.grid.value()).into();
+        start = checked_ceil_to_grid(
+            start.value(),
+            child.node.schedule.grid.value(),
+            node.schedule.section_timing_mode,
+        )
+        .with_context(|| {
+            format!(
+                "While aligning child start time {} to grid in section '{}'",
+                tinysamples_to_seconds(start),
+                section_name(&node.kind),
+            )
+        })?
+        .into();
 
         // Calculate child timing
         let start = calculate_node_timing(child.node.make_mut(), absolute_start + start, ctx)?;
@@ -315,7 +343,7 @@ fn arrange_left_aligned(
 fn arrange_right_aligned(
     node: &mut ScheduledNode,
     absolute_start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) -> Result<()> {
     let mut signal_end_constraints = HashMap::new();
     let mut play_after_constraints: HashMap<&SectionUid, TinySamples> = HashMap::new();
@@ -348,7 +376,19 @@ fn arrange_right_aligned(
         }
 
         // Align to grid
-        child_offset = floor_to_grid(child_offset.value(), child.node.schedule.grid.value()).into();
+        child_offset = checked_floor_to_grid(
+            child_offset.value(),
+            child.node.schedule.grid.value(),
+            node.schedule.section_timing_mode,
+        )
+        .with_context(|| {
+            format!(
+                "While aligning child start time {} to grid in section '{}'",
+                tinysamples_to_seconds(child_offset),
+                section_name(&node.kind),
+            )
+        })?
+        .into();
 
         // Assign calculated start offset relative to parent
         child.offset = child_offset;
@@ -375,8 +415,18 @@ fn arrange_right_aligned(
     }
 
     // Align section start to grid
-    let relative_offset: TinySamples =
-        floor_to_grid(relative_offset.value(), node.schedule.grid.value()).into();
+    let relative_offset: TinySamples = checked_floor_to_grid(
+        relative_offset.value(),
+        node.schedule.grid.value(),
+        node.schedule.section_timing_mode,
+    )
+    .with_context(|| {
+        format!(
+            "While aligning start of section '{}' to grid",
+            section_name(&node.kind)
+        )
+    })?
+    .into();
 
     // Adjust children offsets to be relative to section start
     for child in node.children.iter_mut() {
@@ -394,17 +444,40 @@ fn arrange_right_aligned(
 fn calculate_section_length(
     node: &mut ScheduledNode,
     absolute_start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) -> Result<()> {
     let mut children_length = tiny_samples(0);
     for child in node.children.iter_mut() {
         children_length = children_length.max(child.offset + child.node.schedule.length());
     }
-    children_length = ceil_to_grid(children_length.value(), node.schedule.grid.value()).into();
+    children_length = checked_ceil_to_grid(
+        children_length.value(),
+        node.schedule.grid.value(),
+        node.schedule.section_timing_mode,
+    )
+    .with_context(|| {
+        format!(
+            "While scheduling section '{}' of length {}",
+            section_name(&node.kind),
+            tinysamples_to_seconds(children_length)
+        )
+    })?
+    .into();
 
     // Handle forced section length
     if let Some(max_length) = node.schedule.try_length() {
-        let force_length: i64 = ceil_to_grid(max_length.value(), node.schedule.grid.value());
+        let force_length: i64 = checked_ceil_to_grid(
+            max_length.value(),
+            node.schedule.grid.value(),
+            node.schedule.section_timing_mode,
+        )
+        .with_context(|| {
+            format!(
+                "While enforcing section length {} for section '{}'",
+                tinysamples_to_seconds(max_length),
+                node.kind.section_info().unwrap().uid.0
+            )
+        })?;
         check_for_exceeded_section_length(
             force_length.into(),
             children_length,
@@ -440,10 +513,27 @@ fn adjust_section_length(
     node: &mut ScheduledNode,
     new_length: TinySamples,
     absolute_start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) -> Result<()> {
-    let new_length: TinySamples =
-        ceil_to_grid(new_length.value(), node.schedule.grid.value()).into();
+    // Callers currently pass in already rounded values, but we enforce the
+    // strict mode invariant here as well to guard against future callers.
+    let new_length: TinySamples = checked_ceil_to_grid(
+        new_length.value(),
+        node.schedule.grid.value(),
+        node.schedule.section_timing_mode,
+    )
+    .with_context(|| {
+        let name = node
+            .kind
+            .section_info()
+            .map_or("loop iteration".to_string(), |s| format!("'{}'", s.uid.0));
+        format!(
+            "While adjusting length of section {} to {}",
+            name,
+            tinysamples_to_seconds(new_length)
+        )
+    })?
+    .into();
 
     if let Some(current_length) = node.schedule.try_length()
         && new_length == current_length
@@ -481,11 +571,12 @@ fn create_insufficient_repetition_time_error_message(
 fn schedule_compressed_loop(
     node: &mut ScheduledNode,
     absolute_start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) -> Result<TinySamples> {
     let IrKind::Loop(loop_obj) = &node.kind else {
         unreachable!()
     };
+    let loop_uid = loop_obj.uid;
     let iteration = node
         .children
         .iter_mut()
@@ -494,7 +585,18 @@ fn schedule_compressed_loop(
     calculate_node_timing(iteration.node.make_mut(), absolute_start, ctx)?;
     let mut length = iteration.node.length();
     if let Some(RepetitionMode::Constant { time }) = &node.schedule.repetition_mode {
-        let adjusted_time = ceil_to_grid(time.value(), node.schedule.grid.value());
+        let adjusted_time = checked_ceil_to_grid(
+            time.value(),
+            node.schedule.grid.value(),
+            node.schedule.section_timing_mode,
+        )
+        .with_context(|| {
+            format!(
+                "While enforcing repetition time {} for loop '{}'",
+                tinysamples_to_seconds(*time),
+                loop_uid.0
+            )
+        })?;
         if adjusted_time < length.value() {
             return Err(Error::new(
                 create_insufficient_repetition_time_error_message(*time, length, loop_obj.uid, 0),
@@ -506,7 +608,15 @@ fn schedule_compressed_loop(
         node.schedule.grid.value(),
         node.schedule.compressed_loop_grid.value(),
     );
-    length = ceil_to_grid(length.value(), grid).into();
+    length = checked_ceil_to_grid(length.value(), grid, node.schedule.section_timing_mode)
+        .with_context(|| {
+            format!(
+                "While scheduling iteration length {} for loop '{}'",
+                tinysamples_to_seconds(length),
+                loop_uid.0
+            )
+        })?
+        .into();
     adjust_section_length(iteration.node.make_mut(), length, absolute_start, ctx)?;
     iteration.offset = tiny_samples(0);
     node.schedule
@@ -517,8 +627,12 @@ fn schedule_compressed_loop(
 fn schedule_generic_loop(
     node: &mut ScheduledNode,
     absolute_start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) -> Result<TinySamples> {
+    let loop_uid = match &node.kind {
+        IrKind::Loop(loop_obj) => loop_obj.uid,
+        _ => unreachable!(),
+    };
     let mut child_offset = 0;
     for child in node.children.iter_mut() {
         child.offset = child_offset.into();
@@ -527,10 +641,18 @@ fn schedule_generic_loop(
             absolute_start + child_offset.into(),
             ctx,
         )?;
-        let child_length = ceil_to_grid(
+        let child_length = checked_ceil_to_grid(
             child.node.schedule.length().value(),
             node.schedule.grid.value(),
-        );
+            node.schedule.section_timing_mode,
+        )
+        .with_context(|| {
+            format!(
+                "While scheduling iteration length {} for loop '{}'",
+                tinysamples_to_seconds(child.node.schedule.length()),
+                loop_uid.0
+            )
+        })?;
         adjust_section_length(
             child.node.make_mut(),
             child_length.into(),
@@ -548,7 +670,7 @@ fn schedule_generic_loop(
 fn schedule_auto_repetition_mode_loop(
     node: &mut ScheduledNode,
     absolute_start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) -> Result<TinySamples> {
     let IrKind::Loop(loop_obj) = &node.kind else {
         unreachable!()
@@ -591,16 +713,28 @@ fn schedule_auto_repetition_mode_loop(
 fn schedule_constant_repetition_mode_loop(
     node: &mut ScheduledNode,
     absolute_start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) -> Result<TinySamples> {
     let IrKind::Loop(loop_obj) = &node.kind else {
         unreachable!()
     };
+    let loop_uid = loop_obj.uid;
     let repetition_time = match &node.schedule.repetition_mode {
         Some(RepetitionMode::Constant { time }) => *time,
         _ => unreachable!(),
     };
-    let adjusted_time = ceil_to_grid(repetition_time.value(), node.schedule.grid.value());
+    let adjusted_time = checked_ceil_to_grid(
+        repetition_time.value(),
+        node.schedule.grid.value(),
+        node.schedule.section_timing_mode,
+    )
+    .with_context(|| {
+        format!(
+            "While enforcing repetition time {} for loop '{}'",
+            tinysamples_to_seconds(repetition_time),
+            loop_uid.0
+        )
+    })?;
     let mut child_offset = 0;
     for (iteration, child) in node.children.iter_mut().enumerate() {
         child.offset = child_offset.into();
@@ -634,8 +768,15 @@ fn schedule_loop(
     node: &mut ScheduledNode,
     is_compressed: bool,
     absolute_start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) -> Result<TinySamples> {
+    if node.schedule.repetition_mode == Some(RepetitionMode::Auto)
+        && node.schedule.section_timing_mode == SectionTimingMode::Strict
+    {
+        return Err(Error::new(
+            "RepetitionMode.AUTO is not allowed with SectionTimingMode.STRICT",
+        ));
+    }
     if is_compressed {
         schedule_compressed_loop(node, absolute_start, ctx)?;
     } else {
@@ -658,7 +799,7 @@ fn schedule_loop(
 fn schedule_match(
     node: &mut ScheduledNode,
     absolute_start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) -> Result<TinySamples> {
     let IrKind::Match(match_info) = &node.kind else {
         unreachable!()
@@ -678,7 +819,7 @@ fn schedule_match(
 fn schedule_feedback_match(
     node: &mut ScheduledNode,
     start: TinySamples,
-    ctx: &mut Context<impl FeedbackCalculator>,
+    ctx: &mut CalculatorContext<impl FeedbackCalculator>,
 ) -> Result<TinySamples> {
     let IrKind::Match(match_info) = &node.kind else {
         unreachable!()
@@ -710,14 +851,21 @@ fn schedule_feedback_match(
         node.schedule.grid.value(),
     );
 
-    // Warn if start time is shifted
+    // Warn (or reject in strict mode) if start time is shifted
     if earliest_execute_table_entry_ts > start.value() {
+        let delay =
+            tinysamples_to_seconds((earliest_execute_table_entry_ts - start.value()).into());
+        if node.schedule.section_timing_mode == SectionTimingMode::Strict {
+            return Err(Error::new(format!(
+                "Match section '{}' start time is shifted by {} due to feedback \
+                 latency constraints. This is not allowed in strict timing mode.",
+                match_info.uid.0, delay
+            )));
+        }
         ctx.timing_result
             .add_warning(TimingWarning::MatchStartShifted {
                 section_uid: match_info.uid,
-                delay: tinysamples_to_seconds(
-                    (earliest_execute_table_entry_ts - start.value()).into(),
-                ),
+                delay,
             });
     }
 

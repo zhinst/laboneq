@@ -18,7 +18,7 @@ from flask import Flask, request
 
 import laboneq.core.path as qct_path
 from laboneq.core.types.compiled_experiment import CompiledExperiment
-from laboneq.core.utilities.laboneq_compile import laboneq_compile
+from laboneq.core.utilities.compile_experiment import compile_experiment
 from laboneq.simulator.output_simulator import OutputSimulator
 
 _logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ def _fill_maybe_missing_information(
             "to bypass this step with a small impact on the compilation time."
         )
 
-        compiled_experiment_for_psv = laboneq_compile(
+        compiled_experiment_for_psv = compile_experiment(
             device_setup=compiled_experiment.device_setup,
             experiment=compiled_experiment.experiment,
             compiler_settings={

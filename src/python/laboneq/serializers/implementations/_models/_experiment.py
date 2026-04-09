@@ -19,6 +19,7 @@ from laboneq.core.types.enums.dsl_version import DSLVersion
 from laboneq.core.types.enums.execution_type import ExecutionType
 from laboneq.core.types.enums.repetition_mode import RepetitionMode
 from laboneq.core.types.enums.section_alignment import SectionAlignment
+from laboneq.core.types.enums.section_timing_mode import SectionTimingMode
 from laboneq.dsl.experiment.acquire import Acquire
 from laboneq.dsl.experiment.call import Call
 from laboneq.dsl.experiment.delay import Delay
@@ -71,6 +72,12 @@ class SectionAlignmentModel(Enum):
     LEFT = "left"
     RIGHT = "right"
     _target_class = SectionAlignment
+
+
+class SectionTimingModeModel(Enum):
+    RELAXED = "relaxed"
+    STRICT = "strict"
+    _target_class = SectionTimingMode
 
 
 class AveragingModeModel(Enum):
@@ -472,12 +479,13 @@ def _structure_play_after_model(obj, _):
 class SectionModel:
     uid: str | None
     name: str
-    alignment: SectionAlignment
+    alignment: SectionAlignmentModel
     execution_type: ExecutionType | None
     length: float | None
     play_after: PlayAfterModel
     children: list[AllSectionModel | OperationModel]
     trigger: dict[str, dict[str, int]]
+    section_timing_mode: SectionTimingModeModel | None
 
     on_system_grid: bool | None
     _target_class: ClassVar[Type] = Section

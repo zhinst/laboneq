@@ -142,6 +142,10 @@ class ResultsSerializer(VersionedClassSerializer[Results]):
         else:
             experiment = None
 
+        # Ensure tuple->list->tuple in JSON serialization round-trip
+        if data["execution_errors"]:
+            data["execution_errors"] = [tuple(e) for e in data["execution_errors"]]
+
         return Results(
             acquired_results=acquired_results,
             neartime_callback_results=data["neartime_callback_results"],

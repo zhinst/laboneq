@@ -29,7 +29,6 @@ from laboneq.data.scheduled_experiment import (
 if TYPE_CHECKING:
     from laboneq.core.types.compiled_experiment import CompiledExperiment
     from laboneq.dsl.experiment.pulse import Pulse
-    from laboneq.dsl.session import Session
 
 _logger = logging.getLogger(__name__)
 
@@ -45,19 +44,16 @@ def _replace_pulse_in_wave(
     wave_name: str,
     pulse_or_array: ArrayLike | Pulse,
     pwm: PulseWaveformMap,
-    current_waves: dict[str, CodegenWaveform] | None,
+    current_waves: dict[str, CodegenWaveform],
     component: Component = Component.COMPLEX,
     is_complex: bool = True,
 ):
-    current_wave = None
-    if current_waves is not None:
-        current_wave = current_waves.get(wave_name)
+    current_wave = current_waves.get(wave_name)
     if current_wave is None:
         specified_wave = artifacts.waves[wave_name]
         # TODO(2K): Avoid deepcopy on every iteration, create working copy once per execution
         current_wave = deepcopy(specified_wave)
-        if current_waves is not None:
-            current_waves[wave_name] = current_wave
+        current_waves[wave_name] = current_wave
 
     new_samples = current_wave.samples  # Reference
     input_samples = None
@@ -163,9 +159,9 @@ class WaveReplacement:
 
 def calc_wave_replacements(
     artifacts: CompilerArtifact | None,
-    pulse_uid: str | Pulse,
+    pulse_uid: str,
     pulse_or_array: ArrayLike | Pulse,
-    current_waves: dict[str, CodegenWaveform] | None = None,
+    current_waves: dict[str, CodegenWaveform],
 ) -> list[WaveReplacement]:
     if not isinstance(artifacts, ArtifactsCodegen):
         raise LabOneQException("Wave replacement is not supported for this instrument.")
@@ -173,26 +169,20 @@ def calc_wave_replacements(
     if artifacts.pulse_map is None or artifacts.wave_indices is None:
         raise LabOneQException("No waves available for replacement.")
 
-    eff_pulse_uid = (
-        pulse_uid
-        if isinstance(pulse_uid, str)
-        else getattr(pulse_uid, "uid", "<unknown>")
-    )
-
-    pm = artifacts.pulse_map.get(eff_pulse_uid)
+    pm = artifacts.pulse_map.get(pulse_uid)
     if pm is None:
-        _logger.warning("No mapping found for pulse '%s' - ignoring", eff_pulse_uid)
+        _logger.warning("No mapping found for pulse '%s' - ignoring", pulse_uid)
         return []
 
     for sig_string, waveform in pm.waveforms.items():
         if any([instance.can_compress for instance in waveform.instances]):
             raise LabOneQException(
-                f"Pulse replacement is not allowed for pulses that support compression. Pulse '{eff_pulse_uid}'."
+                f"Pulse replacement is not allowed for pulses that support compression. Pulse '{pulse_uid}'."
             )
         wave = artifacts.waves.get(sig_string + ".wave")
         if wave is not None and wave.hold_start is not None:
             raise LabOneQException(
-                f"Pulse replacement is not allowed for long readout pulses. Pulse '{eff_pulse_uid}'."
+                f"Pulse replacement is not allowed for long readout pulses. Pulse '{pulse_uid}'."
             )
 
     replacements: list[WaveReplacement] = []
@@ -262,33 +252,32 @@ def calc_wave_replacements(
 
 
 def replace_pulse(
-    target: CompiledExperiment | Session,
+    target: CompiledExperiment,
     pulse_uid: str | Pulse,
     pulse_or_array: ArrayLike | Pulse,
 ):
     """Replaces specific pulse with the new sample data.
 
     Args:
-        target: CompiledExperiment or Session.
-                See CompiledExperiment.replace_pulse and Session.replace_pulse for details.
+        target: See CompiledExperiment.replace_pulse for details.
         pulse_uid: pulse to replace, can be Pulse object or uid of the pulse
         pulse_or_array: replacement pulse, can be Pulse object or value array (see sampled_pulse_* from the pulse library)
     """
-    from laboneq.core.types.compiled_experiment import CompiledExperiment
-
-    if isinstance(target, CompiledExperiment):
-        artifacts = target.scheduled_experiment.artifacts
-        wave_replacements = calc_wave_replacements(artifacts, pulse_uid, pulse_or_array)
-        # Ensured by `calc_wave_replacements`
-        assert isinstance(artifacts, ArtifactsCodegen)
-        for repl in wave_replacements:
-            if repl.replacement_type == ReplacementType.I_Q:
-                if len(repl.samples) == 2:
-                    wave_i = artifacts.waves[repl.sig_string + "_i.wave"]
-                    wave_q = artifacts.waves[repl.sig_string + "_q.wave"]
-                    wave_i.samples = repl.samples[0]
-                    wave_q.samples = repl.samples[1]
-                else:
-                    artifacts.waves[repl.sig_string + ".wave"].samples = repl.samples[0]
-    else:
-        target.replace_pulse(pulse_uid, pulse_or_array)
+    artifacts = target.scheduled_experiment.artifacts
+    uid = (
+        pulse_uid
+        if isinstance(pulse_uid, str)
+        else getattr(pulse_uid, "uid", "<unknown>")
+    )
+    wave_replacements = calc_wave_replacements(artifacts, uid, pulse_or_array, {})
+    # Ensured by `calc_wave_replacements`
+    assert isinstance(artifacts, ArtifactsCodegen)
+    for repl in wave_replacements:
+        if repl.replacement_type == ReplacementType.I_Q:
+            if len(repl.samples) == 2:
+                wave_i = artifacts.waves[repl.sig_string + "_i.wave"]
+                wave_q = artifacts.waves[repl.sig_string + "_q.wave"]
+                wave_i.samples = repl.samples[0]
+                wave_q.samples = repl.samples[1]
+            else:
+                artifacts.waves[repl.sig_string + ".wave"].samples = repl.samples[0]

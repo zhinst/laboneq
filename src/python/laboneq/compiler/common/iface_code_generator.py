@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
-    from laboneq.compiler.common.compiler_settings import CompilerSettings
     from laboneq.compiler.common.iface_compiler_output import RTCompilerOutput
 
 
@@ -18,7 +17,6 @@ class ICodeGenerator(abc.ABC):
     def __init__(
         self,
         experiment_ir: compiler_rs.ExperimentIr,
-        settings: CompilerSettings | dict | None = None,
     ): ...
 
     @abstractmethod

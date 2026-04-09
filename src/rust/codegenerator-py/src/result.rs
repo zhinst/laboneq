@@ -350,6 +350,29 @@ impl AwgCodeGenerationResultPy {
                     amplitude: output.amplitude.map(|amp| {
                         fixed_value_or_parameterf64_to_pyany(py, &amp, id_store).unwrap()
                     }),
+                    voltage_offset: Some(
+                        fixed_value_or_parameterf64_to_pyany(py, &output.voltage_offset, id_store)
+                            .unwrap(),
+                    ),
+                    gains: output.gains.map(|gains| {
+                        Gains {
+                            diagonal: fixed_value_or_parameterf64_to_pyany(
+                                py,
+                                &gains.diagonal,
+                                id_store,
+                            )
+                            .unwrap(),
+                            off_diagonal: fixed_value_or_parameterf64_to_pyany(
+                                py,
+                                &gains.off_diagonal,
+                                id_store,
+                            )
+                            .unwrap(),
+                        }
+                        .into_pyobject(py)
+                        .unwrap()
+                        .unbind()
+                    }),
                 }
                 .into_pyobject(py)
                 .unwrap()
@@ -366,6 +389,8 @@ impl AwgCodeGenerationResultPy {
                     marker_mode: None, // Input channels don't have marker modes
                     hw_oscillator_index: properties.hw_oscillator_index,
                     amplitude: None, // Input channels don't have amplitude settings
+                    voltage_offset: None, // Input channels don't have voltage offset
+                    gains: None,     // Input channels don't have gain settings
                 }
                 .into_pyobject(py)
                 .unwrap()
@@ -582,6 +607,19 @@ pub(crate) struct ChannelPropertiesPy {
     pub hw_oscillator_index: Option<u16>,
     #[pyo3(get)]
     pub amplitude: Option<Py<PyAny>>, // Can be either a float or a parameter reference (string)
+    #[pyo3(get)]
+    pub voltage_offset: Option<Py<PyAny>>, // Can be either a float or a parameter reference (string)
+    #[pyo3(get)]
+    pub gains: Option<Py<Gains>>, // Internal field to hold the Gains struct
+}
+
+#[pyclass(name = "Gains", skip_from_py_object)]
+#[derive(Debug)]
+pub(crate) struct Gains {
+    #[pyo3(get)]
+    pub diagonal: Py<PyAny>, // Can be either a float or a parameter reference (string)
+    #[pyo3(get)]
+    pub off_diagonal: Py<PyAny>, // Can be either a float or a parameter reference (string)
 }
 
 #[pyclass(name = "SeqCProgram", skip_from_py_object)]

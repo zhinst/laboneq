@@ -119,6 +119,7 @@ class SectionContextManager(SectionContextManagerBase):
         play_after: str | list[str] | None = None,
         trigger: dict[str, dict[str, int]] | None = None,
         execution_type=None,
+        section_timing_mode=None,
     ):
         kwargs = {}
         if uid is not None:
@@ -137,6 +138,8 @@ class SectionContextManager(SectionContextManagerBase):
             kwargs["on_system_grid"] = on_system_grid
         if execution_type is not None:
             kwargs["execution_type"] = execution_type
+        if section_timing_mode is not None:
+            kwargs["section_timing_mode"] = section_timing_mode
         super().__init__(kwargs=kwargs)
 
     def __call__(self, f):
@@ -170,6 +173,7 @@ class SweepSectionContextManager(SectionContextManagerBase):
         reset_oscillator_phase=False,
         chunk_count=1,
         auto_chunking=False,
+        section_timing_mode=None,
     ):
         kwargs = dict(
             parameters=parameters, chunk_count=chunk_count, auto_chunking=auto_chunking
@@ -182,6 +186,8 @@ class SweepSectionContextManager(SectionContextManagerBase):
             kwargs["alignment"] = alignment
         if reset_oscillator_phase is not None:
             kwargs["reset_oscillator_phase"] = reset_oscillator_phase
+        if section_timing_mode is not None:
+            kwargs["section_timing_mode"] = section_timing_mode
         super().__init__(kwargs=kwargs)
 
     def __enter__(self):
@@ -204,6 +210,7 @@ class AcquireLoopRtSectionContextManager(SectionContextManagerBase):
         reset_oscillator_phase=False,
         uid=None,
         name=None,
+        section_timing_mode=None,
     ):
         kwargs = dict(
             count=count,
@@ -217,6 +224,8 @@ class AcquireLoopRtSectionContextManager(SectionContextManagerBase):
             kwargs["uid"] = uid
         if name is not None:
             kwargs["name"] = name
+        if section_timing_mode is not None:
+            kwargs["section_timing_mode"] = section_timing_mode
         super().__init__(kwargs=kwargs)
 
 
@@ -257,12 +266,14 @@ class MatchSectionContextManager(SectionContextManagerBase):
 class CaseSectionContextManager(SectionContextManagerBase):
     section_class = Case
 
-    def __init__(self, uid, name, state):
+    def __init__(self, uid, name, state, section_timing_mode=None):
         kwargs = dict(state=state)
         if uid is not None:
             kwargs["uid"] = uid
         if name is not None:
             kwargs["name"] = name
+        if section_timing_mode is not None:
+            kwargs["section_timing_mode"] = section_timing_mode
         super().__init__(kwargs=kwargs)
 
     def _section_post_create(self, section, parent):

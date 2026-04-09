@@ -25,3 +25,6 @@ laboneq-py-utils = { workspace = true }
 laboneq-common = { workspace = true }
 laboneq-error = { workspace = true, features = ["pyo3"] }
 laboneq-units = { workspace = true }
+
+laboneq-tracing = { path = "../laboneq-tracing" }
+laboneq-opentelemetry-python = { path = "../laboneq-opentelemetry-python" }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use laboneq_common::device_options::DeviceOptions;
+use laboneq_dsl::signal_calibration::MixerCalibration;
 use laboneq_error::{LabOneQError, laboneq_error};
 use numeric_array::NumericArray;
 use std::collections::{HashMap, HashSet};
@@ -529,4 +530,5 @@ pub(crate) struct InitialSignalProperties {
     pub uid: SignalUid,
     pub amplitude: Option<FixedValueOrParameter<f64>>,
     pub thresholds: Vec<f64>,
+    pub mixer_calibration: Option<MixerCalibration>,
 }

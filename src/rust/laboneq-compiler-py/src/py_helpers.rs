@@ -6,7 +6,10 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::intern;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use pyo3::types::{IntoPyDict, PyModule};
+
+use laboneq_common::compiler_settings::CompilerSettings;
 
 /// Check whether `obj` is an exact instance of the Python type `ty`.
 ///
@@ -65,4 +68,20 @@ pub(crate) fn iq_to_complex<'py>(
     arr64
         .call_method1(intern!(py, "view"), (intern!(py, "complex128"),))?
         .call_method1(intern!(py, "reshape"), (-1i64,))
+}
+
+/// Creates code generator settings from a Python dictionary
+pub(crate) fn compiler_settings_from_py_dict(ob: &Bound<PyDict>) -> PyResult<CompilerSettings> {
+    // Convert PyDict to key-value pairs
+    let pairs: Result<Vec<(String, String)>, PyErr> = ob
+        .iter()
+        .map(|(key, value)| {
+            let key_str: String = key.extract()?;
+            let value_str: String = value.str()?.extract()?;
+            Ok((key_str, value_str))
+        })
+        .collect();
+
+    CompilerSettings::from_key_value_pairs(pairs?)
+        .map_err(|err| PyValueError::new_err(err.to_string()))
 }

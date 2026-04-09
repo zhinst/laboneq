@@ -1,6 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use anyhow::Context;
 use std::collections::HashSet;
 
 use crate::error::{Error, Result};
@@ -8,17 +9,18 @@ use crate::error::{Error, Result};
 use crate::experiment_context::ExperimentContext;
 use crate::lower_experiment::local_context::LocalContext;
 use crate::schedule_info::{RepetitionMode, ScheduleInfoBuilder};
-use laboneq_ir::builders::SectionBuilder;
-use laboneq_ir::{Acquire, ChangeOscillatorPhase, IrKind, Loop, LoopKind, PlayPulse};
-
-use crate::utils::{compute_grid, lcm, round_to_grid};
+use crate::utils::{checked_round_to_grid, compute_grid, lcm};
 use crate::{ParameterStore, ScheduledNode, SignalInfo};
 use laboneq_dsl::operation::{
     Acquire as AcquireDsl, Delay as DelayDsl, LoopInfo, Operation, PlayPulse as PlayPulseDsl,
     PrngSetup as PrngSetupDsl, Section as SectionDsl,
 };
-use laboneq_dsl::types::{RepetitionMode as RepetitionModeDsl, SignalUid, ValueOrParameter};
+use laboneq_dsl::types::{
+    RepetitionMode as RepetitionModeDsl, SectionTimingMode, SignalUid, ValueOrParameter,
+};
 use laboneq_dsl::{ExperimentNode, NodeChild};
+use laboneq_ir::builders::SectionBuilder;
+use laboneq_ir::{Acquire, ChangeOscillatorPhase, IrKind, Loop, LoopKind, PlayPulse};
 use laboneq_units::tinysample::{TinySamples, seconds_to_tinysamples, tiny_samples};
 
 mod local_context;
@@ -118,14 +120,14 @@ fn lower_to_ir_impl<T: SignalInfo + Sized>(
             Ok((vec![], reserved))
         }
         Operation::PlayPulse(play_pulse) => Ok((
-            vec![lower_play_pulse(play_pulse, local_ctx)],
+            vec![lower_play_pulse(play_pulse, local_ctx)?],
             HashSet::new(),
         )),
         Operation::Acquire(acquire) => {
-            Ok((vec![lower_acquire(acquire, local_ctx)], HashSet::new()))
+            Ok((vec![lower_acquire(acquire, local_ctx)?], HashSet::new()))
         }
         Operation::Delay(delay) => {
-            let delay_node = lower_delay(delay, local_ctx);
+            let delay_node = lower_delay(delay, local_ctx)?;
             if delay.precompensation_clear {
                 let precomp_node = create_precompensation_node(delay.signal, local_ctx);
                 Ok((vec![precomp_node, delay_node], HashSet::new()))
@@ -143,6 +145,13 @@ fn lower_to_ir_impl<T: SignalInfo + Sized>(
                     .section_uid
                     .expect("Internal error: Phase reset not in a section"),
             )?;
+            if local_ctx.section_timing_mode == SectionTimingMode::Strict
+                && reset_node.schedule.try_length() > Some(tiny_samples(0))
+            {
+                return Err(Error::new(
+                    "HW oscillator phase reset is not allowed in strict timing sections.",
+                ));
+            }
             Ok((vec![reset_node], HashSet::new()))
         }
         Operation::Case(_) => Err(Error::new(
@@ -207,9 +216,12 @@ fn lower_sweep<T: SignalInfo + Sized>(
         .ok_or_else(|| Error::new("Expected a loop"))?;
 
     let (children, reserved_signals) = local_ctx
-        .with_loop(*loop_info.uid, loop_info.parameters, |new_ctx| {
-            lower_children(&node.children, ctx, new_ctx)
-        })
+        .with_loop(
+            *loop_info.uid,
+            loop_info.parameters,
+            *loop_info.section_timing_mode,
+            |new_ctx| lower_children(&node.children, ctx, new_ctx),
+        )
         .flatten()?;
 
     let mut loop_signals: HashSet<SignalUid> = children
@@ -247,12 +259,19 @@ fn create_loop_preamble<T: SignalInfo>(
     let signal_refs =
         collect_signals_from_uids(&loop_signals.iter().cloned().collect::<Vec<_>>(), ctx)?;
 
+    let strict = *loop_info.section_timing_mode == SectionTimingMode::Strict;
+
     // Add oscillator frequency setup
     if let Some(set_osc_freq) = handle_set_oscillator_frequency(
         &signal_refs,
         loop_info.parameters.iter().collect(),
         local_ctx.system_grid,
     )? {
+        if strict && set_osc_freq.schedule.try_length() > Some(tiny_samples(0)) {
+            return Err(Error::new(
+                "HW oscillator frequency sweep is not allowed in strict timing sections.",
+            ));
+        }
         preamble.add_child(tiny_samples(0), set_osc_freq);
     }
 
@@ -264,6 +283,11 @@ fn create_loop_preamble<T: SignalInfo>(
             local_ctx.system_grid,
             *loop_info.uid,
         )?;
+        if strict && reset_node.schedule.try_length() > Some(tiny_samples(0)) {
+            return Err(Error::new(
+                "HW oscillator phase reset is not allowed in strict timing sections.",
+            ));
+        }
         preamble.add_child(tiny_samples(0), reset_node);
     }
 
@@ -278,9 +302,14 @@ fn create_loop_preamble<T: SignalInfo>(
 
     // Add PPC sweep steps
     let all_signals: Vec<_> = ctx.signals().collect();
-    for ppc_step in
-        handle_ppc_sweep_steps(&all_signals, loop_info.parameters, preamble.schedule.grid)?
-    {
+    let ppc_steps =
+        handle_ppc_sweep_steps(&all_signals, loop_info.parameters, preamble.schedule.grid)?;
+    if strict && !ppc_steps.is_empty() {
+        return Err(Error::new(
+            "SHFPPC sweeps are not allowed in strict timing sections.",
+        ));
+    }
+    for ppc_step in ppc_steps {
         preamble.add_child(tiny_samples(0), ppc_step);
     }
 
@@ -309,6 +338,7 @@ fn create_loop_iteration(
             .grid(local_ctx.system_grid)
             .alignment_mode(*loop_info.alignment)
             .signals(loop_signals.iter().cloned().collect())
+            .section_timing_mode(*loop_info.section_timing_mode)
             .build(),
         children.len() + 1, // +1 for preamble
     );
@@ -357,7 +387,8 @@ fn create_root_loop(
         .alignment_mode(*loop_info.alignment)
         .signals(iteration.schedule.signals.clone())
         .grid(iteration.schedule.grid)
-        .sequencer_grid(iteration.schedule.sequencer_grid);
+        .sequencer_grid(iteration.schedule.sequencer_grid)
+        .section_timing_mode(*loop_info.section_timing_mode);
 
     if let Some(repetition_mode) = &loop_info.repetition_mode {
         schedule_builder =
@@ -395,7 +426,8 @@ fn lower_section(
 
     let mut schedule_builder = ScheduleInfoBuilder::new()
         .alignment_mode(section.alignment)
-        .play_after(section.play_after.clone());
+        .play_after(section.play_after.clone())
+        .section_timing_mode(section.section_timing_mode);
 
     if let Some(length) = section.length {
         schedule_builder = schedule_builder.length(seconds_to_tinysamples(length));
@@ -407,9 +439,10 @@ fn lower_section(
         children.len(),
     );
 
-    let (children, reserved_signals) = local_ctx.with_section(section.uid, |local_ctx| {
-        lower_children(children, ctx, local_ctx)
-    })?;
+    let (children, reserved_signals) =
+        local_ctx.with_section(section.uid, section.section_timing_mode, |local_ctx| {
+            lower_children(children, ctx, local_ctx)
+        })?;
 
     root.schedule.signals.extend(reserved_signals);
     for child in children {
@@ -428,7 +461,7 @@ fn lower_section(
     Ok(root)
 }
 
-fn lower_play_pulse(obj: &PlayPulseDsl, ctx: &LocalContext) -> ScheduledNode {
+fn lower_play_pulse(obj: &PlayPulseDsl, ctx: &LocalContext) -> Result<ScheduledNode> {
     let (grid, _) = ctx.signal_grids(&obj.signal);
     if let Some(pulse) = obj.pulse {
         let ir = IrKind::PlayPulse(PlayPulse {
@@ -447,8 +480,22 @@ fn lower_play_pulse(obj: &PlayPulseDsl, ctx: &LocalContext) -> ScheduledNode {
         if let Some(length) = obj.length {
             match length {
                 ValueOrParameter::Value(v) => {
-                    let length = seconds_to_tinysamples(v);
-                    schedule = schedule.length(round_to_grid(length.value(), grid.value()));
+                    let tinysample_length = seconds_to_tinysamples(v);
+                    let rounded_length = checked_round_to_grid(
+                        tinysample_length.value(),
+                        grid.value(),
+                        ctx.section_timing_mode,
+                    )
+                    .with_context(|| {
+                        format!(
+                            "While scheduling pulse of length {} on signal '{}' in section '{}'",
+                            v,
+                            obj.signal.0,
+                            ctx.section_name()
+                        )
+                    })?;
+
+                    schedule = schedule.length(rounded_length);
                 }
                 ValueOrParameter::Parameter(p) => {
                     schedule = schedule.length_param(p);
@@ -456,23 +503,34 @@ fn lower_play_pulse(obj: &PlayPulseDsl, ctx: &LocalContext) -> ScheduledNode {
                 _ => {}
             }
         }
-        ScheduledNode::new(ir, schedule.build())
+        Ok(ScheduledNode::new(ir, schedule.build()))
     } else {
+        // no pulse id
         let ir = IrKind::ChangeOscillatorPhase(ChangeOscillatorPhase {
             signal: obj.signal,
             increment: obj.increment_oscillator_phase,
             set: obj.set_oscillator_phase,
         });
-        ScheduledNode::new(ir, ScheduleInfoBuilder::new().grid(grid).length(0).build())
+        Ok(ScheduledNode::new(
+            ir,
+            ScheduleInfoBuilder::new().grid(grid).length(0).build(),
+        ))
     }
 }
 
-fn lower_acquire(obj: &AcquireDsl, ctx: &LocalContext) -> ScheduledNode {
-    let integration_length =
-        seconds_to_tinysamples(obj.length.expect("Expected Acquire to have length"));
+fn lower_acquire(obj: &AcquireDsl, ctx: &LocalContext) -> Result<ScheduledNode> {
+    let raw_length = seconds_to_tinysamples(obj.length.expect("Expected Acquire to have length"));
     let (grid, _) = ctx.signal_grids(&obj.signal);
-    let integration_length = round_to_grid(integration_length.value(), grid.value());
-    ScheduledNode::new(
+    let integration_length =
+        checked_round_to_grid(raw_length.value(), grid.value(), ctx.section_timing_mode)
+            .with_context(|| {
+                format!(
+                    "While scheduling acquisition on signal '{}' in section '{}'",
+                    obj.signal.0,
+                    ctx.section_name()
+                )
+            })?;
+    Ok(ScheduledNode::new(
         IrKind::Acquire(Acquire {
             signal: obj.signal,
             handle: obj.handle,
@@ -486,17 +544,30 @@ fn lower_acquire(obj: &AcquireDsl, ctx: &LocalContext) -> ScheduledNode {
             .length(integration_length)
             .escalate_to_sequencer_grid(true)
             .build(),
-    )
+    ))
 }
 
-fn lower_delay(obj: &DelayDsl, ctx: &LocalContext) -> ScheduledNode {
+fn lower_delay(obj: &DelayDsl, ctx: &LocalContext) -> Result<ScheduledNode> {
     let ir = IrKind::Delay { signal: obj.signal };
     let (grid, _) = ctx.signal_grids(&obj.signal);
     let mut schedule = ScheduleInfoBuilder::new();
     match obj.time {
         ValueOrParameter::Value(v) => {
             let length = seconds_to_tinysamples(v);
-            let length_tinysample = round_to_grid(length.value(), grid.value());
+            let length_tinysample = checked_round_to_grid(
+                length.value(),
+                grid.value(),
+                ctx.section_timing_mode,
+            )
+            .map_err(|e| {
+                Error::new(format!(
+                    "While scheduling delay of length {} on signal '{}' in section '{}': {}",
+                    v,
+                    obj.signal.0,
+                    ctx.section_name(),
+                    e
+                ))
+            })?;
             schedule = schedule.length(length_tinysample);
         }
         ValueOrParameter::Parameter(p) => {
@@ -504,7 +575,7 @@ fn lower_delay(obj: &DelayDsl, ctx: &LocalContext) -> ScheduledNode {
         }
         _ => {}
     }
-    ScheduledNode::new(ir, schedule.grid(grid).build())
+    Ok(ScheduledNode::new(ir, schedule.grid(grid).build()))
 }
 
 fn create_precompensation_node(signal: SignalUid, ctx: &LocalContext) -> ScheduledNode {
@@ -532,9 +603,10 @@ fn lower_prng_setup(
             .build(),
     );
 
-    let (children, reserved_signals) = local_ctx.with_section(section.uid, |local_ctx| {
-        lower_children(children, ctx, local_ctx)
-    })?;
+    let (children, reserved_signals) =
+        local_ctx.with_section(section.uid, SectionTimingMode::default(), |local_ctx| {
+            lower_children(children, ctx, local_ctx)
+        })?;
 
     root.schedule.signals.extend(reserved_signals);
     for child in children {

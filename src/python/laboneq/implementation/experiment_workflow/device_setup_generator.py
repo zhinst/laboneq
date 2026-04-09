@@ -5,12 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Dict, List, Union
 
-from yaml import load
-
-try:
-    from yaml import CLoader as Loader
-except ImportError:
-    from yaml import Loader  # type: ignore[assignment]
+from yaml import safe_load
 
 if TYPE_CHECKING:
     from laboneq.data.setup_description import Setup
@@ -29,7 +24,7 @@ class DeviceSetupGenerator:
         server_port: int | str | None = None,
         setup_name: str | None = None,
     ) -> Setup:
-        setup_desc = load(yaml_text, Loader=Loader)
+        setup_desc = safe_load(yaml_text)
 
         return DeviceSetupGenerator.from_dicts(
             instrument_list=setup_desc.get("instrument_list"),
@@ -51,7 +46,7 @@ class DeviceSetupGenerator:
         setup_name: str | None = None,
     ) -> Setup:
         with open(filepath) as fp:
-            setup_desc = load(fp, Loader=Loader)
+            setup_desc = safe_load(fp)
 
         return DeviceSetupGenerator.from_dicts(
             instrument_list=setup_desc.get("instrument_list"),

@@ -12,9 +12,6 @@ import orjson
 
 from laboneq._rust import codegenerator as codegen_rs
 from laboneq._rust.codegenerator import SampledWaveform
-from laboneq.compiler.common.compiler_settings import (
-    CompilerSettings,
-)
 from laboneq.compiler.common.iface_code_generator import ICodeGenerator
 from laboneq.compiler.common.integration_times import (
     IntegrationTimes,
@@ -45,15 +42,7 @@ class CodeGenerator(ICodeGenerator):
     def __init__(
         self,
         experiment_ir: compiler_rs.ExperimentIr,
-        settings: CompilerSettings | dict | None = None,
     ):
-        if settings is not None:
-            if isinstance(settings, CompilerSettings):
-                self._settings = settings
-            else:
-                self._settings = CompilerSettings(**settings)
-        else:
-            self._settings = CompilerSettings()
         self._experiment_ir = experiment_ir
         self._awg_keys: list[AwgKey] = []
         self._awg_properties: dict[AwgKey, codegen_rs.AwgProperties] = {}
@@ -269,26 +258,8 @@ class CodeGenerator(ICodeGenerator):
             assert all(np.all(group[0][1] == g[1]) for g in group[1:])
 
     def generate_code(self):
-        settings: dict[str, bool | int | float] = {
-            "HDAWG_MIN_PLAYWAVE_HINT": self._settings.HDAWG_MIN_PLAYWAVE_HINT,
-            "HDAWG_MIN_PLAYZERO_HINT": self._settings.HDAWG_MIN_PLAYZERO_HINT,
-            "UHFQA_MIN_PLAYWAVE_HINT": self._settings.UHFQA_MIN_PLAYWAVE_HINT,
-            "UHFQA_MIN_PLAYZERO_HINT": self._settings.UHFQA_MIN_PLAYZERO_HINT,
-            "SHFSG_MIN_PLAYWAVE_HINT": self._settings.SHFSG_MIN_PLAYWAVE_HINT,
-            "SHFSG_MIN_PLAYZERO_HINT": self._settings.SHFSG_MIN_PLAYZERO_HINT,
-            "SHF_OUTPUT_MUTE_MIN_DURATION": self._settings.SHF_OUTPUT_MUTE_MIN_DURATION,
-            "AMPLITUDE_RESOLUTION_BITS": max(
-                self._settings.AMPLITUDE_RESOLUTION_BITS, 0
-            ),
-            "PHASE_RESOLUTION_BITS": max(self._settings.PHASE_RESOLUTION_BITS, 0),
-            "USE_AMPLITUDE_INCREMENT": self._settings.USE_AMPLITUDE_INCREMENT,
-            "EMIT_TIMING_COMMENTS": self._settings.EMIT_TIMING_COMMENTS,
-            "IGNORE_RESOURCE_LIMITATION_ERRORS": self._settings.IGNORE_RESOURCE_LIMITATION_ERRORS,
-        }
-
         codegen_result = codegen_rs.generate_code(
             ir_experiment=self._experiment_ir,
-            settings=settings,
         )
         self._total_execution_time = codegen_result.total_execution_time
         self._result_handle_maps = {

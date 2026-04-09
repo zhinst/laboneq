@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from numpy import typing as npt
 
 from laboneq.controller.runtime_context import RuntimeContext
+from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.exceptions import AbortExecution
 
 if TYPE_CHECKING:
@@ -99,10 +100,18 @@ class RuntimeContextImpl(RuntimeContext):
     def replace_pulse(
         self, pulse_uid: str | Pulse, pulse_or_array: npt.ArrayLike | Pulse
     ):
-        self._controller.replace_pulse(
-            recipe_data=self._recipe_data,
-            pulse_uid=pulse_uid,
-            pulse_or_array=pulse_or_array,
+        if isinstance(pulse_uid, str):
+            eff_pulse_uid = pulse_uid
+        elif hasattr(pulse_uid, "uid"):
+            eff_pulse_uid = pulse_uid.uid
+        else:
+            raise LabOneQControllerException(
+                "Cannot replace pulse that does not have uid"
+            )
+
+        self._controller.register_pulse_replacement(
+            pulse_uid=eff_pulse_uid,
+            replacement=pulse_or_array,
         )
 
     def replace_phase_increment(
@@ -110,8 +119,7 @@ class RuntimeContextImpl(RuntimeContext):
         parameter_uid: str,
         new_value: int | float,
     ):
-        self._controller.replace_phase_increment(
-            recipe_data=self._recipe_data,
+        self._controller.register_phase_increment_replacement(
             parameter_uid=parameter_uid,
             new_value=new_value,
         )

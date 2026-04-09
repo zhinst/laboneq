@@ -37,5 +37,6 @@ LabOneQInstrumentor().uninstrument()
 """
 
 from .instrumentor import LabOneQInstrumentor
+from .tracing import laboneq_tracing
 
-__all__ = "LabOneQInstrumentor"
+__all__ = ["LabOneQInstrumentor", "laboneq_tracing"]

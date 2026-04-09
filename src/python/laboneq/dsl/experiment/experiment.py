@@ -10,6 +10,7 @@ import attrs
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import DSLVersion
+from laboneq.core.types.enums.section_timing_mode import SectionTimingMode
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration.calibration import Calibration
 from laboneq.dsl.device.io_units.logical_signal import LogicalSignalRef
@@ -627,6 +628,7 @@ class Experiment:
         reset_oscillator_phase: bool = False,
         chunk_count: int = 1,
         auto_chunking: bool = False,
+        section_timing_mode: SectionTimingMode | None = None,
     ):
         """Define a sweep section.
 
@@ -665,6 +667,11 @@ class Experiment:
             auto_chunking:
                 If True, the compiler will decide how many chunks to divide this sweep into
                 to respect resource limitations of instruments.
+            section_timing_mode:
+                Controls how the compiler handles timing values that require padding
+                to fit the required grid. When set to `SectionTimingMode.STRICT`, the
+                compiler raises an error instead of silently padding.
+                Defaults to `SectionTimingMode.RELAXED` (silent rounding allowed).
 
         """
         return Experiment._SweepSectionContext(
@@ -676,6 +683,7 @@ class Experiment:
             reset_oscillator_phase=reset_oscillator_phase,
             chunk_count=chunk_count,
             auto_chunking=auto_chunking,
+            section_timing_mode=section_timing_mode,
         )
 
     class _SweepSectionContext:
@@ -689,6 +697,7 @@ class Experiment:
             reset_oscillator_phase,
             chunk_count,
             auto_chunking,
+            section_timing_mode,
         ):
             self.exp = experiment
             args = {"parameters": parameters}
@@ -716,6 +725,9 @@ class Experiment:
             args["chunk_count"] = chunk_count
             args["auto_chunking"] = auto_chunking
 
+            if section_timing_mode is not None:
+                args["section_timing_mode"] = section_timing_mode
+
             self.sweep = Sweep(**args)
 
         def __enter__(self):
@@ -736,6 +748,7 @@ class Experiment:
         acquisition_type: AcquisitionType = AcquisitionType.INTEGRATION,
         uid: str | None = None,
         reset_oscillator_phase: bool = False,
+        section_timing_mode: SectionTimingMode | None = None,
     ):
         """Define an acquire section with averaging in real time.
 
@@ -777,6 +790,11 @@ class Experiment:
             reset_oscillator_phase:
                 When True, the phase of every oscillator is reset at
                 the start of the each step of the acquire loop.
+            section_timing_mode:
+                Controls how the compiler handles timing values that require padding
+                to fit the required grid. When set to `SectionTimingMode.STRICT`, the
+                compiler raises an error instead of silently padding.
+                Defaults to `SectionTimingMode.RELAXED` (silent rounding allowed).
 
         !!! note
             When an acquire loop is present in an experiment, it automatically defines the boundary between
@@ -794,6 +812,7 @@ class Experiment:
             repetition_time=repetition_time,
             acquisition_type=acquisition_type,
             reset_oscillator_phase=reset_oscillator_phase,
+            section_timing_mode=section_timing_mode,
         )
 
     class _AcquireLoopRtSectionContext:
@@ -806,6 +825,7 @@ class Experiment:
             repetition_time,
             acquisition_type,
             reset_oscillator_phase,
+            section_timing_mode,
             uid=None,
         ):
             self.exp = experiment
@@ -819,6 +839,8 @@ class Experiment:
             )
             if uid is not None:
                 kwargs["uid"] = uid
+            if section_timing_mode is not None:
+                kwargs["section_timing_mode"] = section_timing_mode
             self.acquire_shots = AcquireLoopRt(**kwargs)
 
         def __enter__(self):
@@ -836,6 +858,7 @@ class Experiment:
         on_system_grid: bool | None = None,
         play_after: str | Section | list[str | Section] | None = None,
         trigger: dict[str, dict[str, int]] | None = None,
+        section_timing_mode: SectionTimingMode | None = None,
     ):
         """Define an section for scoping operations.
 
@@ -873,6 +896,11 @@ class Experiment:
             on_system_grid:
                 If True, the section boundaries are always rounded to the
                 system grid, even if the signals would allow for tighter alignment.
+            section_timing_mode:
+                Controls how the compiler handles timing values that require padding
+                to fit the required grid. When set to `SectionTimingMode.STRICT`, the
+                compiler raises an error instead of silently padding.
+                Defaults to `SectionTimingMode.RELAXED` (silent rounding allowed).
 
         The individual trigger (a.k.a marker) ports on the device are addressed via the
         experiment signal that is mapped to the corresponding analog port.
@@ -913,6 +941,7 @@ class Experiment:
             play_after=play_after,
             trigger=trigger,
             on_system_grid=on_system_grid,
+            section_timing_mode=section_timing_mode,
         )
 
     class _SectionSectionContext:
@@ -925,6 +954,7 @@ class Experiment:
             play_after=None,
             trigger=None,
             on_system_grid=None,
+            section_timing_mode=None,
         ):
             self.exp = experiment
             args = {}
@@ -940,6 +970,8 @@ class Experiment:
                 args["trigger"] = trigger
             if on_system_grid is not None:
                 args["on_system_grid"] = on_system_grid
+            if section_timing_mode is not None:
+                args["section_timing_mode"] = section_timing_mode
 
             self.section = Section(**args)
 
@@ -1160,7 +1192,12 @@ class Experiment:
             local=local,
         )
 
-    def case(self, state: int, uid: str | None = None):
+    def case(
+        self,
+        state: int,
+        uid: str | None = None,
+        section_timing_mode: SectionTimingMode | None = None,
+    ):
         """Define a section which plays after matching with the given value to the
         result of a QA measurement.
 
@@ -1178,6 +1215,11 @@ class Experiment:
         Arguments:
             uid: The unique ID for this section.
             state: The state that this section is executed for.
+            section_timing_mode:
+                Controls how the compiler handles timing values that require padding
+                to fit the required grid. When set to `SectionTimingMode.STRICT`, the
+                compiler raises an error instead of silently padding.
+                Defaults to `SectionTimingMode.RELAXED` (silent rounding allowed).
         """
         if not isinstance(self._peek_section(), Match):
             raise LabOneQException("Case section must be inside a Match section")
@@ -1185,6 +1227,7 @@ class Experiment:
             self,
             uid=uid,
             state=state,
+            section_timing_mode=section_timing_mode,
         )
 
     class _CaseSectionContext:
@@ -1193,11 +1236,14 @@ class Experiment:
             experiment,
             uid,
             state,
+            section_timing_mode=None,
         ):
             self.exp = experiment
             args = {"state": state}
             if uid is not None:
                 args["uid"] = uid
+            if section_timing_mode is not None:
+                args["section_timing_mode"] = section_timing_mode
 
             self.section = Case(**args)
 

@@ -88,16 +88,16 @@ class PulseFunctional(Pulse):
 
     # TODO: check if / how __call__ could be used here instead
     def evaluate(self, x=None):
-        """Evaluate a pulse functional.
+        """Evaluate a functional pulse.
 
         Arguments:
             x (array):
-                The points where the function of the pulse functional is to be evaluated.
+                The points where the function of the functional pulse is to be evaluated.
                 The values of `x` range from -1 to +1.
                 If not provided, defaults to `numpy.linspace(-1, 1, 201)`.
 
         Returns:
-            A numpy array of the pulse functional as provided by the functional definition,
+            A numpy array of the functional pulse as provided by the functional definition,
             evaluated over the interval given by the input x.
             The parameters `length` and `amplitude` do not have an effect in the evaluation.
         """
@@ -110,18 +110,18 @@ class PulseFunctional(Pulse):
         return pulse_function(x=x, **pulse_parameters)
 
     def generate_sampled_pulse(self, sampling_rate=None):
-        """Sample a pulse functional.
+        """Sample a functional pulse.
 
         Arguments:
             sampling_rate:
-                The sampling rate used when sampling the pulse functional.
+                The sampling rate used when sampling the functional pulse.
                 Defaults to 2Gs/s.
 
         Returns:
             A real-valued numpy array corresponding to the sampled time values.
-            A complex valued numpy array corresponding to the pulse functional evaluated
+            A complex valued numpy array corresponding to the functional pulse evaluated
             with the given pulse parameters, including `length` and `amplitude`. The
-            output corresponds to the pulse functional in the form it will be used to
+            output corresponds to the functional pulse in the form it will be used to
             create a pulse envelope in time.
         """
         if sampling_rate is None:

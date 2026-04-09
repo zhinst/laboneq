@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import warnings
 from typing import TYPE_CHECKING, Any
 
 from laboneq.data.compilation_job import DeviceInfoType, ParameterInfo, SignalInfo
@@ -53,6 +54,7 @@ def build_rs_experiment(
     signal_objects: dict[str, SignalObj],
     compiler_module: compiler_rs,
     desktop_setup: bool,
+    compiler_settings: dict | None = None,
 ):
     """Builds a Rust representation of the experiment."""
     compiler_rs = compiler_module
@@ -137,6 +139,20 @@ def build_rs_experiment(
                 )
                 for route in signal_info.output_routing or []
             ],
+            mixer_calibration=(
+                device_setup_capnp.create_mixer_calibration(
+                    voltage_offsets=[
+                        setup_builder.maybe_parameter(offset)
+                        for offset in signal_info.mixer_calibration.voltage_offsets
+                    ],
+                    correction_matrix=[
+                        [setup_builder.maybe_parameter(element) for element in row]
+                        for row in signal_info.mixer_calibration.correction_matrix
+                    ],
+                )
+            )
+            if signal_info.mixer_calibration is not None
+            else None,
             threshold=t
             if (t := signal_info.threshold) is None or isinstance(t, list)
             else [t],
@@ -162,7 +178,77 @@ def build_rs_experiment(
         awgs=list(awg_allocation.values()),
         desktop_setup=desktop_setup,
         packed=use_packed,
+        compiler_settings=_sanitize_compiler_settings(compiler_settings),
     )
+
+
+def _sanitize_compiler_settings(settings: dict | None) -> dict:
+    if settings is None:
+        return {}
+    settings = settings.copy()  # Create a copy to avoid mutating the original
+    # Ensure resolution bits are non-negative integers.
+    # This did not previously raise an error so therefore we sanitize the input instead of raising an error.
+    if "AMPLITUDE_RESOLUTION_BITS" in settings:
+        settings["AMPLITUDE_RESOLUTION_BITS"] = max(
+            settings["AMPLITUDE_RESOLUTION_BITS"], 0
+        )
+    if "PHASE_RESOLUTION_BITS" in settings:
+        settings["PHASE_RESOLUTION_BITS"] = max(settings["PHASE_RESOLUTION_BITS"], 0)
+    if "MAX_EVENTS_TO_PUBLISH" in settings:
+        if isinstance(
+            settings["MAX_EVENTS_TO_PUBLISH"], float
+        ):  # We support e.g. 1e6 for convenience, but we need to convert it to int for the Rust compiler
+            settings["MAX_EVENTS_TO_PUBLISH"] = int(settings["MAX_EVENTS_TO_PUBLISH"])
+
+    if "EXPAND_LOOPS_FOR_SCHEDULE" in settings:
+        warnings.warn(
+            "Setting `EXPAND_LOOPS_FOR_SCHEDULE` is deprecated.\n"
+            "Use the expand_loops_for_schedule argument of laboneq.pulse_sheet_viewer.pulse_sheet_viewer.view_pulse_sheet"
+            " to set loop expansion for the pulse sheet viewer",
+            FutureWarning,
+            stacklevel=2,
+        )
+
+    if "SHFSG_FORCE_COMMAND_TABLE" in settings:
+        warnings.warn(
+            "The setting `SHFSG_FORCE_COMMAND_TABLE` has no effect and will be removed in a future version",
+            FutureWarning,
+            stacklevel=2,
+        )
+        settings.pop("SHFSG_FORCE_COMMAND_TABLE")
+
+    if "HDAWG_FORCE_COMMAND_TABLE" in settings:
+        warnings.warn(
+            "The setting `HDAWG_FORCE_COMMAND_TABLE` has no effect and will be removed in a future version",
+            FutureWarning,
+            stacklevel=2,
+        )
+        settings.pop("HDAWG_FORCE_COMMAND_TABLE")
+
+    if "SHFQA_MIN_PLAYWAVE_HINT" in settings:
+        warnings.warn(
+            "The setting `SHFQA_MIN_PLAYWAVE_HINT` has no effect.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        settings.pop("SHFQA_MIN_PLAYWAVE_HINT")
+
+    if "SHFQA_MIN_PLAYZERO_HINT" in settings:
+        warnings.warn(
+            "The setting `SHFQA_MIN_PLAYZERO_HINT` has no effect.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        settings.pop("SHFQA_MIN_PLAYZERO_HINT")
+
+    if ("MAX_EVENTS_TO_PUBLISH" in settings) and ("OUTPUT_EXTRAS" not in settings):
+        warnings.warn(
+            "Setting `MAX_EVENTS_TO_PUBLISH` has no effect unless used together with `OUTPUT_EXTRAS=True`.",
+            FutureWarning,
+            stacklevel=2,
+        )
+
+    return settings
 
 
 def _build_precompensation(

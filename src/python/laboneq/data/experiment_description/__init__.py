@@ -15,6 +15,7 @@ from laboneq.core.types.enums import (
     ExecutionType,
     RepetitionMode,
     SectionAlignment,
+    SectionTimingMode,
 )
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.calibration import Calibration
@@ -58,6 +59,7 @@ class Section:
     children: list[Operation | Section] = field(default_factory=list)
     trigger: dict[str, dict[str, int]] = field(default_factory=dict)
     on_system_grid: bool | None = None
+    section_timing_mode: SectionTimingMode | None = None
 
 
 @dataclass
@@ -78,6 +80,7 @@ class AcquireLoopRt(Section):
     repetition_mode: RepetitionMode = None
     repetition_time: float = None
     reset_oscillator_phase: bool = None
+    section_timing_mode: SectionTimingMode | None = None
 
 
 @dataclass
@@ -90,6 +93,7 @@ class Call(Operation):
 class Case(Section):
     uid: str = None
     state: int = None
+    section_timing_mode: SectionTimingMode | None = None
 
 
 @dataclass
@@ -116,6 +120,7 @@ class Match(Section):
     prng_sample: PRNGSample | None = None
     sweep_parameter: Parameter | None = None
     local: Optional[bool] = None
+    section_timing_mode: SectionTimingMode | None = None
 
 
 @dataclass

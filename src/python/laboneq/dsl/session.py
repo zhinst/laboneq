@@ -16,8 +16,8 @@ from laboneq.controller.runtime_context_impl import LegacySessionData
 from laboneq.controller.toolkit_adapter import ToolkitDevices
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types import CompiledExperiment
+from laboneq.core.utilities.compile_experiment import compile_experiment
 from laboneq.core.utilities.environment import is_testing
-from laboneq.core.utilities.laboneq_compile import laboneq_compile
 from laboneq.data.experiment_results import ExperimentResults
 from laboneq.dsl.device import DeviceSetup, SystemProfile, system_profile_session
 from laboneq.dsl.device.io_units.logical_signal import (
@@ -416,7 +416,7 @@ class Session:
             compiler_settings: Extra options passed to the compiler.
         """
         self._experiment_definition = experiment
-        self._compiled_experiment = laboneq_compile(
+        self._compiled_experiment = compile_experiment(
             device_setup=self.device_setup,
             experiment=self.experiment,
             compiler_settings={

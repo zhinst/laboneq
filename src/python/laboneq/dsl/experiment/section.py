@@ -9,7 +9,7 @@ import attrs
 
 from laboneq._utils import id_generator
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import SectionAlignment
+from laboneq.core.types.enums import SectionAlignment, SectionTimingMode
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.core.validators import validating_allowed_values
 from laboneq.dsl.enums import (
@@ -94,6 +94,12 @@ class Section:
             If True, the section boundaries are always rounded to the system grid,
             even if the contained signals would allow for tighter alignment.
             Default: `False`.
+        section_timing_mode (SectionTimingMode | None):
+            Controls how the compiler handles timing values that require padding
+            to fit the required grid. When set to `SectionTimingMode.STRICT`, the
+            compiler raises an error instead of silently padding.
+            Default: `None` (relaxed behaviour — padding is allowed).
+
     """
 
     # Unique identifier of the section.
@@ -123,6 +129,9 @@ class Section:
     # Whether to escalate to the system grid even if tighter alignment is possible.
     # See [Experiment.section][laboneq.dsl.experiment.experiment.Experiment.section].
     on_system_grid: bool | None = attrs.field(default=False)
+
+    # How the scheduler handles rounding within this section.
+    section_timing_mode: SectionTimingMode | None = attrs.field(default=None)
 
     def __attrs_post_init__(self):
         if self.uid is None:

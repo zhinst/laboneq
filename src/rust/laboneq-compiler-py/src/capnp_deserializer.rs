@@ -37,15 +37,16 @@ use laboneq_dsl::operation::{
     PrngSetup, PulseParameterValue, Reserve, ResetOscillatorPhase, Section, Sweep,
 };
 use laboneq_dsl::signal_calibration::{
-    BounceCompensation, ExponentialCompensation, FirCompensation, HighPassCompensation,
-    OutputRoute, PortMode, Precompensation, SignalCalibration,
+    BounceCompensation, CorrectionMatrix, ExponentialCompensation, FirCompensation,
+    HighPassCompensation, MixerCalibration, OutputRoute, PortMode, Precompensation,
+    SignalCalibration,
 };
 use laboneq_dsl::types::{
     AcquisitionType, AmplifierPump, AveragingMode, ComplexOrFloat, ExternalParameterUid,
     FunctionalPulse, HandleUid, Marker, MarkerSelector, MatchTarget, NumericLiteral, Oscillator,
     OscillatorKind, ParameterUid, PrngSampleUid, PulseDef, PulseFunction, PulseKind,
     PulseParameterUid, PulseUid, Quantity, RepetitionMode, SampledPulse, SectionAlignment,
-    SectionUid, SignalUid, SweepParameter, Trigger, Unit, ValueOrParameter,
+    SectionTimingMode, SectionUid, SignalUid, SweepParameter, Trigger, Unit, ValueOrParameter,
 };
 use laboneq_ir::signal::SignalKind;
 use laboneq_ir::system::AwgDevice;
@@ -54,7 +55,6 @@ use num_complex::Complex64;
 use numeric_array::NumericArray;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyString};
-
 type ExternalParameterStore = HashMap<ExternalParameterUid, Py<PyAny>>;
 
 /// Result of deserializing a Cap'n Proto experiment message.
@@ -198,6 +198,16 @@ fn deserialize_alignment(alignment: section_capnp::Alignment) -> SectionAlignmen
         section_capnp::Alignment::Left => SectionAlignment::Left,
         section_capnp::Alignment::Right => SectionAlignment::Right,
         section_capnp::Alignment::Unspecified => SectionAlignment::Left,
+    }
+}
+
+fn deserialize_section_timing_mode(
+    section_timing_mode: section_capnp::SectionTimingMode,
+) -> SectionTimingMode {
+    match section_timing_mode {
+        section_capnp::SectionTimingMode::Relaxed => SectionTimingMode::Relaxed,
+        section_capnp::SectionTimingMode::Strict => SectionTimingMode::Strict,
+        section_capnp::SectionTimingMode::Unspecified => SectionTimingMode::Relaxed,
     }
 }
 
@@ -400,6 +410,8 @@ fn deserialize_acquire_loop(
         RepWhich::Constant(t) => RepetitionMode::Constant { time: seconds(t) },
         RepWhich::Auto(()) => RepetitionMode::Auto,
     };
+    let section_timing_mode =
+        deserialize_section_timing_mode(reader.get_section_timing_mode().map_err(Error::new)?);
 
     Ok(AveragingLoop {
         uid: section_uid,
@@ -409,6 +421,7 @@ fn deserialize_acquire_loop(
         repetition_mode,
         reset_oscillator_phase: reader.get_reset_oscillator_phase(),
         alignment,
+        section_timing_mode,
     })
 }
 
@@ -419,10 +432,13 @@ fn deserialize_case_section(
     let state_reader = reader.get_state().map_err(Error::new)?;
     let state = deserialize_value_as_numeric(&state_reader)?
         .ok_or_else(|| Error::new("Case state must be a constant value"))?;
+    let section_timing_mode =
+        deserialize_section_timing_mode(reader.get_section_timing_mode().map_err(Error::new)?);
 
     Ok(Case {
         uid: section_uid,
         state,
+        section_timing_mode,
     })
 }
 
@@ -978,6 +994,9 @@ impl<'py> Deserializer<'py> {
 
         let triggers = self.deserialize_triggers(reader)?;
 
+        let section_timing_mode =
+            deserialize_section_timing_mode(reader.get_section_timing_mode().map_err(Error::new)?);
+
         Ok(Section {
             uid: section_uid,
             alignment,
@@ -985,6 +1004,7 @@ impl<'py> Deserializer<'py> {
             play_after: deserialize_play_after_from_regular(reader, section_name, sibling_refs)?,
             triggers,
             on_system_grid: reader.get_on_system_grid(),
+            section_timing_mode,
         })
     }
 
@@ -1027,6 +1047,9 @@ impl<'py> Deserializer<'py> {
             ChunkWhich::Auto(()) => Some(Chunking::Auto),
         };
 
+        let section_timing_mode =
+            deserialize_section_timing_mode(reader.get_section_timing_mode().map_err(Error::new)?);
+
         Ok(Sweep {
             uid: section_uid,
             parameters,
@@ -1034,6 +1057,7 @@ impl<'py> Deserializer<'py> {
             alignment,
             reset_oscillator_phase: reader.get_reset_oscillator_phase(),
             chunking,
+            section_timing_mode,
         })
     }
 
@@ -1650,6 +1674,7 @@ impl<'py> Deserializer<'py> {
                 port_delay: calibration.port_delay,
                 signal_delay: calibration.signal_delay,
                 thresholds: calibration.thresholds,
+                mixer_calibration: calibration.mixer_calibration,
             };
 
             signals.push(signal_props);
@@ -1715,6 +1740,53 @@ impl<'py> Deserializer<'py> {
             .transpose()?
             .unwrap_or_default();
 
+        let mixer_calibration = reader
+            .has_mixer_calibration()
+            .then(|| {
+                let mc_reader = reader.get_mixer_calibration().map_err(Error::new)?;
+
+                let voltage_offset_i = self.deserialize_value_f64(
+                    &mc_reader.get_voltage_offset_i().map_err(Error::new)?,
+                )?;
+                let voltage_offset_q = self.deserialize_value_f64(
+                    &mc_reader.get_voltage_offset_q().map_err(Error::new)?,
+                )?;
+
+                let correction_matrix = if mc_reader.has_correction_matrix() {
+                    let matrix_values = mc_reader.get_correction_matrix().map_err(Error::new)?;
+                    if matrix_values.len() != 4 {
+                        return Err(Error::new(format!(
+                            "Correction matrix must have exactly 4 elements, got {}",
+                            matrix_values.len()
+                        )));
+                    }
+                    let values = [
+                        self.deserialize_value_f64(&matrix_values.get(0))?.ok_or_else(|| {
+                            Error::new("Correction matrix element must be a specified value or parameter reference")
+                        })?,
+                        self.deserialize_value_f64(&matrix_values.get(1))?.ok_or_else(|| {
+                            Error::new("Correction matrix element must be a specified value or parameter reference")
+                        })?,
+                        self.deserialize_value_f64(&matrix_values.get(2))?.ok_or_else(|| {
+                            Error::new("Correction matrix element must be a specified value or parameter reference")
+                        })?,
+                        self.deserialize_value_f64(&matrix_values.get(3))?.ok_or_else(|| {
+                            Error::new("Correction matrix element must be a specified value or parameter reference")
+                        })?,
+                    ];
+                    Some(CorrectionMatrix::from_row_major(values))
+                } else {
+                    None
+                };
+
+                Ok(MixerCalibration {
+                    voltage_offset_i,
+                    voltage_offset_q,
+                    correction_matrix,
+                })
+            })
+            .transpose()?;
+
         let calibration = SignalCalibration {
             oscillator,
             automute,
@@ -1729,6 +1801,7 @@ impl<'py> Deserializer<'py> {
             amplifier_pump,
             amplitude,
             thresholds,
+            mixer_calibration,
         };
         Ok(calibration)
     }

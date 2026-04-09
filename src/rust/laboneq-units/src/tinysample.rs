@@ -5,9 +5,11 @@ use crate::duration::{Duration, Second, seconds};
 
 /// The smallest time unit used in the compiler.
 ///
-/// Example conversion:
+/// Selected as the LCM of the supported instrument sampling rates (1.8, 2.0, 2.4 GHz),
+/// times a "scheduler fidelity" factor of 100. Using i64 to count TinySamples, this
+/// yields a maximum experiment length of ~29.6 days.
 ///
-/// At 2.0 GS/s 1 sample = 1800 x TINYSAMPLE_UNIT
+/// Example conversion: at 2.0 GS/s, 1 sample = 0.5 ns = 1800 × TINYSAMPLE_DURATION.
 pub const TINYSAMPLE_DURATION: f64 = 1.0 / 3600000e6;
 
 #[derive(Debug, Clone, Copy, Default, PartialOrd, PartialEq, Ord, Eq)]
@@ -38,3 +40,23 @@ pub fn tinysamples_to_samples(ts: TinySamples, sampling_rate: f64) -> i64 {
 
 /// A duration expressed in TinySamples.
 pub type TinySamples<T = i64> = Duration<TinySample, T>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn test_seconds_to_tinysamples() {
+        assert_eq!(
+            seconds_to_tinysamples(seconds(1)),
+            tiny_samples(3600000000000)
+        );
+        assert_eq!(seconds_to_tinysamples(seconds(1e-9)), tiny_samples(3600));
+    }
+    #[test]
+    fn test_roundtrip() {
+        assert_eq!(
+            tiny_samples(1),
+            seconds_to_tinysamples(tinysamples_to_seconds(tiny_samples(1)))
+        );
+    }
+}

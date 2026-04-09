@@ -1,3 +1,23 @@
+# LabOne Q 26.4.0b5 (2026-04-09)
+
+## Features
+
+- Added `SectionTimingMode.STRICT` for sections and acquire loops. When enabled, the compiler raises an error if any timing value (section length, pulse length, repetition time) requires padding to fit the required grid, rather than silently padding. `RepetitionMode.AUTO` is incompatible with strict mode and also raises an error.
+- The `inject_results` `paths` run experiment option is now of type `list[Path | str]`, i.e. a list of paths to serialized `Results` objects. If multiple file paths are provided, then the `Results` objects are combined.
+- Renamed controller API endpoints to match new naming scheme, added stubs for sync controller API.
+
+## Bug Fixes
+
+- Fixed a bug where pulse replacements did not persist over near-time steps in situations where, besides the replacement(s), the near-time loop is used to sweep some pulse properties as well (the pulse being replaced, or another one).
+- Fixed a bug where near-time pulse replacement replaced the wrong waveform if the pulse being replaced was in different positions in different near-time steps (can happen when matching against the near-time loop index and defining structurally different entries for different cases).
+- Fixed a bug where delay compensation for input latency on SHFQA when using LRT was inaccurate. Users are advised to update their integration kernel estimations as this change affects signal latency.
+- Fixed a bug where auto chunking, when chunking was not necessary, produced a different compilation result than when auto chunking was not enabled.
+
+## Deprecation Notices
+
+- Deprecated the methods `CompiledExperiment.replace_pulse` and `CompiledExperiment.replace_phase_increment`. NOTE: the methods `RuntimeContext.replace_pulse` and `RuntimeContext.replace_phase_increment` are not deprecated and can still be used to apply replacements in NT callbacks (these methods leave the compiled experiment unchanged).
+- Deprecated `QPU.measure_section_length`. The method is only meaningful for certain types of qubits, so it will be moved to the implementations of `QuantumOperations` in the `laboneq-applications` repository instead.
+
 # LabOne Q 26.4.0b4 (2026-03-27)
 
 ## Bug Fixes

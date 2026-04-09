@@ -70,9 +70,11 @@ impl DeviceSetupCapnpBuilderPy {
         precompensation=None,
         added_outputs=vec![],
         threshold=None,
+        mixer_calibration=None,
     ))]
     fn add_signal_with_calibration(
         &mut self,
+        py: Python,
         uid: Py<PyString>,
         ports: Vec<Py<PyString>>,
         instrument_uid: Py<PyString>,
@@ -93,6 +95,7 @@ impl DeviceSetupCapnpBuilderPy {
         precompensation: Option<Py<PrecompensationPy>>,
         added_outputs: Vec<Py<OutputRoutePy>>,
         threshold: Option<Vec<f64>>,
+        mixer_calibration: Option<Py<MixerCalibrationRef>>,
     ) -> PyResult<()> {
         let payload = SignalPayload {
             uid,
@@ -115,6 +118,7 @@ impl DeviceSetupCapnpBuilderPy {
             precompensation,
             added_outputs,
             threshold,
+            mixer_calibration: mixer_calibration.map(|mc| mc.clone_ref(py)),
         };
         self.signals.push(payload);
         Ok(())
@@ -148,6 +152,17 @@ impl DeviceSetupCapnpBuilderPy {
             phase_shift,
         })
     }
+
+    fn create_mixer_calibration(
+        &self,
+        voltage_offsets: Vec<Py<PyAny>>,
+        correction_matrix: Vec<Vec<Py<PyAny>>>,
+    ) -> PyResult<MixerCalibrationRef> {
+        Ok(MixerCalibrationRef {
+            voltage_offsets,
+            correction_matrix,
+        })
+    }
 }
 
 pub(crate) struct InstrumentPayload {
@@ -168,6 +183,12 @@ pub(crate) struct OscillatorPayload {
 #[pyclass(name = "OscillatorRef", frozen)]
 pub(crate) struct OscillatorRef {
     pub index: usize,
+}
+
+#[pyclass(name = "MixerCalibrationRef", frozen)]
+pub(crate) struct MixerCalibrationRef {
+    pub voltage_offsets: Vec<Py<PyAny>>, // None, float or sweep parameter. One per output.
+    pub correction_matrix: Vec<Vec<Py<PyAny>>>, // None, float or sweep parameter. 2x2 matrix for I/Q mixer
 }
 
 pub(crate) struct SignalPayload {
@@ -191,6 +212,7 @@ pub(crate) struct SignalPayload {
     pub precompensation: Option<Py<PrecompensationPy>>,
     pub added_outputs: Vec<Py<OutputRoutePy>>,
     pub threshold: Option<Vec<f64>>,
+    pub mixer_calibration: Option<Py<MixerCalibrationRef>>,
 }
 
 #[pyclass(name = "OutputRoute", frozen)]

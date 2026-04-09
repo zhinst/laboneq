@@ -13,6 +13,7 @@ from laboneq.core.types.enums import (
     PortMode,
     RepetitionMode,
     SectionAlignment,
+    SectionTimingMode,
 )
 
 
@@ -30,6 +31,7 @@ for e in [
     ExecutionType,
     AcquisitionType,
     SectionAlignment,
+    SectionTimingMode,
     AveragingMode,
     RepetitionMode,
     PortMode,

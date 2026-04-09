@@ -4,14 +4,17 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
+use laboneq_common::named_id::NamedId;
 use laboneq_common::named_id::resolve_ids;
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::Operation;
 use laboneq_dsl::types::AcquisitionType;
 use laboneq_dsl::types::ParameterUid;
+use laboneq_dsl::types::SectionTimingMode;
 use laboneq_dsl::types::SweepParameter;
 use laboneq_ir::node::IrNode;
 use laboneq_log::warn;
+use tracing::instrument;
 
 use crate::ChunkingInfo;
 use crate::ExperimentContext;
@@ -41,6 +44,7 @@ pub struct ScheduledExperiment {
 /// Schedule real time part of an Experiment
 ///
 /// The scheduler will schedule the real time portion of the experiment
+#[instrument(name = "laboneq.compiler.schedule-experiment", skip_all)]
 pub fn schedule_experiment<T: SignalInfo>(
     root: &ExperimentNode,
     mut context: ExperimentContext<T>,
@@ -52,6 +56,8 @@ pub fn schedule_experiment<T: SignalInfo>(
         check_tinysample_commensurability(s.sampling_rate())
             .with_context(|| format!("Incompatible sampling rate on signal: '{}'", s.uid().0))
     })?;
+
+    validate_strict_before_realtime(root)?;
 
     let mut real_time_root = find_real_time_root(root)
         .expect("Experiment has no real-time section")
@@ -66,6 +72,7 @@ pub fn schedule_experiment<T: SignalInfo>(
     let acquisition_type =
         find_acquisition_type(&real_time_root).expect("Unspecified acquisition type.");
     let mut scheduled_node = lower_to_ir(&real_time_root, &context, near_time_parameters)?;
+
     resolve_repetition_mode(&mut scheduled_node)?;
     validate_ir(&scheduled_node)?;
     adjust_acquisition_lengths(&mut scheduled_node, context.signals, acquisition_type);
@@ -103,6 +110,31 @@ fn find_real_time_root(root: &ExperimentNode) -> Option<&ExperimentNode> {
         }
     }
     None
+}
+
+/// Reject any section with `SectionTimingMode::Strict` that lives outside the
+/// real-time loop. Near-time sections cannot be strictly controlled.
+fn validate_strict_before_realtime(node: &ExperimentNode) -> Result<()> {
+    if node.kind == Operation::RealTimeBoundary {
+        return Ok(());
+    }
+    let strict_uid: Option<NamedId> = match &node.kind {
+        Operation::Section(s) if s.section_timing_mode == SectionTimingMode::Strict => {
+            Some(s.uid.0)
+        }
+        Operation::Sweep(s) if s.section_timing_mode == SectionTimingMode::Strict => Some(s.uid.0),
+        Operation::Case(s) if s.section_timing_mode == SectionTimingMode::Strict => Some(s.uid.0),
+        _ => None,
+    };
+    if let Some(uid) = strict_uid {
+        return Err(crate::error::Error::new(format!(
+            "Section '{uid}': SectionTimingMode.STRICT is only allowed inside the real-time loop",
+        )));
+    }
+    for child in &node.children {
+        validate_strict_before_realtime(child)?;
+    }
+    Ok(())
 }
 
 fn find_acquisition_type(root: &ExperimentNode) -> Option<AcquisitionType> {

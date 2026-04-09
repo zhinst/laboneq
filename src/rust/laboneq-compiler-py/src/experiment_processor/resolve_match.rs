@@ -223,7 +223,7 @@ mod tests {
                         uid: NamedId::debug_id(123).into(),
                         target: MatchTarget::Handle(handle),
                         local,
-                        play_after: vec![]
+                        play_after: vec![],
                     }),
                     [(
                         Operation::Reserve(Reserve {

@@ -111,6 +111,7 @@ class Compiler:
         self._experiment_dao: ExperimentDAO = None
         self._execution: Statement = None
         self._chunking_info: ChunkingInfo | None = None
+        self._compiler_settings = settings or {}
         self._settings = compiler_settings.from_dict(settings)
         self._is_desktop_setup: bool = False
 
@@ -119,10 +120,6 @@ class Compiler:
         self._has_uhfqa: bool = False
 
         _logger.info("Starting LabOne Q Compiler run...")
-
-    @classmethod
-    def from_user_settings(cls, settings: dict) -> Compiler:
-        return cls(compiler_settings.filter_user_settings(settings))
 
     def use_experiment(self, experiment: CompilationJob):
         if isinstance(experiment, CompilationJob):
@@ -234,6 +231,8 @@ class Compiler:
             self._signal_objects,
             self._settings,
         )
+        if chunk_count == 1:
+            chunk_count = None
         executor = NtCompilerExecutor(rt_compiler, self._settings, chunk_count)
         executor.run(self._execution)
 
@@ -295,6 +294,7 @@ class Compiler:
             signal_objects=self._signal_objects,
             compiler_module=compiler_module,
             desktop_setup=self._is_desktop_setup,
+            compiler_settings=self._compiler_settings,
         )
 
         chunking = self._chunking_info

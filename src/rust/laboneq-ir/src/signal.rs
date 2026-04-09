@@ -3,7 +3,7 @@
 
 use laboneq_common::types::AwgKey;
 use laboneq_dsl::{
-    signal_calibration::{OutputRoute, PortMode, Precompensation},
+    signal_calibration::{MixerCalibration, OutputRoute, PortMode, Precompensation},
     types::{AmplifierPump, DeviceUid, Oscillator, Quantity, SignalUid, ValueOrParameter},
 };
 use laboneq_units::duration::{Duration, Second};
@@ -34,6 +34,7 @@ pub struct Signal {
     pub precompensation: Option<Precompensation>,
     pub added_outputs: Vec<OutputRoute>,
     pub thresholds: Vec<f64>,
+    pub mixer_calibration: Option<MixerCalibration>,
 
     // Timing parameters
     pub port_delay: ValueOrParameter<Duration<Second>>,
@@ -100,6 +101,7 @@ pub mod builder {
                     precompensation: None,
                     added_outputs: vec![],
                     thresholds: vec![],
+                    mixer_calibration: None,
                 },
             }
         }

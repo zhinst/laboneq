@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -248,6 +249,12 @@ class CompiledExperiment:
                 an array of values (see `sampled_pulse_*` from
                 [pulse_library][laboneq.dsl.experiment.pulse_library])
         """
+        warnings.warn(
+            "CompiledExperiment.replace_pulse is deprecated and will be removed in a future release. "
+            "Instead, modify the experiment by putting the new pulse in there and recompile the experiment.",
+            FutureWarning,
+            stacklevel=2,
+        )
         from laboneq.core.utilities.replace_pulse import replace_pulse
 
         replace_pulse(self, pulse_uid, pulse_or_array)
@@ -264,6 +271,13 @@ class CompiledExperiment:
             new_value:
                 Replacement value in radians
         """
+        warnings.warn(
+            "CompiledExperiment.replace_phase_increment is deprecated and will be removed in a future release. "
+            "Instead, modify the experiment by putting the new phase increment in there and recompile the experiment.",
+            FutureWarning,
+            stacklevel=2,
+        )
+
         from laboneq.core.utilities.replace_phase_increment import (
             replace_phase_increment,
         )

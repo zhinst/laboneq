@@ -134,7 +134,10 @@ mod tests {
     use laboneq_dsl::{
         node_structure,
         operation::{AveragingLoop, Reserve, Sweep},
-        types::{AcquisitionType, RepetitionMode, SectionAlignment, SectionUid, SignalUid},
+        types::{
+            AcquisitionType, RepetitionMode, SectionAlignment, SectionTimingMode, SectionUid,
+            SignalUid,
+        },
     };
 
     fn make_sweep(store: &mut NamedIdStore, name: &str) -> Sweep {
@@ -145,6 +148,7 @@ mod tests {
             reset_oscillator_phase: false,
             count: NonZeroU32::new(1).unwrap(),
             chunking: None,
+            section_timing_mode: SectionTimingMode::Relaxed,
         }
     }
 
@@ -161,6 +165,7 @@ mod tests {
             repetition_mode: RepetitionMode::Fastest,
             reset_oscillator_phase: false,
             alignment,
+            section_timing_mode: SectionTimingMode::Relaxed,
         }
     }
 

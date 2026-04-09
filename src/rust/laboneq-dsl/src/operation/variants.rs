@@ -7,7 +7,8 @@ use std::num::NonZeroU32;
 use crate::types::{
     AcquisitionType, AveragingMode, ComplexOrFloat, ExternalParameterUid, HandleUid, Marker,
     MatchTarget, NumericLiteral, ParameterUid, PrngSampleUid, PulseParameterUid, PulseUid,
-    RepetitionMode, SectionAlignment, SectionUid, SignalUid, Trigger, ValueOrParameter,
+    RepetitionMode, SectionAlignment, SectionTimingMode, SectionUid, SignalUid, Trigger,
+    ValueOrParameter,
 };
 use laboneq_units::duration::{Duration, Second};
 
@@ -71,6 +72,7 @@ pub struct Section {
     pub play_after: Vec<SectionUid>,
     pub triggers: Vec<Trigger>,
     pub on_system_grid: bool,
+    pub section_timing_mode: SectionTimingMode,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,12 +114,14 @@ pub struct Sweep {
     pub alignment: SectionAlignment,
     pub reset_oscillator_phase: bool,
     pub chunking: Option<Chunking>,
+    pub section_timing_mode: SectionTimingMode,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Case {
     pub uid: SectionUid,
     pub state: NumericLiteral,
+    pub section_timing_mode: SectionTimingMode,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -137,6 +141,7 @@ pub struct AveragingLoop {
     pub repetition_mode: RepetitionMode,
     pub reset_oscillator_phase: bool,
     pub alignment: SectionAlignment,
+    pub section_timing_mode: SectionTimingMode,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -171,6 +176,7 @@ pub struct LoopInfo<'a> {
     pub reset_oscillator_phase: bool,
     pub alignment: &'a SectionAlignment,
     pub repetition_mode: Option<RepetitionMode>,
+    pub section_timing_mode: &'a SectionTimingMode,
 }
 
 impl Operation {
@@ -216,6 +222,7 @@ impl Operation {
                 reset_oscillator_phase: false,
                 alignment: &SectionAlignment::Left,
                 repetition_mode: None,
+                section_timing_mode: &SectionTimingMode::Relaxed,
             }
             .into(),
             Operation::Sweep(s) => LoopInfo {
@@ -225,6 +232,7 @@ impl Operation {
                 reset_oscillator_phase: s.reset_oscillator_phase,
                 alignment: &s.alignment,
                 repetition_mode: None,
+                section_timing_mode: &s.section_timing_mode,
             }
             .into(),
             Operation::AveragingLoop(s) => LoopInfo {
@@ -234,6 +242,7 @@ impl Operation {
                 reset_oscillator_phase: s.reset_oscillator_phase,
                 alignment: &s.alignment,
                 repetition_mode: Some(s.repetition_mode),
+                section_timing_mode: &s.section_timing_mode,
             }
             .into(),
             Operation::Root

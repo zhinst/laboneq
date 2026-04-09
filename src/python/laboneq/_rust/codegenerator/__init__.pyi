@@ -3,29 +3,52 @@
 
 from __future__ import annotations
 
+from enum import Enum, auto
 from typing import Literal
 
 import numpy.typing as npt
 
 from laboneq._rust.compiler import ExperimentIr
 from laboneq.compiler.seqc.waveform_sampler import SampledWaveformSignature
-from laboneq.data.compilation_job import Marker
+from laboneq.data.compilation_job import PulseDef
+
+class SignalType(Enum):
+    IQ = auto()
+    SINGLE = auto()
+    INTEGRATION = auto()
+
+class DeviceType(Enum):
+    HDAWG = auto()
+    SHFQA = auto()
+    SHFSG = auto()
+    UHFQA = auto()
+
+class MixerType(Enum):
+    IQ = auto()
+    UhfqaEnvelope = auto()
 
 class PulseParameters:
     parameters: dict
     pulse_parameters: dict
     play_parameters: dict
 
+class MarkerSamplingDesc:
+    marker_selector: str
+    enable: bool
+    start: float | None
+    length: float | None
+    pulse: PulseDef | None
+
 class PulseSamplingDesc:
     start: int
     length: int
-    pulse: str
+    pulse: PulseDef
     amplitude: float
     phase: float
     oscillator_frequency: float | None
     channel: int | None
     pulse_parameters: PulseParameters | None
-    markers: list[Marker]
+    markers: list[MarkerSamplingDesc]
 
 class WaveformSamplingDesc:
     length: int
@@ -39,9 +62,9 @@ class PlaySamples:
         uid: int,
         label: str,
         has_i: bool,
-        has_q: bool | None,
-        has_marker1: bool | None,
-        has_marker2: bool | None,
+        has_q: bool,
+        has_marker1: bool,
+        has_marker2: bool,
         signature: SampledWaveformSignature,
     ) -> None: ...
 
@@ -58,7 +81,7 @@ class IntegrationKernel:
     samples_i: npt.ArrayLike
     samples_q: npt.ArrayLike
     downsampling_factor: int | None
-    signals: set[str]
+    signals: list[str]
 
 class SignalIntegrationInfo:
     is_play: bool
@@ -80,30 +103,41 @@ class ChannelProperties:
     marker_mode: Literal["TRIGGER", "MARKER"] | None
     hw_oscillator_index: int | None
     amplitude: float | str | None  # Can be a float or a parameter name
+    voltage_offset: float | str | None  # Can be a float or a parameter name
+    gains: Gains | None
+
+class Gains:
+    diagonal: float | str  # Can be a float or a parameter name
+    off_diagonal: float | str  # Can be a float or a parameter name
 
 class AwgProperties:
     key: tuple[str, int]  # (device UID, AWG index)
     signal_type: Literal["IQ", "SINGLE", "DOUBLE"]
 
-class SeqcProgram:
+class PpcSweeperConfig:
+    ppc_device: str
+    ppc_channel: int
+    json: str
+
+class SeqCProgram:
     src: str
     sequencer: str
     dev_type: str
     dev_opts: list[str]
     awg_index: int
-    sampling_rate: float
+    sampling_rate: float | None
 
 class IntegrationWeight:
-    channels: list[int]
+    integration_units: list[int]
     basename: str
-    downsampling_factor: int | None
+    downsampling_factor: int
 
 class AwgCodeGenerationResult:
     awg_properties: AwgProperties
-    seqc: SeqcProgram
+    seqc: SeqCProgram
     wave_indices: list[tuple[str, tuple[int, str]]]
-    command_table: dict[str, object] | None
-    shf_sweeper_config: dict[str, object] | None
+    command_table: str | None
+    shf_sweeper_config: PpcSweeperConfig | None
     sampled_waveforms: list[SampledWaveform]
     integration_kernels: list[IntegrationKernel]
     # Signal delays in seconds to be applied to the signal
@@ -115,7 +149,7 @@ class AwgCodeGenerationResult:
     feedback_register_config: FeedbackRegisterConfig
     channel_properties: list[ChannelProperties]
     integration_weights: list[IntegrationWeight]
-    integration_unit_allocations: list[IntegrationUnitAllocation] = []
+    integration_unit_allocations: list[IntegrationUnitAllocation]
 
 class Measurement:
     """Measurement information for a device.
@@ -153,17 +187,15 @@ class SeqCGenOutput:
     """
 
     awg_results: list[AwgCodeGenerationResult]
-    total_execution_time: float = 0.0
-    result_handle_maps: dict[ResultSource, list[list[str]]] = {}
-    measurements: list[Measurement] = []
+    total_execution_time: float
+    result_handle_maps: dict[ResultSource, list[list[str]]]
+    measurements: list[Measurement]
 
 def generate_code(
     ir_experiment: ExperimentIr,
-    settings: dict[str, bool | int | float],
 ) -> SeqCGenOutput:
     """Generate SeqC code for given AWGs.
 
     Arguments:
         ir_experiment: The Rust lib experiment IR.
-        settings: Compiler settings as dictionary.
     """

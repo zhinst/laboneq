@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal
 
 from laboneq import (
     serializers,
@@ -27,6 +28,90 @@ if TYPE_CHECKING:
 # Deprecated alias for Results used by laboneq-applications.
 # Remove once laboneq-applications has been updated:
 RunExperimentResults = Results
+
+
+def _combine_results(results: list[Results]) -> Results:
+    """Combine a list of `Results` objects into a single `Results` object.
+
+    !!! warning
+        Currently, only the `acquired_results` and `execution_errors` fields are
+        combined.
+
+    Arguments:
+        results: The list of `Results` objects to combine.
+
+    Returns:
+        The combined `Results` object.
+
+    TODO:
+        - Raise an error when `Results` objects cannot be combined.
+        - Combine all fields of the `Results` objects.
+    """
+    combined = Results()
+    for result in results:
+        for handle, data in result.acquired_results.items():
+            combined.acquired_results[handle] = data
+        combined.execution_errors.extend(result.execution_errors)
+
+    return combined
+
+
+def _validate_inject_results(
+    _instance,
+    _attribute,
+    value: dict[str, list[Path | str] | Literal["no", "emulation", "always"] | bool],
+):
+    if set(value.keys()) != {"paths", "use", "check_shapes"}:
+        raise ValueError(
+            "The `inject_results` dictionary must have the keys {'paths', 'use', 'check_shapes'}."
+        )
+
+    if not isinstance(value["paths"], list) or not all(
+        isinstance(item, (str, Path)) for item in value["paths"]
+    ):
+        raise TypeError("The `paths` value must be of type `list[Path | str]`.")
+
+    if value["use"] not in {"no", "emulation", "always"}:
+        raise ValueError("The `use` value must be one of 'no', 'emulation', 'always'.")
+
+    if not isinstance(value["check_shapes"], bool):
+        raise TypeError("The `check_shapes` value must be of type `bool`.")
+
+
+def _load_results(path: Path) -> Results:
+    """Load a `Results` object from a file path.
+
+    Arguments:
+        path: The path to load the results from.
+
+    Returns:
+        The loaded `Results` object.
+
+    Raises:
+        ValueError: If the file path does not point to serialized `Results`.
+    """
+    try:
+        return serializers.load(path)
+    except Exception as e:
+        raise ValueError(f"Path {path} does not point to serialized Results.") from e
+
+
+def _combine_results_from_file_paths(paths: list[Path]) -> Results:
+    """Load a list of `Results` objects from file paths and combine them.
+
+    Arguments:
+        paths: The list of file paths to load from.
+
+    Returns:
+        The combined `Results` object.
+
+    Raises:
+        ValueError: If no results file paths are provided.
+    """
+    if not paths:
+        raise ValueError("No results file paths provided.")
+
+    return _combine_results([_load_results(p) for p in paths])
 
 
 def _are_results_compatible(
@@ -100,19 +185,24 @@ class RunExperimentOptions:
 
     inject_results: dict = workflow.option_field(
         factory=lambda: {
-            "path": None,
+            "paths": [],
             "use": "emulation",
             "check_shapes": True,
         },
+        validators=[_validate_inject_results],
+        # We convert `Path` to `str` so that the workflow inputs are JSON-serializable
+        converter=lambda v: {**v, "paths": [str(p) for p in v.get("paths", [])]},
         description=(
             "Inject results loaded from a previously serialized LabOne Q run.\n"
             "Keys:\n"
-            "  - use (str): Controls when to inject results.\n"
+            "  - use (Literal['no', 'emulation', 'always']): Controls when to inject results.\n"
             "      * 'no'        : never inject\n"
             "      * 'emulation' : inject only when running in emulation mode (default)\n"
             "      * 'always'    : inject regardless of mode\n"
-            "  - path (Path | str | None): Path to the serialized results file to load.\n"
-            "      Default: None\n"
+            "      Default: 'emulation'\n"
+            "  - paths (list[Path | str]): Paths to load results from.\n"
+            "      If multiple paths are provided, then the results are combined.\n"
+            "      Default: []\n"
             "  - check_shapes (bool): Whether to verify that injected results match the\n"
             "      expected shapes of the experiment results.\n"
             "      Default: True\n"
@@ -155,14 +245,15 @@ def run_experiment(
         include_results_metadata=include_results_metadata,
     )
 
-    if opts.inject_results["path"] is not None and (
+    if opts.inject_results["paths"] and (
         opts.inject_results["use"] == "always"
         or (
             opts.inject_results["use"] == "emulation"
             and session._connection_state.emulated
         )
     ):
-        injected_results = serializers.load(opts.inject_results["path"])
+        paths = [Path(p) for p in opts.inject_results["paths"]]
+        injected_results = _combine_results_from_file_paths(paths)
         # checking that dimensions are matching using emulated results
         if not _are_results_compatible(
             results, injected_results, opts.inject_results["check_shapes"]

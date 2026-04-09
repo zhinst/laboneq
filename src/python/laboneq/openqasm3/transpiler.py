@@ -433,7 +433,7 @@ class OpenQASMTranspiler:
                 or enums.AcquisitionType.INTEGRATION,
                 reset_oscillator_phase=options.reset_oscillator_phase,
             ):
-                sweep_kwargs = {}
+                sweep_kwargs: dict[str, Any] = {}
                 if batch_execution_mode != "nt":
                     if batch_execution_mode in ("chunking", "pipeline"):
                         # pipelined sweep with specified programs per chunk

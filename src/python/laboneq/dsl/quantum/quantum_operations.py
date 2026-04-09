@@ -171,7 +171,7 @@ def create_pulse(
 
       - a key `"function"` that specifies which function from the LabOne Q
         `pulse_library` to use to construct the pulse. The function may
-        either be the name of a registered pulse functional or
+        either be the name of a registered functional pulse or
         `"sampled_pulse"` which uses `pulse_library.sampled_pulse`.
       - any other parameters required by the given pulse function.
 

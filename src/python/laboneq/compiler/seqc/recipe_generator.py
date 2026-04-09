@@ -200,8 +200,7 @@ class RecipeGenerator:
         device_id,
         channel,
         offset: float | ParameterInfo = 0.0,
-        diagonal: float | ParameterInfo = 1.0,
-        off_diagonal: float | ParameterInfo = 0.0,
+        gains: Gains | None = None,
         precompensation=None,
         modulation=False,
         lo_frequency=None,
@@ -265,10 +264,6 @@ class RecipeGenerator:
             port_delay = port_delay.uid
         if isinstance(offset, ParameterInfo):
             offset = offset.uid
-        if isinstance(diagonal, ParameterInfo):
-            diagonal = diagonal.uid
-        if isinstance(off_diagonal, ParameterInfo):
-            off_diagonal = off_diagonal.uid
 
         output = IO(
             channel=channel,
@@ -288,9 +283,8 @@ class RecipeGenerator:
             amplitude=amplitude,
             routed_outputs=recipe_output_routers,
             enable_output_mute=enable_output_mute,
+            gains=gains,
         )
-        if diagonal is not None and off_diagonal is not None:
-            output.gains = Gains(diagonal=diagonal, off_diagonal=off_diagonal)
 
         initialization = self._find_initialization(device_id)
         initialization.outputs.append(output)
@@ -442,8 +436,6 @@ def calc_outputs(
 ):
     all_channels = {}
 
-    flipper = [1, 0]
-
     channels_flat = (
         (awg_key, ch_props)
         for awg_key, ch_props_list in combined_compiler_output.channel_properties.items()
@@ -461,11 +453,9 @@ def calc_outputs(
         )
 
         voltage_offset = experiment_dao.voltage_offset(signal_id)
-        mixer_calibration = experiment_dao.mixer_calibration(signal_id)
         lo_frequency = experiment_dao.lo_frequency(signal_id)
         port_mode = experiment_dao.port_mode(signal_id)
         signal_range = experiment_dao.signal_range(signal_id)
-        device_type = DeviceType.from_device_info_type(signal_info.device.device_type)
         port_delay = experiment_dao.port_delay(signal_id)
 
         scheduler_port_delay: float = 0.0
@@ -474,7 +464,6 @@ def calc_outputs(
             scheduler_port_delay += signal_delays[signal_id].on_device
         scheduler_port_delay += experiment_rs.signal_delay_compensation(signal_id)
 
-        base_channel = min(signal_info.channels)
         precompensation = experiment_rs.signal_precompensation(signal_id)
         warnings = verify_precompensation_parameters(
             precompensation,
@@ -502,35 +491,17 @@ def calc_outputs(
             "modulation": oscillator_is_hardware,
             "marker_mode": channel_properties.marker_mode,
             "amplitude": channel_properties.amplitude,
+            "offset": channel_properties.voltage_offset,
+            "gains": Gains(
+                diagonal=channel_properties.gains.diagonal,
+                off_diagonal=channel_properties.gains.off_diagonal,
+            )
+            if channel_properties.gains is not None
+            else None,
         }
-
-        # default mixer calib
-        if (
-            device_type == DeviceType.HDAWG
-        ):  # for hdawgs, we add default values to the recipe
-            output["offset"] = 0.0
-            output["diagonal"] = 1.0
-            output["off_diagonal"] = 0.0
-        else:  # others get no mixer calib values
-            output["offset"] = 0.0
-            output["diagonal"] = None
-            output["off_diagonal"] = None
 
         if signal_info.type == SignalInfoType.RF and voltage_offset is not None:
             output["offset"] = voltage_offset
-
-        if signal_info.type == SignalInfoType.IQ and mixer_calibration is not None:
-            if mixer_calibration.voltage_offsets:
-                output["offset"] = mixer_calibration.voltage_offsets[
-                    channel - base_channel
-                ]
-            if mixer_calibration.correction_matrix:
-                output["diagonal"] = mixer_calibration.correction_matrix[
-                    channel - base_channel
-                ][channel - base_channel]
-                output["off_diagonal"] = mixer_calibration.correction_matrix[
-                    flipper[channel - base_channel]
-                ][channel - base_channel]
 
         channel_key = (awg_key.device_id, channel)
         # TODO(2K): check for conflicts if 'channel_key' already present in 'all_channels'
@@ -623,8 +594,7 @@ def generate_recipe(
             output["device_id"],
             output["channel"],
             output["offset"],
-            output["diagonal"],
-            output["off_diagonal"],
+            gains=output["gains"],
             precompensation=output.get("precompensation"),
             modulation=output["modulation"],
             lo_frequency=output["lo_frequency"],

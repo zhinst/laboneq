@@ -20,7 +20,6 @@ from laboneq.data.scheduled_experiment import (
 if typing.TYPE_CHECKING:
     from laboneq.data.parameter import Parameter
     from laboneq.data.scheduled_experiment import ScheduledExperiment
-    from laboneq.dsl import Session
 
 
 def calc_ct_replacement(
@@ -83,15 +82,14 @@ def calc_ct_replacement(
 
 
 def replace_phase_increment(
-    target: CompiledExperiment | Session,
+    target: CompiledExperiment,
     parameter: str | Parameter,
     new_value: int | float,
 ):
     """Set the phase increment driven by the given parameter to the new value.
 
     Args:
-        target: CompiledExperiment or Session.
-                See CompiledExperiment.replace_phase_increment and Session.replace_phase_increment for details.
+        target: See CompiledExperiment.replace_phase_increment for details.
         parameter: The parameter that will be replaced.
         new_value: The replacement value of the phase increment.
     """
@@ -99,8 +97,5 @@ def replace_phase_increment(
     if not isinstance(parameter, str):
         parameter = parameter.uid
 
-    if isinstance(target, CompiledExperiment):
-        scheduled_experiment = target.scheduled_experiment
-        calc_ct_replacement(scheduled_experiment, parameter, new_value, in_place=True)
-    else:
-        target.replace_phase_increment(parameter, new_value)
+    scheduled_experiment = target.scheduled_experiment
+    calc_ct_replacement(scheduled_experiment, parameter, new_value, in_place=True)

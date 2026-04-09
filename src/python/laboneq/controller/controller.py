@@ -8,10 +8,8 @@ import logging
 import time
 import traceback
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, cast
+from typing import TYPE_CHECKING, Callable
 
-import numpy as np
-import zhinst.utils  # type: ignore
 from numpy import typing as npt
 
 from laboneq import __version__
@@ -19,10 +17,13 @@ from laboneq.controller.devices.async_support import _gather
 from laboneq.controller.devices.device_collection import DeviceCollection
 from laboneq.controller.devices.device_utils import NodeCollector, zhinst_core_version
 from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
+from laboneq.controller.near_time_replacement import (
+    NearTimeReplacements,
+    process_replacements,
+)
 from laboneq.controller.near_time_runner import NearTimeRunner
 from laboneq.controller.recipe_processor import (
     RecipeData,
-    WaveformItem,
     get_execution_time,
     pre_process_compiled,
 )
@@ -36,16 +37,11 @@ from laboneq.controller.versioning import (
     SetupCaps,
 )
 from laboneq.core.exceptions import AbortExecution
-from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.utilities.async_helpers import AsyncWorker, EventLoopMixIn
-from laboneq.core.utilities.replace_phase_increment import calc_ct_replacement
-from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
 from laboneq.data.execution_payload import TargetSetup
 from laboneq.data.experiment_results import ExperimentResults
 from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import (
-    ArtifactsCodegen,
-    CodegenWaveform,
     ScheduledExperiment,
 )
 
@@ -105,8 +101,7 @@ class Controller(EventLoopMixIn):
 
         self._last_connect_check_ts: float | None = None
 
-        # Waves which are uploaded to the devices via pulse replacements
-        self._current_waves: dict[str, CodegenWaveform] = {}
+        self._neartime_replacements: NearTimeReplacements = NearTimeReplacements()
         self._neartime_callbacks: dict[str, Callable] = (
             {} if neartime_callbacks is None else neartime_callbacks
         )
@@ -157,6 +152,13 @@ class Controller(EventLoopMixIn):
 
         # Feedback
         await self._devices.for_each(DeviceBase.configure_feedback, recipe_data)
+
+        process_replacements(
+            self._neartime_replacements,
+            recipe_data,
+            self._devices,
+            nt_step,
+        )
 
         # AWG / pipeliner upload
         await self._devices.for_each(
@@ -336,6 +338,7 @@ class Controller(EventLoopMixIn):
         await self._devices.disable_outputs(device_uids, logical_signals, unused_only)
 
     def disconnect(self):
+        self.stop_workers()
         self._event_loop.run(self._disconnect_async)
         self.stop()
 
@@ -419,7 +422,7 @@ class Controller(EventLoopMixIn):
                 )
 
                 # Ensure no side effects from the previous execution in the same session
-                self._current_waves.clear()
+                self._neartime_replacements.clear()
 
                 _logger.info("Starting near-time execution...")
                 try:
@@ -463,76 +466,19 @@ class Controller(EventLoopMixIn):
                 # are still captured.
                 execution_context.submission.temp_run_future.set_result(None)
 
-    def replace_pulse(
+    def register_pulse_replacement(
         self,
-        recipe_data: RecipeData,
-        pulse_uid: str | Pulse,
-        pulse_or_array: npt.ArrayLike | Pulse,
+        pulse_uid: str,
+        replacement: npt.ArrayLike | Pulse,
     ):
-        artifacts = recipe_data.scheduled_experiment.artifacts
-        wave_replacements = calc_wave_replacements(
-            artifacts,
-            pulse_uid,
-            pulse_or_array,
-            self._current_waves,
-        )
+        self._neartime_replacements.add_pulse_replacement(pulse_uid, replacement)
 
-        # Ensured by `calc_wave_replacements`
-        assert isinstance(artifacts, ArtifactsCodegen)
-        assert artifacts.wave_indices is not None
-
-        acquisition_type = recipe_data.rt_execution_info.acquisition_type
-        for repl in wave_replacements:
-            awg_indices = next(
-                cast(dict[str, tuple[int, WaveType]], a["value"])
-                for a in artifacts.wave_indices
-                if a["filename"] == repl.awg_id
-            )
-            target_wave_index = awg_indices[repl.sig_string][0]
-            seqc_name = repl.awg_id
-            awg_key = recipe_data.awg_by_seqc_name(seqc_name)
-            assert awg_key is not None
-            device = self._devices.find_by_uid(awg_key.device_uid)
-
-            if repl.replacement_type == ReplacementType.I_Q:
-                assert isinstance(repl.samples, list)
-                clipped = np.clip(repl.samples, -1.0, 1.0)
-                bin_wave = zhinst.utils.convert_awg_waveform(*clipped)
-                device.add_waveform_replacement(
-                    awg_index=awg_key.awg_index,
-                    wave=WaveformItem(
-                        index=target_wave_index,
-                        name=repl.sig_string + " (repl)",
-                        samples=bin_wave,
-                    ),
-                    acquisition_type=acquisition_type,
-                )
-            elif repl.replacement_type == ReplacementType.COMPLEX:
-                assert isinstance(repl.samples, np.ndarray)
-                np.clip(repl.samples.real, -1.0, 1.0, out=repl.samples.real)
-                np.clip(repl.samples.imag, -1.0, 1.0, out=repl.samples.imag)
-                device.add_waveform_replacement(
-                    awg_index=awg_key.awg_index,
-                    wave=WaveformItem(
-                        index=target_wave_index,
-                        name=repl.sig_string + " (repl)",
-                        samples=repl.samples,
-                    ),
-                    acquisition_type=acquisition_type,
-                )
-
-    def replace_phase_increment(
-        self, recipe_data: RecipeData, parameter_uid: str, new_value: int | float
+    def register_phase_increment_replacement(
+        self, parameter_uid: str, new_value: int | float
     ):
-        ct_replacements = calc_ct_replacement(
-            recipe_data.scheduled_experiment, parameter_uid, new_value
+        self._neartime_replacements.add_phase_increment_replacement(
+            parameter_uid, new_value
         )
-        for repl in ct_replacements:
-            seqc_name = repl["seqc"]
-            awg_key = recipe_data.awg_by_seqc_name(seqc_name)
-            assert awg_key is not None
-            device = self._devices.find_by_uid(awg_key.device_uid)
-            device.add_command_table_replacement(awg_key.awg_index, repl["ct"])
 
     async def _collect_nt_step_results(
         self, nt_step_result_context: NtStepResultContext

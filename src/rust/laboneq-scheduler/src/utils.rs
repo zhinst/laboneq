@@ -1,12 +1,16 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_dsl::types::SignalUid;
+use laboneq_dsl::types::{SectionTimingMode, SignalUid};
 use laboneq_units::tinysample::{TINYSAMPLE_DURATION, TinySamples, tiny_samples};
-use num_integer::{Integer, div_ceil, div_floor};
 // Re-export for convenience
 use crate::error::{Error, Result};
 pub(crate) use num_integer::lcm;
+use num_integer::{div_ceil, div_floor};
+
+/// In strict timing mode, rounding of more than 1/STRICT_TIMING_TOLERANCE of the
+/// grid size is rejected.
+pub(crate) const STRICT_TIMING_TOLERANCE: i64 = 1000;
 
 fn is_valid_sampling_rate(rate: f64) -> bool {
     rate.is_finite() && rate > 0.0 && !rate.is_subnormal()
@@ -77,16 +81,16 @@ pub(crate) fn signal_grid(signal: &impl SignalGridInfo) -> TinySamples {
 ///
 /// This function panics if `grid` is not positive.
 #[inline]
-pub(crate) fn ceil_to_grid<T: Integer + Copy>(value: T, grid: T) -> T {
-    assert!(grid > T::zero(), "Grid must be positive for rounding.");
+pub(crate) fn ceil_to_grid(value: i64, grid: i64) -> i64 {
+    assert!(grid > 0, "Grid must be positive for rounding.");
     div_ceil(value, grid) * grid
 }
 
 /// Floor the given value to the nearest multiple of the grid.
 ///
 /// This function panics if `grid` is not positive.
-pub(crate) fn floor_to_grid<T: Integer + Copy>(value: T, grid: T) -> T {
-    assert!(grid > T::zero(), "Grid must be positive for rounding.");
+pub(crate) fn floor_to_grid(value: i64, grid: i64) -> i64 {
+    assert!(grid > 0, "Grid must be positive for rounding.");
     div_floor(value, grid) * grid
 }
 
@@ -99,46 +103,75 @@ pub(crate) fn floor_to_grid<T: Integer + Copy>(value: T, grid: T) -> T {
 /// - For all other cases, it rounds to the nearest multiple
 ///
 /// This function panics if `grid` is not positive.
-pub(crate) fn round_to_grid<T>(value: T, grid: T) -> T
-where
-    T: Integer + Copy + std::ops::Neg<Output = T>,
-{
-    assert!(grid > T::zero(), "Grid must be positive for rounding.");
-    let abs_value = if value >= T::zero() {
-        value
-    } else {
-        value * T::one().neg()
-    };
-    let remainder = abs_value % grid;
-    if remainder == T::zero() {
+pub(crate) fn round_to_grid(value: i64, grid: i64) -> i64 {
+    assert!(grid > 0, "Grid must be positive for rounding.");
+    let remainder = value.abs() % grid;
+    if remainder == 0 {
         // Already on grid
         return value;
     }
     let quotient = value / grid;
-    let double_remainder = remainder + remainder;
+    let double_remainder = remainder * 2;
     if double_remainder < grid {
         // Less than half - round toward zero
         quotient * grid
     } else if double_remainder > grid {
         // More than half - round away from zero
-        if value >= T::zero() {
-            (quotient + T::one()) * grid
+        if value >= 0 {
+            (quotient + 1) * grid
         } else {
-            (quotient - T::one()) * grid
+            (quotient - 1) * grid
         }
     } else {
         // Exactly half - round to even quotient
-        if quotient % (T::one() + T::one()) == T::zero() {
+        if quotient % 2 == 0 {
             quotient * grid // Even quotient - keep it
         } else {
             // Odd quotient - make it even
-            if value >= T::zero() {
-                (quotient + T::one()) * grid
+            if value >= 0 {
+                (quotient + 1) * grid
             } else {
-                (quotient - T::one()) * grid
+                (quotient - 1) * grid
             }
         }
     }
+}
+
+pub(crate) fn checked_ceil_to_grid(
+    value: i64,
+    grid: i64,
+    timing_mode: SectionTimingMode,
+) -> Result<i64> {
+    let ret = ceil_to_grid(value, grid);
+    if timing_mode == SectionTimingMode::Strict && grid < (ret - value) * STRICT_TIMING_TOLERANCE {
+        return Err(Error::new("strict mode prevents rounding"));
+    }
+    Ok(ret)
+}
+
+pub(crate) fn checked_floor_to_grid(
+    value: i64,
+    grid: i64,
+    timing_mode: SectionTimingMode,
+) -> Result<i64> {
+    let ret = floor_to_grid(value, grid);
+    if timing_mode == SectionTimingMode::Strict && grid < (value - ret) * STRICT_TIMING_TOLERANCE {
+        return Err(Error::new("strict mode prevents rounding"));
+    }
+    Ok(ret)
+}
+
+pub(crate) fn checked_round_to_grid(
+    value: i64,
+    grid: i64,
+    timing_mode: SectionTimingMode,
+) -> Result<i64> {
+    let ret = round_to_grid(value, grid);
+    let absdiff = (ret - value).abs();
+    if timing_mode == SectionTimingMode::Strict && grid < absdiff * STRICT_TIMING_TOLERANCE {
+        return Err(Error::new("strict mode prevents rounding"));
+    }
+    Ok(ret)
 }
 
 #[cfg(test)]
@@ -355,5 +388,51 @@ mod tests {
         // Odd grid (should not happen often in practice)
         assert_eq!(round_to_grid(5, 3), 6);
         assert_eq!(round_to_grid(4, 3), 3);
+    }
+
+    #[test]
+    fn test_checked_ceil_to_grid() {
+        // Grid = 1000; tolerance = grid / STRICT_TIMING_TOLERANCE = 1.
+        // Rounding by exactly 1 is allowed (boundary); by 2 or more is rejected.
+        let grid = 1000_i64;
+        // No rounding needed — always Ok.
+        assert_eq!(
+            checked_ceil_to_grid(2000, grid, SectionTimingMode::Strict).unwrap(),
+            2000
+        );
+        // Rounding within tolerance — Ok in strict mode.
+        assert_eq!(
+            checked_ceil_to_grid(1999, grid, SectionTimingMode::Strict).unwrap(),
+            2000
+        );
+        // Rounding beyond tolerance — rejected in strict, allowed in relaxed.
+        assert!(checked_ceil_to_grid(1998, grid, SectionTimingMode::Strict).is_err());
+        assert_eq!(
+            checked_ceil_to_grid(1998, grid, SectionTimingMode::Relaxed).unwrap(),
+            2000
+        );
+        assert!(checked_ceil_to_grid(1500, grid, SectionTimingMode::Strict).is_err());
+    }
+
+    #[test]
+    fn test_checked_floor_to_grid() {
+        let grid = 1000_i64;
+        // No rounding needed — always Ok.
+        assert_eq!(
+            checked_floor_to_grid(2000, grid, SectionTimingMode::Strict).unwrap(),
+            2000
+        );
+        // Rounding within tolerance — Ok in strict mode.
+        assert_eq!(
+            checked_floor_to_grid(2001, grid, SectionTimingMode::Strict).unwrap(),
+            2000
+        );
+        // Rounding beyond tolerance — rejected in strict, allowed in relaxed.
+        assert!(checked_floor_to_grid(2002, grid, SectionTimingMode::Strict).is_err());
+        assert_eq!(
+            checked_floor_to_grid(2002, grid, SectionTimingMode::Relaxed).unwrap(),
+            2000
+        );
+        assert!(checked_floor_to_grid(2500, grid, SectionTimingMode::Strict).is_err());
     }
 }

@@ -286,3 +286,14 @@ showcontent = true
 directory = "misc"
 name = "Miscellaneous"
 showcontent = false
+
+# static files for the automation web viewer
+[tool.setuptools.package-data]
+"laboneq.automation.web_viewer" = [
+  "app/static/js/*.js",
+  "app/static/css/*.css",
+  "app/static/images/*.png",
+  "app/static/images/*.svg",
+  "app/static/favicon.ico",
+  "app/templates/*.html",
+]

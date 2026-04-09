@@ -8,6 +8,9 @@ from laboneq.core.types.enums.repetition_mode import RepetitionMode as Repetitio
 from laboneq.core.types.enums.section_alignment import (
     SectionAlignment as SectionAlignmentDSL,
 )
+from laboneq.core.types.enums.section_timing_mode import (
+    SectionTimingMode as SectionTimingModeDSL,
+)
 from laboneq.data.experiment_description import Acquire as AcquireDATA
 from laboneq.data.experiment_description import AcquireLoopRt as AcquireLoopRtDATA
 from laboneq.data.experiment_description import AveragingMode as AveragingModeDATA
@@ -32,6 +35,9 @@ from laboneq.data.experiment_description import (
 )
 from laboneq.data.experiment_description import Section as SectionDATA
 from laboneq.data.experiment_description import SectionAlignment as SectionAlignmentDATA
+from laboneq.data.experiment_description import (
+    SectionTimingMode as SectionTimingModeDATA,
+)
 from laboneq.data.experiment_description import SetNode as SetDATA
 from laboneq.data.experiment_description import Sweep as SweepDATA
 from laboneq.data.parameter import LinearSweepParameter as LinearSweepParameterDATA
@@ -104,6 +110,14 @@ def convert_SectionAlignment(orig: SectionAlignmentDSL):
     )
 
 
+def convert_SectionTimingMode(orig: SectionTimingModeDSL | None):
+    return (
+        next(e for e in SectionTimingModeDATA if e.name == orig.name)
+        if orig is not None
+        else None
+    )
+
+
 def convert_Acquire(orig: AcquireDSL):
     if orig is None:
         return None
@@ -137,6 +151,7 @@ def convert_AcquireLoopRt(orig: AcquireLoopRtDSL):
     retval.repetition_mode = convert_RepetitionMode(orig.repetition_mode)
     retval.repetition_time = orig.repetition_time
     retval.reset_oscillator_phase = orig.reset_oscillator_phase
+    retval.section_timing_mode = convert_SectionTimingMode(orig.section_timing_mode)
     retval.uid = orig.uid
     return retval
 
@@ -163,6 +178,7 @@ def convert_Case(orig: CaseDSL):
     retval.trigger = convert_dynamic(orig.trigger, converter_function_directory)
     retval.uid = orig.uid
     retval.state = orig.state
+    retval.section_timing_mode = convert_SectionTimingMode(orig.section_timing_mode)
     retval.uid = orig.uid
     return retval
 
@@ -234,6 +250,7 @@ def convert_Match(orig: MatchDSL):
         orig.sweep_parameter, converter_function_directory
     )
     retval.local = orig.local
+    retval.section_timing_mode = convert_SectionTimingMode(orig.section_timing_mode)
     retval.uid = orig.uid
     return post_process(orig, retval, converter_function_directory)
 
@@ -309,7 +326,7 @@ def convert_ResetOscillatorPhase(orig: ResetOscillatorPhaseDSL):
     return retval
 
 
-def convert_Section(orig: SectionDSL):
+def convert_Section(orig: SectionDSL) -> SectionDATA | None:
     if orig is None:
         return None
     retval = SectionDATA()
@@ -318,6 +335,7 @@ def convert_Section(orig: SectionDSL):
     retval.execution_type = convert_ExecutionType(orig.execution_type)
     retval.length = orig.length
     retval.on_system_grid = orig.on_system_grid
+    retval.section_timing_mode = convert_SectionTimingMode(orig.section_timing_mode)
     retval.play_after = convert_dynamic(orig.play_after, converter_function_directory)
     retval.trigger = convert_dynamic(orig.trigger, converter_function_directory)
     retval.uid = orig.uid
@@ -345,6 +363,7 @@ def convert_Sweep(orig: SweepDSL):
     retval.chunk_count = orig.chunk_count
     retval.auto_chunking = orig.auto_chunking
     retval.alignment = convert_dynamic(orig.alignment, converter_function_directory)
+    retval.section_timing_mode = convert_SectionTimingMode(orig.section_timing_mode)
     return retval
 
 

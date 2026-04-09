@@ -167,10 +167,13 @@ fn create_initial_signal_properties(signal: &SignalCommon) -> InitialSignalPrope
         uid: signal.uid,
         amplitude: signal.amplitude.map(value_or_parameter_to_fixed),
         thresholds: signal.thresholds.clone(),
+        mixer_calibration: signal.mixer_calibration.clone(),
     }
 }
 
-fn value_or_parameter_to_fixed<T>(value: ValueOrParameter<T>) -> FixedValueOrParameter<T> {
+pub(crate) fn value_or_parameter_to_fixed<T>(
+    value: ValueOrParameter<T>,
+) -> FixedValueOrParameter<T> {
     match value {
         ValueOrParameter::Value(v) => FixedValueOrParameter::Value(v),
         ValueOrParameter::Parameter(p) => FixedValueOrParameter::Parameter(p),

@@ -24,6 +24,7 @@ mod integration_units;
 mod ir_adapter;
 mod oscillator_allocation;
 pub mod result;
+mod tracing_utils;
 mod triggers;
 
 pub use generator::generate_code;

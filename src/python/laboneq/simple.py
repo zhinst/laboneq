@@ -6,10 +6,14 @@ Convenience header for the LabOne Q project.
 """
 
 from laboneq import laboneq_logging, workflow
+from laboneq.controller.api.async_remote_controller import AsyncRemoteController
 from laboneq.controller.api.remote_controller import RemoteController
 from laboneq.controller.runtime_context import RuntimeContext
 from laboneq.core.types.compiled_experiment import CompiledExperiment
-from laboneq.core.utilities.laboneq_compile import laboneq_compile
+from laboneq.core.utilities.compile_experiment import (
+    compile_experiment,
+    laboneq_compile,
+)
 from laboneq.dsl import LinearSweepParameter, SweepParameter
 from laboneq.dsl.calibration import (
     AmplifierPump,
@@ -48,6 +52,7 @@ from laboneq.dsl.enums import (
     PortMode,
     RepetitionMode,
     SectionAlignment,
+    SectionTimingMode,
 )
 from laboneq.dsl.experiment import (
     AcquireLoopRt,

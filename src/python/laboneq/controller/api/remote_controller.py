@@ -43,13 +43,13 @@ class ServerError(APIError):
 
 class RemoteController(ControllerAPI):
     @staticmethod
-    async def create(
+    def create(
         remote_url: str, ignore_version_mismatch: bool | None = None
     ) -> RemoteController:
         remote_controller = RemoteController(
             remote_url=remote_url, ignore_version_mismatch=ignore_version_mismatch
         )
-        await remote_controller._connect()
+        remote_controller._connect()
         return remote_controller
 
     def __init__(
@@ -69,50 +69,48 @@ class RemoteController(ControllerAPI):
                 ignore_version_mismatch
             ).lower()
 
-    async def _connect(self):
+    def _connect(self):
         pass
 
-    async def aclose(self):
+    def close(self):
         pass
 
-    async def get_device_setup(self) -> DeviceSetup:
-        serialized = await self._request("GET", "v1/device-setup")
+    def get_default_devicesetup(self) -> DeviceSetup:
+        serialized = self._request("GET", "v1/device-setup")
         device_setup = cast(DeviceSetup, from_dict(serialized))
         return device_setup
 
-    async def submit_experiment(
+    def submit_experiment(
         self, scheduled_experiment: ScheduledExperiment
     ) -> SubmissionHandle:
         serialized = to_dict(scheduled_experiment)
         assert isinstance(serialized, dict)  # to satisfy type checker
         handle = SubmissionHandle(handle_id=uuid.uuid4().int)
-        await self._request("PUT", f"v1/experiments/{handle.hex}", json=serialized)
+        self._request("PUT", f"v1/experiments/{handle.hex}", json=serialized)
         return handle
 
-    async def wait_for_completion(self, handle: SubmissionHandle):
+    def wait_for_experiment(self, handle: SubmissionHandle):
         raise NotImplementedError
 
-    async def submission_status(self, handle: SubmissionHandle) -> SubmissionStatus:
+    def get_experiment_status(self, handle: SubmissionHandle) -> SubmissionStatus:
         raise NotImplementedError
 
-    async def submission_results(self, handle: SubmissionHandle) -> Results:
+    def get_experiment(self, handle: SubmissionHandle) -> Results:
         raise NotImplementedError
 
-    async def cancel_submission(self, handle: SubmissionHandle):
+    def cancel_experiment(self, handle: SubmissionHandle):
         raise NotImplementedError
 
-    async def close_submission(self, handle: SubmissionHandle):
+    def close_submission(self, handle: SubmissionHandle):
         raise NotImplementedError
 
-    async def _request(
-        self, method: str, path: str, json: dict[str, Any] | None = None
-    ):
+    def _request(self, method: str, path: str, json: dict[str, Any] | None = None):
         url = f"{self._remote_url}/{path.lstrip('/')}"
         # TODO(2K): Consider reusing the client, which however will create a problem
         # of the client lifecycle management and a proper cleanup. For now, we create
         # a new client for each request, which is simpler to manage.
-        async with httpx.AsyncClient() as client:
-            resp = await client.request(method, url, json=json, headers=self._headers)
+        with httpx.Client() as client:
+            resp = client.request(method, url, json=json, headers=self._headers)
 
             # TODO(2K): Proper transfer of server-side controller exceptions, e.g. by defining
             # a common error format and deserializing it here.

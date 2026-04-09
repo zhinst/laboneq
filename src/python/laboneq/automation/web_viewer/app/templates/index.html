@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block content %}
+    <div id="app-wrapper">
+        <div id="header">
+            <a href="https://docs.zhinst.com/labone_q_user_manual/applications_library/index.html"
+               target="_blank">
+                <img class="logo logo-full"
+                     src="static/images/laboneq_automation_logo.png"
+                     alt="LabOne Q Automation"
+                     title="Documentation">
+            </a>
+            <div id="automation-title" class="automation-title">
+                <span id="automation-title-string">{{ name }}</span>
+            </div>
+            <div id="controls">
+                <div class="view-toggle" id="viewToggle" data-active="layers">
+                    <div class="toggle-slider"></div>
+                    <button data-mode="layers" class="toggle-option">Layers</button>
+                    <button data-mode="nodes" class="toggle-option">Nodes</button>
+                </div>
+                <button id="btnResetZoom"
+                        class="controls-button"
+                        type="button"
+                        title="Reset the graph zoom to the default view"
+                        aria-label="Reset Zoom">
+                    <svg class="btn-icon"
+                         viewBox="0 0 24 24"
+                         fill="none"
+                         stroke="currentColor"
+                         stroke-width="2"
+                         stroke-linecap="round"
+                         stroke-linejoin="round">
+                        <polyline points="15 3 21 3 21 9" />
+                        <polyline points="9 21 3 21 3 15" />
+                        <line x1="21" y1="3" x2="14" y2="10" />
+                        <line x1="3" y1="21" x2="10" y2="14" />
+                    </svg>
+                </button>
+                <button id="btnRunAuto"
+                        class="controls-button"
+                        type="button"
+                        title="Run the automation graph"
+                        aria-label="Run Automation">
+                    <svg class="btn-icon"
+                         viewBox="0 0 24 24"
+                         fill="currentColor"
+                         stroke="none">
+                        <polygon points="6,4 20,12 6,20" />
+                    </svg>
+                </button>
+                <button id="btnResetAuto"
+                        class="controls-button"
+                        type="button"
+                        title="Reset the automation state and clear progress"
+                        aria-label="Reset Automation">
+                    <svg class="btn-icon"
+                         viewBox="0 0 24 24"
+                         fill="none"
+                         stroke="currentColor"
+                         stroke-width="2"
+                         stroke-linecap="round"
+                         stroke-linejoin="round">
+                        <path d="M12 3a9 9 0 1 1-9 9" />
+                        <polyline points="14 7 11.5 2.5 16 1" />
+                    </svg>
+                </button>
+            </div>
+        </div>
+        <div id="graph"></div>
+        <div id="status-legend" class="legend-panel">
+            <div class="status-header">
+                <h3>
+                    <span class="chevron">&#9654;</span> Status
+                </h3>
+            </div>
+            <div id="status-legend-items" class="legend-items open"></div>
+        </div>
+        <div id="layer-legend" class="legend-panel">
+            <div class="layers-header">
+                <h3>
+                    <span class="chevron">&#9654;</span> Layers
+                </h3>
+            </div>
+            <div id="layer-legend-items" class="legend-items open"></div>
+        </div>
+        <div id="automation-status" class="automation-status">
+            <span id="toast-text" class="toast-text"></span>
+            <button class="toast-close" onclick="hideToast()" title="Dismiss">
+                <svg width="10" height="10" viewBox="0 0 10 10">
+                    <line x1="1" y1="1" x2="9" y2="9" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+                    <line x1="9" y1="1" x2="1" y2="9" stroke="#fff" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+            </button>
+        </div>
+        <div id="node-info" class="legend-panel">
+            <div id="node-info-header">
+                <h3>
+                    <span id="status-title"></span>
+                </h3>
+                <button id="btnRunElement" class="controls-button run-element-button" type="button">
+                    <svg class="btn-icon" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                        <polygon points="6,4 20,12 6,20"/>
+                    </svg>
+                    <span id="btn-run-element"></span>
+                </button>
+            </div>
+            <div id="node-info-rows" class="legend-items open"></div>
+            <div id="node-results-section" hidden>
+                <h3>Node results</h3>
+                <span class="node-result-message" hidden>File not found</span>
+                <div class="node-result-thumbnail-wrapper">
+                    <div class="node-result-thumbnail-inner">
+                        <img class="node-result-thumbnail" alt="" />
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div id="footer">
+            <img class="footer-logo"
+                 src="static/images/zhinst_logo_sep_horiz_2019.svg"
+                 alt="Zurich Instruments"
+                 title="Homepage">
+            <span class="footer-version">laboneq ver. {{ version }}</span>
+        </div>
+        <div id="image-modal" style="display:none">
+            <img id="image-modal-img" src="" alt="Result image">
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+    <script src="{{ url_for('static', filename='js/automation_methods.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/helpers.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/layout.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/legend.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/plot.js') }}"></script>
+{% endblock %}

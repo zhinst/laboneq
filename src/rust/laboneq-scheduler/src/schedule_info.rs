@@ -1,7 +1,9 @@
 // Copyright 2024 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_dsl::types::{ParameterUid, SectionAlignment, SectionUid, SignalUid};
+use laboneq_dsl::types::{
+    ParameterUid, SectionAlignment, SectionTimingMode, SectionUid, SignalUid,
+};
 use laboneq_units::tinysample::{TinySamples, tiny_samples};
 use std::collections::HashSet;
 
@@ -37,6 +39,8 @@ pub(crate) struct ScheduleInfo {
     /// Sections that should be played after this one.
     pub play_after: Vec<SectionUid>,
     pub(crate) absolute_start: TinySamples,
+    /// The timing mode of the section, controlling whether rounding is allowed or rejected.
+    pub section_timing_mode: SectionTimingMode,
 }
 
 impl ScheduleInfo {
@@ -72,6 +76,7 @@ pub(crate) struct ScheduleInfoBuilder {
     repetition_mode: Option<RepetitionMode>,
     escalate_to_sequencer_grid: bool,
     play_after: Vec<SectionUid>,
+    section_timing_mode: SectionTimingMode,
 }
 
 impl ScheduleInfoBuilder {
@@ -87,6 +92,7 @@ impl ScheduleInfoBuilder {
             sequencer_grid: tiny_samples(1),
             escalate_to_sequencer_grid: false,
             play_after: Vec::new(),
+            section_timing_mode: SectionTimingMode::Relaxed,
         }
     }
 
@@ -128,6 +134,11 @@ impl ScheduleInfoBuilder {
         self
     }
 
+    pub(crate) fn section_timing_mode(mut self, section_timing_mode: SectionTimingMode) -> Self {
+        self.section_timing_mode = section_timing_mode;
+        self
+    }
+
     pub(crate) fn repetition_mode(mut self, mode: RepetitionMode) -> Self {
         self.repetition_mode = Some(mode);
         self
@@ -156,6 +167,7 @@ impl ScheduleInfoBuilder {
             escalate_to_sequencer_grid: self.escalate_to_sequencer_grid,
             play_after: self.play_after,
             absolute_start: tiny_samples(0),
+            section_timing_mode: self.section_timing_mode,
         }
     }
 }

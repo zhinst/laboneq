@@ -6,8 +6,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from laboneq.controller.api.controller_api import (
-    ControllerAPI,
+from laboneq.controller.api.async_controller_api import (
+    AsyncControllerAPI,
     SubmissionHandle,
     SubmissionStatus,
 )
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from laboneq.data.scheduled_experiment import ScheduledExperiment
 
 
-class AsyncController(ControllerAPI):
+class AsyncLocalController(AsyncControllerAPI):
     """Asynchronous controller interface."""
 
     @staticmethod
@@ -42,8 +42,8 @@ class AsyncController(ControllerAPI):
         reset_devices: bool = False,
         disable_runtime_checks: bool = True,
         timeout_s: float | None = None,
-    ) -> AsyncController:
-        """Create an instance of the AsyncController."""
+    ) -> AsyncLocalController:
+        """Create an instance of the AsyncLocalController."""
         if timeout_s is None:
             timeout_s = DEFAULT_TIMEOUT_S
         setup = convert_device_setup_to_setup(device_setup)
@@ -61,7 +61,7 @@ class AsyncController(ControllerAPI):
             disable_runtime_checks=disable_runtime_checks,
             timeout_s=timeout_s,
         )
-        return AsyncController(device_setup=device_setup, controller=controller)
+        return AsyncLocalController(device_setup=device_setup, controller=controller)
 
     def __init__(
         self,
@@ -87,10 +87,10 @@ class AsyncController(ControllerAPI):
 
     async def aclose(self):
         for handle_id in self._submissions.keys():
-            await self.cancel_submission(SubmissionHandle(handle_id))
+            await self.cancel_experiment(SubmissionHandle(handle_id))
         await self._controller._disconnect_async()
 
-    async def get_device_setup(self) -> DeviceSetup:
+    async def get_default_devicesetup(self) -> DeviceSetup:
         return self._device_setup
 
     async def update_neartime_callbacks(self, neartime_callbacks: dict[str, Callable]):
@@ -111,10 +111,10 @@ class AsyncController(ControllerAPI):
         )
         return handle
 
-    async def wait_for_completion(self, handle: SubmissionHandle):
+    async def wait_for_experiment(self, handle: SubmissionHandle):
         await self._controller._wait_submission_async(self._submission(handle))
 
-    async def submission_status(self, handle: SubmissionHandle) -> SubmissionStatus:
+    async def get_experiment_status(self, handle: SubmissionHandle) -> SubmissionStatus:
         submission = self._submission(handle)
         status = (
             SubmissionStatus.COMPLETED
@@ -128,10 +128,10 @@ class AsyncController(ControllerAPI):
         # TODO(2K): Implement RUNNING status
         return status
 
-    async def submission_results(self, handle: SubmissionHandle) -> Results:
-        status = await self.submission_status(handle)
+    async def get_experiment(self, handle: SubmissionHandle) -> Results:
+        status = await self.get_experiment_status(handle)
         if status not in [SubmissionStatus.COMPLETED, SubmissionStatus.FAILED]:
-            await self.wait_for_completion(handle)
+            await self.wait_for_experiment(handle)
         experiment_results = self._get_results(handle)
         return Results(
             device_setup=self._device_setup,
@@ -141,13 +141,13 @@ class AsyncController(ControllerAPI):
             pipeline_jobs_timestamps=experiment_results.pipeline_jobs_timestamps,
         )
 
-    async def cancel_submission(self, handle: SubmissionHandle):
+    async def cancel_experiment(self, handle: SubmissionHandle):
         self._submission(handle)  # Validate handle
         # TODO(2K): No mechanism to cancel yet. Implement proper cancellation.
-        await self.wait_for_completion(handle)
+        await self.wait_for_experiment(handle)
 
     async def close_submission(self, handle: SubmissionHandle):
-        await self.cancel_submission(handle)
+        await self.cancel_experiment(handle)
         self._submissions.pop(handle.id)
 
     # TODO: Remove _legacy_session_data tests once the RuntimeContext endpoints are removed

@@ -46,6 +46,14 @@ class AutomationNode:
         """The node ID."""
         return f"{self.layer_key}_{self.key}"
 
+    @property
+    def _key_str(self) -> str:
+        """The string representation of the node key."""
+        if isinstance(self.key, tuple):
+            return "-".join(self.key)
+        else:
+            return self.key
+
 
 @classformatter
 @attrs.define

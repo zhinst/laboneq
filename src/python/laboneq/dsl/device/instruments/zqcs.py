@@ -15,13 +15,7 @@ from .zi_standard_instrument import ZIStandardInstrument
 @classformatter
 @attrs.define
 class ZQCS(ZIStandardInstrument):
-    """Class representing a virtual instrument that pretty prints some info about the experiment.
-
-    !!! version-changed "Changed in version 2.62.0"
-
-        Changed the class to be slotted, which prevents the accidental creation of new
-        attributes.
-    """
+    """Class representing a ZI ZQCS instrument."""
 
     _ports: list[Port] = attrs.field(factory=list)
 

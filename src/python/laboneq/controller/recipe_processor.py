@@ -21,7 +21,9 @@ from typing import (
 import numpy as np
 import zhinst.utils  # type: ignore[import-untyped]
 from packaging.version import InvalidVersion, Version
+from sortedcollections import NearestDict
 
+from laboneq._utils import cached_method
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
     AttributeValueTracker,
@@ -366,6 +368,16 @@ class RecipeData:
         if len(awgs) == 0 and default_awg is not None:
             awgs.add(default_awg)
         return awgs
+
+    @cached_method(1)
+    def get_program_refs(self) -> NearestDict[tuple[int, ...], set[str]]:
+        refs = NearestDict(rounding=NearestDict.NEAREST_PREV)
+
+        for init in self.recipe.realtime_execution_init:
+            nt_step_program_refs = refs.setdefault(init.nt_step.indices, set())
+            nt_step_program_refs.add(init.program_ref)
+
+        return refs
 
 
 def _validate_scheduled_experiment(

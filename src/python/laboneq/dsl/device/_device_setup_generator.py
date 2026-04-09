@@ -8,12 +8,7 @@ import warnings
 from typing import TYPE_CHECKING, Callable, Union
 
 import jsonschema
-from yaml import load
-
-try:
-    from yaml import CLoader as Loader
-except ImportError:
-    from yaml import Loader  # type: ignore[assignment]
+from yaml import safe_load
 
 import laboneq.core.path as qct_path
 from laboneq.core.exceptions import LabOneQException
@@ -372,7 +367,7 @@ class _DeviceSetupGenerator:
         server_port: str | int | None = None,
         setup_name: str | None = None,
     ):
-        setup_desc = load(yaml_text, Loader=Loader)
+        setup_desc = safe_load(yaml_text)
 
         return _DeviceSetupGenerator.from_dicts(
             instrument_list=setup_desc.get("instrument_list"),
@@ -395,7 +390,7 @@ class _DeviceSetupGenerator:
         setup_name: str | None = None,
     ):
         with open(filepath) as fp:
-            setup_desc = load(fp, Loader=Loader)
+            setup_desc = safe_load(fp)
 
         return _DeviceSetupGenerator.from_dicts(
             instrument_list=setup_desc.get("instrument_list"),

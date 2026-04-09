@@ -222,7 +222,7 @@ def initialize_logging(
     if os.path.exists(LOG_CONFIG_FILE):
         print("Loading log config from %s", LOG_CONFIG_FILE)
         with open(LOG_CONFIG_FILE, "r") as stream:
-            config = yaml.load(stream, Loader=yaml.FullLoader)
+            config = yaml.safe_load(stream)
         config_source = LOG_CONFIG_FILE
     elif logging_config_dict is not None:
         config = logging_config_dict

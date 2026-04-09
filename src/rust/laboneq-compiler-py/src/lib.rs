@@ -5,10 +5,15 @@
 
 pub mod error;
 
+use pyo3::types::PyDict;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::sync::Arc;
+
+use laboneq_opentelemetry_python::attach_otel_context;
+use laboneq_tracing::tracing_is_enabled;
+use laboneq_tracing::with_tracing;
 
 use crate::error::{Error, Result, create_error_message};
 use crate::experiment::Experiment;
@@ -24,6 +29,7 @@ use crate::qccs_feedback_calculator::QccsFeedbackCalculator;
 use crate::setup_processor::process_setup;
 use crate::signal_properties::SignalProperties;
 
+use laboneq_common::compiler_settings::CompilerSettings;
 use laboneq_common::named_id::{NamedIdStore, resolve_ids};
 use laboneq_dsl::device_setup::AuxiliaryDevice;
 use laboneq_dsl::types::ExternalParameterUid;
@@ -79,13 +85,14 @@ fn serialize_experiment_py(
 }
 
 /// Build an experiment from Cap'n Proto bytes plus device/signal configuration.
-#[pyfunction(name = "build_experiment_capnp", signature = (capnp_data, awgs, desktop_setup, packed=false))]
+#[pyfunction(name = "build_experiment_capnp", signature = (capnp_data, awgs, desktop_setup, packed=false, compiler_settings=None))]
 fn build_experiment_capnp_py(
     py: Python<'_>,
     capnp_data: &[u8],
     awgs: Vec<Bound<'_, AwgInfoPy>>,
     desktop_setup: bool,
     packed: bool,
+    compiler_settings: Option<Bound<'_, PyDict>>,
 ) -> Result<ExperimentPy> {
     // 1. Deserialize the experiment tree from Cap'n Proto.
     let deserialized = capnp_deserializer::deserialize_experiment(py, capnp_data, packed)?;
@@ -95,6 +102,12 @@ fn build_experiment_capnp_py(
     for (uid, value) in deserialized.external_parameter_values {
         py_object_store.insert(uid, value);
     }
+
+    let compiler_settings = compiler_settings
+        .as_ref()
+        .map(|dict| py_helpers::compiler_settings_from_py_dict(dict))
+        .transpose()?
+        .unwrap_or_default();
 
     let awg_mapping = awgs.into_iter().map(|awg| {
         let awg = awg.borrow();
@@ -159,6 +172,7 @@ fn build_experiment_capnp_py(
         device_setup: Arc::new(device_setup),
         context,
         delay_compensation: processed_setup.on_device_delays,
+        compiler_settings,
     })
 }
 
@@ -169,10 +183,24 @@ struct ScheduleResult {
     used_parameters: HashSet<String>,
     #[pyo3(get)]
     experiment_ir: Py<ExperimentIrPy>,
+    #[pyo3(get)]
+    pulse_sheet_schedule: Option<Py<PyAny>>,
 }
 
 #[pyfunction(name = "schedule_experiment")]
 fn schedule_experiment_py(
+    py: Python,
+    experiment: &ExperimentPy,
+    parameters: HashMap<String, f64>,
+    chunking_info: Option<(usize, usize)>, // Current chunk index, total chunk count
+) -> Result<ScheduleResult> {
+    let _context_guard = tracing_is_enabled()
+        .then(|| attach_otel_context(py))
+        .transpose()?;
+    with_tracing(|| schedule_experiment_py_impl(py, experiment, parameters, chunking_info))
+}
+
+fn schedule_experiment_py_impl(
     py: Python,
     experiment: &ExperimentPy,
     parameters: HashMap<String, f64>,
@@ -187,17 +215,18 @@ fn schedule_experiment_py(
     } else {
         None
     };
+    let compiler_settings = &experiment.compiler_settings;
     let context = &experiment.context;
     let device_setup = &experiment.device_setup;
-    let experiment = &experiment.inner;
-    let mut parameter_store = create_parameter_store(parameters, &experiment.id_store);
+    let inner_experiment = &experiment.inner;
+    let mut parameter_store = create_parameter_store(parameters, &inner_experiment.id_store);
     let views = signal_views(device_setup);
     let feedback_calculator = QccsFeedbackCalculator::new(py, views.values().cloned())?;
     let result = schedule_experiment(
-        &experiment.root,
+        &inner_experiment.root,
         SchedulerContext {
-            id_store: &experiment.id_store,
-            parameters: experiment.parameters.clone(),
+            id_store: &inner_experiment.id_store,
+            parameters: inner_experiment.parameters.clone(),
             signals: &views,
             handle_to_signal: context.handle_to_signal(),
         },
@@ -207,27 +236,38 @@ fn schedule_experiment_py(
     )
     .map_err(|e| {
         let msg = create_error_message(e);
-        Error::new(resolve_ids(&msg, &experiment.id_store))
+        Error::new(resolve_ids(&msg, &inner_experiment.id_store))
     })?;
+
     let ir = ExperimentIr {
         root: result.root,
         parameters: result.parameters.values().cloned().collect(),
-        pulses: experiment.pulses.values().cloned().collect(),
+        pulses: inner_experiment.pulses.values().cloned().collect(),
         acquisition_type: *context.acquisition_type(),
-        id_store: Arc::clone(&experiment.id_store),
+        id_store: Arc::clone(&inner_experiment.id_store),
         device_setup: Arc::clone(device_setup),
     };
+
+    let pulse_sheet_schedule = prepare_schedule(&ir, compiler_settings);
+
     let ir_py = ExperimentIrPy {
         inner: ir,
-        py_object_store: Arc::clone(&experiment.py_object_store),
+        py_object_store: Arc::clone(&experiment.inner.py_object_store),
+        compiler_settings: experiment.compiler_settings.clone(),
     };
+
     let out = ScheduleResult {
         used_parameters: parameter_store
             .empty_queries()
             .iter()
-            .map(|p| experiment.id_store.resolve(p.0).unwrap().to_string())
+            .map(|p| inner_experiment.id_store.resolve(p.0).unwrap().to_string())
             .collect(),
         experiment_ir: ir_py.into_pyobject(py)?.into(),
+        pulse_sheet_schedule: pulse_sheet_schedule
+            .as_ref()
+            .map(|s| schedule_to_py(py, s))
+            .transpose()?
+            .map(|s| s.unbind()),
     };
     Ok(out)
 }
@@ -236,29 +276,14 @@ fn schedule_experiment_py(
 ///
 /// This function is used by the Python compiler to generate the event list
 /// for the Pulse Sheet Viewer (PSV).
-///
-/// # Arguments
-/// * `ir_py` - The experiment IR from Python
-/// * `expand_loops` - Whether to expand compressed loops (EXPAND_LOOPS_FOR_SCHEDULE flag)
-/// * `max_events` - Maximum number of events to generate (MAX_EVENTS_TO_PUBLISH setting)
-///
-/// # Returns
-/// A Python dict containing:
-/// - event_list: List of scheduler events
-/// - event_list_truncated: Whether event generation hit the max_events limit
-/// - section_info: Section metadata with preorder map
-/// - section_signals_with_children: Signal hierarchy per section
-#[pyfunction(name = "generate_pulse_sheet_schedule")]
-fn generate_pulse_sheet_schedule<'py>(
-    py: Python<'py>,
-    ir_py: &ExperimentIrPy,
-    expand_loops: bool,
-    max_events: usize,
-) -> Result<Bound<'py, PyAny>> {
-    let ir = &ir_py.inner;
-
-    // Generate the schedule
-    let schedule = PulseSheetSchedule::generate(
+fn prepare_schedule(
+    ir: &ExperimentIr,
+    compiler_settings: &CompilerSettings,
+) -> Option<PulseSheetSchedule> {
+    if !compiler_settings.output_extras {
+        return None;
+    }
+    let out = PulseSheetSchedule::generate(
         &ir.root,
         ir.device_setup
             .signals()
@@ -269,15 +294,28 @@ fn generate_pulse_sheet_schedule<'py>(
                 )
             })
             .collect(),
-        expand_loops,
-        max_events,
+        compiler_settings.expand_loops_for_schedule,
+        compiler_settings.max_events_to_publish,
         &ir.id_store,
     );
+    Some(out)
+}
 
+/// Convert a [`PulseSheetSchedule`] to a Python dict for consumption in Python.
+///
+/// # Returns
+/// A Python dict containing:
+/// - event_list: List of scheduler events
+/// - event_list_truncated: Whether event generation hit the max_events limit
+/// - section_info: Section metadata with preorder map
+/// - section_signals_with_children: Signal hierarchy per section
+fn schedule_to_py<'py>(
+    py: Python<'py>,
+    schedule: &PulseSheetSchedule,
+) -> Result<Bound<'py, PyAny>> {
     // Convert to JSON then to Python dict
-    let json_value = serde_json::to_value(&schedule)
+    let json_value = serde_json::to_value(schedule)
         .map_err(|e| Error::new(format!("Failed to serialize schedule: {}", e)))?;
-
     // Convert JSON to Python object
     json_to_py(py, &json_value)
 }
@@ -349,6 +387,7 @@ pub fn create_py_module<'py>(py: Python<'py>, name: &str) -> Result<Bound<'py, P
         BounceCompensationPy, ExponentialCompensationPy, FirCompensationPy, HighPassCompensationPy,
         PrecompensationPy,
     };
+    use laboneq_opentelemetry_python::span_buffer::SpanBufferPy;
     use py_awg::AwgInfoPy;
     use py_device_setup_capnp::DeviceSetupCapnpBuilderPy;
 
@@ -356,8 +395,8 @@ pub fn create_py_module<'py>(py: Python<'py>, name: &str) -> Result<Bound<'py, P
     m.add_function(wrap_pyfunction!(schedule_experiment_py, &m)?)?;
     m.add_function(wrap_pyfunction!(serialize_experiment_py, &m)?)?;
     m.add_function(wrap_pyfunction!(build_experiment_capnp_py, &m)?)?;
-    m.add_function(wrap_pyfunction!(generate_pulse_sheet_schedule, &m)?)?;
     m.add_function(wrap_pyfunction!(init_logging_py, &m)?)?;
+    m.add_class::<SpanBufferPy>()?;
     // Intermediate migration objects, shall be removed later
     m.add_class::<AwgInfoPy>()?;
     m.add_class::<AmplifierPumpPy>()?;

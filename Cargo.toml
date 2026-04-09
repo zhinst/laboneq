@@ -1,5 +1,5 @@
 [workspace.package]
-version = "26.4.0-b4"
+version = "26.4.0-b5"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
 edition = "2024"
 publish = false
@@ -49,6 +49,12 @@ smallvec = "1.15.1"
 string-interner = "0.19.0"
 capnp = "0.25"
 thiserror = "2.0"
+opentelemetry = { version = "0.31.0", default-features = false }
+opentelemetry_sdk = { version = "0.31.0", default-features = false }
+opentelemetry-otlp = { version = "0.31.0", default-features = false }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", default-features = false }
+tracing-opentelemetry = { version = "0.32.0", default-features = false }
 
 # 1st party
 codegenerator = { path = "src/rust/codegenerator" }
@@ -66,6 +72,8 @@ laboneq-capnp = { path = "src/rust/laboneq-capnp" }
 laboneq-common = { path = "src/rust/laboneq-common" }
 laboneq-units = { path = "src/rust/laboneq-units" }
 laboneq-py-utils = { path = "src/rust/laboneq-py-utils" }
+laboneq-opentelemetry-python = { path = "src/rust/laboneq-opentelemetry-python" }
+laboneq-tracing = { path = "src/rust/laboneq-tracing" }
 rccow = { path = "src/rust/rccow" }
 
 [workspace.lints.rust]

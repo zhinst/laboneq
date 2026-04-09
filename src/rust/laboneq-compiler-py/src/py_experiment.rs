@@ -6,6 +6,7 @@ use laboneq_dsl::types::{OscillatorKind, ValueOrParameter};
 use pyo3::prelude::*;
 use std::sync::Arc;
 
+use laboneq_common::compiler_settings::CompilerSettings;
 use laboneq_ir::system::DeviceSetup;
 
 use crate::experiment::Experiment;
@@ -25,6 +26,7 @@ pub(crate) struct ExperimentPy {
     pub context: ExperimentContext,
     /// Delay compensation for signals on devices.
     pub delay_compensation: DelayRegistry,
+    pub compiler_settings: CompilerSettings,
 }
 
 #[pymethods]

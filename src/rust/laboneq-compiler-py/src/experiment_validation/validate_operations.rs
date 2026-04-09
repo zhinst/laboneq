@@ -163,7 +163,7 @@ fn shfqa_unique_measure_pulse(
         .is_none_or(|v| v.len() > 1)
     {
         let err_msg = format!(
-            "Multiple different pulses are being played on signal {}. SHFQA \
+            "Multiple different pulses are being played on signal '{}'. SHFQA \
             generators can only hold a single pulse waveform. Therefore, playing \
             multiple readout pulses represented by different Python objects is \
             not possible on a SHFQA measurement line.",
@@ -201,7 +201,7 @@ fn check_markers(
             .any(|m| matches!(m.marker_selector, MarkerSelector::M2))
     {
         let err_msg = format!(
-            "Single channel RF Pulse {} referenced in section {} \
+            "Single channel RF Pulse '{}' referenced in section '{}' \
             has marker 2 enabled. Please only use marker 1 on RF channels.",
             pulse_uid.0, section_uid.0,
         );
@@ -209,7 +209,7 @@ fn check_markers(
     }
     if signal.device_kind().is_qa_device() && !pulse.markers.is_empty() {
         let err_msg = format!(
-            "Pulse {} referenced in section {} \
+            "Pulse '{}' referenced in section {} \
             has markers but is to be played on a QA device. QA \
             devices do not support markers.",
             pulse_uid.0, section_uid.0,
@@ -258,7 +258,7 @@ fn check_phase_on_rf_signal_support(
             .as_ref()
             .ok_or(Error::new("Internal error: section not found."))?;
         let err_msg = format!(
-            "In section {}, signal {}: baseband phase modulation \
+            "In section '{}', signal '{}': baseband phase modulation \
             not possible for RF signal with HW oscillator.",
             section_uid.0,
             signal.uid().0,
@@ -283,8 +283,8 @@ fn check_acquire_only_on_acquire_line(
             .as_ref()
             .ok_or(Error::new("Internal error: section not found."))?;
         let err_msg = format!(
-            "In section {}, an acquire statement is issued on \
-            signal {}. acquire is only allowed on acquire lines.",
+            "In section '{}', an acquire statement is issued on \
+            signal '{}'. `acquire` is only allowed on acquire lines.",
             section_uid.0,
             signal.uid().0,
         );
@@ -311,7 +311,7 @@ fn check_no_play_on_acquire_line(
         SignalKind::Integration => {
             let err_msg = format!(
                 "In section {}, a play statement is issued on \
-                signal {}. play is not allowed on acquire lines.",
+                signal {}. `play` is not allowed on acquire lines.",
                 section_uid.0,
                 signal.uid().0,
             );
@@ -359,7 +359,7 @@ fn check_arbitrary_marker_is_valid(
                     continue;
                 }
                 let err_msg = format!(
-                    "A pulse in section {} attempts to play a sampled arbitrary marker with a sample not set to either 0 or 1. \
+                    "A pulse in section '{}' attempts to play a sampled arbitrary marker with a sample not set to either 0 or 1. \
                     Please make sure that all samples of your markers are either 0 or 1.",
                     section_uid.0,
                 );
@@ -370,8 +370,8 @@ fn check_arbitrary_marker_is_valid(
                 PulseFunction::Custom { ref function } => {
                     if function != PulseFunction::CONSTANT_PULSE_NAME {
                         let err_msg = format!(
-                            "A pulse {} in section {} attempts to play an arbitrary marker with a pulse functional \
-                            other than `const'. At this time, only constants pulses or sampled pulses are supported",
+                            "A pulse '{}' in section '{}' attempts to play an arbitrary marker with a functional pulse \
+                            other than `const`. At this time, only constants pulses or sampled pulses are supported",
                             signal.uid().0,
                             section_uid.0,
                         );

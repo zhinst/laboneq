@@ -22,6 +22,8 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING, Any, Sequence
 
+from typing_extensions import deprecated
+
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.quantum.qpu_topology import QPUTopology
 from laboneq.dsl.quantum.quantum_element import QuantumElement
@@ -131,6 +133,10 @@ class QPU:
         classes is automatically combined into a single class. If the
         `QuantumOperations` classes have methods with the same name, these are
         dispatched based on their simplified type signatures.
+
+    !!! version-changed "Deprecated in version 24.4.0"
+        The `measure_section_length` method is moved to the implementations
+        of `QuantumOperations` for qubit types where this is property meaningful.
 
     Arguments:
         quantum_elements: The quantum elements to run the experiments on. By passing a
@@ -465,6 +471,12 @@ class QPU:
                 self.topology.update_edge(*key, **params_dict)
 
     @staticmethod
+    @deprecated(
+        "`QPU.measure_section_length` is deprecated and will be removed in "
+        "LabOne Q 26.7.0. The functionality has been moved to implementations of "
+        "`QuantumOperations` for qubit types where this property is meaningful.",
+        category=FutureWarning,
+    )
     def measure_section_length(quantum_elements: QuantumElements) -> float:
         """Calculates the length of the measure section for multiplexed readout.
 

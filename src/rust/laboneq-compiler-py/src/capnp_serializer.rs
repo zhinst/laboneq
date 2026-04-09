@@ -588,6 +588,10 @@ impl<'py> Serializer<'py> {
             regular.set_alignment(alignment);
         }
 
+        if let Some(section_timing_mode) = extract_section_timing_mode_capnp(obj)? {
+            regular.set_section_timing_mode(section_timing_mode);
+        }
+
         // Length
         let length_py = obj.getattr(intern!(py, "length"))?;
         if let Ok(Some(v)) = length_py.extract::<Option<f64>>() {
@@ -675,6 +679,10 @@ impl<'py> Serializer<'py> {
 
         if let Some(alignment) = extract_alignment_capnp(obj)? {
             sweep.set_alignment(alignment);
+        }
+
+        if let Some(section_timing_mode) = extract_section_timing_mode_capnp(obj)? {
+            sweep.set_section_timing_mode(section_timing_mode);
         }
 
         {
@@ -824,6 +832,10 @@ impl<'py> Serializer<'py> {
             acq_loop.set_alignment(alignment);
         }
 
+        if let Some(section_timing_mode) = extract_section_timing_mode_capnp(obj)? {
+            acq_loop.set_section_timing_mode(section_timing_mode);
+        }
+
         acq_loop.set_count(count);
         acq_loop.set_averaging_mode(averaging_mode);
         acq_loop.set_acquisition_type(acquisition_type);
@@ -927,7 +939,10 @@ impl<'py> Serializer<'py> {
         let py = obj.py();
         let state_py = obj.getattr(intern!(py, "state"))?;
 
-        let case_section = builder.reborrow().init_case_section();
+        let mut case_section = builder.reborrow().init_case_section();
+        if let Some(section_timing_mode) = extract_section_timing_mode_capnp(obj)? {
+            case_section.set_section_timing_mode(section_timing_mode);
+        }
         let mut state_builder = case_section.init_state();
         set_sweep_value_from_py(&state_py, &mut state_builder)?;
 
@@ -1888,6 +1903,58 @@ impl<'py> Serializer<'py> {
             }
         }
 
+        // Mixer calibration
+        if let Some(mixer_calibration) = &signal.mixer_calibration {
+            let mixer_calibration = mixer_calibration.borrow(py);
+            let mut mixer_builder = calibration_builder.reborrow().init_mixer_calibration();
+
+            // Voltage offsets for I and Q. We use the presence of each entry to determine whether to set it,
+            if let Some(value) = mixer_calibration.voltage_offsets.first() {
+                self.set_sweep_value_from_py_or_param(
+                    value.bind(py),
+                    &mut mixer_builder
+                        .reborrow()
+                        .get_voltage_offset_i()
+                        .map_err(Error::new)?,
+                )?;
+            }
+            if let Some(value) = mixer_calibration.voltage_offsets.get(1) {
+                self.set_sweep_value_from_py_or_param(
+                    value.bind(py),
+                    &mut mixer_builder
+                        .reborrow()
+                        .get_voltage_offset_q()
+                        .map_err(Error::new)?,
+                )?;
+            }
+
+            if !mixer_calibration.correction_matrix.is_empty() {
+                if mixer_calibration.correction_matrix.len() != 2
+                    || mixer_calibration
+                        .correction_matrix
+                        .iter()
+                        .any(|row| row.len() != 2)
+                {
+                    return Err(Error::new(
+                        "Correction matrix must be 2x2 for I/Q mixer calibration",
+                    ));
+                }
+
+                // Correction matrix (2x2). We flatten the nested Vec<Vec<T>> into a single row-major Vec<T> for capnp.
+                let mut correction_matrix_builder =
+                    mixer_builder.reborrow().init_correction_matrix(4);
+                for (flat_index, correction) in mixer_calibration
+                    .correction_matrix
+                    .iter()
+                    .flat_map(|row| row.iter())
+                    .enumerate()
+                {
+                    let mut entry_builder =
+                        correction_matrix_builder.reborrow().get(flat_index as u32);
+                    self.set_sweep_value_from_py_or_param(correction.bind(py), &mut entry_builder)?;
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -1987,6 +2054,26 @@ fn extract_alignment_capnp(obj: &Bound<'_, PyAny>) -> Result<Option<section_capn
         "LEFT" => Ok(Some(section_capnp::Alignment::Left)),
         "RIGHT" => Ok(Some(section_capnp::Alignment::Right)),
         _ => Err(Error::new(format!("Unknown section alignment: {name}"))),
+    }
+}
+
+/// Extract section timing mode from a Python section object and convert to capnp enum.
+fn extract_section_timing_mode_capnp(
+    obj: &Bound<'_, PyAny>,
+) -> Result<Option<section_capnp::SectionTimingMode>> {
+    let py = obj.py();
+    let section_timing_mode_py = obj.getattr(intern!(py, "section_timing_mode"))?;
+    if section_timing_mode_py.is_none() {
+        return Ok(None);
+    }
+    let section_timing_mode_obj = section_timing_mode_py.getattr(intern!(py, "name"))?;
+    let name: &str = section_timing_mode_obj.extract()?;
+    match name {
+        "RELAXED" => Ok(Some(section_capnp::SectionTimingMode::Relaxed)),
+        "STRICT" => Ok(Some(section_capnp::SectionTimingMode::Strict)),
+        _ => Err(Error::new(format!(
+            "Unknown section section timing mode: {name}"
+        ))),
     }
 }
 

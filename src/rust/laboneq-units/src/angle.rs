@@ -1,10 +1,11 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use num_traits::{AsPrimitive, Float, FromPrimitive, PrimInt, Signed};
+use num_traits::{AsPrimitive, Float, FromPrimitive, PrimInt, Signed, Zero};
 use std::fmt;
+use std::fmt::Debug;
 use std::num::Wrapping;
-use std::ops::{Add, Mul, Neg, Rem, Sub};
+use std::ops::{Add, Mul, Neg, Rem};
 
 /// An angle represented as a fixed-point value using a signed integer type.
 ///
@@ -26,7 +27,20 @@ use std::ops::{Add, Mul, Neg, Rem, Sub};
 /// let doubled = angle * 2.0; // 180°
 /// let wrapped = Angle64::from_degrees(450.0); // Same as 90° due to wrapping
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    derive_more::Add,
+    derive_more::Sub,
+    derive_more::AddAssign,
+    derive_more::SubAssign,
+)]
 pub struct Angle<T>(Wrapping<T>)
 where
     T: PrimInt + Signed;
@@ -126,27 +140,28 @@ where
     }
 }
 
-impl<T> Add for Angle<T>
+impl<T: Debug + PrimInt + Signed + 'static> Debug for Angle<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Angle({:?} /*  2π × {:.3} rad */)",
+            self.0,
+            self.to_radians::<f32>() / std::f32::consts::TAU
+        )
+    }
+}
+
+impl<T> Zero for Angle<T>
 where
     T: PrimInt + Signed,
     Wrapping<T>: Add<Output = Wrapping<T>>,
 {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self {
-        Self(self.0 + other.0)
+    fn zero() -> Self {
+        Angle(Wrapping(T::zero()))
     }
-}
 
-impl<T> Sub for Angle<T>
-where
-    T: PrimInt + Signed,
-    Wrapping<T>: Sub<Output = Wrapping<T>>,
-{
-    type Output = Self;
-
-    fn sub(self, other: Self) -> Self {
-        Self(self.0 - other.0)
+    fn is_zero(&self) -> bool {
+        self.0.is_zero()
     }
 }
 

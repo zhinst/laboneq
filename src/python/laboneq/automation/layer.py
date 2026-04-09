@@ -97,7 +97,7 @@ class AutomationLayer(ABC):
         """Get the automation node by its key."""
         return self.get_node(node_key)
 
-    def get_node(self, node_key: str) -> AutomationNode:
+    def get_node(self, node_key: str | tuple[str, ...]) -> AutomationNode:
         """Get the automation node by its key.
 
         Arguments:
@@ -181,9 +181,10 @@ class AutomationLayer(ABC):
     @logic.setter
     def logic(self, value: AutomationLogic):
         """Set the layer logic."""
-        class_name = str(value.__class__.__name__)
+        cls = value.__class__
+        class_path = f"{cls.__module__}:{cls.__qualname__}"
         class_args = attrs.asdict(value)
-        self.parameters.setdefault("logic", {})["class"] = class_name
+        self.parameters.setdefault("logic", {})["class"] = class_path
         self.parameters.setdefault("logic", {})["arguments"] = class_args
 
     @property

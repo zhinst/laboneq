@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use laboneq_common::types::AwgKey;
-use laboneq_dsl::signal_calibration::{OutputRoute, PortMode, Precompensation};
+use laboneq_dsl::signal_calibration::{MixerCalibration, OutputRoute, PortMode, Precompensation};
 use laboneq_dsl::types::{
     AmplifierPump, DeviceUid, Oscillator, Quantity, SignalUid, ValueOrParameter,
 };
@@ -36,6 +36,7 @@ pub(crate) struct SignalProperties {
     pub precompensation: Option<Precompensation>,
     pub added_outputs: Vec<OutputRoute>,
     pub thresholds: Vec<f64>,
+    pub mixer_calibration: Option<MixerCalibration>,
 
     // Timing parameters
     pub port_delay: ValueOrParameter<Duration<Second>>,

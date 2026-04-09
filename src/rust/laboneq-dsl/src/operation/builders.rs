@@ -3,7 +3,7 @@
 
 use std::num::NonZeroU32;
 
-use crate::types::{ParameterUid, SectionAlignment, SectionUid};
+use crate::types::{ParameterUid, SectionAlignment, SectionTimingMode, SectionUid};
 
 use crate::operation::{Chunking, Sweep};
 
@@ -21,6 +21,7 @@ impl SweepBuilder {
                 alignment: SectionAlignment::Left,
                 reset_oscillator_phase: false,
                 chunking: None,
+                section_timing_mode: Default::default(),
             },
         }
     }
@@ -37,6 +38,11 @@ impl SweepBuilder {
 
     pub fn chunking(mut self, chunking: Chunking) -> Self {
         self.sweep.chunking = Some(chunking);
+        self
+    }
+
+    pub fn section_timing_mode(mut self, section_timing_mode: SectionTimingMode) -> Self {
+        self.sweep.section_timing_mode = section_timing_mode;
         self
     }
 

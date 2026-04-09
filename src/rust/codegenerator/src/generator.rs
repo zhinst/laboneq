@@ -15,9 +15,13 @@ use crate::ir::IrNode;
 use crate::ir::SignalUid;
 use crate::ir::compilation_job::AwgCore;
 use crate::ir::compilation_job::AwgKey;
+use crate::ir::compilation_job::ChannelIndex;
 use crate::ir::compilation_job::DeviceKind;
+use crate::ir::compilation_job::SignalKind;
 use crate::ir::experiment::AcquisitionType;
 use crate::ir::experiment::Handle;
+use crate::ir_adapter::value_or_parameter_to_fixed;
+use crate::par_trace;
 use crate::passes::MeasurementAnalysis;
 use crate::passes::analyze_awg::AwgCompilationInfo;
 use crate::passes::analyze_awg::analyze_awg_ir;
@@ -29,6 +33,8 @@ use crate::result::AwgProperties;
 use crate::result::ChannelProperties;
 use crate::result::CommandTable;
 use crate::result::FeedbackRegisterConfig;
+use crate::result::FixedValueOrParameter;
+use crate::result::Gains;
 use crate::result::InputChannelProperties;
 use crate::result::IntegrationWeight;
 use crate::result::IntegratorAllocation;
@@ -48,8 +54,10 @@ use crate::sampled_event_handler::SeqcResults;
 use crate::sampled_event_handler::handle_sampled_events;
 use crate::sampled_event_handler::seqc_tracker::FeedbackRegisterIndex;
 use crate::sampled_event_handler::seqc_tracker::awg::Awg;
+use crate::tracing_utils::ParallelTraceContext;
 use crate::waveform_sampler::SampleWaveforms;
 
+use laboneq_dsl::signal_calibration::MixerCalibration;
 use laboneq_error::LabOneQError;
 use laboneq_error::WithContext;
 use laboneq_error::resource_usage::ResourceExhaustionError;
@@ -58,6 +66,7 @@ use laboneq_log::warn;
 use laboneq_units::tinysample::{tiny_samples, tinysamples_to_seconds};
 use rayon::prelude::*;
 use std::collections::HashMap;
+use tracing::instrument;
 
 #[allow(clippy::too_many_arguments)]
 fn generate_output(
@@ -220,13 +229,28 @@ where
         let oscillator_index = awg.oscillator_index(&signal.uid);
 
         let awg_channels = awg.awg_channels_for_signal(&signal.uid).unwrap();
+        let base_channel = awg_channels
+            .iter()
+            .min()
+            .expect("Internal error: Signal has no channels");
+
         for channel in awg_channels.iter() {
+            let relative_channel = channel - base_channel;
+            let mixer_props = calculate_mixer_properties(
+                &signal_properties.mixer_calibration,
+                relative_channel,
+                awg.device_kind(),
+                &signal.kind,
+            );
+
             channel_properties.push(ChannelProperties {
                 signal: signal.uid,
                 channel: *channel,
                 marker_mode: awg_info.marker_modes.get(channel).cloned(),
                 hw_oscillator_index: oscillator_index,
                 amplitude: signal_properties.amplitude.clone(),
+                voltage_offset: mixer_props.voltage_offset,
+                gains: mixer_props.gains,
             });
         }
     }
@@ -337,16 +361,90 @@ where
     }
 }
 
+/// Mixer calibration properties for a single channel
+#[derive(Debug, Clone)]
+struct MixerChannelProperties {
+    voltage_offset: FixedValueOrParameter<f64>,
+    gains: Option<Gains>,
+}
+
+/// Calculate mixer calibration properties for a channel with device-specific defaults
+fn calculate_mixer_properties(
+    mixer_calibration: &Option<MixerCalibration>,
+    relative_channel: ChannelIndex,
+    device_kind: &DeviceKind,
+    signal_kind: &SignalKind,
+) -> MixerChannelProperties {
+    // For non-IQ signals, use defaults.
+    // For IQ signals, if mixer calibration is provided, use it, otherwise use defaults.
+    // Currently we do not error on mixer calibration on non-IQ signals, but simply ignore it.
+    let mixer_calibration = if !matches!(signal_kind, SignalKind::IQ) {
+        None
+    } else {
+        mixer_calibration.as_ref().or(None)
+    };
+    assert!(
+        relative_channel == 0 || relative_channel == 1,
+        "Only relative channels 0 (I) and 1 (Q) are supported"
+    );
+    let is_i_channel = relative_channel == 0;
+
+    // Voltage offsets
+    let voltage_offset = mixer_calibration
+        .as_ref()
+        .and_then(|mc| {
+            if is_i_channel {
+                mc.voltage_offset_i
+            } else {
+                mc.voltage_offset_q
+            }
+        })
+        .map(value_or_parameter_to_fixed)
+        .unwrap_or(FixedValueOrParameter::Value(0.0));
+
+    // Gains
+    let gains = mixer_calibration
+        .as_ref()
+        .and_then(|mc| {
+            let (diagonal, off_diagonal) = if is_i_channel {
+                mc.gains_i()
+            } else {
+                mc.gains_q()
+            }?;
+            Some(Gains {
+                diagonal: value_or_parameter_to_fixed(diagonal),
+                off_diagonal: value_or_parameter_to_fixed(off_diagonal),
+            })
+        })
+        .or({
+            // Apply device-specific defaults for HDAWG when values are missing
+            if matches!(device_kind, DeviceKind::HDAWG) {
+                Some(Gains {
+                    diagonal: FixedValueOrParameter::Value(1.0),
+                    off_diagonal: FixedValueOrParameter::Value(0.0),
+                })
+            } else {
+                None
+            }
+        });
+
+    MixerChannelProperties {
+        voltage_offset,
+        gains,
+    }
+}
+
 fn generate_code_for_multiple_awgs<T: SampleWaveforms + Sync + Send>(
     root: &IrNode,
     awgs: &[AwgCore],
     ctx: &CodeGenContext,
     waveform_sampler: &T,
 ) -> Result<Vec<AwgCodeGenerationResult<T>>> {
+    let trace_ctx = ParallelTraceContext::new();
     let awg_results: Vec<AwgCodeGenerationResult<T>> = awgs
         .par_iter()
-        .map(|awg| {
-            let code =
+        .map(|awg| -> Result<AwgCodeGenerationResult<T>> {
+            par_trace!(trace_ctx, "generate_code_for_awg", {
                 generate_code_for_awg(root, awg, ctx, waveform_sampler).with_context(|| {
                     format!(
                         "Error while generating code for signals: {}",
@@ -356,8 +454,8 @@ fn generate_code_for_multiple_awgs<T: SampleWaveforms + Sync + Send>(
                             .collect::<Vec<_>>()
                             .join(", ")
                     )
-                })?;
-            Ok(code)
+                })
+            })
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(awg_results)
@@ -432,10 +530,11 @@ fn construct_result_handle_maps(
     result_handle_maps
 }
 
+#[instrument(name = "laboneq.compiler.generate-code-rs", skip_all)] // Named with `-rs` suffix to distinguish from Python wrapper function
 pub fn generate_code<T: SampleWaveforms + Sync + Send>(
     codegen_ir: CodegenIr,
-    mut settings: CodeGeneratorSettings,
     sampler: &T,
+    mut settings: CodeGeneratorSettings,
 ) -> Result<SeqCGenOutput<T>> {
     let root = &codegen_ir.root;
     let mut awgs = codegen_ir.awg_cores;

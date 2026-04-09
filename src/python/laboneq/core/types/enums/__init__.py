@@ -13,3 +13,4 @@ from .port_mode import PortMode
 from .reference_clock_source import ReferenceClockSource
 from .repetition_mode import RepetitionMode
 from .section_alignment import SectionAlignment
+from .section_timing_mode import SectionTimingMode

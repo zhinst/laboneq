@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use laboneq_common::compiler_settings::CompilerSettings;
 use pyo3::prelude::*;
 
 use laboneq_dsl::types::ExternalParameterUid;
@@ -18,6 +19,7 @@ use crate::py_object_interner::PyObjectInterner;
 pub struct ExperimentIrPy {
     pub inner: ExperimentIr,
     pub py_object_store: Arc<PyObjectInterner<ExternalParameterUid>>,
+    pub compiler_settings: CompilerSettings,
 }
 
 #[pymethods]

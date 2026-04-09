@@ -633,10 +633,9 @@ class DeviceBase(DeviceZI):
 
     async def _apply_near_time_replacements(self, with_pipeliner: bool):
         """Apply near-time user nodes that were collected since the previous real-time execution."""
-        if with_pipeliner and not self._near_time_artifact_replacement_nodes.is_empty:
-            raise LabOneQControllerException(
-                f"{self.dev_repr}: Cannot apply near-time artifact replacements in pipeliner mode."
-            )
+        assert (
+            not with_pipeliner or self._near_time_artifact_replacement_nodes.is_empty
+        ), "pipelined replacement not supported"
         await self.set_async(self._near_time_artifact_replacement_nodes)
         self._near_time_artifact_replacement_nodes.clear()
 

@@ -63,6 +63,9 @@ def _otel_traces_to_tree(traces: list[dict]) -> tuple[Operation, dict]:
     root: Operation | None = None
     ops: dict[str, Operation] = {}
     runner_info = {}
+    traces = sorted(
+        traces, key=lambda x: _otel_dt_to_epoch(x["start_time"]), reverse=True
+    )
     for span in reversed(traces):
         duration = _otel_dt_to_epoch(span["end_time"]) - _otel_dt_to_epoch(
             span["start_time"]
@@ -78,7 +81,9 @@ def _otel_traces_to_tree(traces: list[dict]) -> tuple[Operation, dict]:
                 metadata[_deformat_user_attribute(attr_name)] = attr_value
             runner_info = {
                 "name": span["resource"]["attributes"]["service.name"],
-                "laboneq_version": span["resource"]["attributes"]["laboneq.version"],
+                "laboneq_version": span["resource"]["attributes"].get(
+                    "laboneq.version"
+                ),
                 "version": "0.0.1",
             }
             root = Operation(
@@ -222,9 +227,11 @@ def benchmark(
     Returns:
         BenchmarkResult: The result of the benchmark.
     """
+    from laboneq.instrumentation import laboneq_tracing
+
     tracer_provider, exporter = _setup_otlp_exporter()
     LabOneQInstrumentor().instrument(tracer_provider=tracer_provider)
-    from laboneq.core.utilities.laboneq_compile import laboneq_compile
+    from laboneq.core.utilities.compile_experiment import compile_experiment
 
     tracer = trace.get_tracer(
         instrumenting_module_name=__name__,
@@ -239,8 +246,9 @@ def benchmark(
             if callable(experiment):
                 experiment = experiment()
         root_span.set_attribute("experiment_name", experiment.uid or "unnamed")
-        with tracer.start_as_current_span("experiment-compile"):
-            compiled_experiment = laboneq_compile(device_setup, experiment)
+        with laboneq_tracing(exporter):
+            with tracer.start_as_current_span("experiment-compile"):
+                compiled_experiment = compile_experiment(device_setup, experiment)
         with tracer.start_as_current_span("experiment-serialize"):
             compiled_experiment_json = None
             with tracer.start_as_current_span("serialize"):
