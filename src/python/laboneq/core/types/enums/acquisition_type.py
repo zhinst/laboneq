@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
 
 
 # TODO: Move to laboneq.data. Note that moving the type will cause issues when deserialising
@@ -48,8 +47,7 @@ class AcquisitionType(Enum):
     RAW = "RAW"
 
 
-# TODO(2K): Why do we need optional 'Any' here?
-def is_spectroscopy(obj: AcquisitionType | Any) -> bool:
+def is_spectroscopy(obj: AcquisitionType) -> bool:
     return obj in (
         AcquisitionType.SPECTROSCOPY,
         AcquisitionType.SPECTROSCOPY_IQ,

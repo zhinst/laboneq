@@ -171,7 +171,6 @@ class WaveScroller:
         self.channel_type = channel_type
 
         self.is_shfqa = sim.device_type == "SHFQA"
-        self.is_spectroscopy = sim.is_spectroscopy
 
         self.sim_targets = sim_targets
 
@@ -187,6 +186,7 @@ class WaveScroller:
         self.last_freq_set_samples = 0
         self.last_freq = np.nan
         self.last_played_value = 0
+        self.last_marker_value: int = 0
         self.oscillator_phase: Optional[float] = None
 
         # Only HDAWG supports 4 registers, for other devices, the simulator simply does
@@ -237,7 +237,9 @@ class WaveScroller:
             and self.is_shfqa
         ):
             target_ops.add(Operation.START_QA)
-        if SimTarget.PLAY in self.sim_targets and not self.is_shfqa:
+        if (
+            SimTarget.PLAY in self.sim_targets or SimTarget.MARKER in self.sim_targets
+        ) and not self.is_shfqa:
             target_ops.add(Operation.PLAY_WAVE)
             target_ops.add(Operation.PLAY_HOLD)
             target_ops.add(Operation.PLAY_ZERO)
@@ -308,57 +310,81 @@ class WaveScroller:
 
         markers = event.args[2] if len(event.args) > 2 else {}
 
+        last_marker = 0
         if markers.get("marker1") and (
             self.channel_type != PhysicalChannelType.RF_CHANNEL or self.ch[0] % 2 == 0
         ):
-            wave_arg_pos = -2 if markers["marker2"] else -1
-            _slice_copy(
-                self.marker_snippet,
-                snippet_start_samples,
-                self.sim.waves[wave_data_indices[wave_arg_pos]].astype(np.uint8),
-                event.start_samples,
-                event.length_samples,
+            wave_arg_pos = -2 if markers.get("marker2") else -1
+            marker1_data = self.sim.waves[wave_data_indices[wave_arg_pos]].astype(
+                np.uint8
             )
+            if self.marker_snippet is not None:
+                _slice_copy(
+                    self.marker_snippet,
+                    snippet_start_samples,
+                    marker1_data,
+                    event.start_samples,
+                    event.length_samples,
+                )
+            last_marker |= int(marker1_data[event.length_samples - 1]) & 1
 
         if markers.get("marker2"):
+            marker2_data = self.sim.waves[wave_data_indices[-1]].astype(np.uint8)
             if (
                 self.channel_type == PhysicalChannelType.RF_CHANNEL
                 and self.ch[0] % 2 == 1
             ):
-                _slice_add(
-                    self.marker_snippet,
-                    snippet_start_samples,
-                    self.sim.waves[wave_data_indices[-1]].astype(np.uint8),
-                    event.start_samples,
-                    event.length_samples,
-                )
+                if self.marker_snippet is not None:
+                    _slice_add(
+                        self.marker_snippet,
+                        snippet_start_samples,
+                        marker2_data,
+                        event.start_samples,
+                        event.length_samples,
+                    )
+                last_marker |= int(marker2_data[event.length_samples - 1]) & 1
             elif self.channel_type == PhysicalChannelType.IQ_CHANNEL:
-                _slice_add(
-                    self.marker_snippet,
-                    snippet_start_samples,
-                    self.sim.waves[wave_data_indices[-1]].astype(np.uint8) << 1,
-                    event.start_samples,
-                    event.length_samples,
-                )
+                if self.marker_snippet is not None:
+                    _slice_add(
+                        self.marker_snippet,
+                        snippet_start_samples,
+                        marker2_data << 1,
+                        event.start_samples,
+                        event.length_samples,
+                    )
+                last_marker |= (int(marker2_data[event.length_samples - 1]) & 1) << 1
+
+        self.last_marker_value = last_marker
 
     def _process_play_hold(self, event: SeqCEvent, snippet_start_samples: int):
-        _slice_set(
-            self.wave_snippet,
-            snippet_start_samples,
-            self.last_played_value,
-            event.start_samples,
-            event.length_samples,
-        )
+        if self.wave_snippet is not None:
+            _slice_set(
+                self.wave_snippet,
+                snippet_start_samples,
+                self.last_played_value,
+                event.start_samples,
+                event.length_samples,
+            )
+        if self.marker_snippet is not None:
+            _slice_set(
+                self.marker_snippet,
+                snippet_start_samples,
+                self.last_marker_value,
+                event.start_samples,
+                event.length_samples,
+            )
 
     def _process_play_zero(self, event: SeqCEvent, snippet_start_samples: int):
-        _slice_set(
-            self.wave_snippet,
-            snippet_start_samples,
-            0.0,
-            event.start_samples,
-            event.length_samples,
-        )
+        if self.wave_snippet is not None:
+            _slice_set(
+                self.wave_snippet,
+                snippet_start_samples,
+                0.0,
+                event.start_samples,
+                event.length_samples,
+            )
         self.last_played_value = 0.0
+        self.last_marker_value = 0
 
     def _process_start_qa(self, event: SeqCEvent, snippet_start_samples: int):
         if SimTarget.PLAY in self.sim_targets and self.is_shfqa:
@@ -383,9 +409,8 @@ class WaveScroller:
 
         wave_indices = event.args[4]
 
-        if self.is_spectroscopy:
-            spectroscopy_mask = 0
-            assert generator_mask == spectroscopy_mask
+        spectroscopy_mask = 0
+        if generator_mask == spectroscopy_mask:
             if wave_indices is not None:
                 wave = retrieve_wave(
                     wave_indices[spectroscopy_mask][0],

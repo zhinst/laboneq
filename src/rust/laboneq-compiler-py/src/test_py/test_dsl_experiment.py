@@ -89,7 +89,6 @@ def run_experiment():
         instrument_uid="device_hdawg",
         channel_type="IQ",
         ports=["0", "1"],
-        awg_core=0,
     )
     return compiler_rs.serialize_experiment(exp, device_setup_rs, packed=False)
 
@@ -132,7 +131,6 @@ def create_derived_param_experiment_calibration():
         uid="q0/drive",
         instrument_uid="device_hdawg",
         channel_type="IQ",
-        awg_core=0,
         ports=["0", "1"],
         oscillator=device_setup_rs.create_oscillator(
             uid="osc",
@@ -179,7 +177,6 @@ def create_derived_param_experiment_operation_field():
         instrument_uid="device_hdawg",
         channel_type="IQ",
         ports=["0", "1"],
-        awg_core=0,
     )
     return compiler_rs.serialize_experiment(exp, device_setup_rs, packed=False)
 

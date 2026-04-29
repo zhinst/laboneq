@@ -9,11 +9,29 @@ import hashlib
 import json
 from typing import TYPE_CHECKING, Any, Literal
 
-from laboneq.automation import AutomationStatus
+import attr
+
 from laboneq.automation.utils import hierarchical_layout
 
 if TYPE_CHECKING:
     from laboneq.automation import Automation
+
+
+def _first(value):
+    """First value from dict, or scalar passthrough."""
+    return next(iter(value.values())) if isinstance(value, dict) else value
+
+
+def _total(value):
+    """Sum dict values, or scalar passthrough."""
+    return sum(value.values()) if isinstance(value, dict) else value
+
+
+def _serialize_logic(logic):
+    """Serialize an attrs logic instance, or None."""
+    if logic is None:
+        return None
+    return {"class": type(logic).__name__, **attr.asdict(logic)}
 
 
 def build_json_data(
@@ -21,52 +39,42 @@ def build_json_data(
     graph_type: Literal["nodes", "layers"],
 ) -> list[dict]:
     """Build JSON data."""
-    graph = automation._node_graph if graph_type == "nodes" else automation._layer_graph
+    is_layer = graph_type == "layers"
+    graph = automation._layer_graph if is_layer else automation._node_graph
     pos = hierarchical_layout(graph)
+    get = automation.get_layer if is_layer else automation.get_node
 
-    elements_data = []
+    elements = []
     for idx, key in enumerate(graph.nodes):
-        if graph_type == "layers":
-            element = automation.get_layer(key)
-        else:
-            element = automation.get_node(key)
-
+        el = get(key)
         x, y = pos.get(key, (0, 0))
+        status = el.status.value
 
-        status = element.status.value
-        if element.status == AutomationStatus.DEACTIVATED_FAIL:
-            status = AutomationStatus.FAILED.value
-
-        element_data = {
+        entry = {
             "id": idx,
             "key": key,
             "x": x,
             "y": y,
             "status": status,
-            "layer": str(getattr(element, "layer_key", element.key)),
-            "elements": (
-                len(element.node_keys)
-                if hasattr(element, "node_keys")
-                else element._key_str or []
-            ),
-            "timestamp": next(iter(element.timestamp.values()))
-            if isinstance(element.timestamp, dict)
-            else element.timestamp,
-            "fail_count": sum(element.fail_count.values())
-            if isinstance(element.fail_count, dict)
-            else element.fail_count,
-            "pass_count": sum(element.pass_count.values())
-            if isinstance(element.pass_count, dict)
-            else element.pass_count,
-            "depends_on": list(element.depends_on),
+            "layer": str(getattr(el, "layer_key", el.key)),
+            "timestamp": _first(el.timestamp),
+            "fail_count": _total(el.fail_count),
+            "pass_count": _total(el.pass_count),
+            "depends_on": list(el.depends_on),
         }
 
-        if graph_type == "layers":
-            element_data["sequential"] = getattr(element, "sequential", False)
+        if is_layer:
+            entry["sequential"] = getattr(el, "sequential", False)
+            entry["elements"] = str(len(el.node_keys))
+            logic = _serialize_logic(automation[key].logic)
+            if logic:
+                entry["logic"] = logic
+        else:
+            entry["elements"] = el._key_str or ""
 
-        elements_data.append(element_data)
+        elements.append(entry)
 
-    return elements_data
+    return elements
 
 
 def export_graph_to_json(automation: Automation) -> dict[str, Any]:

@@ -1,14 +1,13 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_common::types::AwgKey;
+use laboneq_common::types::{AwgKey, SignalKind};
 use laboneq_dsl::{
     signal_calibration::{MixerCalibration, OutputRoute, PortMode, Precompensation},
     types::{AmplifierPump, DeviceUid, Oscillator, Quantity, SignalUid, ValueOrParameter},
 };
 use laboneq_units::duration::{Duration, Second};
 use smallvec::SmallVec;
-use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Signal {
@@ -20,7 +19,7 @@ pub struct Signal {
     // Configuration parameters
     pub sampling_rate: f64,
     pub port_mode: Option<PortMode>,
-    pub channels: SmallVec<[u16; 4]>,
+    pub ports: SmallVec<[String; 4]>,
     pub kind: SignalKind,
 
     // Calibration parameters
@@ -37,34 +36,13 @@ pub struct Signal {
     pub mixer_calibration: Option<MixerCalibration>,
 
     // Timing parameters
-    pub port_delay: ValueOrParameter<Duration<Second>>,
+    pub port_delay: Option<ValueOrParameter<Duration<Second>>>,
     pub start_delay: Duration<Second>,
     pub signal_delay: Duration<Second>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum SignalKind {
-    Rf,
-    Integration,
-    Iq,
-}
-
-impl FromStr for SignalKind {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "rf" => Ok(SignalKind::Rf),
-            "iq" => Ok(SignalKind::Iq),
-            "integration" => Ok(SignalKind::Integration),
-            _ => Err(format!("Unknown signal type: {}", s)),
-        }
-    }
-}
-
 pub mod builder {
     use super::*;
-    use laboneq_units::duration::seconds;
     use smallvec::smallvec;
 
     pub struct SignalBuilder {
@@ -90,12 +68,12 @@ pub mod builder {
                     voltage_offset: None,
                     kind,
                     amplifier_pump: None,
-                    channels: smallvec![],
+                    ports: smallvec![],
                     port_mode: None,
                     automute: false,
                     amplitude: None,
                     signal_delay: 0.0.into(),
-                    port_delay: ValueOrParameter::Value(seconds(0.0)),
+                    port_delay: None,
                     start_delay: 0.0.into(),
                     range: None,
                     precompensation: None,
@@ -132,7 +110,7 @@ pub mod builder {
         }
 
         pub fn port_delay(mut self, port_delay: ValueOrParameter<Duration<Second>>) -> Self {
-            self.inner.port_delay = port_delay;
+            self.inner.port_delay = Some(port_delay);
             self
         }
 
@@ -171,8 +149,8 @@ pub mod builder {
             self
         }
 
-        pub fn channels(mut self, channels: Vec<u16>) -> Self {
-            self.inner.channels = SmallVec::from_vec(channels);
+        pub fn ports(mut self, ports: Vec<String>) -> Self {
+            self.inner.ports = SmallVec::from_vec(ports);
             self
         }
 

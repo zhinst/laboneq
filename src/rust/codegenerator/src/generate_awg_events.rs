@@ -9,10 +9,10 @@ use crate::Result;
 use crate::awg_delays::calculate_awg_delays;
 use crate::ir;
 use crate::ir::SignalUid;
-use crate::ir::compilation_job::{AwgCore, DeviceKind};
+use crate::ir::compilation_job::AwgCore;
 use crate::passes::{
     handle_acquire, handle_amplitude_registers, handle_frame_changes, handle_hw_phase_resets,
-    handle_loops, handle_match, handle_oscillators, handle_playwaves, handle_ppc_sweeps,
+    handle_loops, handle_match, handle_oscillators, handle_playwaves,
     handle_precompensation_resets, handle_prng, handle_qa_events, handle_signatures,
     handle_triggers, lower_for_awg,
 };
@@ -63,9 +63,6 @@ pub(crate) fn transform_ir_to_awg_events(
     )?;
     handle_hw_phase_resets::handle_hw_phase_resets(&mut program, &mut cut_points)?;
     handle_precompensation_resets::handle_precompensation_resets(&mut program, &mut cut_points)?;
-    if let DeviceKind::SHFQA = awg.device_kind() {
-        handle_ppc_sweeps::handle_ppc_sweep_steps(&mut program)?;
-    }
     handle_loops::handle_loops(&program, &mut cut_points)?;
     handle_triggers::handle_triggers(&mut program, &mut cut_points, awg)?;
     handle_prng::handle_prng(&program, &mut cut_points)?;

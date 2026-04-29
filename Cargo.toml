@@ -1,5 +1,5 @@
 [workspace.package]
-version = "26.4.0-b5"
+version = "26.4.0"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
 edition = "2024"
 publish = false
@@ -73,6 +73,7 @@ laboneq-common = { path = "src/rust/laboneq-common" }
 laboneq-units = { path = "src/rust/laboneq-units" }
 laboneq-py-utils = { path = "src/rust/laboneq-py-utils" }
 laboneq-opentelemetry-python = { path = "src/rust/laboneq-opentelemetry-python" }
+laboneq-qccs-backend = { path = "src/rust/laboneq-qccs-backend" }
 laboneq-tracing = { path = "src/rust/laboneq-tracing" }
 rccow = { path = "src/rust/rccow" }
 

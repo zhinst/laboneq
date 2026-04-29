@@ -5,15 +5,18 @@ use std::num::NonZero;
 use std::{collections::HashMap, sync::Arc};
 
 use indexmap::IndexMap;
-use laboneq_common::device_options::DeviceOptions;
-use laboneq_dsl::types::ParameterUid;
+use laboneq_dsl::device_setup::AuxiliaryDevice;
+use laboneq_dsl::signal_calibration::PortMode;
+use laboneq_dsl::types::DeviceUid as DeviceUidCommon;
+use laboneq_dsl::types::{ParameterUid, PumpCancellationSource, Quantity};
+use laboneq_units::duration::{Duration, Second};
 
 pub use crate::handle_feedback_registers::Acquisition;
 use crate::ir::SignalUid;
-use crate::ir::compilation_job::AwgKey;
 use crate::ir::compilation_job::AwgKind;
 use crate::ir::compilation_job::ChannelIndex;
 use crate::ir::compilation_job::DeviceUid;
+use crate::ir::compilation_job::{AwgKey, DeviceKind};
 pub use crate::sample_waveforms::SampledWaveform;
 pub use crate::sampled_event_handler::ParameterPhaseIncrement;
 pub use crate::sampled_event_handler::SHFPPCSweeperConfig;
@@ -21,15 +24,18 @@ pub use crate::sampled_event_handler::seqc_tracker::wave_index_tracker::SignalTy
 pub use crate::sampled_event_handler::seqc_tracker::wave_index_tracker::WaveIndex;
 
 use crate::{
-    ir::{PpcDevice, Samples},
+    ir::{PpcChannelKey, Samples},
     sample_waveforms::SampleWaveforms,
 };
 
 pub struct SeqCGenOutput<T: SampleWaveforms> {
+    pub device_properties: Vec<DeviceProperties>,
+    pub auxiliary_device_properties: Vec<AuxiliaryDevice>,
     pub awg_results: Vec<AwgCodeGenerationResult<T>>,
     pub total_execution_time: f64,
     pub result_handle_maps: HashMap<ResultSource, Vec<Vec<String>>>,
     pub measurements: Vec<Measurement>,
+    pub ppc_settings: Vec<PpcSettings>,
 }
 
 pub struct AwgCodeGenerationResult<T: SampleWaveforms> {
@@ -37,7 +43,7 @@ pub struct AwgCodeGenerationResult<T: SampleWaveforms> {
     pub seqc: SeqCProgram,
     pub wave_indices: IndexMap<String, (WaveIndex, SignalType)>,
     pub command_table: Option<CommandTable>,
-    pub shf_sweeper_config: Option<ShfPpcSweepJson>,
+    pub(crate) shf_sweeper_config: Option<ShfPpcSweepJson>,
     pub sampled_waveforms: Vec<SampledWaveform<T::Signature>>,
     pub integration_kernels: Vec<T::SampledIntegrationKernel>,
     pub signal_delays: HashMap<SignalUid, f64>,
@@ -93,14 +99,44 @@ impl CommandTable {
 pub struct AwgProperties {
     pub key: AwgKey,
     pub kind: AwgKind,
-    pub sampling_rate: f64,
-    pub options: DeviceOptions,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DeviceProperties {
+    pub uid: DeviceUid,
+    pub kind: DeviceKind,
+    pub sampling_rate: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ShfPpcSweepJson {
-    pub ppc_device: Arc<PpcDevice>,
+    pub ppc_device: Arc<PpcChannelKey>,
     pub json: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PpcSettings {
+    pub device: DeviceUidCommon,
+    pub channel: u16,
+
+    pub alc_on: bool,
+    pub pump_on: bool,
+    pub pump_filter_on: bool,
+    pub pump_power: Option<FixedValueOrParameter<f64>>,
+    pub pump_frequency: Option<FixedValueOrParameter<f64>>,
+
+    pub probe_on: bool,
+    pub probe_power: Option<FixedValueOrParameter<f64>>,
+    pub probe_frequency: Option<FixedValueOrParameter<f64>>,
+
+    pub cancellation_on: bool,
+    pub cancellation_phase: Option<FixedValueOrParameter<f64>>,
+    pub cancellation_attenuation: Option<FixedValueOrParameter<f64>>,
+    pub cancellation_source: PumpCancellationSource,
+    pub cancellation_source_frequency: Option<f64>,
+
+    /// JSON String containing the sweep configuration
+    pub sweep_config: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +197,18 @@ pub struct ChannelProperties {
     pub amplitude: Option<FixedValueOrParameter<f64>>,
     pub voltage_offset: FixedValueOrParameter<f64>,
     pub gains: Option<Gains>,
+    pub port_mode: Option<PortMode>,
+    pub port_delay: Option<FixedValueOrParameter<Duration<Second>>>,
+    pub range: Option<Quantity>,
+    pub lo_frequency: Option<FixedValueOrParameter<f64>>,
+    pub routed_outputs: Vec<RoutedOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoutedOutput {
+    pub source_channel: ChannelIndex,
+    pub amplitude_scaling: Option<FixedValueOrParameter<f64>>,
+    pub phase_shift: Option<FixedValueOrParameter<f64>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -174,6 +222,10 @@ pub struct InputChannelProperties {
     pub signal: SignalUid,
     pub channel: ChannelIndex,
     pub hw_oscillator_index: Option<u16>,
+    pub port_mode: Option<PortMode>,
+    pub port_delay: Option<FixedValueOrParameter<Duration<Second>>>,
+    pub range: Option<Quantity>,
+    pub lo_frequency: Option<FixedValueOrParameter<f64>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

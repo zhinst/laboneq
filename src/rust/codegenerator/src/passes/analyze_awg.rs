@@ -9,7 +9,7 @@ use laboneq_error::bail;
 use crate::Result;
 use crate::ir::compilation_job::{AwgCore, ChannelIndex, DeviceKind, SignalKind};
 use crate::ir::experiment::Handle;
-use crate::ir::{IrNode, NodeKind, PlayPulse, PpcDevice, TriggerBitData};
+use crate::ir::{IrNode, NodeKind, PlayPulse, PpcChannelKey, TriggerBitData};
 use crate::result::MarkerMode;
 
 /// Maps a channel to marker.
@@ -28,7 +28,7 @@ fn channel_to_trigger_bit_hdawg(channel: u8) -> u8 {
 
 pub(crate) struct AwgCompilationInfo {
     device_kind: DeviceKind,
-    ppc_device: Option<Arc<PpcDevice>>,
+    ppc_device: Option<Arc<PpcChannelKey>>,
     feedback_handles: Vec<Handle>,
     pub marker_modes: HashMap<ChannelIndex, MarkerMode>,
 }
@@ -47,7 +47,7 @@ impl AwgCompilationInfo {
         !self.feedback_handles.is_empty()
     }
 
-    pub(crate) fn ppc_device(&self) -> Option<&Arc<PpcDevice>> {
+    pub(crate) fn ppc_device(&self) -> Option<&Arc<PpcChannelKey>> {
         self.ppc_device.as_ref()
     }
 
@@ -55,7 +55,7 @@ impl AwgCompilationInfo {
         &self.feedback_handles
     }
 
-    fn add_ppc_device(&mut self, ppc_device: &Arc<PpcDevice>) {
+    fn add_ppc_device(&mut self, ppc_device: &Arc<PpcChannelKey>) {
         if self.ppc_device.is_none() {
             self.ppc_device = Some(Arc::clone(ppc_device));
         } else if let Some(unique_ppc) = &self.ppc_device {
@@ -157,7 +157,7 @@ fn traverse_awg_ir(node: &IrNode, info: &mut AwgCompilationInfo) -> Result<()> {
                 info.feedback_handles.push(handle.clone());
             }
         }
-        NodeKind::PpcSweepStep(ob) => {
+        NodeKind::PpcStep(ob) => {
             info.add_ppc_device(&ob.ppc_device);
         }
         NodeKind::PlayPulse(obj) => {

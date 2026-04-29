@@ -32,7 +32,7 @@ class LoopFlags(Flag):
         return bool(self & LoopFlags.AVERAGE)
 
 
-class LoopingMode(Enum):
+class LoopingMode(Flag):
     NEAR_TIME_ONLY = auto()
     ONCE = auto()
 
@@ -381,16 +381,15 @@ class ForLoop(Statement):
         self.loop_flags = loop_flags
 
     def _loop_iterator(self, scope: ExecutionScope) -> Iterator[int]:
-        if scope.root.looping_mode == LoopingMode.NEAR_TIME_ONLY:
-            if scope._is_real_time:
-                yield 0
-            else:
-                for i in range(self.count):
-                    yield i
-        elif scope.root.looping_mode == LoopingMode.ONCE:
+        if (
+            LoopingMode.ONCE in scope.root.looping_mode
+            or LoopingMode.NEAR_TIME_ONLY in scope.root.looping_mode
+            and scope._is_real_time
+        ):
             yield 0
         else:
-            raise LabOneQException(f"Unknown looping mode '{scope.root.looping_mode}'")
+            for i in range(self.count):
+                yield i
 
     def run(self, scope: ExecutionScope) -> Iterator[Notification]:
         sub_scope = scope.make_sub_scope()
@@ -445,13 +444,14 @@ class ExecRT(ForLoop):
                 acquisition_type=self.acquisition_type,
             ),
         )
-        if scope.root.looping_mode == LoopingMode.NEAR_TIME_ONLY:
-            pass
-        elif scope.root.looping_mode == LoopingMode.ONCE:
+        if LoopingMode.NEAR_TIME_ONLY in scope.root.looping_mode:
+            pass  # Skip RT block in near-time-only mode
+        elif LoopingMode.ONCE in scope.root.looping_mode:
             sub_scope = scope.make_sub_scope()
             sub_scope.enter_real_time()
             yield from super().run(sub_scope)
         else:
+            # Disallow RT looping unless in ONCE mode to prevent accidental large loops in SW processing
             raise LabOneQException(f"Unknown looping mode '{scope.root.looping_mode}'")
         yield Notification(
             statement_type=StatementType.RTExit,

@@ -19,14 +19,12 @@ class DeviceTraits:
     min_play_wave: int
     sample_multiple: int
     channels_per_awg: int
-    is_qa_device: bool
     sampling_rate_2GHz: float = None
     oscillator_set_latency: float = 0.0
     reset_osc_duration: float = 0.0
     lo_frequency_granularity: Optional[float] = None
     min_lo_frequency: Optional[float] = None
     max_lo_frequency: Optional[float] = None
-    device_class: int = 0x0
     max_result_vector_length: int | None = None
     scope_max_segments: int | None = None
 
@@ -75,8 +73,6 @@ class DeviceType(DeviceTraits, Enum):
         oscillator_set_latency=304e-9,
         # Verified by PW (2022-10-13) on dev8047, proc. FPGA 68603. Observed ~77 ns.
         reset_osc_duration=80e-9,
-        is_qa_device=False,
-        device_class=0x0,
     )
 
     UHFQA = DeviceTraits(
@@ -87,8 +83,6 @@ class DeviceType(DeviceTraits, Enum):
         channels_per_awg=2,
         # Verified by PW (2022-10-13) on dev2086, rev 68366. Observed ~25 ns.
         reset_osc_duration=40e-9,
-        is_qa_device=True,
-        device_class=0x0,
         max_result_vector_length=1 << 20,
         scope_max_segments=1,
     )
@@ -113,8 +107,6 @@ class DeviceType(DeviceTraits, Enum):
         lo_frequency_granularity=100e6,
         min_lo_frequency=1e9,
         max_lo_frequency=8.5e9,
-        is_qa_device=True,
-        device_class=0x0,
         max_result_vector_length=1 << 19,
         scope_max_segments=1024,
     )
@@ -131,8 +123,6 @@ class DeviceType(DeviceTraits, Enum):
         lo_frequency_granularity=100e6,
         min_lo_frequency=1e9,
         max_lo_frequency=8.5e9,
-        is_qa_device=False,
-        device_class=0x0,
     )
     ZQCS = DeviceTraits(
         str_value="zqcs",
@@ -140,8 +130,6 @@ class DeviceType(DeviceTraits, Enum):
         min_play_wave=4,
         sample_multiple=4,
         channels_per_awg=1,
-        is_qa_device=False,
-        device_class=0x1,
         oscillator_set_latency=36e-9,
         reset_osc_duration=32e-9,
     )

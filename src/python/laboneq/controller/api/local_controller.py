@@ -11,7 +11,7 @@ from laboneq.controller.api.controller_api import (
     SubmissionHandle,
     SubmissionStatus,
 )
-from laboneq.controller.controller import Controller as _Controller
+from laboneq.controller.controller import Controller
 from laboneq.controller.devices.device_collection import DEFAULT_TIMEOUT_S
 from laboneq.controller.runtime_context_impl import LegacySessionData
 from laboneq.controller.utilities.exception import LabOneQControllerException
@@ -50,7 +50,7 @@ class LocalController(ControllerAPI):
         target_setup = TargetSetupGenerator.from_setup(setup)
         if neartime_callbacks is None:
             neartime_callbacks = {}
-        controller = _Controller(
+        controller = Controller(
             target_setup=target_setup,
             ignore_version_mismatch=ignore_version_mismatch,
             neartime_callbacks=neartime_callbacks,
@@ -67,7 +67,7 @@ class LocalController(ControllerAPI):
     def __init__(
         self,
         device_setup: DeviceSetup,
-        controller: _Controller,
+        controller: Controller,
     ):
         self._device_setup = device_setup
         # Keep reference to avoid garbage collection

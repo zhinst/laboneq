@@ -4,12 +4,12 @@
 use std::collections::HashMap;
 
 use laboneq_common::device_traits::DeviceTraits;
-use laboneq_common::types::{AwgKey, DeviceKind};
+use laboneq_common::types::{AwgKey, DeviceKind, SignalKind};
 use laboneq_dsl::signal_calibration::PortMode;
 use laboneq_dsl::types::{
     AmplifierPump, DeviceUid, Oscillator, OscillatorKind, SignalUid, ValueOrParameter,
 };
-use laboneq_ir::signal::{Signal, SignalKind};
+use laboneq_ir::signal::Signal;
 use laboneq_ir::system::{AwgDevice, DeviceSetup};
 use laboneq_scheduler::SignalInfo;
 
@@ -60,8 +60,8 @@ impl SignalView<'_> {
         self.signal.sampling_rate
     }
 
-    pub(crate) fn channels(&self) -> &[u16] {
-        &self.signal.channels
+    pub(crate) fn ports(&self) -> &[String] {
+        &self.signal.ports
     }
 
     pub(crate) fn port_mode(&self) -> Option<&PortMode> {
@@ -103,8 +103,8 @@ impl SignalView<'_> {
         self.signal.signal_delay
     }
 
-    pub(crate) fn port_delay(&self) -> &ValueOrParameter<Duration<Second>> {
-        &self.signal.port_delay
+    pub(crate) fn port_delay(&self) -> Option<&ValueOrParameter<Duration<Second>>> {
+        self.signal.port_delay.as_ref()
     }
 
     pub(crate) fn start_delay(&self) -> Duration<Second> {

@@ -69,8 +69,7 @@ class IO:
 class AWG:
     awg: int
     signal_type: AWGSignalType
-    # signal id -> channel (cast to str for compat with json) -> port
-    signals: dict[str, dict[str, str]] = field(default_factory=dict)
+    signals: set[str] = field(default_factory=set)
 
     # receiver (SG instruments)
     source_feedback_register: int | Literal["local"] | None = None
@@ -160,5 +159,4 @@ class Recipe:
     acquire_lengths: list[AcquireLength] = field(default_factory=list)
     total_execution_time: float = 0.0
     max_step_execution_time: float = 0.0
-    is_spectroscopy: bool = False
     versions: SoftwareVersions = field(default_factory=lambda: SoftwareVersions("", ""))

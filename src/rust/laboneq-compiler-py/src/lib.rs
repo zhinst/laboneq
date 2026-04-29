@@ -5,6 +5,7 @@
 
 pub mod error;
 
+use laboneq_dsl::device_setup::DeviceSignal;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -15,30 +16,32 @@ use laboneq_opentelemetry_python::attach_otel_context;
 use laboneq_tracing::tracing_is_enabled;
 use laboneq_tracing::with_tracing;
 
+use crate::compiler_backend::CompilerBackend;
+use crate::compiler_backend::ExperimentView;
+use crate::compiler_backend::PreprocessedBackendData;
 use crate::error::{Error, Result, create_error_message};
 use crate::experiment::Experiment;
+use crate::experiment_context::ExperimentContext;
 use crate::experiment_context::experiment_context_from_experiment;
 use crate::experiment_processor::process_experiment;
 use crate::experiment_validation::validate_experiment;
 use crate::parameter_store::create_parameter_store;
-use crate::py_awg::AwgInfoPy;
 use crate::py_device_setup_capnp::DeviceSetupCapnpBuilderPy;
 use crate::py_experiment::ExperimentPy;
+use crate::py_experiment_ir::ExperimentIrPy;
 use crate::py_signal::AmplifierPumpPy;
 use crate::qccs_feedback_calculator::QccsFeedbackCalculator;
+use crate::setup_processor::DelayRegistry;
 use crate::setup_processor::process_setup;
-use crate::signal_properties::SignalProperties;
 
 use laboneq_common::compiler_settings::CompilerSettings;
 use laboneq_common::named_id::{NamedIdStore, resolve_ids};
 use laboneq_dsl::device_setup::AuxiliaryDevice;
 use laboneq_dsl::types::ExternalParameterUid;
 use laboneq_ir::ExperimentIr;
-use laboneq_ir::awg::AwgCore;
 use laboneq_ir::pulse_sheet_schedule::PulseSheetSchedule;
 use laboneq_ir::system::AwgDevice;
 use laboneq_ir::system::DeviceSetup;
-use laboneq_py_utils::experiment_ir::ExperimentIrPy;
 use laboneq_py_utils::py_object_interner::PyObjectInterner;
 use laboneq_scheduler::{ChunkingInfo, ExperimentContext as SchedulerContext, schedule_experiment};
 
@@ -55,23 +58,22 @@ mod experiment_context;
 mod experiment_processor;
 mod experiment_validation;
 mod parameter_store;
-mod py_awg;
 mod py_conversion;
 mod py_helpers;
 mod py_signal;
 mod qccs_feedback_calculator;
 mod signal_view;
 use signal_view::signal_views;
+pub mod compiler_backend;
 mod py_device_setup_capnp;
-mod py_experiment;
+pub mod py_experiment;
+pub mod py_experiment_ir;
 mod setup_processor;
-mod signal_properties;
 
 pub(crate) struct SetupProperties {
-    signals: Vec<SignalProperties>,
+    signals: Vec<DeviceSignal>,
     awg_devices: Vec<AwgDevice>,
     auxiliary_devices: Vec<AuxiliaryDevice>,
-    awgs: Vec<AwgCore>,
 }
 
 /// Serialize a Python experiment object to Cap'n Proto bytes.
@@ -85,17 +87,57 @@ fn serialize_experiment_py(
 }
 
 /// Build an experiment from Cap'n Proto bytes plus device/signal configuration.
-#[pyfunction(name = "build_experiment_capnp", signature = (capnp_data, awgs, desktop_setup, packed=false, compiler_settings=None))]
-fn build_experiment_capnp_py(
+pub fn build_experiment_with_backend_capnp_py<B: CompilerBackend>(
     py: Python<'_>,
     capnp_data: &[u8],
-    awgs: Vec<Bound<'_, AwgInfoPy>>,
     desktop_setup: bool,
     packed: bool,
     compiler_settings: Option<Bound<'_, PyDict>>,
-) -> Result<ExperimentPy> {
+    backend: B,
+) -> PyResult<ExperimentPy>
+where
+    <B as CompilerBackend>::Output: Send + Sync + 'static,
+{
+    let compiler_settings = compiler_settings
+        .as_ref()
+        .map(|dict| py_helpers::compiler_settings_from_py_dict(dict))
+        .transpose()?
+        .unwrap_or_default();
+
+    let processed = build_experiment_capnp(py, capnp_data, desktop_setup, packed, backend)?;
+
+    let exp_py = ExperimentPy {
+        inner: processed.inner,
+        device_setup: processed.device_setup,
+        context: processed.context,
+        delay_compensation: processed.delay_compensation,
+        compiler_settings: compiler_settings.clone(),
+        backend_data: Arc::new(processed.backend_data),
+    };
+    Ok(exp_py)
+}
+
+pub struct ProcessedExperiment<D> {
+    inner: Experiment,
+    // NOTE: The usage of Arc here is to allow sharing the id_store across Python bindings
+    // Remove when Python bindings are no longer needed
+    device_setup: Arc<DeviceSetup>,
+    context: ExperimentContext,
+    /// Delay compensation for signals on devices.
+    delay_compensation: DelayRegistry,
+    backend_data: D,
+}
+
+/// Build an experiment from Cap'n Proto bytes plus device/signal configuration.
+fn build_experiment_capnp<B: CompilerBackend>(
+    py: Python<'_>,
+    capnp_data: &[u8],
+    desktop_setup: bool,
+    packed: bool,
+    backend: B,
+) -> Result<ProcessedExperiment<impl PreprocessedBackendData>> {
     // 1. Deserialize the experiment tree from Cap'n Proto.
-    let deserialized = capnp_deserializer::deserialize_experiment(py, capnp_data, packed)?;
+    let mut deserialized = capnp_deserializer::deserialize_experiment(py, capnp_data, packed)?;
 
     // Register the PyObjects
     let mut py_object_store = PyObjectInterner::<ExternalParameterUid>::new();
@@ -103,16 +145,18 @@ fn build_experiment_capnp_py(
         py_object_store.insert(uid, value);
     }
 
-    let compiler_settings = compiler_settings
-        .as_ref()
-        .map(|dict| py_helpers::compiler_settings_from_py_dict(dict))
-        .transpose()?
-        .unwrap_or_default();
-
-    let awg_mapping = awgs.into_iter().map(|awg| {
-        let awg = awg.borrow();
-        AwgCore::new(awg.uid, awg.number.clone().into())
-    });
+    let backend_processed = backend.preprocess_experiment(ExperimentView::new(
+        &deserialized.root,
+        &mut deserialized.id_store,
+        &deserialized.parameters,
+        &deserialized.pulses,
+        &deserialized.awg_devices,
+        &deserialized.auxiliary_devices,
+        &deserialized.signals,
+    ))?;
+    deserialized
+        .signals
+        .extend(backend_processed.additional_signals().iter().cloned());
 
     let mut experiment = Experiment {
         root: deserialized.root,
@@ -125,7 +169,6 @@ fn build_experiment_capnp_py(
         signals: deserialized.signals,
         awg_devices: deserialized.awg_devices,
         auxiliary_devices: deserialized.auxiliary_devices,
-        awgs: awg_mapping.collect(),
     };
 
     let context = experiment_context_from_experiment(&experiment).map_err(|e| {
@@ -135,6 +178,7 @@ fn build_experiment_capnp_py(
 
     let processed_setup = process_setup(
         setup_properties,
+        &backend_processed,
         desktop_setup,
         &experiment.id_store,
         &context,
@@ -149,12 +193,8 @@ fn build_experiment_capnp_py(
             .into_iter()
             .map(|s| (s.uid, s))
             .collect(),
-        processed_setup
-            .devices
-            .into_iter()
-            .map(|d| (d.uid(), d))
-            .collect(),
-        processed_setup.awgs,
+        processed_setup.devices,
+        processed_setup.auxiliary_devices,
         desktop_setup,
     )
     .map_err(Error::new)?;
@@ -167,13 +207,15 @@ fn build_experiment_capnp_py(
         let msg = create_error_message(e);
         Error::new(resolve_ids(&msg, &experiment.id_store))
     })?;
-    Ok(ExperimentPy {
+
+    let res = ProcessedExperiment {
         inner: experiment,
         device_setup: Arc::new(device_setup),
         context,
         delay_compensation: processed_setup.on_device_delays,
-        compiler_settings,
-    })
+        backend_data: backend_processed,
+    };
+    Ok(res)
 }
 
 #[pyclass(name = "ScheduleResult", frozen)]
@@ -254,6 +296,7 @@ fn schedule_experiment_py_impl(
         inner: ir,
         py_object_store: Arc::clone(&experiment.inner.py_object_store),
         compiler_settings: experiment.compiler_settings.clone(),
+        backend_data: Arc::clone(&experiment.backend_data),
     };
 
     let out = ScheduleResult {
@@ -388,17 +431,14 @@ pub fn create_py_module<'py>(py: Python<'py>, name: &str) -> Result<Bound<'py, P
         PrecompensationPy,
     };
     use laboneq_opentelemetry_python::span_buffer::SpanBufferPy;
-    use py_awg::AwgInfoPy;
     use py_device_setup_capnp::DeviceSetupCapnpBuilderPy;
 
     let m = PyModule::new(py, name)?;
     m.add_function(wrap_pyfunction!(schedule_experiment_py, &m)?)?;
     m.add_function(wrap_pyfunction!(serialize_experiment_py, &m)?)?;
-    m.add_function(wrap_pyfunction!(build_experiment_capnp_py, &m)?)?;
     m.add_function(wrap_pyfunction!(init_logging_py, &m)?)?;
     m.add_class::<SpanBufferPy>()?;
     // Intermediate migration objects, shall be removed later
-    m.add_class::<AwgInfoPy>()?;
     m.add_class::<AmplifierPumpPy>()?;
     m.add_class::<PrecompensationPy>()?;
     m.add_class::<HighPassCompensationPy>()?;

@@ -10,7 +10,6 @@ pub(crate) mod handle_loops;
 pub(crate) mod handle_match;
 pub(crate) mod handle_oscillators;
 pub(crate) mod handle_playwaves;
-pub(crate) mod handle_ppc_sweeps;
 pub(crate) mod handle_precompensation_resets;
 pub(crate) mod handle_prng;
 mod handle_qa_events;

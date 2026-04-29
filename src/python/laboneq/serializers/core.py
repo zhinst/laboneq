@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib
+import warnings
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,6 +16,7 @@ import orjson
 import yaml
 
 from laboneq._version import get_version
+from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.serializer_registry import (
     serializer_registry,
 )
@@ -69,9 +71,69 @@ def _serialize_object(
     return serializer.to_dict(obj, options)
 
 
-def import_cls(full_name: str) -> type:
-    """Attempt to import a class by name."""
-    module_name, class_name = full_name.rsplit(".", 1)
+# Sentinel used to detect callers that omit the new keyword arguments.
+# We cannot use None as the default for prefix_restrictions because None is a
+# meaningful value (meaning "allow any module"), so we need a distinct object
+# to distinguish "caller passed None explicitly" from "caller passed nothing".
+_UNSET = object()
+
+
+def import_cls(
+    dotted_name: str,
+    *,
+    base_cls: type | None = None,
+    prefix_restrictions: tuple[str, ...] | None = _UNSET,  # type: ignore[assignment]
+) -> type:
+    """Import a class by its dotted name and verify it is a subclass of the expected type.
+
+    !!! version-changed "Changed in version 26.4.0"
+        Both ``base_cls`` and ``prefix_restrictions`` are required. Omitting either
+        is deprecated and will raise an error in version 26.10.0.
+
+    Args:
+        dotted_name: Dotted name of the form ``"<module>.<ClassName>"``, e.g.
+            ``"mypackage.module.MyClass"``. The module path must be importable
+            and the class must be a top-level attribute of that module —
+            nested classes (whose ``__qualname__`` contains a dot) are not
+            supported.
+        base_cls: The class that the imported class must be a subclass of.
+            Required; omitting it is deprecated.
+        prefix_restrictions: Use this when ``dotted_name`` comes from an
+            untrusted source (e.g. a serialized file) to restrict which modules
+            may be imported — ``dotted_name`` must start with one of the listed
+            prefixes or a ``ValueError`` is raised. Pass ``None`` to allow any
+            module when the caller already controls the name. Required;
+            omitting it is deprecated.
+    """
+    if base_cls is None or prefix_restrictions is _UNSET:
+        missing = []
+        if base_cls is None:
+            missing.append("base_cls")
+        if prefix_restrictions is _UNSET:
+            missing.append("prefix_restrictions")
+        missing_str = " and ".join(missing)
+        warnings.warn(
+            f"Calling import_cls() without explicit {missing_str} "
+            "is deprecated and will be removed in version 26.10.0. "
+            "Pass base_cls=<expected base class> to verify the imported class, and "
+            "prefix_restrictions=('<your.package.',) to restrict which modules may "
+            "be imported (or prefix_restrictions=None to allow any module).",
+            FutureWarning,
+            stacklevel=2,
+        )
+        if base_cls is None:
+            base_cls = object
+        if prefix_restrictions is _UNSET:
+            prefix_restrictions = None
+    if prefix_restrictions is not None and not any(
+        dotted_name.startswith(p) for p in prefix_restrictions
+    ):
+        prefix_str = " or ".join(f"'{p}'" for p in prefix_restrictions)
+        raise ValueError(
+            f"{dotted_name!r} cannot be imported: "
+            f"only modules starting with {prefix_str} are allowed."
+        )
+    module_name, class_name = dotted_name.rsplit(".", 1)
     module = importlib.import_module(module_name)
     try:
         cls = getattr(module, class_name)
@@ -79,6 +141,16 @@ def import_cls(full_name: str) -> type:
         raise ImportError(
             f"Failed to find {class_name!r} in module {module_name!r}."
         ) from None
+    if not isinstance(cls, type):
+        raise ValueError(
+            f"Expected a class (subclass of {base_cls.__name__}), "
+            f"but {class_name!r} in module {module_name!r} is not a class: got {cls!r}."
+        )
+    if not issubclass(cls, base_cls):
+        raise ValueError(
+            f"Expected a subclass of {base_cls.__name__}, "
+            f"but {cls.__qualname__} (from {cls.__module__}) is not."
+        )
     return cls
 
 
@@ -109,11 +181,17 @@ def from_dict(
     serializer = _registry(options)[serializer_id]
     if serializer is not None:
         return serializer.from_dict(data, options)
-    # Try to load the serializer from the module
+    # Serializer not in registry — try importing it by name.
+    # Restrict to laboneq packages to prevent import-time side effects from
+    # crafted __serializer__ values in untrusted data.
     try:
-        serializer = import_cls(serializer_id)
+        serializer = import_cls(
+            serializer_id,
+            base_cls=VersionedClassSerializer,
+            prefix_restrictions=("laboneq.", "laboneq_zqcs."),
+        )
     except ImportError as exc:
-        raise ValueError(f"Failed to import serializer {serializer_id}.") from exc
+        raise ValueError(f"Failed to import serializer {serializer_id!r}.") from exc
     return serializer.from_dict(data, options)
 
 

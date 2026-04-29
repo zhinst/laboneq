@@ -730,7 +730,7 @@ def _calculate_awg_configs(
                     if awg.signal_type == AWGSignalType.IQ
                     else AwgSignalType.SINGLE
                 ),
-                signals=set(awg.signals.keys()),
+                signals=awg.signals,
                 source_feedback_register=awg.source_feedback_register,
                 register_selector_shift=awg.codeword_bitshift,
                 register_selector_bitmask=awg.codeword_bitmask,

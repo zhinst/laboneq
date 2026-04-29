@@ -16,7 +16,6 @@ from laboneq.data.calibration import CancellationSource
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
 
-    from laboneq.core.types.enums import AcquisitionType
     from laboneq.data.calibration import (
         BounceCompensation,
         ExponentialCompensation,
@@ -197,6 +196,7 @@ class OutputRoute:
     from_channel: int
     to_signal: str
     from_signal: str | None
+    from_port: str | None
     amplitude: float | ParameterInfo
     phase: float | ParameterInfo
 
@@ -278,7 +278,6 @@ class ExperimentInfo:
     device_setup_fingerprint: str
     devices: list[DeviceInfo]
     signals: list[SignalInfo]
-    acquisition_type: AcquisitionType
     chunking: ChunkingInfo | None
     # Scheduler Rust integration fields
     src: Experiment | None = field(default=None)

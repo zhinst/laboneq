@@ -7,7 +7,6 @@ import logging
 import warnings
 from typing import TYPE_CHECKING, Callable, Union
 
-import jsonschema
 from yaml import safe_load
 
 import laboneq.core.path as qct_path
@@ -316,27 +315,12 @@ def make_qubits(
     if not isinstance(qubit_descriptor, list):
         msg = "Invalid 'qubits' definition: Must be a list of qubits."
         raise LabOneQException(msg)
-    schema = {
-        "type": "object",
-        "properties": {
-            "name": {
-                "type": ["string", "array"],
-                "items": {
-                    "type": "string",
-                },
-                "uniqueItems": True,
-            },
-            "type": {"type": "string"},
-        },
-        "required": ["name", "type"],
-        "additionalProperties": False,
-    }
     qubits = {}
     for desc in qubit_descriptor:
         try:
-            jsonschema.validate(desc, schema=schema)
-        except jsonschema.exceptions.ValidationError as error:
-            msg = error.message
+            _validate_qubit_descriptor(desc)
+        except (TypeError, ValueError) as error:
+            msg = error.args[0]
             raise LabOneQException(f"Invalid 'qubit' definition: {msg}") from error
         q_type = desc["type"]
         try:
@@ -357,6 +341,34 @@ def make_qubits(
                 raise LabOneQException(f"Invalid 'qubit' definition: {msg}") from None
             qubits[q_def] = quantum_element.from_logical_signal_group(q_def, lsg=lsg)
     return {key: qubits[key] for key in sorted(qubits)}
+
+
+def _validate_qubit_descriptor(qubit_descriptor: dict):
+    if "name" not in qubit_descriptor:
+        raise ValueError("'name' is a required property")
+
+    if "type" not in qubit_descriptor:
+        raise ValueError("'type' is a required property")
+
+    if keys := (qubit_descriptor.keys() - {"name", "type"}):
+        raise ValueError(f"unexpected keys: {', '.join(sorted(keys))}")
+
+    name = qubit_descriptor["name"]
+
+    if not isinstance(name, (str, list)):
+        raise TypeError("'name' is not of type 'string', 'array'")
+
+    name = name if isinstance(name, list) else [name]
+
+    if any(not isinstance(x, str) for x in name):
+        raise TypeError("'name' contains element that is not of type 'string'")
+
+    if len(name) != len(set(name)):
+        raise ValueError(f"{name} has non-unique elements")
+
+    qubit_type = qubit_descriptor["type"]
+    if not isinstance(qubit_type, str):
+        raise TypeError("'type' is not of type 'string'")
 
 
 class _DeviceSetupGenerator:

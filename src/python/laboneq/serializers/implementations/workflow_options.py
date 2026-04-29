@@ -60,7 +60,11 @@ class WorkflowOptionsSerializer(VersionedClassSerializer[WorkflowOptions]):
         options: DeserializationOptions | None = None,
     ) -> WorkflowOptions:
         data = serialized_data["__data__"].copy()
-        return import_cls(data.pop("class__"))(
+        return import_cls(
+            data.pop("class__"),
+            base_cls=WorkflowOptions,
+            prefix_restrictions=None,  # user subclasses may live in any package; base_cls is the guard
+        )(
             _task_options={
                 k: serializers.from_dict(v)
                 for k, v in data.pop("_task_options").items()
@@ -102,6 +106,10 @@ class TaskOptionsSerializer(VersionedClassSerializer[TaskOptions]):
         options: DeserializationOptions | None = None,
     ) -> TaskOptions:
         data = serialized_data["__data__"].copy()
-        return import_cls(data.pop("class__"))(
+        return import_cls(
+            data.pop("class__"),
+            base_cls=TaskOptions,
+            prefix_restrictions=None,  # user subclasses may live in any package; base_cls is the guard
+        )(
             **{k: serializers.from_dict(v) for k, v in data.items()},
         )

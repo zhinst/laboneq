@@ -5,6 +5,7 @@ use crate::CodeGeneratorSettings;
 use crate::CodegenIr;
 use crate::Result;
 use crate::context::CodeGenContext;
+use crate::context_validation::validate_codegen_ir;
 use crate::event_list::generate_event_list;
 use crate::generate_awg_events::transform_ir_to_awg_events;
 use crate::handle_feedback_registers::FeedbackRegisterAllocation;
@@ -12,11 +13,13 @@ use crate::handle_feedback_registers::calculate_feedback_register_layout;
 use crate::handle_feedback_registers::collect_feedback_config;
 use crate::integration_units::allocate_integration_units;
 use crate::ir::IrNode;
+use crate::ir::PpcChannelKey;
 use crate::ir::SignalUid;
 use crate::ir::compilation_job::AwgCore;
 use crate::ir::compilation_job::AwgKey;
 use crate::ir::compilation_job::ChannelIndex;
 use crate::ir::compilation_job::DeviceKind;
+use crate::ir::compilation_job::InitialSignalProperties;
 use crate::ir::compilation_job::SignalKind;
 use crate::ir::experiment::AcquisitionType;
 use crate::ir::experiment::Handle;
@@ -39,6 +42,7 @@ use crate::result::InputChannelProperties;
 use crate::result::IntegrationWeight;
 use crate::result::IntegratorAllocation;
 use crate::result::Measurement;
+use crate::result::PpcSettings;
 use crate::result::ResultSource;
 use crate::result::SampledWaveform;
 use crate::result::SeqCGenOutput;
@@ -62,6 +66,7 @@ use laboneq_error::LabOneQError;
 use laboneq_error::WithContext;
 use laboneq_error::resource_usage::ResourceExhaustionError;
 use laboneq_error::resource_usage::handle_resource_exhaustion;
+use laboneq_error::{bail, laboneq_error};
 use laboneq_log::warn;
 use laboneq_units::tinysample::{tiny_samples, tinysamples_to_seconds};
 use rayon::prelude::*;
@@ -183,7 +188,7 @@ fn generate_code_for_awg<T: SampleWaveforms>(
         measurement_info,
         &awg_info,
         ctx,
-    );
+    )?;
     Ok(output)
 }
 
@@ -195,7 +200,7 @@ fn construct_awg_result<T>(
     measurement_info: MeasurementAnalysis,
     awg_info: &AwgCompilationInfo,
     ctx: &CodeGenContext,
-) -> AwgCodeGenerationResult<T>
+) -> Result<AwgCodeGenerationResult<T>>
 where
     T: SampleWaveforms,
 {
@@ -217,17 +222,27 @@ where
     };
 
     // Construct channel properties
+    let this_awg_initial_properties = awg
+        .signals
+        .iter()
+        .map(|s| {
+            ctx.signal_properties(s.uid).unwrap_or_else(|| {
+                panic!(
+                    "Internal Error: Missing initial signal properties for signal {:?}",
+                    s.uid
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+
     let mut channel_properties = vec![];
     for signal in awg.signals.iter().filter(|s| s.is_output()) {
-        let signal_properties = ctx.signal_properties(signal.uid).unwrap_or_else(|| {
-            panic!(
-                "Internal Error: Missing initial signal properties for signal {:?}",
-                signal.uid
-            )
-        });
+        let signal_properties = this_awg_initial_properties
+            .iter()
+            .find(|s| s.uid == signal.uid)
+            .unwrap();
 
         let oscillator_index = awg.oscillator_index(&signal.uid);
-
         let awg_channels = awg.awg_channels_for_signal(&signal.uid).unwrap();
         let base_channel = awg_channels
             .iter()
@@ -243,14 +258,27 @@ where
                 &signal.kind,
             );
 
+            let voltage_offset = match signal.kind {
+                SignalKind::IQ => mixer_props.voltage_offset,
+                _ => signal_properties
+                    .voltage_offset
+                    .clone()
+                    .unwrap_or(FixedValueOrParameter::Value(0.0)),
+            };
+
             channel_properties.push(ChannelProperties {
                 signal: signal.uid,
                 channel: *channel,
                 marker_mode: awg_info.marker_modes.get(channel).cloned(),
                 hw_oscillator_index: oscillator_index,
                 amplitude: signal_properties.amplitude.clone(),
-                voltage_offset: mixer_props.voltage_offset,
+                voltage_offset,
                 gains: mixer_props.gains,
+                port_mode: signal_properties.port_mode.clone(),
+                port_delay: signal_properties.port_delay.clone(),
+                range: signal_properties.range.clone(),
+                lo_frequency: signal_properties.lo_frequency.clone(),
+                routed_outputs: signal_properties.routed_outputs.clone(),
             });
         }
     }
@@ -258,17 +286,28 @@ where
     // Construct input channel properties
     let mut input_channel_properties = vec![];
     for signal in awg.signals.iter().filter(|s| !s.is_output()) {
-        let oscillator_index = awg.oscillator_index(&signal.uid);
+        let signal_properties = this_awg_initial_properties
+            .iter()
+            .find(|s| s.uid == signal.uid)
+            .unwrap();
 
+        let oscillator_index = awg.oscillator_index(&signal.uid);
         let awg_channels = awg.awg_channels_for_signal(&signal.uid).unwrap();
         for channel in awg_channels.iter() {
             input_channel_properties.push(InputChannelProperties {
                 signal: signal.uid,
                 channel: *channel,
                 hw_oscillator_index: oscillator_index,
+                port_mode: signal_properties.port_mode.clone(),
+                port_delay: signal_properties.port_delay.clone(),
+                range: signal_properties.range.clone(),
+                lo_frequency: signal_properties.lo_frequency.clone(),
             });
         }
     }
+
+    // Post process channel properties
+    resolve_port_mode(awg, &mut channel_properties, &mut input_channel_properties)?;
 
     // Create integration weights by their associated integration channels and sort by channels for output consistency
     let mut integration_weight_infos = integration_weights
@@ -293,10 +332,8 @@ where
     let awg_properties = AwgProperties {
         key: awg.key(),
         kind: awg.kind,
-        sampling_rate: awg.sampling_rate,
-        options: awg.options.clone(),
     };
-    AwgCodeGenerationResult {
+    let result = AwgCodeGenerationResult {
         awg: awg_properties,
         seqc: create_seqc_program(awg, awg_events.seqc),
         wave_indices: awg_events.wave_indices,
@@ -358,7 +395,35 @@ where
         input_channel_properties,
         integration_weights: integration_weight_infos,
         integrator_allocations: construct_integration_allocations(awg, ctx),
+    };
+    Ok(result)
+}
+
+fn resolve_port_mode(
+    awg: &AwgCore,
+    outputs: &mut [ChannelProperties],
+    inputs: &mut [InputChannelProperties],
+) -> Result<()> {
+    if !matches!(awg.device_kind(), DeviceKind::SHFQA) {
+        return Ok(());
     }
+    for input in inputs.iter_mut() {
+        let Some(output) = outputs.iter_mut().find(|o| o.channel == input.channel) else {
+            continue;
+        };
+        if let (Some(input_port_mode), Some(output_port_mode)) =
+            (&input.port_mode, &output.port_mode)
+            && input_port_mode != output_port_mode
+        {
+            bail!(
+                "Mismatch between input and output port mode on channel {}",
+                input.channel
+            );
+        }
+        input.port_mode = input.port_mode.clone().or_else(|| output.port_mode.clone());
+        output.port_mode = output.port_mode.clone().or_else(|| input.port_mode.clone());
+    }
+    Ok(())
 }
 
 /// Mixer calibration properties for a single channel
@@ -536,6 +601,8 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
     sampler: &T,
     mut settings: CodeGeneratorSettings,
 ) -> Result<SeqCGenOutput<T>> {
+    validate_codegen_ir(&codegen_ir)?;
+
     let root = &codegen_ir.root;
     let mut awgs = codegen_ir.awg_cores;
     let acquisition_type = codegen_ir.acquisition_type;
@@ -557,7 +624,7 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
     let feedback_register_layout =
         calculate_feedback_register_layout(&awgs, &integration_unit_allocation, &feedback_config);
     let simulaneous_acquires = feedback_config.take_acquisitions();
-    let ctx = CodeGenContext {
+    let mut ctx = CodeGenContext {
         acquisition_type,
         feedback_register_layout,
         feedback_config,
@@ -567,7 +634,7 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
     };
 
     // Code generation per AWG
-    let awg_results = generate_code_for_multiple_awgs(root, &awgs, &ctx, sampler)?;
+    let mut awg_results = generate_code_for_multiple_awgs(root, &awgs, &ctx, sampler)?;
 
     // Resource usage evaluation
     handle_resource_exhaustion(
@@ -579,14 +646,79 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
     let total_execution_time = estimate_total_execution_time(root);
     let measurements = evaluate_measurement_per_device(&awg_results);
     let result_handle_maps = construct_result_handle_maps(simulaneous_acquires, &awgs, &ctx);
+    let ppc_settings = merge_ppc_steps(&mut awg_results, &mut ctx.initial_signal_properties)?;
 
     let result = SeqCGenOutput {
+        device_properties: codegen_ir.awg_devices,
+        auxiliary_device_properties: codegen_ir.auxiliary_devices,
         awg_results,
         total_execution_time,
         result_handle_maps,
         measurements,
+        ppc_settings,
     };
     Ok(result)
+}
+
+fn merge_ppc_steps(
+    awg_results: &mut [AwgCodeGenerationResult<impl SampleWaveforms>],
+    initial_signal_properties: &mut [InitialSignalProperties],
+) -> Result<Vec<PpcSettings>> {
+    let mut config_by_channel =
+        awg_results
+            .iter_mut()
+            .filter_map(|awg| awg.shf_sweeper_config.take())
+            .try_fold(HashMap::<PpcChannelKey, String>::new(), |mut acc, config| {
+                // Check for compatibility with existing config for this device, and merge if compatible.
+                if let Some(existing_config) = acc.get(&config.ppc_device) {
+                    if existing_config != &config.json {
+                        let msg = format!(
+                            "Incompatible configurations for PPC channel '{}/{}' across different signals.",
+                            config.ppc_device.device.0, config.ppc_device.channel
+                        );
+                        return Err(laboneq_error!("{}", msg));
+                    }
+                } else {
+                    acc.insert(*config.ppc_device, config.json);
+                }
+                Ok(acc)
+            })?;
+
+    // Collect the ppc steps and check that initial signal properties are consistent across PPC channel
+    let ppc_settings = initial_signal_properties
+        .iter_mut()
+        .filter_map(|signal| signal.ppc_settings.take())
+        .try_fold(HashMap::new(), |mut ppc_settings, ppc_config| {
+            let key = PpcChannelKey {
+                device: ppc_config.device,
+                channel: ppc_config.channel,
+            };
+            if let Some(existing_config) = ppc_settings.get(&key)
+                && existing_config != &ppc_config
+            {
+                Err(laboneq_error!(
+                    "Incompatible configurations for PPC channel '{}/{}' across different signals.",
+                    key.device.0,
+                    key.channel
+                ))
+            } else {
+                ppc_settings.insert(key, ppc_config);
+                Ok(ppc_settings)
+            }
+        })?;
+
+    // Build the merged results
+    let mut ppc_settings: Vec<PpcSettings> = ppc_settings
+        .into_iter()
+        .map(|(key, mut config)| {
+            config.sweep_config = config_by_channel.remove(&key);
+            config
+        })
+        .collect();
+
+    // Sorted for output consistency
+    ppc_settings.sort_by_key(|a| a.channel);
+    Ok(ppc_settings)
 }
 
 /// Evaluate the measurements per device.

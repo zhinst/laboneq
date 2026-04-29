@@ -16,13 +16,14 @@ from laboneq.compiler.workflow.compiler_output import (
 def from_single_run(
     rt_compiler_output: RTCompilerOutputContainer, step_indices: list[int]
 ) -> CombinedRTCompilerOutputContainer:
+    combined_output = (
+        get_compiler_hooks(rt_compiler_output.device_class)
+        .linker()
+        .combined_from_single_run(rt_compiler_output.codegen_output, step_indices)
+    )
     return CombinedRTCompilerOutputContainer(
-        combined_output={
-            device_class: get_compiler_hooks(device_class)
-            .linker()
-            .combined_from_single_run(output, step_indices)
-            for device_class, output in rt_compiler_output.codegen_output.items()
-        },
+        device_class=rt_compiler_output.device_class,
+        combined_output=combined_output,
         schedule=rt_compiler_output.schedule,
     )
 
@@ -33,24 +34,20 @@ def merge_compiler_runs(
     previous: RTCompilerOutputContainer,
     step_indices: list[int],
 ):
-    for device_class, combined_output in this.combined_output.items():
-        get_compiler_hooks(device_class).linker().merge_combined_compiler_runs(
-            combined_output,
-            new.codegen_output[device_class],
-            previous.codegen_output[device_class],
-            step_indices,
-        )
+    get_compiler_hooks(this.device_class).linker().merge_combined_compiler_runs(
+        this.combined_output, new.codegen_output, previous.codegen_output, step_indices
+    )
 
 
 def repeat_previous(
     this: CombinedRTCompilerOutputContainer, previous: RTCompilerOutputContainer
 ):
-    for device_class, combined_output in this.combined_output.items():
-        get_compiler_hooks(device_class).linker().repeat_previous(
-            combined_output, previous.codegen_output[device_class]
-        )
+    get_compiler_hooks(this.device_class).linker().repeat_previous(
+        this.combined_output, previous.codegen_output
+    )
 
 
 def finalize(this: CombinedRTCompilerOutputContainer, settings: CompilerSettings):
-    for device_class, combined_output in this.combined_output.items():
-        get_compiler_hooks(device_class).linker().finalize(combined_output, settings)
+    get_compiler_hooks(this.device_class).linker().finalize(
+        this.combined_output, settings
+    )

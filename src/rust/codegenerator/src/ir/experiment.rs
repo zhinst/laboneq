@@ -1,7 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_dsl::types::SignalUid;
+use laboneq_dsl::types::{DeviceUid, SignalUid};
 use num_complex::Complex;
 
 use crate::node;
@@ -302,9 +302,9 @@ impl PlayAcquire {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct PpcDevice {
-    pub device: String,
+#[derive(Debug, Clone, PartialEq, Copy, Hash, Eq)]
+pub struct PpcChannelKey {
+    pub device: DeviceUid,
     pub channel: u16,
 }
 
@@ -359,7 +359,7 @@ pub struct PpcSweepStep {
     pub signal: Arc<Signal>,
     pub length: Samples,
     pub sweep_command: SweepCommand,
-    pub ppc_device: Arc<PpcDevice>,
+    pub ppc_device: Arc<PpcChannelKey>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -464,12 +464,12 @@ pub enum NodeKind {
     SetOscillatorFrequency(SetOscillatorFrequency),
     PhaseReset(PhaseReset),
     PrecompensationFilterReset { signal: Arc<Signal> },
-    PpcSweepStep(PpcSweepStep),
     Match(Match),
     Loop(Loop),
     LoopIteration(LoopIteration),
     TriggerSet(TriggerBitData),
     Section(Section),
+    PpcStep(PpcSweepStep),
     // AWG nodes
     // AWG nodes are produced by the code generator.
     PlayWave(PlayWave),
@@ -479,7 +479,6 @@ pub enum NodeKind {
     FrameChange(FrameChange),
     InitAmplitudeRegister(InitAmplitudeRegister),
     ResetPrecompensationFilters(ResetPrecompensationFilters),
-    PpcStep(PpcSweepStep),
     ResetPhase(),
     InitialResetPhase(),
     SetupPrng(PrngSetup),
@@ -508,7 +507,7 @@ impl NodeKind {
             NodeKind::PhaseReset(_) => {}
             NodeKind::InitialResetPhase() => {}
             NodeKind::PrecompensationFilterReset { .. } => {}
-            NodeKind::PpcSweepStep(x) => x.length = value,
+            NodeKind::PpcStep(x) => x.length = value,
             NodeKind::Match(x) => x.length = value,
             NodeKind::Loop(x) => x.length = value,
             NodeKind::LoopIteration(x) => x.length = value,
@@ -532,7 +531,6 @@ impl NodeKind {
             NodeKind::PhaseReset(_) => 0,
             NodeKind::InitialResetPhase() => 0,
             NodeKind::PrecompensationFilterReset { .. } => 0,
-            NodeKind::PpcSweepStep(x) => x.length,
             NodeKind::Match(x) => x.length,
             NodeKind::Loop(x) => x.length,
             NodeKind::LoopIteration(x) => x.length,
@@ -588,7 +586,6 @@ impl NodeKind {
             NodeKind::InitialOscillatorFrequency(_) => None,
             NodeKind::PhaseReset(_) => None,
             NodeKind::PrecompensationFilterReset { .. } => None,
-            NodeKind::PpcSweepStep(_) => None,
             NodeKind::Nop { .. } => None,
             NodeKind::SetTrigger(_) => None,
             NodeKind::LoopIteration(_) => None,
@@ -601,7 +598,6 @@ impl NodeKind {
             NodeKind::PlayPulse(x) => vec![x.signal.uid],
             NodeKind::FrameChange(x) => vec![x.signal.uid],
             NodeKind::AcquirePulse(x) => vec![x.signal.uid],
-            NodeKind::PpcSweepStep(x) => vec![x.signal.uid],
             NodeKind::SetTrigger(x) => vec![x.signal.uid],
             NodeKind::Acquire(x) => vec![x.signal.uid],
             NodeKind::PpcStep(x) => vec![x.signal.uid],

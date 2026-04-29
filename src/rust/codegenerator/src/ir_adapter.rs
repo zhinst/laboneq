@@ -5,11 +5,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use laboneq_common::types::AwgKey as AwgKeyCommon;
+use laboneq_dsl::device_setup::AuxiliaryDevice;
 use laboneq_error::bail;
+use laboneq_qccs_backend::QccsBackendPreprocessedData;
 use num_complex::Complex;
 
 use codegenerator_utils::pulse_parameters::PulseParameterDeduplicator;
 use laboneq_common::named_id::NamedIdStore;
+use laboneq_common::types::DeviceKind as DeviceKindCommon;
+use laboneq_common::types::SignalKind as SignalKindCommon;
 use laboneq_dsl::types::{
     AcquisitionType as AcquisitionTypeCommon, ComplexOrFloat, DeviceUid, MarkerSelector,
     Oscillator as OscillatorCommon, OscillatorKind as OscillatorKindCommon, OscillatorUid,
@@ -17,7 +21,7 @@ use laboneq_dsl::types::{
     SignalUid, SweepParameter as SweepParameterCommon, ValueOrParameter,
 };
 use laboneq_ir::node::IrNode as HirNode;
-use laboneq_ir::signal::{Signal as SignalCommon, SignalKind as SignalKindCommon};
+use laboneq_ir::signal::Signal as SignalCommon;
 use laboneq_ir::{self as hir, ExperimentIr};
 
 use laboneq_units::tinysample::{TinySamples, tiny_samples};
@@ -32,10 +36,10 @@ use crate::ir::compilation_job::{
 use crate::ir::experiment::{AcquisitionType, PulseParametersId, SweepCommand};
 use crate::ir::{
     AcquirePulse, Case, InitialOscillatorFrequency, IrNode, Loop, LoopIteration, Match, NodeKind,
-    PhaseReset, PlayPulse, PpcDevice, PpcSweepStep, PrngSetup, Section, SectionId, SectionInfo,
+    PhaseReset, PlayPulse, PpcChannelKey, PpcSweepStep, PrngSetup, Section, SectionId, SectionInfo,
     SetOscillatorFrequency, SignalFrequency,
 };
-use crate::result::FixedValueOrParameter;
+use crate::result::{DeviceProperties, FixedValueOrParameter, PpcSettings, RoutedOutput};
 use crate::utils::length_to_samples;
 
 pub struct CodegenIr {
@@ -44,10 +48,17 @@ pub struct CodegenIr {
     pub acquisition_type: AcquisitionType,
     pub(crate) awg_cores: Vec<AwgCore>,
     pub(crate) initial_signal_properties: Vec<InitialSignalProperties>,
+    pub(crate) awg_devices: Vec<DeviceProperties>,
+    pub(crate) auxiliary_devices: Vec<AuxiliaryDevice>,
 }
 
 /// Lower a IR into a codegenerator IR.
-pub fn ir_to_codegen_ir(experiment: &ExperimentIr) -> Result<CodegenIr> {
+///
+/// TODO: Move the converter to the compiler backend to remove dependency to the backend here.
+pub fn ir_to_codegen_ir(
+    experiment: &ExperimentIr,
+    backend_data: &QccsBackendPreprocessedData,
+) -> Result<CodegenIr> {
     let ir_signals = experiment.device_setup.signals().collect::<Vec<_>>();
     let id_store = &experiment.id_store;
 
@@ -63,10 +74,21 @@ pub fn ir_to_codegen_ir(experiment: &ExperimentIr) -> Result<CodegenIr> {
 
     let mut awg_core_builders: HashMap<AwgKeyCommon, AwgCoreBuilder> = HashMap::new();
     for signal in ir_signals {
-        let awg = experiment.device_setup.awg_core(&signal.awg_key).unwrap();
-        let awg_signal = signal_to_codegen_signal(signal, id_store);
+        let additional_info = backend_data
+            .get_signal(signal.uid)
+            .expect("Expected additional signal info for all signals");
 
-        if let Some(awg_core) = awg_core_builders.get_mut(&awg.uid()) {
+        let awg_signal = signal_to_codegen_signal(
+            signal,
+            id_store,
+            additional_info
+                .channels
+                .iter()
+                .map(|ch| (*ch).try_into().expect("Failed to convert channel number"))
+                .collect(),
+        );
+
+        if let Some(awg_core) = awg_core_builders.get_mut(&additional_info.awg_key) {
             awg_core.add_signal(awg_signal.into());
         } else {
             let device = experiment
@@ -82,7 +104,7 @@ pub fn ir_to_codegen_ir(experiment: &ExperimentIr) -> Result<CodegenIr> {
                     .into(),
                 awg_device_kind,
             );
-            let awg_index = *awg.number().first().unwrap();
+            let awg_index = additional_info.awg_index;
             let mut awg_core =
                 AwgCoreBuilder::new(awg_index, awg_device.into(), signal.sampling_rate);
             awg_core.options(
@@ -96,7 +118,7 @@ pub fn ir_to_codegen_ir(experiment: &ExperimentIr) -> Result<CodegenIr> {
                 awg_core.is_shfqc();
             }
             awg_core.add_signal(awg_signal.into());
-            awg_core_builders.insert(awg.uid(), awg_core);
+            awg_core_builders.insert(additional_info.awg_key, awg_core);
         }
     }
     let mut awgs = awg_core_builders
@@ -127,6 +149,7 @@ pub fn ir_to_codegen_ir(experiment: &ExperimentIr) -> Result<CodegenIr> {
         &pulse_defs,
         &sweep_parameters,
     );
+    let device_properties = create_device_properties(experiment, id_store);
 
     let codegen_ir = transform_ir(&mut lowerer, &experiment.root, tiny_samples(0))?;
     let result = CodegenIr {
@@ -138,9 +161,48 @@ pub fn ir_to_codegen_ir(experiment: &ExperimentIr) -> Result<CodegenIr> {
             .device_setup
             .signals()
             .map(create_initial_signal_properties)
+            .collect::<Result<Vec<_>>>()?,
+        awg_devices: device_properties,
+        auxiliary_devices: experiment
+            .device_setup
+            .auxiliary_devices()
+            .cloned()
             .collect(),
     };
     Ok(result)
+}
+
+fn create_device_properties(
+    experiment: &ExperimentIr,
+    id_store: &NamedIdStore,
+) -> Vec<DeviceProperties> {
+    let mut device_sampling_rates =
+        experiment
+            .device_setup
+            .signals()
+            .fold(HashMap::new(), |mut acc, signal| {
+                if let Some(existing_rate) = acc.get(&signal.device_uid) {
+                    assert_eq!(
+                        *existing_rate, signal.sampling_rate,
+                        "Expected all signals for a given device to have the same sampling rate."
+                    );
+                }
+                acc.insert(signal.device_uid, signal.sampling_rate);
+                acc
+            });
+
+    experiment
+        .device_setup
+        .awg_devices()
+        .map(|device| DeviceProperties {
+            uid: id_store.resolve(device.uid()).unwrap().to_string().into(),
+            kind: device
+                .kind()
+                .try_into()
+                .expect("Expected a valid device type."),
+            sampling_rate: device_sampling_rates.remove(&device.uid()),
+        })
+        .collect::<Vec<_>>()
 }
 
 fn validate_unique_oscillators(signals: &[&SignalCommon]) -> Result<()> {
@@ -162,13 +224,54 @@ fn validate_unique_oscillators(signals: &[&SignalCommon]) -> Result<()> {
     Ok(())
 }
 
-fn create_initial_signal_properties(signal: &SignalCommon) -> InitialSignalProperties {
-    InitialSignalProperties {
+fn create_initial_signal_properties(signal: &SignalCommon) -> Result<InitialSignalProperties> {
+    use laboneq_qccs_backend::ports::parse_port;
+
+    Ok(InitialSignalProperties {
         uid: signal.uid,
         amplitude: signal.amplitude.map(value_or_parameter_to_fixed),
         thresholds: signal.thresholds.clone(),
         mixer_calibration: signal.mixer_calibration.clone(),
-    }
+        port_mode: signal.port_mode.clone(),
+        port_delay: signal.port_delay.map(value_or_parameter_to_fixed),
+        ppc_settings: signal.amplifier_pump.as_ref().map(|pump| {
+            PpcSettings {
+                device: pump.device,
+                channel: pump.channel,
+                alc_on: pump.alc_on,
+                pump_on: pump.pump_on,
+                pump_filter_on: pump.pump_filter_on,
+                pump_power: pump.pump_power.map(value_or_parameter_to_fixed),
+                pump_frequency: pump.pump_frequency.map(value_or_parameter_to_fixed),
+                probe_on: pump.probe_on,
+                probe_power: pump.probe_power.map(value_or_parameter_to_fixed),
+                probe_frequency: pump.probe_frequency.map(value_or_parameter_to_fixed),
+                cancellation_on: pump.cancellation_on,
+                cancellation_phase: pump.cancellation_phase.map(value_or_parameter_to_fixed),
+                cancellation_attenuation: pump
+                    .cancellation_attenuation
+                    .map(value_or_parameter_to_fixed),
+                cancellation_source: pump.cancellation_source,
+                cancellation_source_frequency: pump.cancellation_source_frequency,
+                sweep_config: None, // Will be filled in later if this signal is used in a PPC sweep
+            }
+        }),
+        voltage_offset: signal.voltage_offset.map(value_or_parameter_to_fixed),
+        range: signal.range.clone(),
+        lo_frequency: signal.lo_frequency.map(value_or_parameter_to_fixed),
+        routed_outputs: signal
+            .added_outputs
+            .iter()
+            .map(|output| {
+                Ok(RoutedOutput {
+                    source_channel: parse_port(&output.source_channel, DeviceKindCommon::Shfsg)?
+                        .channel,
+                    amplitude_scaling: output.amplitude_scaling.map(value_or_parameter_to_fixed),
+                    phase_shift: output.phase_shift.map(value_or_parameter_to_fixed),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+    })
 }
 
 pub(crate) fn value_or_parameter_to_fixed<T>(
@@ -211,7 +314,11 @@ fn eval_trigger_modes(
         .collect()
 }
 
-fn signal_to_codegen_signal(signal: &SignalCommon, id_store: &NamedIdStore) -> Signal {
+fn signal_to_codegen_signal(
+    signal: &SignalCommon,
+    id_store: &NamedIdStore,
+    channels: Vec<u8>,
+) -> Signal {
     Signal {
         uid: signal.uid,
         kind: match signal.kind {
@@ -219,7 +326,7 @@ fn signal_to_codegen_signal(signal: &SignalCommon, id_store: &NamedIdStore) -> S
             SignalKindCommon::Integration => SignalKind::INTEGRATION,
             SignalKindCommon::Iq => SignalKind::IQ,
         },
-        channels: signal.channels.iter().map(|c| *c as u8).collect(),
+        channels,
         oscillator: signal.oscillator.as_ref().map(|osc| Oscillator {
             uid: id_store.resolve_unchecked(osc.uid).to_string(),
             kind: match osc.kind {
@@ -330,7 +437,7 @@ fn transform_ir(
         }
         hir::IrKind::PpcStep(obj) => {
             let code_ir = ctx.ppc_step_to_code(obj);
-            NodeKind::PpcSweepStep(code_ir)
+            NodeKind::PpcStep(code_ir)
         }
         hir::IrKind::ClearPrecompensation { signal } => NodeKind::PrecompensationFilterReset {
             signal: ctx.get_signal(signal),
@@ -360,7 +467,7 @@ struct IrToCodeIrLowerer<'a> {
     // These are populated during lowering for deduplication and cross-referencing
     pulse_parameter_deduplicator: PulseParameterDeduplicator,
     section_info: HashMap<SectionUid, Arc<SectionInfo>>,
-    ppc_devices: HashMap<SignalUid, Arc<PpcDevice>>,
+    ppc_devices: HashMap<SignalUid, Arc<PpcChannelKey>>,
 }
 
 impl<'a> IrToCodeIrLowerer<'a> {
@@ -423,12 +530,11 @@ impl<'a> IrToCodeIrLowerer<'a> {
         signal: &SignalUid,
         device: DeviceUid,
         channel: u16,
-    ) -> Arc<PpcDevice> {
+    ) -> Arc<PpcChannelKey> {
         if let Some(ppc_device) = self.ppc_devices.get(signal) {
             Arc::clone(ppc_device)
         } else {
-            let device = self.id_store.resolve_unchecked(device).to_string();
-            let ppc = Arc::new(PpcDevice { device, channel });
+            let ppc = Arc::new(PpcChannelKey { device, channel });
             self.ppc_devices.insert(*signal, Arc::clone(&ppc));
             ppc
         }

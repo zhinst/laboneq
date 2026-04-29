@@ -106,7 +106,7 @@ pub(super) fn check_ppc_sweeper<'a>(
             output auto-muting feature:\n {}",
             conflicts
                 .iter()
-                .map(|s| format!("- device {}, channel {}", s.device_uid().0, s.channels()[0]))
+                .map(|s| format!("- device {}, channel {}", s.device_uid().0, s.ports()[0]))
                 .collect::<Vec<String>>()
                 .join("\n")
         );
@@ -125,7 +125,7 @@ pub(super) fn check_ppc_sweeper<'a>(
             section triggers:\n {}",
             conflicts
                 .into_iter()
-                .map(|s| format!("- device {}, channel {}", s.device_uid().0, s.channels()[0]))
+                .map(|s| format!("- device {}, channel {}", s.device_uid().0, s.ports()[0]))
                 .collect::<Vec<String>>()
                 .join("\n")
         );

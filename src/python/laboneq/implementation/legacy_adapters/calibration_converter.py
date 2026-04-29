@@ -8,8 +8,7 @@ from typing import Any, Callable, Optional
 
 import attrs
 
-from laboneq.core.types import enums as legacy_enums
-from laboneq.core.types.enums.modulation_type import ModulationType
+from laboneq.core.types.enums import ModulationType
 from laboneq.data import calibration
 from laboneq.dsl import calibration as legacy_calibration
 from laboneq.dsl import parameter as legacy_parameter
@@ -51,20 +50,6 @@ def convert_maybe_parameter(obj: Any) -> Any:
     raise_not_implemented(obj)
 
 
-def convert_modulation_type(
-    obj: legacy_enums.ModulationType | None,
-) -> calibration.ModulationType | None:
-    if obj is None:
-        return None
-    if obj == legacy_enums.ModulationType.AUTO:
-        return calibration.ModulationType.AUTO
-    if obj == legacy_enums.ModulationType.HARDWARE:
-        return calibration.ModulationType.HARDWARE
-    if obj == legacy_enums.ModulationType.SOFTWARE:
-        return calibration.ModulationType.SOFTWARE
-    raise_not_implemented(obj)
-
-
 def convert_oscillator(
     obj: legacy_calibration.Oscillator | None,
 ) -> Optional[calibration.Oscillator]:
@@ -73,7 +58,7 @@ def convert_oscillator(
     return calibration.Oscillator(
         uid=obj.uid,
         frequency=convert_maybe_parameter(obj.frequency),
-        modulation_type=convert_modulation_type(obj.modulation_type),
+        modulation_type=obj.modulation_type,
     )
 
 
@@ -155,18 +140,6 @@ def convert_amplifier_pump(
     )
 
 
-def convert_port_mode(
-    obj: legacy_enums.PortMode | None,
-) -> Optional[calibration.PortMode]:
-    if obj is None:
-        return None
-    if obj == legacy_enums.PortMode.LF:
-        return calibration.PortMode.LF
-    if obj == legacy_enums.PortMode.RF:
-        return calibration.PortMode.RF
-    raise_not_implemented(obj)
-
-
 def format_ls_pc_uid(seq: str) -> str:
     return LogicalSignalPhysicalChannelUID(seq).uid
 
@@ -203,7 +176,7 @@ def convert_calibration(
             new.precompensation = convert_precompensation(legacy_ls.precompensation)
             new.port_delay = convert_maybe_parameter(legacy_ls.port_delay)
             new.delay_signal = getattr(legacy_ls, "delay_signal", None)
-            new.port_mode = convert_port_mode(legacy_ls.port_mode)
+            new.port_mode = legacy_ls.port_mode
             new.voltage_offset = convert_maybe_parameter(legacy_ls.voltage_offset)
             new.range = legacy_ls.range
             new.threshold = getattr(legacy_ls, "threshold", None)

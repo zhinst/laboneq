@@ -11,6 +11,8 @@ use pyo3::types::{IntoPyDict, PyModule};
 
 use laboneq_common::compiler_settings::CompilerSettings;
 
+use crate::error::LabOneQException;
+
 /// Check whether `obj` is an exact instance of the Python type `ty`.
 ///
 /// Unlike `isinstance`, this does **not** match subclasses — it compares
@@ -83,5 +85,5 @@ pub(crate) fn compiler_settings_from_py_dict(ob: &Bound<PyDict>) -> PyResult<Com
         .collect();
 
     CompilerSettings::from_key_value_pairs(pairs?)
-        .map_err(|err| PyValueError::new_err(err.to_string()))
+        .map_err(|err| LabOneQException::new_err(err.to_string()))
 }

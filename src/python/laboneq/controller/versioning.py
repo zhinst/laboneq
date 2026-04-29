@@ -46,10 +46,8 @@ class LabOneVersion:
         )
 
 
-RECOMMENDED_MINIMUM_LABONE_VERSION = LabOneVersion(year=26, month=1, patch=0, build=357)
+RECOMMENDED_MINIMUM_LABONE_VERSION = LabOneVersion(year=26, month=4, patch=0, build=935)
 """This variable holds the L1 version where the latest stable release of LabOne Q was fully tested against."""
-
-MIN_LABONE_VERSION_SHF_BUSY = LabOneVersion(year=25, month=4, patch=0, build=0)
 
 
 @dataclass
@@ -61,9 +59,3 @@ class SetupCaps:
         return SetupCaps(
             client_version=self.client_version, server_version=server_version
         )
-
-    @property
-    def supports_shf_busy(self) -> bool:
-        if self.server_version is None:
-            return False
-        return self.server_version >= MIN_LABONE_VERSION_SHF_BUSY

@@ -49,6 +49,13 @@ impl From<PyErr> for Error {
     }
 }
 
+impl From<laboneq_error::LabOneQError> for Error {
+    // TODO: Actually use `LabOneQError` in the compiler instead of anyhow::Error
+    fn from(error: laboneq_error::LabOneQError) -> Self {
+        anyhow::anyhow!(error).into()
+    }
+}
+
 /// Create a formatted error message.
 pub fn create_error_message<T: Into<Error>>(error: T) -> String {
     let Error::Anyhow(e) = error.into();

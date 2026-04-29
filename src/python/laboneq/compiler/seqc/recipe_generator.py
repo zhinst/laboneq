@@ -4,31 +4,23 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
 
 from zhinst.core import __version__ as zhinst_version
 
 from laboneq._version import get_version
-from laboneq.compiler.common.device_type import DeviceType
 from laboneq.compiler.common.integration_times import IntegrationTimes
-from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC, NeartimeStep
 from laboneq.compiler.seqc.types import SignalDelays
 from laboneq.compiler.workflow.precompensation_helpers import (
     verify_precompensation_parameters,
 )
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import AcquisitionType
-from laboneq.core.types.enums.acquisition_type import is_spectroscopy
 from laboneq.core.types.enums.awg_signal_type import AWGSignalType
-from laboneq.data.awg_info import AWGInfo, AwgKey
-from laboneq.data.calibration import CancellationSource, PortMode
+from laboneq.data.awg_info import AwgKey
+from laboneq.data.calibration import CancellationSource
 from laboneq.data.compilation_job import (
-    DeviceInfo,
-    DeviceInfoType,
     ParameterInfo,
-    SignalInfo,
-    SignalInfoType,
 )
 from laboneq.data.recipe import (
     AWG,
@@ -47,7 +39,6 @@ from laboneq.data.recipe import (
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
     from laboneq._rust.codegenerator import ChannelProperties, FeedbackRegisterConfig
-    from laboneq.data.compilation_job import OutputRoute as CompilerOutputRoute
 
 
 _logger = logging.getLogger(__name__)
@@ -108,15 +99,7 @@ class RecipeGenerator:
             ]
         )
 
-    def add_devices_from_experiment(self, experiment_dao: ExperimentDAO):
-        for device in experiment_dao.device_infos():
-            self._recipe.initializations.append(
-                Initialization(
-                    device_uid=device.uid, device_type=device.device_type.name
-                )
-            )
-
-    def _find_initialization(self, device_uid) -> Initialization:
+    def find_initialization(self, device_uid) -> Initialization:
         for initialization in self._recipe.initializations:
             if initialization.device_uid == device_uid:
                 return initialization
@@ -124,81 +107,11 @@ class RecipeGenerator:
             f"Internal error: missing initialization for device {device_uid}"
         )
 
-    def add_connectivity_from_experiment(
-        self,
-        experiment_dao: ExperimentDAO,
-    ):
-        # ppc device uid -> acquire signal ids
-        ppc_signals: dict[str, list[str]] = {}
-        for signal_id in experiment_dao.signals():
-            amplifier_pump = experiment_dao.signal_info(signal_id).amplifier_pump
-            if amplifier_pump is None:
-                continue
-            device_id = amplifier_pump.ppc_device.uid
-
-            for other_signal in ppc_signals.get(device_id, []):
-                other_amplifier_pump = experiment_dao.amplifier_pump(other_signal)
-                if amplifier_pump.channel == other_amplifier_pump.channel:
-                    assert other_amplifier_pump == amplifier_pump, (
-                        f"Mismatched amplifier_pump configuration between signals"
-                        f" {other_signal} and {signal_id}, which are connected to the same"
-                        f" PPC channel"
-                    )
-            ppc_signals.setdefault(device_id, []).append(signal_id)
-
-        for device in experiment_dao.device_infos():
-            device_uid = device.uid
-            initialization = self._find_initialization(device_uid)
-            initialization.config.lead_delay = self._experiment_rs.device_lead_delay(
-                device.physical_device_uid
-            )
-            initialization.config.sampling_rate = self._sampling_rates_by_device.get(
-                device_uid
-            )
-
-            if device.device_type.value == "shfppc":
-                ppchannels: dict[int, dict[str, Any]] = {}  # keyed by ppc channel idx
-                for signal in ppc_signals.get(device_uid, []):
-                    amplifier_pump = experiment_dao.amplifier_pump(signal)
-                    if amplifier_pump is None:
-                        continue
-                    amplifier_pump_dict: dict[
-                        str, str | float | bool | int | CancellationSource | None
-                    ] = {
-                        "pump_on": amplifier_pump.pump_on,
-                        "cancellation_on": amplifier_pump.cancellation_on,
-                        "cancellation_source": amplifier_pump.cancellation_source,
-                        "cancellation_source_frequency": amplifier_pump.cancellation_source_frequency,
-                        "alc_on": amplifier_pump.alc_on,
-                        "pump_filter_on": amplifier_pump.pump_filter_on,
-                        "probe_on": amplifier_pump.probe_on,
-                        "channel": amplifier_pump.channel,
-                    }
-                    for field in [
-                        "pump_frequency",
-                        "pump_power",
-                        "probe_frequency",
-                        "probe_power",
-                        "cancellation_phase",
-                        "cancellation_attenuation",
-                    ]:
-                        val = getattr(amplifier_pump, field)
-                        if val is None:
-                            continue
-                        if isinstance(val, ParameterInfo):
-                            amplifier_pump_dict[field] = val.uid
-                        else:
-                            amplifier_pump_dict[field] = val
-
-                    ppchannels.setdefault(amplifier_pump.channel, {}).update(
-                        amplifier_pump_dict
-                    )
-                initialization.ppchannels = list(ppchannels.values())
-
     def add_output(
         self,
         device_id,
         channel,
+        output_routers: list[RoutedOutput],
         offset: float | ParameterInfo = 0.0,
         gains: Gains | None = None,
         precompensation=None,
@@ -211,28 +124,8 @@ class RecipeGenerator:
         scheduler_port_delay=0.0,
         marker_mode=None,
         amplitude: float | str | None = None,
-        output_routers: list[CompilerOutputRoute] | None = None,
         enable_output_mute: bool = False,
     ):
-        if output_routers is None:
-            output_routers = []
-        recipe_output_routers = [
-            RoutedOutput(
-                from_channel=route.from_channel,
-                amplitude=(
-                    route.amplitude
-                    if not isinstance(route.amplitude, ParameterInfo)
-                    else route.amplitude.uid
-                ),
-                phase=(
-                    route.phase
-                    if not isinstance(route.phase, ParameterInfo)
-                    else route.phase.uid
-                ),
-            )
-            for route in output_routers
-        ]
-
         def precompensation_to_recipe_dict(precompensation) -> dict:
             out = {
                 "exponential": None,
@@ -258,13 +151,6 @@ class RecipeGenerator:
                 out["FIR"] = {"coefficients": precompensation.fir.coefficients}
             return out
 
-        if isinstance(lo_frequency, ParameterInfo):
-            lo_frequency = lo_frequency.uid
-        if isinstance(port_delay, ParameterInfo):
-            port_delay = port_delay.uid
-        if isinstance(offset, ParameterInfo):
-            offset = offset.uid
-
         output = IO(
             channel=channel,
             enable=True,
@@ -281,12 +167,12 @@ class RecipeGenerator:
             scheduler_port_delay=scheduler_port_delay,
             marker_mode=marker_mode,
             amplitude=amplitude,
-            routed_outputs=recipe_output_routers,
+            routed_outputs=output_routers,
             enable_output_mute=enable_output_mute,
             gains=gains,
         )
 
-        initialization = self._find_initialization(device_id)
+        initialization = self.find_initialization(device_id)
         initialization.outputs.append(output)
 
     def add_input(
@@ -300,10 +186,6 @@ class RecipeGenerator:
         scheduler_port_delay=0.0,
         port_mode=None,
     ):
-        if isinstance(lo_frequency, ParameterInfo):
-            lo_frequency = lo_frequency.uid
-        if isinstance(port_delay, ParameterInfo):
-            port_delay = port_delay.uid
         input = IO(
             channel=channel,
             enable=True,
@@ -315,35 +197,8 @@ class RecipeGenerator:
             port_mode=port_mode,
         )
 
-        initialization = self._find_initialization(device_id)
+        initialization = self.find_initialization(device_id)
         initialization.inputs.append(input)
-
-    def validate_and_postprocess_ios(self, device: DeviceInfo):
-        init = self._find_initialization(device.uid)
-        if device.device_type == DeviceInfoType.SHFQA:
-            for input in init.inputs or []:
-                output = next(
-                    (
-                        output
-                        for output in init.outputs or []
-                        if output.channel == input.channel
-                    ),
-                    None,
-                )
-                if output is None:
-                    continue
-                if input.port_mode is None and output.port_mode is not None:
-                    input.port_mode = output.port_mode
-                elif input.port_mode is not None and output.port_mode is None:
-                    output.port_mode = input.port_mode
-                elif input.port_mode is None and output.port_mode is None:
-                    input.port_mode = output.port_mode = PortMode.RF.value
-                if input.port_mode != output.port_mode:
-                    raise LabOneQException(
-                        f"Mismatch between input and output port mode on device"
-                        f" '{device.uid}', channel {input.channel}"
-                    )
-        # todo: Validation of synthesizer frequencies, etc could go here
 
     def add_awg(
         self,
@@ -351,8 +206,7 @@ class RecipeGenerator:
         awg_number: int,
         signal_type: AWGSignalType,
         feedback_register_config: FeedbackRegisterConfig | None,
-        signals: dict[str, dict[str, str]],
-        shfppc_sweep_configuration: dict[str, object] | None,
+        signals: set[str],
     ):
         awg = AWG(
             awg=awg_number,
@@ -379,20 +233,8 @@ class RecipeGenerator:
                 else "local"
             )
 
-        initialization = self._find_initialization(device_id)
+        initialization = self.find_initialization(device_id)
         initialization.awgs.append(awg)
-
-        if shfppc_sweep_configuration is not None:
-            ppc_device = shfppc_sweep_configuration.ppc_device
-            ppc_channel_idx = shfppc_sweep_configuration.ppc_channel
-            ppc_initialization = self._find_initialization(ppc_device)
-            for ppc_channel in ppc_initialization.ppchannels:
-                if ppc_channel["channel"] == ppc_channel_idx:
-                    # Attach the sweep configuration to the correct PPC channel
-                    ppc_channel["sweep_config"] = shfppc_sweep_configuration.json
-                    break
-            else:
-                raise AssertionError("channel not found")
 
     def add_neartime_execution_step(self, nt_step: NeartimeStep):
         self._recipe.realtime_execution_init.append(
@@ -405,14 +247,6 @@ class RecipeGenerator:
                 nt_step=nt_step.key,
             )
         )
-
-    def from_experiment(
-        self,
-        experiment_dao: ExperimentDAO,
-    ):
-        self.add_devices_from_experiment(experiment_dao)
-        self.add_connectivity_from_experiment(experiment_dao)
-        self._recipe.is_spectroscopy = is_spectroscopy(experiment_dao.acquisition_type)
 
     def add_total_execution_time(self, total_execution_time):
         self._recipe.total_execution_time = total_execution_time
@@ -430,7 +264,6 @@ class RecipeGenerator:
 
 
 def calc_outputs(
-    experiment_dao: ExperimentDAO,
     combined_compiler_output: CombinedRTOutputSeqC,
     experiment_rs: compiler_rs.ExperimentInfo,
 ):
@@ -447,16 +280,11 @@ def calc_outputs(
 
         signal_id = channel_properties.signal
         channel = channel_properties.channel
-        signal_info: SignalInfo = experiment_dao.signal_info(signal_id)
         oscillator_is_hardware = (
             experiment_rs.signal_hw_oscillator(signal_id) is not None
         )
 
-        voltage_offset = experiment_dao.voltage_offset(signal_id)
-        lo_frequency = experiment_dao.lo_frequency(signal_id)
-        port_mode = experiment_dao.port_mode(signal_id)
-        signal_range = experiment_dao.signal_range(signal_id)
-        port_delay = experiment_dao.port_delay(signal_id)
+        signal_range = channel_properties.range
 
         scheduler_port_delay: float = 0.0
         signal_delays = combined_compiler_output.signal_delays
@@ -475,16 +303,19 @@ def calc_outputs(
         output = {
             "device_id": awg_key.device_id,
             "channel": channel,
-            "lo_frequency": lo_frequency,
-            "port_mode": port_mode.value if port_mode is not None else None,
+            "lo_frequency": channel_properties.lo_frequency,
+            "port_mode": channel_properties.port_mode,
             "range": signal_range.value if signal_range is not None else None,
             "range_unit": (signal_range.unit if signal_range is not None else None),
-            "port_delay": port_delay,
+            "port_delay": channel_properties.port_delay,
             "scheduler_port_delay": scheduler_port_delay,
             "output_routers": [
-                router
-                for router in signal_info.output_routing
-                if router.to_channel == channel
+                RoutedOutput(
+                    from_channel=router.source_channel,
+                    amplitude=router.amplitude_scaling,
+                    phase=router.phase_shift,
+                )
+                for router in channel_properties.routed_outputs
             ],
             "enable_output_mute": experiment_rs.signal_automute(signal_id),
             "precompensation": precompensation,
@@ -500,9 +331,6 @@ def calc_outputs(
             else None,
         }
 
-        if signal_info.type == SignalInfoType.RF and voltage_offset is not None:
-            output["offset"] = voltage_offset
-
         channel_key = (awg_key.device_id, channel)
         # TODO(2K): check for conflicts if 'channel_key' already present in 'all_channels'
         all_channels[channel_key] = output
@@ -514,12 +342,10 @@ def calc_outputs(
 
 
 def calc_inputs(
-    experiment_dao: ExperimentDAO,
     signal_delays: SignalDelays,
     combined_compiler_output: CombinedRTOutputSeqC,
 ):
     all_channels = {}
-    ports_delays_raw_shfqa = set()
     channels_flat = (
         (device_uid, ch_props)
         for device_uid, ch_props_list in combined_compiler_output.channel_properties.items()
@@ -529,30 +355,7 @@ def calc_inputs(
         if channel_properties.direction != "IN":
             continue
         signal_id = channel_properties.signal
-        signal_info: SignalInfo = experiment_dao.signal_info(signal_id)
-
-        port_delay = experiment_dao.port_delay(signal_id)
-        # SHFQA scope delay cannot be set for individual channels
-        if (
-            experiment_dao.acquisition_type == AcquisitionType.RAW
-            and port_delay is not None
-        ):
-            device_type = DeviceType.from_device_info_type(
-                signal_info.device.device_type
-            )
-            if device_type == device_type.SHFQA:
-                ports_delays_raw_shfqa.add(
-                    port_delay.uid
-                    if isinstance(port_delay, ParameterInfo)
-                    else port_delay
-                )
-            if len(ports_delays_raw_shfqa) > 1:
-                msg = f"{signal_info.device.uid}: Multiple different `port_delay`s defined for SHFQA acquisition signals in `AcquisitionType.RAW` mode. Only 1 supported."
-                raise LabOneQException(msg)
-
-        lo_frequency = experiment_dao.lo_frequency(signal_id)
-        signal_range = experiment_dao.signal_range(signal_id)
-        port_mode = experiment_dao.port_mode(signal_id)
+        signal_range = channel_properties.range
 
         scheduler_port_delay: float = 0.0
         if signal_id in signal_delays:
@@ -560,12 +363,12 @@ def calc_inputs(
         input = {
             "device_id": awg_key.device_id,
             "channel": channel_properties.channel,
-            "lo_frequency": lo_frequency,
+            "lo_frequency": channel_properties.lo_frequency,
             "range": signal_range.value if signal_range is not None else None,
             "range_unit": (signal_range.unit if signal_range is not None else None),
-            "port_delay": port_delay,
+            "port_delay": channel_properties.port_delay,
             "scheduler_port_delay": scheduler_port_delay,
-            "port_mode": port_mode.value if port_mode is not None else None,
+            "port_mode": channel_properties.port_mode,
         }
         channel_key = (awg_key.device_id, channel_properties.channel)
         # TODO(2K): check for conflicts if 'channel_key' already present in 'all_channels'
@@ -578,22 +381,46 @@ def calc_inputs(
 
 
 def generate_recipe(
-    awgs: list[AWGInfo],
-    experiment_dao: ExperimentDAO,
     experiment_rs: compiler_rs.ExperimentInfo,
     combined_compiler_output: CombinedRTOutputSeqC,
 ) -> Recipe:
     recipe_generator = RecipeGenerator(experiment_rs)
-    recipe_generator.from_experiment(experiment_dao)
+
+    for device in combined_compiler_output.device_properties:
+        init = Initialization(device_uid=device.uid, device_type=device.device_type)
+        init.config.sampling_rate = device.sampling_rate
+        init.config.lead_delay = experiment_rs.device_lead_delay(device.uid)
+        recipe_generator.recipe().initializations.append(init)
+
+    for ppc_settings in combined_compiler_output.ppc_settings:
+        init = recipe_generator.find_initialization(ppc_settings.device)
+        settings = {
+            "channel": ppc_settings.channel,
+            "pump_on": ppc_settings.pump_on,
+            "cancellation_on": ppc_settings.cancellation_on,
+            "cancellation_source": CancellationSource[ppc_settings.cancellation_source],
+            "cancellation_source_frequency": ppc_settings.cancellation_source_frequency,
+            "alc_on": ppc_settings.alc_on,
+            "pump_filter_on": ppc_settings.pump_filter_on,
+            "probe_on": ppc_settings.probe_on,
+            "pump_frequency": ppc_settings.pump_frequency,
+            "pump_power": ppc_settings.pump_power,
+            "probe_frequency": ppc_settings.probe_frequency,
+            "probe_power": ppc_settings.probe_power,
+            "cancellation_phase": ppc_settings.cancellation_phase,
+            "cancellation_attenuation": ppc_settings.cancellation_attenuation,
+            "sweep_config": ppc_settings.sweep_config,
+        }
+        init.ppchannels.append(settings)
 
     recipe_generator.add_oscillator_params(combined_compiler_output.channel_properties)
 
-    for output in calc_outputs(experiment_dao, combined_compiler_output, experiment_rs):
+    for output in calc_outputs(combined_compiler_output, experiment_rs):
         _logger.debug("Adding output %s", output)
         recipe_generator.add_output(
-            output["device_id"],
-            output["channel"],
-            output["offset"],
+            device_id=output["device_id"],
+            channel=output["channel"],
+            offset=output["offset"],
             gains=output["gains"],
             precompensation=output.get("precompensation"),
             modulation=output["modulation"],
@@ -610,14 +437,13 @@ def generate_recipe(
         )
 
     for input in calc_inputs(
-        experiment_dao,
         combined_compiler_output.signal_delays,
         combined_compiler_output,
     ):
         _logger.debug("Adding input %s", input)
         recipe_generator.add_input(
-            input["device_id"],
-            input["channel"],
+            device_id=input["device_id"],
+            channel=input["channel"],
             lo_frequency=input["lo_frequency"],
             input_range=input["range"],
             input_range_unit=input["range_unit"],
@@ -628,26 +454,17 @@ def generate_recipe(
 
     for step in combined_compiler_output.neartime_steps:
         recipe_generator.add_neartime_execution_step(step)
-    for device in experiment_dao.device_infos():
-        recipe_generator.validate_and_postprocess_ios(device)
 
-    for awg in awgs:
-        properties = combined_compiler_output.awg_properties[awg.key]
-        device_id = awg.key.device_id
+    for awg_key, awg_properties in combined_compiler_output.awg_properties.items():
+        channels = combined_compiler_output.channel_properties[awg_key]
         recipe_generator.add_awg(
-            device_id=device_id,
-            awg_number=cast(int, awg.awg_id),
-            signal_type=AWGSignalType(properties.signal_type.lower()),
+            device_id=awg_key.device_id,
+            awg_number=awg_key.awg_id,
+            signal_type=AWGSignalType(awg_properties.signal_type.lower()),
             feedback_register_config=combined_compiler_output.feedback_register_configurations.get(
-                awg.key
+                awg_key
             ),
-            signals={
-                s.id: {str(c): p for c, p in s.channel_to_port.items()}
-                for s in awg.signals
-            },
-            shfppc_sweep_configuration=combined_compiler_output.shfppc_sweep_configurations.get(
-                awg.key
-            ),
+            signals={c.signal for c in channels},
         )
 
     for (

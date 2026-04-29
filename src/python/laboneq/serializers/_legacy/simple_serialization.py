@@ -59,7 +59,7 @@ class NumpyArrayRepr:
         if binary_npz is not None:
             # For backwards compatibility only, we no longer emit npz blobs
             input_buffer = BytesIO(base64.b64decode(binary_npz.encode("ascii")))
-            loaded_npz = np.load(input_buffer)
+            loaded_npz = np.load(input_buffer, allow_pickle=False)
             return loaded_npz[loaded_npz.files[0]]
         if binary_npy is not None:
             input_buffer = base64.b64decode(binary_npy.encode("ascii"))

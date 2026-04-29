@@ -2,4 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .acquired_result import AcquiredResult, AcquiredResults
-from .results import Results
+from .results import Results, combine_results
+
+__all__ = ["AcquiredResult", "AcquiredResults", "Results", "combine_results"]

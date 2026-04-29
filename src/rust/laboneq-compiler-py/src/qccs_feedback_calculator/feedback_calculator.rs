@@ -4,11 +4,10 @@
 use std::collections::HashMap;
 
 use laboneq_dsl::types::{SignalUid, ValueOrParameter};
-use laboneq_ir::signal::SignalKind;
 use laboneq_ir::system::AwgDevice;
 use pyo3::Python;
 
-use laboneq_common::types::{AwgKey, DeviceKind};
+use laboneq_common::types::{AwgKey, DeviceKind, SignalKind};
 use laboneq_scheduler::FeedbackCalculator;
 use laboneq_units::duration::{Duration, Second, seconds};
 
@@ -285,27 +284,29 @@ where
         let mut generator_port_delay = seconds(0.0);
         if let Some(generator_signal) = self.generator_signals.get(&acquisition_signal.uid()) {
             generator_signal_delay = generator_signal.signal_delay();
-            generator_port_delay = if let ValueOrParameter::Value(value) =
-                generator_signal.port_delay()
-            {
-                *value
-            } else {
-                return Err(Error::new(
-                    "Feedback measure line requires a constant 'port_delay', but it is a sweep parameter.",
-                ));
-            };
+            if let Some(port_delay) = generator_signal.port_delay() {
+                if let ValueOrParameter::Value(value) = port_delay {
+                    generator_port_delay = *value;
+                } else {
+                    return Err(Error::new(
+                        "Feedback measure line requires a constant 'port_delay', but it is a sweep parameter.",
+                    ));
+                }
+            }
         }
 
         let acquisition_start_delay = acquisition_signal.start_delay();
         let acquisition_signal_delay = acquisition_signal.signal_delay();
-        let acquisition_port_delay = if let ValueOrParameter::Value(value) =
-            acquisition_signal.port_delay()
-        {
-            *value
+        let acquisition_port_delay = if let Some(port_delay) = acquisition_signal.port_delay() {
+            if let ValueOrParameter::Value(value) = port_delay {
+                *value
+            } else {
+                return Err(Error::new(
+                    "Feedback acquisition line requires a constant 'port_delay', but it is a sweep parameter.",
+                ));
+            }
         } else {
-            return Err(Error::new(
-                "Feedback acquisition line requires a constant 'port_delay', but it is a sweep parameter.",
-            ));
+            seconds(0.0)
         };
 
         let integration_dsp_latency = acquisition_signal
@@ -405,8 +406,8 @@ impl FeedbackCalculator for QccsFeedbackCalculator<'_, QCCSFeedbackModel<'_>> {
 mod tests {
     use super::*;
     use approx::abs_diff_eq;
-    use laboneq_common::{named_id::NamedId, types::PhysicalDeviceUid};
-    use laboneq_ir::signal::{Signal, SignalKind, builder::SignalBuilder};
+    use laboneq_common::{named_id::NamedId, types::PhysicalDeviceUid, types::SignalKind};
+    use laboneq_ir::signal::{Signal, builder::SignalBuilder};
     use laboneq_ir::system::AwgDevice;
 
     struct MockFeedbackModel {}

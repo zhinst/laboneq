@@ -118,7 +118,7 @@ class IOModel:
 class AWGModel:
     awg: int | str
     signal_type: AWGSignalTypeModel
-    signals: dict[str, dict[str, str]]
+    signals: set[str]
     source_feedback_register: int | Literal["local"] | None
     codeword_bitshift: int | None
     codeword_bitmask: int | None
@@ -246,7 +246,6 @@ class RecipeModel:
     acquire_lengths: list[AcquireLengthModel]
     total_execution_time: float
     max_step_execution_time: float
-    is_spectroscopy: bool
     versions: SoftwareVersionsModel
     _target_class: ClassVar[Type] = Recipe
 

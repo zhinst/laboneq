@@ -28,3 +28,5 @@ laboneq-units = { workspace = true }
 
 laboneq-tracing = { path = "../laboneq-tracing" }
 laboneq-opentelemetry-python = { path = "../laboneq-opentelemetry-python" }
+laboneq-compiler-py = { workspace = true }
+laboneq-qccs-backend = { workspace = true }

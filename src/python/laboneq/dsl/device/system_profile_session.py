@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, TypeVar
 
 from laboneq.dsl.device import SystemProfile
-from laboneq.dsl.device.instruments import ZQCS
 from laboneq.dsl.device.system_profile_builder import build_profile
 
 if TYPE_CHECKING:
@@ -59,31 +58,31 @@ def update_system_profile(
 ) -> SystemProfile | None:
     """Query hardware and update cached system profile.
 
+    Extracts hardware data from the controller (via
+    :mod:`laboneq.controller.profile_data`) and delegates to the
+    appropriate builder.
+
     Args:
-        controller: Connected controller with devices
-        device_setup: Device setup to use for profile generation
+        device_setup: Device setup to use for profile generation.
+        controller: Connected controller with devices.
 
     Returns:
-        Generated system profile or None on failure
+        Generated system profile or None on failure.
     """
+    from laboneq.controller.profile_data import extract_profile_data
     from laboneq.core import system_profile_cache
 
     if not device_setup.instruments:
         # Happens during some tests
         return None
 
-    if len(device_setup.instruments) == 1 and isinstance(
-        device_setup.instruments[0], ZQCS
-    ):
-        system_type = "ZQCS"
-    else:
-        system_type = "QCCS"
+    system_type, hw_data = extract_profile_data(device_setup, controller)
 
     try:
         profile = build_profile(
             system_type=system_type,
             device_setup=device_setup,
-            controller=controller,
+            **hw_data,
         )
 
         cache_path = system_profile_cache.save(profile)

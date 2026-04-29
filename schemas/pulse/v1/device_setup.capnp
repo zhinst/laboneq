@@ -61,7 +61,6 @@ struct DeviceSignal {
   #   Gen1/Gen2: device port path (e.g. "SIGOUTS/0", "QACHANNELS/1")
   #   ZQCS: geolocation (e.g. "1:3:1:2" for shelf:slot:frontend:port)
   # Single-channel signals carry one entry; IQ signals carry two.
-  # Transitional fallback: "<channel_index>" accepted as a compatibility marker.
 
   calibration @2 :Calibration.SignalCalibration;
   # Calibration of the signal.
@@ -72,7 +71,4 @@ struct DeviceSignal {
   channelType @4 :Text;
   # Optional signal type hint for validation (e.g. "IQ", "INTEGRATION", "RF").
   # The compiler infers the actual type from device metadata; this is a hint only.
-
-  awgCore @5 :UInt64;
-  # TODO: Temporary migration field, shall be removed
 }

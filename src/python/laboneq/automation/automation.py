@@ -1,6 +1,7 @@
 # Copyright 2026 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
 import warnings
 from pathlib import Path
 from typing import Any, ClassVar, Iterator, Literal, final
@@ -38,10 +39,9 @@ class Automation:
 
     Attributes:
         name: The automation name. This name is used for organizing the folder store.
-        automation_parameters: The dictionary of automation parameters.
-            The primary key is the layer key. The secondary key is the parameter type.
-            If no automation parameters are specified, then the parameters
-            need to be passed to the layers.
+        parameters: A computed property returning the parameters of each
+            added layer, keyed by layer key. To supply initial parameters, pass them
+            via the constructor or `load_parameters`.
         timestamp: The automation timestamp. This timestamp is set when an automation
             instance is initialized and updated when an automation instance is run
             completely, using `self.run()`. This timestamp is used for organizing the
@@ -52,8 +52,17 @@ class Automation:
     ROOT_LAYER: ClassVar[RootLayer] = RootLayer()
 
     name: str
-    automation_parameters: dict[str, dict[str, Any]] = attrs.field(factory=dict)
-    timestamp: str = local_timestamp()
+    _parameters: dict[str, dict[str, Any]] = attrs.field(
+        factory=dict,
+        alias="parameters",
+        converter=copy.deepcopy,
+    )
+    timestamp: str = attrs.field(factory=local_timestamp, init=False)
+
+    @property
+    def parameters(self) -> dict[str, dict[str, Any]]:
+        """The automation parameters, derived from each layer's parameters."""
+        return {layer.key: layer.parameters for layer in self.layers()}
 
     _node_graph: nx.DiGraph = attrs.field(factory=lambda: nx.DiGraph(), init=False)
     _node_lookup: dict[str, AutomationNode] = attrs.field(factory=dict, init=False)
@@ -211,21 +220,19 @@ class Automation:
             add_note(err, f"Layer {layer_key!r} is not in the automation framework.")
             raise err
 
-    def sync_auto_params_with_layer_params(self, layer_key: str):
-        """Synchronize the automation parameters with the layer parameters.
+    def construct_layer_params_using_auto_params(self, layer_key: str):
+        """Construct the layer parameters.
+
+        Nested update the `_parameters` dictionary (if any) with the layer
+        `parameters` dictionary (if any). Use this to construct the layer parameters.
 
         Arguments:
             layer_key: The layer key.
         """
         layer = self.get_layer(layer_key)
-
-        # Update auto params with layer params
-        if layer.parameters:
-            layer_parameters = {f"{layer.key}": layer.parameters}
-            nested_update(self.automation_parameters, layer_parameters)
-
-        # Set layer params to auto params
-        layer.parameters = self.automation_parameters[layer.key]
+        merged = copy.deepcopy((self._parameters or {}).get(layer.key, {}))
+        nested_update(merged, layer.parameters)
+        layer.parameters = merged
 
     @final
     def add_layer(self, layer: AutomationLayer):
@@ -264,10 +271,32 @@ class Automation:
                 )
 
         self._add_layer(layer)
-        self.sync_auto_params_with_layer_params(layer.key)
+        self.construct_layer_params_using_auto_params(layer.key)
 
     def _add_layer(self, layer: AutomationLayer):
         """Add a layer to the automation framework (internal).
+
+        When adding a layer, we need to (1) update the `_layer_lookup`/`_node_lookup`,
+        and (2) update the `_layer_graph`/`_node_graph`.
+
+        (1) This step is straightforward, since it is a simple dictionary update.
+
+        (2) Updating the layer graph is straightforward, since we simply add the new
+        layer node and edges to all of its dependencies.
+
+        Updating the node graph is more involved because layer dependencies have
+        overlapping node sets, which are not necessarily identical.
+
+        Consider the simple example of three layers dependent on each other in a chain.
+        Layer 1 has nodes [q0, q1], layer 2 has nodes [q1], and layer 3 has nodes
+        [q0, q1]. In the node graph, there will be an edge between the q0 node in
+        layer 1 and the q0 node in layer 3 because there is a transitive dependency.
+
+        For each layer dependency chain, we check all the nodes in each layer, starting
+        from the direct dependency and moving up the chain, until we find a matching
+        node key. In this case, we add an edge and move to the next layer dependency
+        chain. If no match is found in any layer dependency chain, then we add an edge
+        to the root node.
 
         !!! note
             This is an internal method that is only to be called via `add_layer`.
@@ -276,27 +305,31 @@ class Automation:
             layer: The layer to add.
         """
         subset = len(self._layer_lookup.keys())
-        # Add layer to lookup
+
+        ### Layers
+
+        # 1) Update `_layer_lookup`
         self._layer_lookup[layer.key] = layer
+
+        # 2) Update `_layer_graph`
+        self._layer_graph.add_node(layer.key, subset=subset)
         for previous_layer_key in layer.depends_on:
-            # Add layer edge
-            self._layer_graph.add_node(layer.key, subset=subset)
             self._layer_graph.add_edge(previous_layer_key, layer.key)
 
-        if layer.nodes is None:
-            raise TypeError(
-                f"Cannot add empty layer `{layer.key}` to automation as it has no nodes."
-            )
+        ### Nodes
 
-        for node_key, node in layer.nodes.items():
+        for node_key, node in layer.nodes.items():  # loop over nodes in the layer
+            # 1) Update `_node_lookup`
             self._node_lookup[node.id] = node
-            # Search each direct dependency chain independently so that nodes with
-            # multiple dependencies get an edge from each dep chain that contains them.
-            # Root is only used as a fallback if no dep chain finds the node at all.
-            any_ancestor_found = False
-            for dep_layer_key in layer.depends_on:
+
+            # 2) Update `_node_graph`
+            self._node_graph.add_node(node.id, subset=subset)
+
+            any_ancestor_found = False  # whether a node key match was found in any layer dependency chain
+            for dep_layer_key in layer.depends_on:  # loop over layer dependency chains
                 to_search = [dep_layer_key]
                 visited = set()
+                chain_found = False  # whether a node key match was found in the current layer dependency chain
                 while to_search:
                     curr_layer_key = to_search.pop(0)
                     if curr_layer_key in visited:
@@ -306,30 +339,26 @@ class Automation:
                     prev_layer = self.get_layer(curr_layer_key)
 
                     for prev_node in prev_layer.nodes.values():
-                        if prev_node.key == node_key or any(
-                            prev_node.key == n
-                            for n in node_key
-                            if isinstance(node_key, tuple)
+                        if (
+                            prev_node.key == node_key
+                            or (
+                                isinstance(node_key, tuple)
+                                and prev_node.key in node_key
+                            )
+                            or (
+                                isinstance(prev_node.key, tuple)
+                                and node_key in prev_node.key
+                            )
                         ):
-                            self._node_graph.add_node(node.id, subset=subset)
                             self._node_graph.add_edge(prev_node.id, node.id)
-                            any_ancestor_found = True
-                        elif any(
-                            node_key == n
-                            for n in prev_node.key
-                            if isinstance(prev_node.key, tuple)
-                        ):
-                            self._node_graph.add_node(node.id, subset=subset)
-                            self._node_graph.add_edge(prev_node.id, node.id)
-                            any_ancestor_found = True
+                            chain_found = True
                         elif prev_layer.nodes.get(self.ROOT_NODE.key) is not None:
-                            # Reached root without finding the node; stop this chain.
                             break
-                    if not any_ancestor_found:
+                    if not chain_found:
                         to_search.extend(prev_layer.depends_on)
+                if chain_found:
+                    any_ancestor_found = True
             if not any_ancestor_found:
-                # Node not found in any dep chain — connect directly to root.
-                self._node_graph.add_node(node.id, subset=subset)
                 self._node_graph.add_edge(self.ROOT_NODE.id, node.id)
 
     def get_layer(self, layer_key: str) -> AutomationLayer:
@@ -387,40 +416,123 @@ class Automation:
         isolated_layers = set(nx.descendants(self._layer_graph, layer_key)) | {
             layer_key
         }
-        for layer_key in isolated_layers:
-            layer = self.get_layer(layer_key)
+        for isolated_layer_key in isolated_layers:
+            layer = self.get_layer(isolated_layer_key)
             for node in layer.nodes.values():
                 isolated_nodes.add(node.id)
                 if node.id in self._node_lookup:
                     del self._node_lookup[node.id]
 
-            del self._layer_lookup[layer_key]
+            del self._layer_lookup[isolated_layer_key]
         self._layer_graph.remove_nodes_from(isolated_layers)
         self._node_graph.remove_nodes_from(isolated_nodes)
 
-    def deactivate_node(self, node_id: str, *, include_node: bool = True):
+    def deactivate_node(
+        self,
+        node_id: str,
+        *,
+        include_node: bool = True,
+        include_descendents: bool = True,
+    ):
         """Deactivate a node and its descendents.
 
         Arguments:
             node_id: The node ID.
             include_node: Whether to include the selected node.
+            include_descendents: Whether to include the selected node's descendents.
         """
-        node_set = nx.descendants(self._node_graph, node_id)
+        node_set = set()
         if include_node:
             node_set |= {node_id}
+        if include_descendents:
+            node_set |= nx.descendants(self._node_graph, node_id)
         for n_id in node_set:
             n = self.get_node(n_id)
             n.status = Status.DEACTIVATED
 
-    def run(self):
-        """Run the automation framework."""
+    def reactivate_node(
+        self,
+        node_id: str,
+        *,
+        include_node: bool = True,
+        include_descendents: bool = True,
+    ):
+        """Reactivate a node and its descendents.
+
+        Arguments:
+            node_id: The node ID.
+            include_node: Whether to include the selected node.
+            include_descendents: Whether to include the selected node's descendents.
+        """
+        node_set = set()
+        if include_node:
+            node_set |= {node_id}
+        if include_descendents:
+            node_set |= nx.descendants(self._node_graph, node_id)
+        for n_id in node_set:
+            n = self.get_node(n_id)
+            if n.status == Status.DEACTIVATED:
+                n.status = Status.READY
+
+    def deactivate_layer(
+        self,
+        layer_key: str,
+        *,
+        include_layer: bool = True,
+        include_descendents: bool = True,
+    ):
+        """Deactivate a layer and its descendents.
+
+        Arguments:
+            layer_key: The layer key.
+            include_layer: Whether to include the selected layer.
+            include_descendents: Whether to include the selected layer's descendents.
+        """
+        for node in self.nodes(layer_key):
+            self.deactivate_node(
+                node.id,
+                include_node=include_layer,
+                include_descendents=include_descendents,
+            )
+
+    def reactivate_layer(
+        self,
+        layer_key: str,
+        *,
+        include_layer: bool = True,
+        include_descendents: bool = True,
+    ):
+        """Reactivate a layer and its descendents.
+
+        Arguments:
+            layer_key: The layer key.
+            include_layer: Whether to include the selected layer.
+            include_descendents: Whether to include the selected layer's descendents.
+        """
+        for node in self.nodes(layer_key):
+            self.reactivate_node(
+                node.id,
+                include_node=include_layer,
+                include_descendents=include_descendents,
+            )
+
+    def run(self, *, from_layer: str | None = None):
+        """Run the automation framework.
+
+        Arguments:
+            from_layer: The layer to run the automation from.
+        """
         self.update_timestamp()
-        new_layer_key = next(self.layer_keys(include_root=False))
+        if from_layer is None:
+            new_layer_key = next(self.layer_keys(include_root=False))
+        else:
+            new_layer_key = from_layer
         while new_layer_key is not None:
-            # Break when encountering such a layer
+            # Skip when encountering a deactivated layer
             layer = self.get_layer(new_layer_key)
             if layer.status in Status.inactive():
-                break
+                new_layer_key = self.next_layer_key(new_layer_key)
+                continue
 
             try:
                 new_layer_key, _ = self.run_layer(new_layer_key)
@@ -436,18 +548,17 @@ class Automation:
         *,
         node_keys: list[str | tuple[str, ...]] | None = None,
         parameters: dict[str, dict[str, Any]] | None = None,
-        force: bool = False,
-        **kwargs,
     ) -> tuple[str | None, dict]:
         """Run the automation layer.
 
         Arguments:
             layer_key: The layer key.
             node_keys: The node keys (optional). By default, the whole layer is run.
-            parameters: The layer parameters (optional). By default, the parameters
-                from the layer are used.
-            force: Force layer run (optional). The layer is run regardless of
-                the status of the previous layer.
+            parameters: The layer parameters (optional). The existing layer parameters
+                dictionary (if any) will be *temporarily replaced* with this dictionary
+                for the duration of this method. If the temporary parameters result in
+                a successful run with parameter updates, then the actual layer
+                parameters will be updated.
 
         Returns:
             new_layer_key: The key of the next layer to be executed.
@@ -455,42 +566,25 @@ class Automation:
         """
         layer = self.get_layer(layer_key)
 
-        # Verify that the layer is runnable
-        if not layer.is_runnable(self, node_keys=node_keys) and not force:
-            return None, {}
-
-        # Set temporary node keys
-        original_node_keys = layer.node_keys
-        if node_keys is not None:
-            layer.node_keys = node_keys
-
-        # Set temporary parameters
-        original_parameters = layer.parameters
-        if parameters is not None:
-            layer.parameters = parameters
+        # Set override node keys and parameters
+        layer._node_keys_override = node_keys
+        layer._parameters_override = parameters
 
         # Run layer
-        new_layer_key, new_params = self._run_layer(layer_key)
-
-        # Update node status attributes
-        for node in layer.nodes.values():
-            node.timestamp = local_timestamp()
-            if node.status == Status.FAILED:
-                node.fail_count += 1
-            if node.status == Status.PASSED:
-                node.pass_count += 1
+        new_layer_key = self.next_layer_key(layer_key)
+        new_params = {}
+        layer.run_executable(self)
 
         # Deactivate after node on failure
-        for node in self.nodes(layer_key):
+        for node in layer.target_nodes.values():
             if node.status == Status.FAILED and (
                 not layer.logic or node.fail_count == node.max_fail_count
             ):
-                node.status = Status.DEACTIVATED_FAIL
                 self.deactivate_node(node.id, include_node=False)
 
         # Apply logic
         if layer.logic and (
-            layer.status in [Status.FAILED, Status.MIXED]
+            layer.status == Status.FAILED
             or (
                 layer.logic.iterations is not None
                 and (
@@ -502,35 +596,11 @@ class Automation:
             new_layer_key, new_params = layer.logic.run_executable(layer)
             nested_update(layer.parameters, new_params)
 
-        # Restore original node keys
-        layer.node_keys = original_node_keys
-
-        # Restore original parameters
-        layer.parameters = original_parameters
+        # Clear overrides
+        layer._node_keys_override = None
+        layer._parameters_override = None
 
         return new_layer_key, new_params
-
-    def _run_layer(self, layer_key: str) -> tuple[str | None, dict]:
-        """Run the automation layer.
-
-        !!! note
-            This is an internal method that is meant to be called via `run_layer`.
-
-        !!! important
-            When the end of the graph is reached, return the new layer key `None`.
-            The `next_layer_key` method does this automatically.
-
-        Arguments:
-            layer_key: The layer key.
-
-        Returns:
-            new_layer_key: The key of the next layer to be executed.
-            new_params: The dictionary of new automation parameters.
-        """
-        layer = self.get_layer(layer_key)
-        layer.run_executable(self)
-
-        return self.next_layer_key(layer_key), {}
 
     def run_from_node(self, node_id: str):
         """Run the automation framework from a specific node.
@@ -551,13 +621,17 @@ class Automation:
         """Reset the automation framework."""
         for layer in self.layers():
             layer.results = {}
+            # Reset node keys / parameters overrides in case of `self.run_layer` crash
+            layer._node_keys_override = None
+            layer._parameters_override = None
+            # Reset node keys selection in case of `AutomationLayer.run_executable` crash
+            layer._node_keys_select = None
 
         for node in self.nodes():
             if node.status in [
                 Status.PASSED,
                 Status.FAILED,
                 Status.DEACTIVATED,
-                Status.DEACTIVATED_FAIL,
                 Status.RUNNING,
             ]:
                 node.status = Status.READY
@@ -565,7 +639,7 @@ class Automation:
             node.pass_count = 0
             node.timestamp = None
 
-    def load_automation_parameters(self, auto_params: str | Path | dict | None):
+    def load_parameters(self, auto_params: str | Path | dict | None):
         """Load automation parameters.
 
         Arguments:
@@ -574,24 +648,28 @@ class Automation:
         """
         if isinstance(auto_params, str | Path):
             auto_params = load_automation_parameters_from_file(auto_params)
-        self.automation_parameters = auto_params
+        self._parameters = auto_params
+        for layer in self.layers():
+            layer.parameters = copy.deepcopy(
+                (self._parameters or {}).get(layer.key, {})
+            )
 
-    def save_automation_parameters(self, auto_params_file: str | Path | None = None):
+    def save_parameters(self, file: str | Path | None = None):
         """Save automation parameters.
 
         Arguments:
-            auto_params_file: The output file for the automation parameters. By default,
+            file: The output file for the automation parameters. By default,
                 the output file is saved in a folder-store-compatible directory tree
                 with the file name "{timestamp}-{auto_key}-params.yml".
         """
-        if auto_params_file is None:
+        if file is None:
             timestamp = local_timestamp()
             auto_folder = (
                 Path(f"{self.timestamp[:8]}") / f"{self.timestamp}-{self.name}"
             )
             auto_folder.mkdir(parents=True, exist_ok=True)
-            auto_params_file = auto_folder / f"{timestamp}-{self.name}-params.yml"
-        save_automation_parameters_to_file(self.automation_parameters, auto_params_file)
+            file = auto_folder / f"{timestamp}-{self.name}-params.yml"
+        save_automation_parameters_to_file(self.parameters, file)
 
     def plot(
         self,
@@ -622,21 +700,19 @@ class Automation:
         # Choose a color for each status
         status_color_map = {
             Status.ROOT: "blue",
-            Status.FAILED: "red",
             Status.READY: "orange",
-            Status.PASSED: "green",
             Status.RUNNING: "pink",
+            Status.PASSED: "green",
+            Status.FAILED: "red",
             Status.DEACTIVATED: "gray",
-            Status.DEACTIVATED_FAIL: "darkred",
         }
         lookup = self._node_lookup.copy()
         if graph_type == "layers":
-            status_color_map |= {Status.MIXED: "yellow"}
             lookup = self._layer_lookup.copy()
 
         # Generate a list of colors for each node, in node order
         node_colors = [
-            status_color_map[lookup[n].status if lookup[n] else Status.ROOT]
+            status_color_map[lookup[n].status if n in lookup else Status.ROOT]
             for n in node_list
         ]
 

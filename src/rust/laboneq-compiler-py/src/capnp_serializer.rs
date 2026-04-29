@@ -25,8 +25,8 @@ use crate::py_helpers::is_exact_type;
 use numeric_array::NumericArray;
 
 use laboneq_capnp::pulse::v1::{
-    common_capnp, device_setup_capnp, experiment_capnp, operation_capnp, pulse_capnp,
-    section_capnp, sweep_capnp,
+    calibration_capnp, common_capnp, device_setup_capnp, experiment_capnp, operation_capnp,
+    pulse_capnp, section_capnp, sweep_capnp,
 };
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -1589,13 +1589,9 @@ impl<'py> Serializer<'py> {
             )?;
             let modulation_type = if let Some(modulation) = &osc.modulation {
                 match modulation.extract::<&str>(py)? {
-                    "AUTO" => laboneq_capnp::pulse::v1::calibration_capnp::ModulationType::Auto,
-                    "HARDWARE" => {
-                        laboneq_capnp::pulse::v1::calibration_capnp::ModulationType::Hardware
-                    }
-                    "SOFTWARE" => {
-                        laboneq_capnp::pulse::v1::calibration_capnp::ModulationType::Software
-                    }
+                    "AUTO" => calibration_capnp::ModulationType::Auto,
+                    "HARDWARE" => calibration_capnp::ModulationType::Hardware,
+                    "SOFTWARE" => calibration_capnp::ModulationType::Software,
                     other => {
                         return Err(Error::new(format!(
                             "Invalid modulation type: {}. Expected 'AUTO', 'HARDWARE', or 'SOFTWARE'.",
@@ -1604,7 +1600,7 @@ impl<'py> Serializer<'py> {
                     }
                 }
             } else {
-                laboneq_capnp::pulse::v1::calibration_capnp::ModulationType::Auto
+                calibration_capnp::ModulationType::Auto
             };
             o.set_modulation_type(modulation_type);
         }
@@ -1667,7 +1663,6 @@ impl<'py> Serializer<'py> {
             signal_builder.set_uid(signal.uid.to_str(py)?);
             signal_builder.set_instrument_uid(signal.instrument_uid.to_str(py)?);
             signal_builder.set_channel_type(signal.channel_type.to_str(py)?);
-            signal_builder.set_awg_core(signal.awg_core);
 
             let ports: Vec<&str> = signal
                 .ports
@@ -1741,10 +1736,8 @@ impl<'py> Serializer<'py> {
 
         if let Some(port_mode) = &signal.port_mode {
             match port_mode.extract::<&str>(py)? {
-                "RF" => calibration_builder
-                    .set_port_mode(laboneq_capnp::pulse::v1::calibration_capnp::PortMode::Rf),
-                "LF" => calibration_builder
-                    .set_port_mode(laboneq_capnp::pulse::v1::calibration_capnp::PortMode::Lf),
+                "RF" => calibration_builder.set_port_mode(calibration_capnp::PortMode::Rf),
+                "LF" => calibration_builder.set_port_mode(calibration_capnp::PortMode::Lf),
                 other => {
                     return Err(Error::new(format!(
                         "Invalid port mode: {}. Expected 'RF' or 'LF'.",
@@ -1753,8 +1746,7 @@ impl<'py> Serializer<'py> {
                 }
             }
         } else {
-            calibration_builder
-                .set_port_mode(laboneq_capnp::pulse::v1::calibration_capnp::PortMode::Unspecified);
+            calibration_builder.set_port_mode(calibration_capnp::PortMode::Unspecified);
         }
 
         // Precompensation
@@ -1809,6 +1801,31 @@ impl<'py> Serializer<'py> {
             let mut pump_builder = calibration_builder.reborrow().init_amplifier_pump();
             pump_builder.set_device_uid(amplifier_pump.device.as_str());
             pump_builder.set_channel(amplifier_pump.channel);
+            pump_builder.set_alc_on(amplifier_pump.alc_on);
+            pump_builder.set_pump_on(amplifier_pump.pump_on);
+            pump_builder.set_pump_filter_on(amplifier_pump.pump_filter_on);
+            pump_builder.set_probe_on(amplifier_pump.probe_on);
+            pump_builder.set_cancellation_on(amplifier_pump.cancellation_on);
+
+            match amplifier_pump.cancellation_source.as_str() {
+                "INTERNAL" => pump_builder
+                    .set_cancellation_source(calibration_capnp::CancellationSource::Internal),
+                "EXTERNAL" => pump_builder
+                    .set_cancellation_source(calibration_capnp::CancellationSource::External),
+                other => {
+                    return Err(Error::new(format!(
+                        "Invalid pump cancellation source: {}.",
+                        other
+                    )));
+                }
+            }
+
+            if let Some(frequency) = amplifier_pump.cancellation_source_frequency {
+                pump_builder
+                    .reborrow()
+                    .get_cancellation_source_frequency()
+                    .set_value(frequency);
+            }
 
             self.set_sweep_value_from_py_or_param(
                 amplifier_pump.pump_power.bind(py),

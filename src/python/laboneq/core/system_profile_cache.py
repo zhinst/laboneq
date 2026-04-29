@@ -9,6 +9,7 @@ Cache location is platform-specific and can be overridden via environment variab
 
 from __future__ import annotations
 
+import glob
 import logging
 import os
 import platform
@@ -59,15 +60,21 @@ def load(setup_uid: str, setup_hash: str | None = None) -> SystemProfile | None:
         System profile if found in cache, None otherwise
     """
     cache_dir = get_cache_dir()
+    resolved_cache_dir = cache_dir.resolve()
+
+    if not (cache_dir / setup_uid).resolve().is_relative_to(resolved_cache_dir):
+        raise ValueError(f"setup_uid {setup_uid!r} escapes the cache directory.")
 
     if setup_hash:
         profile_path = cache_dir / f"{setup_uid}-{setup_hash}.yaml"
+        if not profile_path.resolve().is_relative_to(resolved_cache_dir):
+            raise ValueError(f"setup_hash {setup_hash!r} escapes the cache directory.")
         if not profile_path.exists():
             return None
     else:
         # Take the latest one as defined by the file modification time.
         # This assumes that users did not manually tamper with the cache files.
-        pattern = f"{setup_uid}-*.yaml"
+        pattern = f"{glob.escape(setup_uid)}-*.yaml"
         matches = list(cache_dir.glob(pattern))
         if not matches:
             return None
@@ -99,6 +106,8 @@ def save(profile: SystemProfile) -> Path:
 
     fingerprint = profile.get_fingerprint()
     profile_path = cache_dir / f"{profile.uid}-{fingerprint}.yaml"
+    if not profile_path.resolve().is_relative_to(cache_dir.resolve()):
+        raise ValueError(f"Profile UID {profile.uid!r} escapes the cache directory.")
 
     core_save(
         profile,

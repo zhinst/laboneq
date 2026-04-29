@@ -4,10 +4,11 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::error::{Error, Result};
+use laboneq_common::types::SignalKind;
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::Operation;
 use laboneq_dsl::types::{OscillatorKind, SignalUid};
-use laboneq_ir::signal::{Signal, SignalKind};
+use laboneq_ir::signal::Signal;
 
 /// Resolves phase resets without assigned signals by assigning them
 /// to the signals present in their scope: Signals in the same section.

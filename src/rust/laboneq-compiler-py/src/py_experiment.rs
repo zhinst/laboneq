@@ -1,7 +1,6 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_common::types::PhysicalDeviceUid;
 use laboneq_dsl::types::{OscillatorKind, ValueOrParameter};
 use pyo3::prelude::*;
 use std::sync::Arc;
@@ -9,6 +8,7 @@ use std::sync::Arc;
 use laboneq_common::compiler_settings::CompilerSettings;
 use laboneq_ir::system::DeviceSetup;
 
+use crate::compiler_backend::PreprocessedBackendData;
 use crate::experiment::Experiment;
 use crate::experiment_context::ExperimentContext;
 use crate::py_signal::{
@@ -18,15 +18,16 @@ use crate::py_signal::{
 use crate::setup_processor::DelayRegistry;
 
 #[pyclass(name = "Experiment", frozen)]
-pub(crate) struct ExperimentPy {
-    pub inner: Experiment,
+pub struct ExperimentPy {
+    pub(crate) inner: Experiment,
     // NOTE: The usage of Arc here is to allow sharing the id_store across Python bindings
     // Remove when Python bindings are no longer needed
-    pub device_setup: Arc<DeviceSetup>,
-    pub context: ExperimentContext,
+    pub(crate) device_setup: Arc<DeviceSetup>,
+    pub(crate) context: ExperimentContext,
     /// Delay compensation for signals on devices.
-    pub delay_compensation: DelayRegistry,
-    pub compiler_settings: CompilerSettings,
+    pub(crate) delay_compensation: DelayRegistry,
+    pub(crate) compiler_settings: CompilerSettings,
+    pub(crate) backend_data: Arc<dyn PreprocessedBackendData + Send + Sync>,
 }
 
 #[pymethods]
@@ -60,10 +61,9 @@ impl ExperimentPy {
             .to_string()
     }
 
-    fn device_lead_delay(&self, physical_device_uid: u16) -> f64 {
-        self.delay_compensation
-            .device_lead_delay(PhysicalDeviceUid(physical_device_uid))
-            .into()
+    fn device_lead_delay(&self, device_uid: &str) -> f64 {
+        let uid = self.inner.id_store.get(device_uid).unwrap().into();
+        self.delay_compensation.device_lead_delay(uid).into()
     }
 
     fn signal_precompensation(

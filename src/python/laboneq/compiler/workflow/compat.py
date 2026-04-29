@@ -15,7 +15,6 @@ from laboneq.implementation.utils.devices import parse_device_options
 
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
-    from laboneq.compiler.common.signal_obj import SignalObj
     from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
     from laboneq.data.parameter import Parameter as DataParameter
     from laboneq.dsl.calibration import Oscillator
@@ -51,7 +50,6 @@ def _resolve_default_options(
 
 def build_rs_experiment(
     experiment_dao: ExperimentDAO,
-    signal_objects: dict[str, SignalObj],
     compiler_module: compiler_rs,
     desktop_setup: bool,
     compiler_settings: dict | None = None,
@@ -78,20 +76,15 @@ def build_rs_experiment(
             is_shfqc=device.is_qc,
         )
 
-    awg_allocation: dict[int, compiler_rs.AwgInfo] = {}
-
     for signal in experiment_dao.signals():
         signal_info = experiment_dao.signal_info(signal)
         device_uid = signal_info.device.uid
-        signal_obj = signal_objects[signal]
-        awg_key = hash(signal_obj.awg.key)
-
+        ports = list(signal_info.channel_to_port.values())
         device_setup_capnp.add_signal_with_calibration(
             uid=signal_info.uid,
-            ports=[str(ch) for ch in signal_info.channels],
+            ports=ports,
             instrument_uid=device_uid,
             channel_type=signal_info.type.name,
-            awg_core=awg_key,
             # Calibration parameters
             amplitude=setup_builder.maybe_parameter(signal_info.amplitude),
             oscillator=setup_builder.create_oscillator(signal_info.oscillator),
@@ -100,18 +93,25 @@ def build_rs_experiment(
             amplifier_pump=compiler_rs.AmplifierPump(
                 device=signal_info.amplifier_pump.ppc_device.uid,
                 channel=signal_info.amplifier_pump.channel,
+                alc_on=signal_info.amplifier_pump.alc_on,
+                pump_on=signal_info.amplifier_pump.pump_on,
+                pump_filter_on=signal_info.amplifier_pump.pump_filter_on,
                 pump_frequency=setup_builder.maybe_parameter(
                     signal_info.amplifier_pump.pump_frequency
                 ),
                 pump_power=setup_builder.maybe_parameter(
                     signal_info.amplifier_pump.pump_power
                 ),
+                cancellation_on=signal_info.amplifier_pump.cancellation_on,
                 cancellation_phase=setup_builder.maybe_parameter(
                     signal_info.amplifier_pump.cancellation_phase
                 ),
                 cancellation_attenuation=setup_builder.maybe_parameter(
                     signal_info.amplifier_pump.cancellation_attenuation
                 ),
+                cancellation_source=signal_info.amplifier_pump.cancellation_source.name,
+                cancellation_source_frequency=signal_info.amplifier_pump.cancellation_source_frequency,
+                probe_on=signal_info.amplifier_pump.probe_on,
                 probe_frequency=setup_builder.maybe_parameter(
                     signal_info.amplifier_pump.probe_frequency
                 ),
@@ -126,14 +126,14 @@ def build_rs_experiment(
             else None,
             automute=signal_info.automute,
             signal_delay=signal_info.delay_signal or 0.0,
-            port_delay=setup_builder.maybe_parameter(signal_obj.port_delay),
-            range=(signal_obj.signal_range.value, signal_obj.signal_range.unit)
-            if signal_obj.signal_range is not None
+            port_delay=setup_builder.maybe_parameter(signal_info.port_delay),
+            range=(signal_info.signal_range.value, signal_info.signal_range.unit)
+            if signal_info.signal_range is not None
             else None,
             precompensation=_build_precompensation(signal_info, compiler_rs),
             added_outputs=[
                 device_setup_capnp.create_output_route(
-                    source_signal=str(route.from_channel),
+                    source_signal=route.from_port,
                     amplitude_scaling=setup_builder.maybe_parameter(route.amplitude),
                     phase_shift=setup_builder.maybe_parameter(route.phase),
                 )
@@ -158,11 +158,6 @@ def build_rs_experiment(
             else [t],
         )
 
-        if awg_key not in awg_allocation:
-            awg_allocation[awg_key] = compiler_rs.AwgInfo(
-                uid=awg_key, number=signal_obj.awg.awg_allocation
-            )
-
     use_packed = os.environ.get("LABONEQ_CAPNP_PACKED", "0").lower() in (
         "1",
         "true",
@@ -175,7 +170,6 @@ def build_rs_experiment(
     )
     return compiler_rs.build_experiment_capnp(
         capnp_bytes,
-        awgs=list(awg_allocation.values()),
         desktop_setup=desktop_setup,
         packed=use_packed,
         compiler_settings=_sanitize_compiler_settings(compiler_settings),

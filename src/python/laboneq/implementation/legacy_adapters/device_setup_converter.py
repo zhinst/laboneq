@@ -7,7 +7,7 @@ from functools import cached_property
 from typing import TYPE_CHECKING, Iterator, Mapping
 
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types import enums as legacy_enums
+from laboneq.core.types.enums import IOSignalType
 from laboneq.data.setup_description import (
     ChannelMapEntry,
     DeviceType,
@@ -16,11 +16,9 @@ from laboneq.data.setup_description import (
     LogicalSignal,
     LogicalSignalGroup,
     PhysicalChannel,
-    PhysicalChannelType,
     Port,
     PortType,
     ReferenceClock,
-    ReferenceClockSource,
     Server,
     Setup,
     SetupInternalConnection,
@@ -39,10 +37,6 @@ from laboneq.implementation.utils import devices
 if TYPE_CHECKING:
     from laboneq.dsl.device import logical_signal_group as legacy_lsg
     from laboneq.dsl.device import servers as legacy_servers
-
-
-def convert_io_direction(obj: legacy_enums.io_direction.IODirection) -> IODirection:
-    return IODirection[obj.name]
 
 
 def convert_logical_signal(target: legacy_lsg.LogicalSignal) -> LogicalSignal:
@@ -75,18 +69,6 @@ def convert_dataserver(target: legacy_servers.DataServer) -> Server:
     )
 
 
-def convert_reference_clock_source(
-    target: legacy_enums.ReferenceClockSource | None,
-) -> ReferenceClockSource | None:
-    if target is None:
-        return None
-    if target == legacy_enums.ReferenceClockSource.EXTERNAL:
-        return ReferenceClockSource.EXTERNAL
-    if target == legacy_enums.ReferenceClockSource.INTERNAL:
-        return ReferenceClockSource.INTERNAL
-    raise_not_implemented(target)
-
-
 def convert_device_type(target: ZIStandardInstrument) -> DeviceType:
     if isinstance(target, legacy_instruments.HDAWG):
         return DeviceType.HDAWG
@@ -111,16 +93,6 @@ def convert_device_type(target: ZIStandardInstrument) -> DeviceType:
     raise_not_implemented(target)
 
 
-def convert_physical_channel_type(
-    target: legacy_io_units.PhysicalChannelType | None,
-) -> PhysicalChannelType:
-    if target == legacy_io_units.PhysicalChannelType.IQ_CHANNEL:
-        return PhysicalChannelType.IQ_CHANNEL
-    if target == legacy_io_units.PhysicalChannelType.RF_CHANNEL:
-        return PhysicalChannelType.RF_CHANNEL
-    raise_not_implemented(target)
-
-
 def convert_physical_channel(
     target: legacy_io_units.PhysicalChannel,
     direction: IODirection,
@@ -130,7 +102,7 @@ def convert_physical_channel(
     return PhysicalChannel(
         name=pc_helper.name,
         group=pc_helper.group,
-        type=convert_physical_channel_type(target.type),
+        type=target.type,
         direction=direction,
     )
 
@@ -178,7 +150,7 @@ class PortConverter:
     def ports_by_legacy_uid(self, uid: str) -> list[Port]:
         port = self.legacy_port_by_uid(uid)
         # The connection is of type "IQ", so it refers to 2 ports
-        if port.signal_type == legacy_enums.IOSignalType.IQ:
+        if port.signal_type == IOSignalType.IQ:
             if "QAS" in port.uid:
                 uid = "SIGINS"
                 return [self._lookup[uid + "/0"], self._lookup[uid + "/1"]]
@@ -244,8 +216,8 @@ class LegacyConnectionFinder:
                     None if conn.local_port is None else self._ports[conn.local_port]
                 )
                 if conn.signal_type in {
-                    legacy_enums.IOSignalType.ZSYNC,
-                    legacy_enums.IOSignalType.DIO,
+                    IOSignalType.ZSYNC,
+                    IOSignalType.DIO,
                 }:
                     yield conn.remote_path, from_port
                 else:
@@ -286,9 +258,7 @@ class InstrumentConverter:
     def reference_clock(self) -> ReferenceClock:
         ref_clk = ReferenceClock()
         if self._src.reference_clock_source is not None:
-            ref_clk.source = convert_reference_clock_source(
-                self._src.reference_clock_source
-            )
+            ref_clk.source = self._src.reference_clock_source
         return ref_clk
 
     @cached_property
@@ -308,7 +278,7 @@ class InstrumentConverter:
         ) in self.connection_converter.connections_from_port_to_local_logical_signal():
             phys_ch_uid = logical_signal.physical_channel.uid
             if phys_ch_uid not in physical_chs:
-                direction = convert_io_direction(logical_signal.direction)
+                direction = logical_signal.direction
                 physical_ch = convert_physical_channel(
                     logical_signal.physical_channel, direction
                 )

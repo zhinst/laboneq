@@ -41,7 +41,11 @@ class QuantumParametersSerializer(VersionedClassSerializer[QuantumParameters]):
         options: DeserializationOptions | None = None,
     ) -> QuantumParameters:
         data = serialized_data["__data__"]
-        qp_cls = import_cls(data["quantum_parameters_class"])
+        qp_cls = import_cls(
+            data["quantum_parameters_class"],
+            base_cls=QuantumParameters,
+            prefix_restrictions=None,  # user subclasses may live in any package; base_cls is the guard
+        )
         return qp_cls(**from_dict(data["parameters"]))
 
     # v2 added the custom parameter to the QuantumParameters base class.
@@ -230,8 +234,16 @@ class QuantumElementSerializer(VersionedClassSerializer[QuantumElement]):
         options: DeserializationOptions | None = None,
     ) -> QuantumElement:
         data = serialized_data["__data__"]
-        qe_cls = import_cls(data["quantum_element_class"])
-        param_cls = import_cls(data["parameter_class"])
+        qe_cls = import_cls(
+            data["quantum_element_class"],
+            base_cls=QuantumElement,
+            prefix_restrictions=None,  # user subclasses may live in any package; base_cls is the guard
+        )
+        param_cls = import_cls(
+            data["parameter_class"],
+            base_cls=QuantumParameters,
+            prefix_restrictions=None,  # user subclasses may live in any package; base_cls is the guard
+        )
         return qe_cls(
             uid=data["uid"],
             signals=data["signals"],

@@ -14,6 +14,7 @@ pub use output_route::*;
 pub use port_mode::*;
 pub use precompensation::*;
 
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SignalCalibration {
     pub amplitude: Option<ValueOrParameter<f64>>,
     pub added_outputs: Vec<OutputRoute>,
@@ -21,7 +22,7 @@ pub struct SignalCalibration {
     pub automute: bool,
     pub lo_frequency: Option<ValueOrParameter<f64>>,
     pub oscillator: Option<Oscillator>,
-    pub port_delay: ValueOrParameter<Duration<Second>>,
+    pub port_delay: Option<ValueOrParameter<Duration<Second>>>,
     pub port_mode: Option<PortMode>,
     pub precompensation: Option<Precompensation>,
     pub range: Option<Quantity>,

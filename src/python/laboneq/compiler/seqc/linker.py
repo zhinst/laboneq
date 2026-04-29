@@ -65,9 +65,6 @@ class CombinedRTOutputSeqC(CombinedOutput):
         AwgKey, codegen_rs.FeedbackRegisterConfig
     ] = field(default_factory=dict)
     neartime_steps: list[NeartimeStep] = field(default_factory=list)
-    shfppc_sweep_configurations: dict[AwgKey, dict[str, object]] = field(
-        default_factory=dict
-    )
     measurements: list[codegen_rs.Measurement] = field(default_factory=list)
     total_execution_time: float = 0
     max_execution_time_per_step: float = 0
@@ -77,6 +74,8 @@ class CombinedRTOutputSeqC(CombinedOutput):
     channel_properties: dict[AwgKey, list[codegen_rs.ChannelProperties]] = field(
         default_factory=dict
     )
+    device_properties: list[codegen_rs.DeviceProperties] = field(default_factory=list)
+    ppc_settings: list[codegen_rs.PpcSettings] = field(default_factory=list)
 
     def get_artifacts(self) -> CompilerArtifact:
         src: list[dict[str, str | bytes]] = []
@@ -135,7 +134,6 @@ class SeqCGenOutput(RTCompilerOutput):
     pulse_map: dict[str, PulseMapEntry]
     parameter_phase_increment_map: dict[AwgKey, dict[str, list]]
     feedback_register_configurations: dict[AwgKey, codegen_rs.FeedbackRegisterConfig]
-    shfppc_sweep_configurations: dict[AwgKey, dict[str, object]]
     total_execution_time: float = 0
     measurements: list[codegen_rs.Measurement] = field(default_factory=list)
     integration_unit_allocations: dict[
@@ -145,6 +143,8 @@ class SeqCGenOutput(RTCompilerOutput):
         default_factory=dict
     )
     awg_properties: dict[AwgKey, codegen_rs.AwgProperties] = field(default_factory=dict)
+    device_properties: list[codegen_rs.DeviceProperties] = field(default_factory=list)
+    ppc_settings: list[codegen_rs.PpcSettings] = field(default_factory=list)
 
 
 def _check_compatibility(this: SeqCGenOutput, new: SeqCGenOutput):
@@ -164,13 +164,15 @@ def _check_compatibility(this: SeqCGenOutput, new: SeqCGenOutput):
         raise LabOneQException(
             "Feedback register configurations do not match between real-time iterations"
         )
-    if this.shfppc_sweep_configurations != new.shfppc_sweep_configurations:
-        raise LabOneQException(
-            "SHFPPC sweep configurations do not match between real-time iterations"
-        )
+    if this.ppc_settings != new.ppc_settings:
+        raise LabOneQException("PPC settings do not match between real-time iterations")
     if this.integration_unit_allocations != new.integration_unit_allocations:
         raise LabOneQException(
             "Integration unit allocations do not match between real-time iterations"
+        )
+    if this.device_properties != new.device_properties:
+        raise LabOneQException(
+            "Device properties do not match between real-time iterations"
         )
 
 
@@ -247,10 +249,11 @@ class SeqCLinker(ILinker):
                 output, step_indices
             ),
             parameter_phase_increment_map=parameter_phase_increment_map,
-            shfppc_sweep_configurations=output.shfppc_sweep_configurations,
             measurements=output.measurements,
             integration_unit_allocations=output.integration_unit_allocations,
             channel_properties=output.channel_properties,
+            ppc_settings=output.ppc_settings,
+            device_properties=output.device_properties,
         )
 
     @staticmethod

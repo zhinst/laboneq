@@ -47,7 +47,6 @@ class DeviceSetupBuilder:
         ports: list[str],
         instrument_uid: str,
         channel_type: str,
-        awg_core: int,
         amplitude: float | Parameter | None = None,
         oscillator: OscillatorRef | None = None,
         lo_frequency: float | Parameter | None = None,
@@ -95,12 +94,19 @@ class AmplifierPump:
         self,
         device: str,
         channel: int,
+        alc_on: bool,
+        pump_on: bool,
+        pump_filter_on: bool,
         pump_power: float | Parameter | None,
         pump_frequency: float | Parameter | None,
+        probe_on: bool,
         probe_power: float | Parameter | None,
         probe_frequency: float | Parameter | None,
+        cancellation_on: bool,
         cancellation_phase: float | Parameter | None,
         cancellation_attenuation: float | Parameter | None,
+        cancellation_source: str,  # INTERNAL | EXTERNAL
+        cancellation_source_frequency: float | None = None,
     ):
         """A representation of an amplifier pump configuration."""
 
@@ -125,10 +131,6 @@ class FirCompensation:
 class BounceCompensation:
     def __init__(self, delay: float, amplitude: float): ...
 
-class AwgInfo:
-    def __init__(self, uid: int, number: list[int]):
-        """A representation of AWG properties."""
-
 def serialize_experiment(
     experiment: DslExperiment,
     device_setup: DeviceSetupBuilder,
@@ -138,9 +140,9 @@ def serialize_experiment(
 
 def build_experiment_capnp(
     capnp_data: bytes,
-    awgs: list[AwgInfo],
     desktop_setup: bool,
     packed: bool = False,
+    compiler_settings: dict | None = None,
 ) -> Experiment:
     """Build a scheduled experiment from Cap'n Proto bytes."""
 

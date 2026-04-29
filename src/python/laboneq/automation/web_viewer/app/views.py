@@ -69,9 +69,9 @@ def run_automation() -> tuple[Response, int]:
         node = automation.get_node(node_id)
         node_key = node.key
         layer_key = node.layer_key
-        automation.run_layer(layer_key, node_keys=[node_key], force=True)
+        automation.run_layer(layer_key, node_keys=[node_key])
     elif layer_key is not None:
-        automation.run_layer(layer_key, force=True)
+        automation.run_layer(layer_key)
     else:
         automation.run()
     return jsonify({"status": "started"}), 202

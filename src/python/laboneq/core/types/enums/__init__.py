@@ -9,6 +9,7 @@ from .execution_type import ExecutionType
 from .io_direction import IODirection
 from .io_signal_type import IOSignalType
 from .modulation_type import ModulationType
+from .physical_channel_type import PhysicalChannelType
 from .port_mode import PortMode
 from .reference_clock_source import ReferenceClockSource
 from .repetition_mode import RepetitionMode

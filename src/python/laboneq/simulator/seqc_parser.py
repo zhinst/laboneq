@@ -322,7 +322,6 @@ class SeqCDescriptor:
     channels: list[int] = None
     wave_index: dict[int, dict[str, str | WaveType]] = None
     command_table: list[Any] = None
-    is_spectroscopy: bool = False
     feedback_command_table_offset: int = 0
 
 
@@ -435,7 +434,6 @@ class SeqCSimulation:
     sampling_rate: float = field(default=2.0e9)
     startup_delay: float = field(default=0.0)
     output_port_delay: float = field(default=0.0)
-    is_spectroscopy: bool = False
 
 
 class SimpleRuntime:
@@ -517,7 +515,6 @@ class SimpleRuntime:
         }
         self.variables = {}
         self.seqc_simulation = SeqCSimulation()
-        self.seqc_simulation.is_spectroscopy = descriptor.is_spectroscopy
         self.times = {}
         self.times_at_port = {}
         self.descriptor = descriptor
@@ -847,13 +844,13 @@ class SimpleRuntime:
             wave_data_idx.append(known_wave.wave_data_idx)
             return wave_data_idx, event_length
 
-        if self.descriptor.is_spectroscopy:
-            assert generators_mask == self.predefined_consts["QA_GEN_NONE"]
+        spectroscopy_mask = self.predefined_consts["QA_GEN_NONE"]
+        if generators_mask == spectroscopy_mask:
             try:
                 wave_data_idx, event_length = add_wave(0, wave_data_idx, event_length)
             except KeyError:
                 # measure pulse may be missing, e.g. CW mode, or being played on another AWG
-                wave_data_idx = None
+                ...
         else:
             for gen_index in range(16):
                 if (generators_mask & (1 << gen_index)) != 0:
@@ -1156,7 +1153,6 @@ def analyze_recipe(
         seqc_descriptor.channels = outputs[name]
         seqc_descriptor.wave_index = seq_c_wave_indices.get(name, {})
         seqc_descriptor.command_table = command_table
-        seqc_descriptor.is_spectroscopy = recipe.is_spectroscopy
         seqc_descriptors.append(seqc_descriptor)
     return seqc_descriptors
 

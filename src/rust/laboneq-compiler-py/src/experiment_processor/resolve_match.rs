@@ -3,13 +3,14 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::error::{Error, Result};
-use crate::signal_view::SignalView;
 use laboneq_common::types::DeviceKind;
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::Operation;
 use laboneq_dsl::types::{HandleUid, MatchTarget, SignalUid};
 use laboneq_ir::system::AwgDevice;
+
+use crate::error::{Error, Result};
+use crate::signal_view::SignalView;
 
 /// Resolves [`Operation::Match`] nodes in the experiment tree.
 ///
@@ -118,84 +119,98 @@ fn collect_devices<'a>(signals: impl Iterator<Item = &'a SignalView<'a>>) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signal_view::signal_views;
     use laboneq_common::named_id::NamedId;
-    use laboneq_common::types::{AwgKey, PhysicalDeviceUid};
+    use laboneq_common::types::{AwgKey, PhysicalDeviceUid, SignalKind};
     use laboneq_dsl::node_structure;
     use laboneq_dsl::operation::{Acquire, Match, Reserve};
     use laboneq_ir::device::builder::AwgDeviceBuilder;
-    use laboneq_ir::signal::SignalKind;
+    use laboneq_ir::signal::Signal;
     use laboneq_ir::signal::builder::SignalBuilder;
-    use laboneq_ir::system::DeviceSetup;
     use std::collections::HashMap;
 
-    fn create_device_setup(
-        shfqa_signal: SignalUid,
-        shfsg_signal: SignalUid,
-        hdawg_signal: SignalUid,
-    ) -> DeviceSetup {
-        let shfqa_device = AwgDeviceBuilder::new(0.into(), PhysicalDeviceUid(0), DeviceKind::Shfqa)
-            .shfqc(true)
-            .build();
-
-        let shfsg_device = AwgDeviceBuilder::new(1.into(), PhysicalDeviceUid(0), DeviceKind::Shfsg)
-            .shfqc(true)
-            .build();
-
-        let hdawg_device = AwgDeviceBuilder::new(2.into(), PhysicalDeviceUid(1), DeviceKind::Hdawg)
-            .shfqc(false)
-            .build();
-
-        let signal1 = SignalBuilder::new(
-            shfqa_signal,
-            2.0e9,
-            AwgKey(0),
-            shfqa_device.uid(),
-            SignalKind::Integration,
-        )
-        .build();
-
-        let signal2 = SignalBuilder::new(
-            shfsg_signal,
-            2.0e9,
-            AwgKey(1),
-            shfsg_device.uid(),
-            SignalKind::Iq,
-        )
-        .build();
-
-        let signal3 = SignalBuilder::new(
-            hdawg_signal,
-            2.0e9,
-            AwgKey(2),
-            hdawg_device.uid(),
-            SignalKind::Iq,
-        )
-        .build();
-
-        DeviceSetup::new(
-            HashMap::from_iter([
-                (signal1.uid, signal1),
-                (signal2.uid, signal2),
-                (signal3.uid, signal3),
-            ]),
-            HashMap::from_iter([
-                (shfqa_device.uid(), shfqa_device),
-                (shfsg_device.uid(), shfsg_device),
-                (hdawg_device.uid(), hdawg_device),
-            ]),
-            Vec::new(),
-            true,
-        )
-        .unwrap()
+    struct TestSignalFixture {
+        shfqa_device: AwgDevice,
+        shfsg_device: AwgDevice,
+        hdawg_device: AwgDevice,
+        signal1: Signal,
+        signal2: Signal,
+        signal3: Signal,
     }
 
-    fn create_test_signals() -> (SignalUid, SignalUid, SignalUid) {
-        (
-            NamedId::debug_id(0).into(),
-            NamedId::debug_id(1).into(),
-            NamedId::debug_id(2).into(),
-        )
+    impl TestSignalFixture {
+        fn new() -> Self {
+            let shfqa_device =
+                AwgDeviceBuilder::new(0.into(), PhysicalDeviceUid(0), DeviceKind::Shfqa)
+                    .shfqc(true)
+                    .build();
+
+            let shfsg_device =
+                AwgDeviceBuilder::new(1.into(), PhysicalDeviceUid(0), DeviceKind::Shfsg)
+                    .shfqc(true)
+                    .build();
+
+            let hdawg_device =
+                AwgDeviceBuilder::new(2.into(), PhysicalDeviceUid(1), DeviceKind::Hdawg)
+                    .shfqc(false)
+                    .build();
+
+            let signal1 = SignalBuilder::new(
+                0.into(),
+                2.0e9,
+                AwgKey(0),
+                shfqa_device.uid(),
+                SignalKind::Integration,
+            )
+            .build();
+
+            let signal2 = SignalBuilder::new(
+                1.into(),
+                2.0e9,
+                AwgKey(1),
+                shfsg_device.uid(),
+                SignalKind::Iq,
+            )
+            .build();
+
+            let signal3 = SignalBuilder::new(
+                2.into(),
+                2.0e9,
+                AwgKey(2),
+                hdawg_device.uid(),
+                SignalKind::Iq,
+            )
+            .build();
+
+            Self {
+                shfqa_device,
+                shfsg_device,
+                hdawg_device,
+                signal1,
+                signal2,
+                signal3,
+            }
+        }
+
+        fn signal_views(&self) -> HashMap<SignalUid, SignalView<'_>> {
+            HashMap::from_iter([
+                (
+                    self.signal1.uid,
+                    SignalView::new(&self.shfqa_device, &self.signal1),
+                ),
+                (
+                    self.signal2.uid,
+                    SignalView::new(&self.shfsg_device, &self.signal2),
+                ),
+                (
+                    self.signal3.uid,
+                    SignalView::new(&self.hdawg_device, &self.signal3),
+                ),
+            ])
+        }
+
+        fn signal_uids(&self) -> (SignalUid, SignalUid, SignalUid) {
+            (self.signal1.uid, self.signal2.uid, self.signal3.uid)
+        }
     }
 
     fn create_feedback_experiment(
@@ -240,14 +255,13 @@ mod tests {
     /// in the match operation and acquisition.
     #[test]
     fn test_local_feedback_allowed_same_device() {
-        let (qa_acquire_uid, qa_measure_uid, hdawg_uid) = create_test_signals();
-        let device_setup = create_device_setup(qa_acquire_uid, qa_measure_uid, hdawg_uid);
-        let handle: HandleUid = NamedId::debug_id(1).into();
+        let fixture = TestSignalFixture::new();
+        let (qa_acquire_uid, qa_measure_uid, _) = fixture.signal_uids();
 
         // Create experiment tree with match operation
         // Acquire on handle 1 (SHFQC), then match with operations on same device
-        let mut node = create_feedback_experiment(qa_acquire_uid, qa_measure_uid, handle, None);
-        let result = resolve_match(&mut node, &signal_views(&device_setup));
+        let mut node = create_feedback_experiment(qa_acquire_uid, qa_measure_uid, 1.into(), None);
+        let result = resolve_match(&mut node, &fixture.signal_views());
         assert!(result.is_ok());
 
         // Check that local feedback was automatically enabled
@@ -262,19 +276,18 @@ mod tests {
     /// in the match operation and acquisition.
     #[test]
     fn test_local_feedback_not_allowed() {
-        let (qa_acquire_uid, qa_measure_uid, hdawg_uid) = create_test_signals();
-        let device_setup = create_device_setup(qa_acquire_uid, qa_measure_uid, hdawg_uid);
-        let handle: HandleUid = NamedId::debug_id(1).into();
+        let fixture = TestSignalFixture::new();
+        let (qa_acquire_uid, _, hdawg_uid) = fixture.signal_uids();
 
         // Match with local feedback on different devices should error
         let mut root = create_feedback_experiment(
             qa_acquire_uid,
             hdawg_uid,
-            handle,
+            1.into(),
             Some(true), // local feedback explicitly enabled, should error
         );
 
-        let result = resolve_match(&mut root, &signal_views(&device_setup));
+        let result = resolve_match(&mut root, &fixture.signal_views());
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -284,18 +297,17 @@ mod tests {
     /// Test that local feedback is automatically disabled when not possible
     #[test]
     fn test_not_local_feedback_resolved() {
-        let (qa_acquire_uid, qa_measure_uid, hdawg_uid) = create_test_signals();
-        let device_setup = create_device_setup(qa_acquire_uid, qa_measure_uid, hdawg_uid);
-        let handle: HandleUid = NamedId::debug_id(1).into();
+        let fixture = TestSignalFixture::new();
+        let (qa_acquire_uid, _, hdawg_uid) = fixture.signal_uids();
 
         let mut root = create_feedback_experiment(
             qa_acquire_uid,
             hdawg_uid,
-            handle,
+            1.into(),
             None, // local feedback unspecified, should be resolved to false
         );
 
-        resolve_match(&mut root, &signal_views(&device_setup)).unwrap();
+        resolve_match(&mut root, &fixture.signal_views()).unwrap();
 
         // Check that local feedback is disabled
         if let Operation::Match(match_op) = &root.children[1].kind {

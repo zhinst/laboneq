@@ -166,8 +166,6 @@ class DeviceSHFSG(SHFSGMixIn, DeviceSHFBase):
         return self._sgchannels[channel].nodes.osc_freq[index]
 
     def _busy_nodes(self, recipe_data: RecipeData) -> list[str]:
-        if not self._setup_caps.supports_shf_busy:
-            return []
         return [
             self._sgchannels[ch].nodes.busy
             for ch in recipe_data.allocated_awgs(self.uid)

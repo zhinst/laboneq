@@ -5,7 +5,6 @@ pub mod builders;
 mod ir;
 pub mod node;
 pub use ir::*;
-pub mod awg;
 pub mod device;
 mod experiment;
 pub mod pulse_sheet_schedule;

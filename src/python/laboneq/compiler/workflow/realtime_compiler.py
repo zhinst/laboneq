@@ -11,15 +11,12 @@ from typing import TYPE_CHECKING, TypedDict
 from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.iface_code_generator import ICodeGenerator
 from laboneq.compiler.common.iface_compiler_output import (
-    RTCompilerOutput,
     RTCompilerOutputContainer,
 )
-from laboneq.compiler.common.signal_obj import SignalObj
 from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.scheduler.scheduler import Scheduler
 from laboneq.compiler.workflow.compiler_hooks import (
     get_compiler_hooks,
-    resolve_compiler_module,
 )
 
 if TYPE_CHECKING:
@@ -40,30 +37,18 @@ class RealtimeCompiler:
     def __init__(
         self,
         experiment,
-        signal_objects: dict[str, SignalObj],
+        compiler_module: compiler_rs,
+        device_class: int,
         settings: CompilerSettings | None = None,
     ):
         self._experiment = experiment
-        self._signal_objects = signal_objects
         self._settings = settings if settings is not None else CompilerSettings()
 
-        self._code_generators: dict[int, ICodeGenerator] = {}
-        self._compiler_module: compiler_rs = resolve_compiler_module(
-            {s.awg.device_class for s in signal_objects.values()}
-        )
-
-    def _lower_ir_to_code(self, ir_rust):
-        awgs = [signal_obj.awg for signal_obj in self._signal_objects.values()]
-        device_classes = {awg.device_class for awg in awgs}
-        for device_class in device_classes:
-            self._code_generators[device_class] = get_compiler_hooks(
-                device_class
-            ).code_generator()(
-                ir_rust,
-            )
-            self._code_generators[device_class].generate_code()
-
-        _logger.debug("Code generation completed")
+        self._code_generator: ICodeGenerator = get_compiler_hooks(
+            device_class
+        ).code_generator()
+        self._device_class = device_class
+        self._compiler_module: compiler_rs = compiler_module
 
     def run(
         self, near_time_parameters: ParameterStore[str, float]
@@ -83,13 +68,13 @@ class RealtimeCompiler:
         _logger.info(f"Schedule completed. [{time_delta:.3f} s]")
 
         time_start = time.perf_counter()
-        self._lower_ir_to_code(schedule_result)
-        outputs: dict[int, RTCompilerOutput] = {
-            device_class: code_generator.get_output()
-            for device_class, code_generator in self._code_generators.items()
-        }
+        codegenerator = self._code_generator(schedule_result)
+        codegenerator.generate_code()
+        codegen_output = codegenerator.get_output()
         compiler_output = RTCompilerOutputContainer(
-            codegen_output=outputs, schedule=pulse_sheet_schedule
+            device_class=self._device_class,
+            codegen_output=codegen_output,
+            schedule=pulse_sheet_schedule,
         )
         time_delta = time.perf_counter() - time_start
         _logger.info(f"Code generation completed for all AWGs. [{time_delta:.3f} s]")

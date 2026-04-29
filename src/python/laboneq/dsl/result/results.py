@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import attrs
@@ -374,3 +375,45 @@ class Results:
         if self.experiment is None:
             return None
         return self.experiment.get_signal_map()
+
+
+def combine_results(results: Sequence[Results]) -> Results:
+    """Combine multiple results into one
+
+    Combine multiple `Results` objects into one. The fields are merged according
+    to the following rules:
+
+     * `acquired_results` and `neartime_callback_results`: In case of overlapping
+       handles, results that appear later in the sequence overwrite earlier ones.
+       Note that this currently applies for identical handles and handles that
+       share a prefix. This behavior may change in the future, resulting
+       in an error when handles overlap.
+     * `pipeline_jobs_timestamps`: As in the previous two fields, later results
+       overwrite earlier ones. As the access semantics for this field are different,
+       keys with common prefixes are not affected.
+     * `execution_errors`: The combined result contains a concatenated list of all
+       errors from all results.
+
+    Args:
+        results: A sequence of `Results` objects.
+
+    Returns:
+        The combined `Results` object.
+    """
+    acquired_results = AcquiredResults()
+    execution_errors = []
+    neartime_callback_results = {}
+    pipeline_jobs_timestamps = {}
+
+    for res in results:
+        acquired_results.update(res.acquired_results)
+        execution_errors.extend(res.execution_errors or [])
+        neartime_callback_results.update(res.neartime_callback_results or {})
+        pipeline_jobs_timestamps.update(res.pipeline_jobs_timestamps or {})
+
+    return Results(
+        acquired_results=acquired_results,
+        execution_errors=execution_errors,
+        neartime_callback_results=neartime_callback_results,
+        pipeline_jobs_timestamps=pipeline_jobs_timestamps,
+    )

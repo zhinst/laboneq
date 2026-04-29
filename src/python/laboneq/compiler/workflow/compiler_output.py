@@ -13,20 +13,15 @@ from laboneq.compiler.common.iface_compiler_output import (
 
 @dataclass
 class CombinedRTCompilerOutputContainer:
-    """Container (by device class) for the compiler artifacts, after linking."""
+    """Container for the compiler artifacts, after linking."""
 
-    combined_output: dict[int, CombinedOutput]
+    device_class: int
+    combined_output: CombinedOutput
     schedule: dict[str, Any] | None = None
 
     def get_artifacts(self):
-        if len(self.combined_output) == 1:
-            return next(iter(self.combined_output.values())).get_artifacts()
-        else:
-            return {
-                device_class: combined_output.get_artifacts()
-                for device_class, combined_output in self.combined_output.items()
-            }
+        return self.combined_output.get_artifacts()
 
-    def get_first_combined_output(self) -> tuple[int, CombinedOutput | None]:
+    def get_first_combined_output(self) -> CombinedOutput | None:
         """Get the first combined output, if available."""
-        return next(iter(self.combined_output.items()), (-1, None))
+        return self.combined_output if self.combined_output is not None else None

@@ -9,7 +9,9 @@ use pyo3::prelude::*;
 use laboneq_dsl::types::ExternalParameterUid;
 use laboneq_ir::ExperimentIr;
 
-use crate::py_object_interner::PyObjectInterner;
+use laboneq_py_utils::py_object_interner::PyObjectInterner;
+
+use crate::compiler_backend::PreprocessedBackendData;
 
 /// A Python representation of the Experiment IR.
 ///
@@ -20,13 +22,5 @@ pub struct ExperimentIrPy {
     pub inner: ExperimentIr,
     pub py_object_store: Arc<PyObjectInterner<ExternalParameterUid>>,
     pub compiler_settings: CompilerSettings,
-}
-
-#[pymethods]
-impl ExperimentIrPy {
-    fn device_type_by_uid(&self, device_uid: &str) -> String {
-        let uid = self.inner.id_store.get(device_uid).unwrap().into();
-        let device = self.inner.device_setup.device_by_uid(&uid).unwrap();
-        device.kind().to_string()
-    }
+    pub backend_data: Arc<dyn PreprocessedBackendData + Send + Sync>,
 }

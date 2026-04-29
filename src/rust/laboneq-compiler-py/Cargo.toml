@@ -37,6 +37,7 @@ laboneq-ir = { workspace = true }
 laboneq-py-utils = { workspace = true }
 laboneq-opentelemetry-python = { workspace = true }
 laboneq-tracing = { workspace = true }
+laboneq-error = { workspace = true }
 
 [dev-dependencies]
 approx = { workspace = true }

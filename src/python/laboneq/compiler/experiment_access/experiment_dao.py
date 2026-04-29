@@ -5,16 +5,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from laboneq.core.types.enums import AcquisitionType
 from laboneq.data.compilation_job import (
-    AmplifierPumpInfo,
     ChunkingInfo,
     DeviceInfo,
     ExperimentInfo,
-    ParameterInfo,
     SignalInfo,
-    SignalInfoType,
-    SignalRange,
 )
 
 if TYPE_CHECKING:
@@ -27,9 +22,6 @@ class ExperimentDAO:
         self.source_experiment = experiment.src
         self.dsl_parameters = experiment.dsl_parameters
         self._uid = experiment.uid
-        self._acquisition_type: AcquisitionType = (
-            experiment.acquisition_type or AcquisitionType.INTEGRATION
-        )
         self._devices: dict[str, DeviceInfo] = {}
         self._chunking: ChunkingInfo | None = None
         self._signals: dict[str, SignalInfo] = {}
@@ -44,20 +36,6 @@ class ExperimentDAO:
             if s.device.uid not in self._devices:
                 self._devices[s.device.uid] = s.device
 
-    def add_signal(self, device_id, channels, signal_id, signal_type):
-        assert signal_id not in self._signals
-
-        self._signals[signal_id] = SignalInfo(
-            uid=signal_id,
-            type=SignalInfoType(signal_type),
-            device=self.device_info(device_id),
-            channels=channels,
-        )
-
-    @property
-    def acquisition_type(self) -> AcquisitionType:
-        return self._acquisition_type
-
     def signals(self) -> list[str]:
         return sorted([s.uid for s in self._signals.values()])
 
@@ -69,21 +47,3 @@ class ExperimentDAO:
 
     def signal_info(self, signal_id: str) -> SignalInfo:
         return self._signals[signal_id]
-
-    def voltage_offset(self, signal_id) -> float | ParameterInfo:
-        return self._signals[signal_id].voltage_offset
-
-    def lo_frequency(self, signal_id) -> float | ParameterInfo:
-        return self._signals[signal_id].lo_frequency
-
-    def signal_range(self, signal_id) -> SignalRange:
-        return self._signals[signal_id].signal_range
-
-    def port_delay(self, signal_id) -> float | ParameterInfo | None:
-        return self._signals[signal_id].port_delay
-
-    def port_mode(self, signal_id):
-        return self._signals[signal_id].port_mode
-
-    def amplifier_pump(self, signal_id) -> AmplifierPumpInfo | None:
-        return self._signals[signal_id].amplifier_pump

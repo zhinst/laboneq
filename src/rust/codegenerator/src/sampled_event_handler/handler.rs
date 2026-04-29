@@ -352,6 +352,7 @@ struct SampledEventHandler<'a> {
     zsync_feedback_active: Option<bool>,
     match_command_table_entries: IndexMap<State, (&'a PlayWaveEvent, Option<WaveIndex>, i64)>,
     match_seqc_generators: IndexMap<State, SeqCGenerator>,
+    prng_ct_blocks: Vec<(u32, Vec<&'a PlayWaveEvent>)>,
     current_sequencer_step: Option<Samples>,
     sequencer_step: Samples,
     acquisition_type: &'a AcquisitionType,
@@ -404,6 +405,7 @@ impl<'a> SampledEventHandler<'a> {
             last_phase_reset: None,
             match_command_table_entries: IndexMap::new(),
             match_seqc_generators: IndexMap::new(),
+            prng_ct_blocks: Vec::new(),
             current_sequencer_step,
             sequencer_step: 8,
             feedback_register,
@@ -1097,7 +1099,7 @@ impl<'a> SampledEventHandler<'a> {
         }
         let is_spectroscopy = is_spectroscopy_type(self.acquisition_type);
 
-        let integration_channels = data
+        let mut integration_channels = data
             .acquire_events
             .iter()
             .flat_map(|event| event.channels.iter())
@@ -1111,6 +1113,7 @@ impl<'a> SampledEventHandler<'a> {
         } else if integration_channels.is_empty() {
             "QA_INT_NONE"
         } else {
+            integration_channels.sort(); // ensure deterministic order for testing
             &integration_channels
                 .iter()
                 .map(|channel| format!("QA_INT_{channel}"))
@@ -1513,14 +1516,30 @@ impl<'a> SampledEventHandler<'a> {
         let mut sorted_ct_entries: Vec<_> = self.match_command_table_entries.drain(..).collect();
         sorted_ct_entries.sort_by_key(|(idx, _)| *idx);
         check_state_coverage(&sorted_ct_entries, || format!("section {}", params.section))?;
-        let mut command_table_match_offset = self.command_table_tracker.len() as u32;
-        // Allocate command table entries
-        for (idx, (signature, wave_index, _)) in sorted_ct_entries.iter() {
-            let id2 = self
-                .command_table_tracker
-                .create_entry(signature, *wave_index, true)? as u32;
-            assert!(command_table_match_offset + *idx as u32 == id2);
-        }
+        // Reuse existing contiguous CT block if all entries already exist (e.g. repeated
+        // subtrees inside a non-compressed sweep). This avoids duplicate CT entries and
+        // keeps setPRNGRange identical across iterations so the compressor can collapse them.
+        let mut command_table_match_offset =
+            match Self::find_existing_prng_ct_block(&self.prng_ct_blocks, &sorted_ct_entries) {
+                Some(base) => base,
+                None => {
+                    let base = self.command_table_tracker.len() as u32;
+                    for (idx, (signature, wave_index, _)) in sorted_ct_entries.iter() {
+                        let id2 =
+                            self.command_table_tracker
+                                .create_entry(signature, *wave_index, true)?
+                                as u32;
+                        assert!(base + *idx as u32 == id2);
+                    }
+                    // Remember this block for future reuse
+                    let sigs: Vec<&PlayWaveEvent> = sorted_ct_entries
+                        .iter()
+                        .map(|(_, (sig, _, _))| *sig)
+                        .collect();
+                    self.prng_ct_blocks.push((base, sigs));
+                    base
+                }
+            };
 
         let offset = self.seqc_tracker.commit_prng(command_table_match_offset);
         command_table_match_offset -= offset;
@@ -1538,6 +1557,26 @@ impl<'a> SampledEventHandler<'a> {
         self.seqc_tracker.set_current_time(parent_match_end);
         self.match_parent_event = None;
         Ok(())
+    }
+
+    /// Check whether a previously allocated PRNG CT block matches the current entries.
+    /// Returns the base index of the matching block if found.
+    fn find_existing_prng_ct_block(
+        prng_ct_blocks: &[(u32, Vec<&PlayWaveEvent>)],
+        sorted_ct_entries: &[CommandTableEntry],
+    ) -> Option<u32> {
+        'outer: for (base, stored_sigs) in prng_ct_blocks {
+            if stored_sigs.len() != sorted_ct_entries.len() {
+                continue;
+            }
+            for (idx, (sig, _, _)) in sorted_ct_entries.iter() {
+                if stored_sigs[*idx as usize] != *sig {
+                    continue 'outer;
+                }
+            }
+            return Some(*base);
+        }
+        None
     }
 
     fn handle_sampled_event(&mut self, sampled_event: &'a AwgEvent) -> Result<()> {

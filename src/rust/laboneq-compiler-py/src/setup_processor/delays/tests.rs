@@ -7,11 +7,11 @@ mod test_compute_delays {
 
     use laboneq_common::{
         device_traits::{DEFAULT_HDAWG_LEAD_DESKTOP_SETUP, DEFAULT_UHFQA_LEAD_PQSC},
-        types::{DeviceKind, PhysicalDeviceUid},
+        types::DeviceKind,
     };
     use laboneq_dsl::signal_calibration::{
         BounceCompensation, ExponentialCompensation, FirCompensation, HighPassCompensation,
-        OutputRoute, Precompensation,
+        Precompensation,
     };
     use smallvec::SmallVec;
 
@@ -26,20 +26,20 @@ mod test_compute_delays {
     #[allow(clippy::too_many_arguments)]
     fn create_signal_props<'a>(
         uid: u32,
-        physical_device: u16,
+        device_uid: u32,
         device_kind: DeviceKind,
         sampling_rate: f64,
-        channels: &[u16],
-        output_routes: Vec<&'a OutputRoute>,
+        ports: &'a Vec<String>,
+        output_route_channels: &'a SmallVec<[String; 4]>,
         precompensation: Option<&'a Precompensation>,
     ) -> SignalDelayProperties<'a> {
         SignalDelayProperties::new(
             uid.into(),
-            SmallVec::from_slice(channels),
-            PhysicalDeviceUid(physical_device),
+            ports,
             sampling_rate,
+            device_uid.into(),
             device_kind,
-            output_routes,
+            output_route_channels.iter().map(|s| s.as_str()).collect(),
             precompensation,
         )
         .unwrap()
@@ -84,9 +84,18 @@ mod test_compute_delays {
 
     #[test]
     fn test_compute_delays_no_delays() {
-        let signal_a = create_signal_props(0, 0, DeviceKind::Shfsg, 2e9, &[0], vec![], None);
-        let signal_b = create_signal_props(1, 1, DeviceKind::Hdawg, 2e9, &[0], vec![], None);
-        let signal_c = create_signal_props(2, 0, DeviceKind::Shfsg, 2e9, &[0], vec![], None);
+        let ports_0 = &vec![0.to_string()];
+        let ports_1 = &vec![1.to_string()];
+        let ports_2 = &vec![2.to_string()];
+
+        let output_routes = &SmallVec::new();
+
+        let signal_a =
+            create_signal_props(0, 0, DeviceKind::Shfsg, 2e9, ports_0, output_routes, None);
+        let signal_b =
+            create_signal_props(1, 1, DeviceKind::Hdawg, 2e9, ports_1, output_routes, None);
+        let signal_c =
+            create_signal_props(2, 0, DeviceKind::Shfsg, 2e9, ports_2, output_routes, None);
 
         let signals = vec![signal_a, signal_b, signal_c];
         let delays = compute_signal_delays(&signals, false);
@@ -113,28 +122,18 @@ mod test_compute_delays {
     /// and that HDAWG signal delays are compensated accordingly.
     #[test]
     fn test_compute_delays_with_output_routing() {
-        let output_route_1 = OutputRoute {
-            source_channel: 1,
-            amplitude_scaling: None,
-            phase_shift: None,
-        };
-        let output_route_2 = OutputRoute {
-            source_channel: 3,
-            amplitude_scaling: None,
-            phase_shift: None,
-        };
+        let ports_0 = &vec![0.to_string()];
+        let ports_1 = &vec![1.to_string()];
 
-        let signal_sg_0 = create_signal_props(
-            0,
-            1,
-            DeviceKind::Shfsg,
-            2e9,
-            &[0],
-            vec![&output_route_1, &output_route_2],
-            None,
-        );
-        let signal_sg_1 = create_signal_props(1, 1, DeviceKind::Shfsg, 2e9, &[1], vec![], None);
-        let signal_hdawg_0 = create_signal_props(2, 2, DeviceKind::Hdawg, 2e9, &[0], vec![], None);
+        let output_routes_0 = &SmallVec::from_vec(vec!["0".to_string(), "1".to_string()]);
+        let output_routes_1 = &SmallVec::new();
+
+        let signal_sg_0 =
+            create_signal_props(0, 1, DeviceKind::Shfsg, 2e9, ports_0, output_routes_0, None);
+        let signal_sg_1 =
+            create_signal_props(1, 1, DeviceKind::Shfsg, 2e9, ports_1, output_routes_1, None);
+        let signal_hdawg_0 =
+            create_signal_props(2, 2, DeviceKind::Hdawg, 2e9, ports_0, output_routes_1, None);
 
         let signals = vec![signal_sg_0, signal_sg_1, signal_hdawg_0];
         let delays = compute_signal_delays(&signals, false);
@@ -156,24 +155,25 @@ mod test_compute_delays {
     /// and the other signal delays are calculated accordingly.
     #[test]
     fn test_compute_delays_with_precompensation() {
-        let precomp = dummy_precompensation(0, true, false, false);
-        let output_route = OutputRoute {
-            source_channel: 1,
-            amplitude_scaling: None,
-            phase_shift: None,
-        };
+        let ports_0 = &vec![0.to_string()];
+        let output_routes_0 = &SmallVec::from_vec(vec!["1".to_string()]);
 
-        let signal_output_route = create_signal_props(
-            0,
-            0,
-            DeviceKind::Shfsg,
+        let ports_1 = &vec![0.to_string()];
+        let output_routes_1 = &SmallVec::new();
+
+        let precomp = dummy_precompensation(0, true, false, false);
+
+        let signal_output_route =
+            create_signal_props(0, 0, DeviceKind::Shfsg, 2e9, ports_0, output_routes_0, None);
+        let signal_precomp = create_signal_props(
+            1,
+            1,
+            DeviceKind::Hdawg,
             2e9,
-            &[0],
-            vec![&output_route],
-            None,
+            ports_1,
+            output_routes_1,
+            Some(&precomp),
         );
-        let signal_precomp =
-            create_signal_props(1, 1, DeviceKind::Hdawg, 2e9, &[0], vec![], Some(&precomp));
 
         let signals = vec![signal_output_route, signal_precomp];
         let delays = compute_signal_delays(&signals, false);
@@ -197,9 +197,28 @@ mod test_compute_delays {
 
     #[test]
     fn test_compute_delays_hdawg_uhfqa() {
+        let ports_0 = &vec![0.to_string()];
+        let output_routes_0 = &SmallVec::new();
+
         // Test with different sample multiples affecting delay calculations
-        let signal_hdawg = create_signal_props(0, 0, DeviceKind::Hdawg, 2.4e9, &[0], vec![], None);
-        let signal_uhfqa = create_signal_props(1, 1, DeviceKind::Uhfqa, 1.8e9, &[0], vec![], None);
+        let signal_hdawg = create_signal_props(
+            0,
+            0,
+            DeviceKind::Hdawg,
+            2.4e9,
+            ports_0,
+            output_routes_0,
+            None,
+        );
+        let signal_uhfqa = create_signal_props(
+            1,
+            1,
+            DeviceKind::Uhfqa,
+            1.8e9,
+            ports_0,
+            output_routes_0,
+            None,
+        );
 
         let signals = vec![signal_hdawg, signal_uhfqa];
         let delays = compute_signal_delays(&signals, true);

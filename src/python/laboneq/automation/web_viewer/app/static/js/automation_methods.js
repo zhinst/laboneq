@@ -1,3 +1,6 @@
+// Copyright 2026 Zurich Instruments AG
+// SPDX-License-Identifier: Apache-2.0
+
 async function resetAutomation() {
     if (!confirm("Are you sure you want to reset the automation?")) return;
 

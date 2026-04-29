@@ -56,7 +56,6 @@ impl DeviceSetupCapnpBuilderPy {
         ports,
         instrument_uid,
         channel_type,
-        awg_core,
         amplitude=None,
         oscillator=None,
         lo_frequency=None,
@@ -79,7 +78,6 @@ impl DeviceSetupCapnpBuilderPy {
         ports: Vec<Py<PyString>>,
         instrument_uid: Py<PyString>,
         channel_type: Py<PyString>,
-        awg_core: i64,
 
         // Calibration
         amplitude: Option<Py<PyAny>>,
@@ -102,7 +100,6 @@ impl DeviceSetupCapnpBuilderPy {
             ports,
             instrument_uid,
             channel_type,
-            awg_core: awg_core as u64,
 
             // Calibration
             oscillator_index: oscillator.map(|o| o.borrow().index),
@@ -196,7 +193,6 @@ pub(crate) struct SignalPayload {
     pub ports: Vec<Py<PyString>>,
     pub instrument_uid: Py<PyString>,
     pub channel_type: Py<PyString>,
-    pub awg_core: u64,
 
     // Calibration
     pub amplitude: Option<Py<PyAny>>,

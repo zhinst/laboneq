@@ -5,37 +5,42 @@ use std::collections::{HashMap, HashSet};
 
 use laboneq_common::device_traits;
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_common::types::{AuxiliaryDeviceKind, DeviceKind, ReferenceClock};
+use laboneq_common::types::{DeviceKind, SignalKind};
+use laboneq_dsl::device_setup::AuxiliaryDevice;
+use laboneq_dsl::device_setup::DeviceSignal;
 use laboneq_dsl::types::{AcquisitionType, DeviceUid, OscillatorKind, SignalUid};
-use laboneq_ir::awg::AwgCore;
-use laboneq_ir::signal::{Signal, SignalKind};
+use laboneq_ir::signal::Signal;
 use laboneq_ir::system::AwgDevice;
 use laboneq_log::{debug, info, warn};
 use laboneq_units::duration::{Duration, Frequency, Hertz, Second};
 use smallvec::SmallVec;
 
 use crate::SetupProperties;
+use crate::compiler_backend::PreprocessedBackendData;
 use crate::error::{Error, Result};
 use crate::experiment_context::ExperimentContext;
 use crate::setup_processor::DelayRegistry;
 use crate::setup_processor::delays::{SignalDelayProperties, compute_signal_delays};
 use crate::setup_processor::precompensation::{AssignedPrecompensation, adapt_precompensations};
-use crate::signal_properties::SignalProperties;
 
 pub(crate) struct ProcessedSetup {
     pub signals: Vec<Signal>,
     pub devices: Vec<AwgDevice>,
-    pub awgs: Vec<AwgCore>,
+    pub auxiliary_devices: Vec<AuxiliaryDevice>,
     pub on_device_delays: DelayRegistry,
 }
 
+/// Process the setup properties.
+///
+/// TODO: Most of the functionality could be moved to the Compiler backends.
 pub(crate) fn process_setup(
-    mut setup: SetupProperties,
+    setup: SetupProperties,
+    backend_processed: &impl PreprocessedBackendData,
     desktop_setup: bool,
     id_store: &NamedIdStore,
     context: &ExperimentContext,
 ) -> Result<ProcessedSetup> {
-    analyze_setup(&setup)?;
+    let mut signals = setup.signals;
 
     let device_map = setup
         .awg_devices
@@ -43,43 +48,45 @@ pub(crate) fn process_setup(
         .map(|d| (d.uid(), d))
         .collect::<HashMap<_, _>>();
 
-    let sampling_rates = eval_sampling_rates(&setup.signals, &device_map);
+    let sampling_rates = eval_sampling_rates(&signals, &device_map);
 
     resolve_oscillator_modulation(
-        &mut setup.signals,
+        &mut signals,
         &device_map,
         &sampling_rates,
         context,
         id_store,
+        backend_processed,
     )?;
 
     // Adapt precompensation before computing the delays, as the presence of precompensation can affect the delay calculations.
-    adapt_precompensation_on_signals(&mut setup.signals, &device_map)?;
+    adapt_precompensation_on_signals(&mut signals, &device_map, backend_processed)?;
 
     // Compute the on-device delays based on the signal properties and device information.
-    let delays = compute_delays(&setup.signals, &device_map, &sampling_rates, desktop_setup)
+    let delays = compute_delays(&signals, &device_map, &sampling_rates, desktop_setup)
         .map_err(Error::new)?;
 
     // Process the signals, generating the final signal configurations with the computed delays and adapted precompensation settings.
     let signals = process_signals(
-        setup.signals,
+        signals,
         &sampling_rates,
         &device_map,
         &delays,
         id_store,
+        backend_processed,
     )?;
 
     Ok(ProcessedSetup {
         signals,
         devices: setup.awg_devices,
-        awgs: setup.awgs,
+        auxiliary_devices: setup.auxiliary_devices,
         on_device_delays: delays,
     })
 }
 
 /// Evaluates the sampling rates for each signal based on the device information and signal properties.
 fn eval_sampling_rates(
-    signals: &[SignalProperties],
+    signals: &[DeviceSignal],
     device_map: &HashMap<DeviceUid, &AwgDevice>,
 ) -> HashMap<SignalUid, Frequency<Hertz>> {
     let has_shf = device_map
@@ -116,16 +123,24 @@ fn eval_sampling_rates(
 
 /// Resolves the modulation type for oscillators with AUTO modulation based on the device capabilities.
 fn resolve_oscillator_modulation(
-    signals: &mut [SignalProperties],
+    signals: &mut [DeviceSignal],
     device_map: &HashMap<DeviceUid, &AwgDevice>,
     sampling_rates: &HashMap<SignalUid, Frequency<Hertz>>,
     context: &ExperimentContext,
     id_store: &NamedIdStore,
+    backend_processed: &impl PreprocessedBackendData,
 ) -> Result<()> {
-    fn hw_channel_key(signal: &SignalProperties) -> (DeviceUid, SmallVec<[u16; 4]>) {
-        let mut channels = signal.channels.clone();
-        channels.sort();
-        (signal.device_uid, channels)
+    fn hw_channel_key(
+        signal: &DeviceSignal,
+        backend_processed: &impl PreprocessedBackendData,
+    ) -> Option<(DeviceUid, SmallVec<[u16; 4]>)> {
+        if let Some(channels) = backend_processed.channels(signal.uid) {
+            let device_uid = signal.device_uid;
+            let mut channels = channels.clone();
+            channels.sort();
+            return Some((device_uid, channels));
+        }
+        None
     }
 
     // Threshold above which AUTO modulation resolves to HARDWARE on QA devices
@@ -148,15 +163,15 @@ fn resolve_oscillator_modulation(
             let has_long_readout =
                 max_acq_len.is_some_and(|len| len.value() > _LRT_HW_MODULATION_THRESHOLD);
             if has_long_readout {
-                return Some(hw_channel_key(signal));
+                return Some(hw_channel_key(signal, backend_processed));
             }
             None
         })
         .collect::<HashSet<_>>();
 
     for signal in signals {
-        let hw_channel_key = hw_channel_key(signal);
-        if let Some(osc) = signal.oscillator.as_mut()
+        let hw_channel_key = hw_channel_key(signal, backend_processed);
+        if let Some(osc) = signal.calibration.oscillator.as_mut()
             && osc.kind == OscillatorKind::Auto
         {
             let device = device_map.get(&signal.device_uid).unwrap();
@@ -247,47 +262,14 @@ fn max_acquisition_length_seconds(
     }
 }
 
-fn analyze_setup(setup: &SetupProperties) -> Result<()> {
-    let all_devices = setup
-        .awg_devices
-        .iter()
-        .map(|d| d.kind())
-        .collect::<HashSet<_>>();
-
-    let has_sync_devices = setup.auxiliary_devices.iter().any(|i| {
-        matches!(
-            i.kind(),
-            AuxiliaryDeviceKind::Pqsc | AuxiliaryDeviceKind::Qhub
-        )
-    });
-
-    if !has_sync_devices
-        && all_devices.contains(&DeviceKind::Hdawg)
-        && all_devices.contains(&DeviceKind::Uhfqa)
-    {
-        // Check that no internal reference clock is used for UHFQA+HDAWG.
-        // TODO: Shall we move this to the Controller? This is the only place where
-        // the reference clock is accessed.
-        for device in &setup.awg_devices {
-            if device.kind() == DeviceKind::Hdawg
-                && let Some(ReferenceClock::Internal) = device.reference_clock()
-            {
-                return Err(Error::new(
-                    "HDAWG+UHFQA system can only be used with an external clock connected to HDAWG in order to prevent jitter.",
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Generates the signals from the signal properties and device information.
 fn process_signals(
-    signal_properties: Vec<SignalProperties>,
+    signal_properties: Vec<DeviceSignal>,
     sampling_rates: &HashMap<SignalUid, Frequency<Hertz>>,
     devices: &HashMap<DeviceUid, &AwgDevice>,
     delays: &DelayRegistry,
     id_store: &NamedIdStore,
+    backend_processed: &impl PreprocessedBackendData,
 ) -> Result<Vec<Signal>> {
     let signals = signal_properties
         .into_iter()
@@ -296,7 +278,7 @@ fn process_signals(
             let sampling_rate = sampling_rates.get(&prop.uid).unwrap().value();
 
             let signal_delay = round_signal_delay(
-                prop.signal_delay,
+                prop.calibration.signal_delay,
                 sampling_rate,
                 device.traits().sample_multiple,
                 prop.uid,
@@ -305,26 +287,26 @@ fn process_signals(
 
             let signal = Signal {
                 uid: prop.uid,
-                channels: prop.channels,
-                automute: prop.automute,
-                port_mode: prop.port_mode,
-                port_delay: prop.port_delay,
+                ports: prop.ports.into(),
+                automute: prop.calibration.automute,
+                port_mode: prop.calibration.port_mode,
+                port_delay: prop.calibration.port_delay,
                 start_delay: delays.signal_start_delay(prop.uid),
-                amplitude: prop.amplitude,
-                range: prop.range,
-                precompensation: prop.precompensation,
+                amplitude: prop.calibration.amplitude,
+                range: prop.calibration.range,
+                precompensation: prop.calibration.precompensation,
                 signal_delay,
-                awg_key: prop.awg_key,
+                awg_key: backend_processed.awg_key(prop.uid)?,
                 device_uid: prop.device_uid,
                 sampling_rate,
-                amplifier_pump: prop.amplifier_pump,
-                oscillator: prop.oscillator,
-                lo_frequency: prop.lo_frequency,
-                voltage_offset: prop.voltage_offset,
+                amplifier_pump: prop.calibration.amplifier_pump,
+                oscillator: prop.calibration.oscillator,
+                lo_frequency: prop.calibration.lo_frequency,
+                voltage_offset: prop.calibration.voltage_offset,
                 kind: prop.kind,
-                added_outputs: prop.added_outputs,
-                thresholds: prop.thresholds,
-                mixer_calibration: prop.mixer_calibration,
+                added_outputs: prop.calibration.added_outputs,
+                thresholds: prop.calibration.thresholds,
+                mixer_calibration: prop.calibration.mixer_calibration,
             };
             Ok(signal)
         })
@@ -338,22 +320,26 @@ fn process_signals(
 /// This ensures all the signals on that AWG have the delay introduced by the precompensation correctly applied,
 /// even if only some of them have precompensation explicitly set.
 fn adapt_precompensation_on_signals(
-    signals: &mut [SignalProperties],
+    signals: &mut [DeviceSignal],
     devices: &HashMap<DeviceUid, &AwgDevice>,
+    backend_processed: &impl PreprocessedBackendData,
 ) -> Result<()> {
     // Find AWGs that may need precompensation adaptation
     let should_adapt_pc: Vec<_> = signals
         .iter()
         .filter_map(|s| {
             let device = devices.get(&s.device_uid).unwrap();
-            if s.precompensation.is_some() && !device.traits().supports_precompensation {
+            if s.calibration.precompensation.is_some() && !device.traits().supports_precompensation
+            {
                 return Some(Err(Error::new(format!(
                     "Precompensation is not supported on device '{}'.",
                     device.kind(),
                 ))));
             }
-            if s.precompensation.is_some() && device.kind() == DeviceKind::Hdawg {
-                Some(Ok(s.awg_key))
+            if s.calibration.precompensation.is_some() && device.kind() == DeviceKind::Hdawg {
+                Some(Ok(backend_processed
+                    .awg_key(s.uid)
+                    .expect("Expected AWG key")))
             } else {
                 None
             }
@@ -363,20 +349,21 @@ fn adapt_precompensation_on_signals(
     // Extract precompensations for adaptation
     let mut pcs = Vec::new();
     for signal in signals.iter_mut() {
-        if !should_adapt_pc.contains(&signal.awg_key) {
+        let awg_key = &backend_processed.awg_key(signal.uid)?;
+        if !should_adapt_pc.contains(awg_key) {
             continue;
         }
-        if let Some(precomp) = signal.precompensation.take() {
+        if let Some(precomp) = signal.calibration.precompensation.take() {
             pcs.push(AssignedPrecompensation {
                 signal_uid: signal.uid,
-                awg: signal.awg_key,
+                awg: *awg_key,
                 precompensation: Some(precomp),
             });
         } else {
             // Placeholder for signal without precompensation, to ensure it gets adapted if needed
             pcs.push(AssignedPrecompensation {
                 signal_uid: signal.uid,
-                awg: signal.awg_key,
+                awg: *awg_key,
                 precompensation: None,
             });
         }
@@ -387,7 +374,7 @@ fn adapt_precompensation_on_signals(
     // Apply adapted precompensations back to signals
     for pc in pcs {
         if let Some(signal) = signals.iter_mut().find(|s| s.uid == pc.signal_uid) {
-            signal.precompensation = pc.precompensation;
+            signal.calibration.precompensation = pc.precompensation;
         }
     }
     Ok(())
@@ -449,7 +436,7 @@ fn round_delay(
 ///
 /// Returns a struct containing the start and port delays for each signal, which can be used to adjust the signal timing in the setup processing.
 fn compute_delays(
-    signals: &[SignalProperties],
+    signals: &[DeviceSignal],
     devices: &HashMap<DeviceUid, &AwgDevice>,
     sampling_rates: &HashMap<SignalUid, Frequency<Hertz>>,
     desktop_setup: bool,
@@ -460,12 +447,16 @@ fn compute_delays(
             let device = devices.get(&s.device_uid).unwrap();
             SignalDelayProperties::new(
                 s.uid,
-                s.channels.clone(),
-                device.physical_device_uid(),
+                &s.ports,
                 sampling_rates.get(&s.uid).unwrap().value(),
+                device.uid(),
                 device.kind(),
-                s.added_outputs.iter().collect(),
-                s.precompensation.as_ref(),
+                s.calibration
+                    .added_outputs
+                    .iter()
+                    .map(|r| r.source_channel.as_str())
+                    .collect(),
+                s.calibration.precompensation.as_ref(),
             )
             .map_err(Error::new)
         })

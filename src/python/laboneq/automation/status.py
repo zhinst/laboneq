@@ -6,21 +6,20 @@ from enum import Enum
 
 class AutomationStatus(Enum):
     ROOT = "root"
-    FAILED = "failed"
     READY = "ready"
-    PASSED = "passed"
-    MIXED = "mixed"
     RUNNING = "running"
+    PASSED = "passed"
+    FAILED = "failed"
     DEACTIVATED = "deactivated"
-    DEACTIVATED_FAIL = "deactivated (failure)"
+    EMPTY = "empty"
 
     def __str__(self):
         return self.value
 
     @classmethod
     def inactive(cls) -> list["AutomationStatus"]:
-        return [cls.DEACTIVATED, cls.DEACTIVATED_FAIL]
+        return [cls.DEACTIVATED]
 
     @classmethod
     def active(cls) -> list["AutomationStatus"]:
-        return [cls.READY, cls.FAILED, cls.PASSED, cls.MIXED, cls.RUNNING]
+        return [cls.READY, cls.RUNNING, cls.PASSED, cls.FAILED]

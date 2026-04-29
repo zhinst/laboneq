@@ -88,7 +88,7 @@ body {
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: #fafafa;
+    background-color: var(--light-gray);
 }
 
 #controls {
@@ -112,7 +112,7 @@ body {
     height: fit-content;
     box-sizing: border-box;
     overflow-y: auto;
-    max-height: 50vh;
+    max-height: 90vh;
 }
 
 #automation-status {
@@ -140,18 +140,18 @@ body {
     position: absolute;
     top: calc(var(--header-h) + var(--panel-gap));
     right: var(--panel-gap);
-    max-height: calc(100vh - var(--header-h) - 2 * var(--panel-gap));
     border: 0.1rem solid var(--zi-blue);
     opacity: 0;
     visibility: hidden;
     transition:
-        opacity 0.4s ease-out,
-        visibility 0.4s;
+        opacity 0.3s ease-out 0.3s,
+        visibility 0.3s 0.3s;
 }
 
 #node-info.visible {
     opacity: 1;
     visibility: visible;
+    transition: opacity 0s ease-out;
 }
 
 #layer-legend {
@@ -187,7 +187,19 @@ body {
     z-index: -100;
 }
 
-.node.selected circle {
+.node {
+    cursor: pointer;
+}
+
+.node .gear-hole {
+    fill: var(--light-gray);
+}
+
+.node .gear-teeth {
+    fill: var(--light-black);
+}
+
+.node.selected > .node-circle {
     stroke: var(--zi-blue);
 }
 
@@ -199,7 +211,7 @@ body {
     opacity: 0.15;
 }
 
-.node.highlighted circle {
+.node.highlighted > .node-circle {
     stroke: white;
     stroke-width: 3;
 }
@@ -259,8 +271,12 @@ svg.btn-icon {
     transition:
         max-height 0.4s ease,
         margin-top 0.4s ease,
-        max-width 0.4s ease 0.4s,
-        padding 0.4s ease 0.4s;
+        max-width 0.4s ease,
+        padding 0.4s ease;
+}
+
+.node-legend-items {
+    max-width: inherit;
 }
 
 .legend-items.open {
@@ -271,8 +287,8 @@ svg.btn-icon {
     transition:
         max-width 0.4s ease,
         padding 0.4s ease,
-        max-height 0.4s ease 0.4s,
-        margin-top 0.4s ease 0.4s;
+        max-height 0.4s ease,
+        margin-top 0.4s ease;
 }
 
 .legend-row {
@@ -281,7 +297,7 @@ svg.btn-icon {
     column-gap: 0.75rem;
     align-items: baseline;
     font-size: 1.25rem;
-    white-space: nowrap;
+    white-space: pre-wrap;
 }
 
 #layer-legend.legend-panel .legend-row,
@@ -298,7 +314,6 @@ svg.btn-icon {
 
 .legend-right {
     justify-self: end;
-    text-align: right;
     min-width: 0;
     overflow-wrap: anywhere;
 }
@@ -409,16 +424,6 @@ svg.btn-icon {
     display: none;
 }
 
-.node-result-thumbnail-wrapper {
-    display: grid;
-    grid-template-rows: 0fr;
-    transition: grid-template-rows 0.4s ease;
-}
-
-.node-result-thumbnail-wrapper.visible {
-    grid-template-rows: 1fr;
-}
-
 .node-result-thumbnail {
     display: block;
     max-width: 20rem;
@@ -427,7 +432,9 @@ svg.btn-icon {
     overflow: hidden;
     opacity: 0;
     cursor: pointer;
-    transition: opacity 0.4s ease;
+    transition:
+        opacity 0.4s,
+        max-height 0.4s;
     border-radius: 0.4vmin;
     border: 0.1vmin solid var(--dark-gray);
 }
@@ -527,8 +534,16 @@ svg.btn-icon {
     justify-content: space-between;
 }
 
+#node-info-rows {
+    min-width: stretch;
+}
+
 .run-element-button {
     height: 2rem;
+}
+
+.run-element-button[hidden] {
+    display: none;
 }
 
 .toast-close {

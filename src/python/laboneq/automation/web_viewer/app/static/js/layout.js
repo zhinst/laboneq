@@ -69,7 +69,8 @@ function hideToast() {
 }
 
 function highlightLayer(layerKey) {
-    g.selectAll("g.node circle")
+    g.selectAll("g.node")
+        .select("circle")
         .attr("fill", (d) => {
             const color = statusColorMap[d.status] || colorPalette.zi_blue;
             return d.layer === layerKey ? color : d3.color(color).darker(1.5);
@@ -130,13 +131,10 @@ function highlightLayer(layerKey) {
 }
 
 function clearHighlight() {
-    g.selectAll("g.node circle")
+    g.selectAll("g.node")
+        .select("circle")
         .attr("fill", (d) => statusColorMap[d.status] || colorPalette.zi_blue)
         .style("filter", null);
     g.selectAll(".link").style("stroke", null);
     g.selectAll(".layer-label").remove();
-}
-
-function closeNodeInfoPanel() {
-    d3.select("#node-info").classed("visible", false);
 }

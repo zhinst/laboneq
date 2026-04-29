@@ -121,3 +121,23 @@ impl Display for ReferenceClock {
         write!(f, "{}", out)
     }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SignalKind {
+    Rf,
+    Integration,
+    Iq,
+}
+
+impl std::str::FromStr for SignalKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "rf" => Ok(SignalKind::Rf),
+            "iq" => Ok(SignalKind::Iq),
+            "integration" => Ok(SignalKind::Integration),
+            _ => Err(format!("Unknown signal type: {}", s)),
+        }
+    }
+}

@@ -22,3 +22,4 @@ pyo3 = { workspace = true }
 codegenerator-py = { workspace = true }
 laboneq-scheduler = { workspace = true }
 laboneq-compiler-py = { workspace = true }
+laboneq-qccs-backend = { workspace = true }

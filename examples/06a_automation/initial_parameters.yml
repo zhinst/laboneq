@@ -1,0 +1,18 @@
+l1:
+  n1:
+    seed: 1
+  n2:
+    seed: 2
+  n3:
+    seed: 3
+  n4:
+    seed: 4
+l2:
+  n1:
+    seed: 1
+  n2:
+    seed: 1
+  n3:
+    seed: 1
+  n4:
+    seed: 1

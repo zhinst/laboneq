@@ -138,7 +138,6 @@ class ExperimentInfoBuilder:
             device_setup_fingerprint=device_setup_fingerprint(self._device_setup),
             devices=list(self._device_info.device_mapping.values()),
             signals=sorted(self._signal_infos.values(), key=lambda s: s.uid),
-            acquisition_type=self._acquisition_type,
             chunking=self._chunking_info,
             src=self._experiment,
             dsl_parameters=list(self._dsl_parameters.values()),
@@ -519,6 +518,7 @@ class ExperimentInfoBuilder:
                         from_signal=self._ls_to_exp_sig_mapping.get(
                             self._setup_helper.logical_signal_path(source_signal)
                         ),
+                        from_port=from_port.path,
                         amplitude=self.opt_param(route_amplitude, nt_only=True),
                         phase=self.opt_param(
                             self._route_phase(output_router), nt_only=True

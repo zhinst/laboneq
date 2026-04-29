@@ -112,13 +112,19 @@ class FolderStore(LogbookStore):
 
         if workflow.storage_key:
             log_path_stem = Path(self._folder, day, *workflow.storage_key)
+            if not log_path_stem.resolve().is_relative_to(self._folder.resolve()):
+                raise ValueError(
+                    f"Workflow storage_key {workflow.storage_key!r} escapes the store folder."
+                )
             log_path_stem.mkdir(parents=True, exist_ok=True)
         else:
             log_path_stem = Path(self._folder, day)
             log_path_stem.mkdir(parents=False, exist_ok=True)
 
         assert workflow.name is not None  # noqa: S101
-        folder_name = self._unique_workflow_folder_name(workflow.name, start_time)
+        folder_name = self._unique_workflow_folder_name(
+            workflow.name, start_time, log_path_stem
+        )
 
         return FolderLogbook(
             log_path_stem / folder_name,
@@ -147,13 +153,18 @@ class FolderStore(LogbookStore):
         return SaveMode(save_mode)
 
     def _unique_workflow_folder_name(
-        self, workflow_name: str, start_time: datetime.datetime
+        self,
+        workflow_name: str,
+        start_time: datetime.datetime,
+        log_path_stem: Path | None = None,
     ) -> str:
         """Generate a unique workflow folder name within the storage folder.
 
         Arguments:
             workflow_name: The name of the workflow.
             start_time: The start time of the workflow execution.
+            log_path_stem: The directory in which to check for uniqueness.
+                Defaults to ``self._folder / day``.
 
         Returns:
             A unique name for the folder.
@@ -161,14 +172,14 @@ class FolderStore(LogbookStore):
         day = local_date_stamp(start_time)
         ts = local_timestamp(start_time)
         workflow_name = _sanitize_filename(workflow_name)
+        search_dir = log_path_stem if log_path_stem is not None else self._folder / day
         count = 0
         while True:
             if count > 0:
                 potential_name = f"{ts}-{workflow_name}-{count}"
             else:
                 potential_name = f"{ts}-{workflow_name}"
-            workflow_path = self._folder / day / potential_name
-            if not workflow_path.exists():
+            if not (search_dir / potential_name).exists():
                 return potential_name
             count += 1
 

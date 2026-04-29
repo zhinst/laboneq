@@ -18,7 +18,7 @@ from laboneq.core.utilities.attribute_wrapper import AttributeWrapper  # noqa: F
 # Import of AcquiredResult and AttributeWrapper is to support
 # laboneq_applications/analysis/plotting_helpers which imports
 # it from here.
-from laboneq.dsl.result import AcquiredResult, Results  # noqa: F401
+from laboneq.dsl.result import AcquiredResult, Results, combine_results  # noqa: F401
 
 if TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment
@@ -28,32 +28,6 @@ if TYPE_CHECKING:
 # Deprecated alias for Results used by laboneq-applications.
 # Remove once laboneq-applications has been updated:
 RunExperimentResults = Results
-
-
-def _combine_results(results: list[Results]) -> Results:
-    """Combine a list of `Results` objects into a single `Results` object.
-
-    !!! warning
-        Currently, only the `acquired_results` and `execution_errors` fields are
-        combined.
-
-    Arguments:
-        results: The list of `Results` objects to combine.
-
-    Returns:
-        The combined `Results` object.
-
-    TODO:
-        - Raise an error when `Results` objects cannot be combined.
-        - Combine all fields of the `Results` objects.
-    """
-    combined = Results()
-    for result in results:
-        for handle, data in result.acquired_results.items():
-            combined.acquired_results[handle] = data
-        combined.execution_errors.extend(result.execution_errors)
-
-    return combined
 
 
 def _validate_inject_results(
@@ -111,7 +85,7 @@ def _combine_results_from_file_paths(paths: list[Path]) -> Results:
     if not paths:
         raise ValueError("No results file paths provided.")
 
-    return _combine_results([_load_results(p) for p in paths])
+    return combine_results([_load_results(p) for p in paths])
 
 
 def _are_results_compatible(
@@ -135,13 +109,18 @@ def _are_results_compatible(
         results_to_validate.acquired_results.keys()
         <= target_results.acquired_results.keys()
     )
-    shapes_match = all(
+
+    if not keys_match:
+        return False
+
+    if not check_shapes:
+        return True
+
+    return all(
         results_to_validate.acquired_results[key].data.shape
         == target_results.acquired_results[key].data.shape
         for key in results_to_validate.acquired_results
     )
-    # return according to setting
-    return keys_match and (shapes_match or not check_shapes)
 
 
 @workflow.task_options
@@ -193,7 +172,10 @@ class RunExperimentOptions:
         # We convert `Path` to `str` so that the workflow inputs are JSON-serializable
         converter=lambda v: {**v, "paths": [str(p) for p in v.get("paths", [])]},
         description=(
-            "Inject results loaded from a previously serialized LabOne Q run.\n"
+            "Inject results loaded from a previously serialized LabOne Q run.\n\n"
+            "!!! Note: the sweep points are not injected. Please make sure that the\n"
+            "sweep point values you pass to the workflow are the same as those that\n"
+            "were used in the experiment you are loading the data for.\n\n"
             "Keys:\n"
             "  - use (Literal['no', 'emulation', 'always']): Controls when to inject results.\n"
             "      * 'no'        : never inject\n"
@@ -208,6 +190,19 @@ class RunExperimentOptions:
             "      Default: True\n"
         ),
     )
+
+
+def _workflow_comment(message: str):
+    """Add a comment to the logbook of a running workflow.
+
+    !!! note
+        This function does nothing when it's called outside a running workflow.
+
+    Arguments:
+        message: The comment to add.
+    """
+    if workflow.execution_info():
+        workflow.comment(message)
 
 
 @workflow.task
@@ -252,6 +247,9 @@ def run_experiment(
             and session._connection_state.emulated
         )
     ):
+        _workflow_comment(
+            f"Injecting results from paths: {opts.inject_results['paths']}"
+        )
         paths = [Path(p) for p in opts.inject_results["paths"]]
         injected_results = _combine_results_from_file_paths(paths)
         # checking that dimensions are matching using emulated results
@@ -259,9 +257,9 @@ def run_experiment(
             results, injected_results, opts.inject_results["check_shapes"]
         ):
             warn_string = (
-                f"The injected results from '{opts.inject_results['path']}' are not compatible "
-                r"with the expected results. "
-                r"Please check that the dimensions and structure of the results match."
+                f"The injected results from '{opts.inject_results['paths']}' "
+                "are not compatible with the expected results. "
+                "Please check that the dimensions and structure of the results match."
             )
             raise ValueError(warn_string)
 

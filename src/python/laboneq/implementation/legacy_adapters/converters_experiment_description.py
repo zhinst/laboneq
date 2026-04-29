@@ -2,22 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from laboneq.core.types.enums.averaging_mode import AveragingMode as AveragingModeDSL
-from laboneq.core.types.enums.execution_type import ExecutionType as ExecutionTypeDSL
-from laboneq.core.types.enums.repetition_mode import RepetitionMode as RepetitionModeDSL
-from laboneq.core.types.enums.section_alignment import (
-    SectionAlignment as SectionAlignmentDSL,
-)
-from laboneq.core.types.enums.section_timing_mode import (
-    SectionTimingMode as SectionTimingModeDSL,
-)
 from laboneq.data.experiment_description import Acquire as AcquireDATA
 from laboneq.data.experiment_description import AcquireLoopRt as AcquireLoopRtDATA
-from laboneq.data.experiment_description import AveragingMode as AveragingModeDATA
 from laboneq.data.experiment_description import Call as CallDATA
 from laboneq.data.experiment_description import Case as CaseDATA
 from laboneq.data.experiment_description import Delay as DelayDATA
-from laboneq.data.experiment_description import ExecutionType as ExecutionTypeDATA
 from laboneq.data.experiment_description import Experiment as ExperimentDATA
 from laboneq.data.experiment_description import ExperimentSignal as ExperimentSignalDATA
 from laboneq.data.experiment_description import Match as MatchDATA
@@ -28,16 +17,11 @@ from laboneq.data.experiment_description import PulseFunctional as PulseFunction
 from laboneq.data.experiment_description import (
     PulseSampled as PulseSampledDATA,
 )
-from laboneq.data.experiment_description import RepetitionMode as RepetitionModeDATA
 from laboneq.data.experiment_description import Reserve as ReserveDATA
 from laboneq.data.experiment_description import (
     ResetOscillatorPhase as ResetOscillatorPhaseDATA,
 )
 from laboneq.data.experiment_description import Section as SectionDATA
-from laboneq.data.experiment_description import SectionAlignment as SectionAlignmentDATA
-from laboneq.data.experiment_description import (
-    SectionTimingMode as SectionTimingModeDATA,
-)
 from laboneq.data.experiment_description import SetNode as SetDATA
 from laboneq.data.experiment_description import Sweep as SweepDATA
 from laboneq.data.parameter import LinearSweepParameter as LinearSweepParameterDATA
@@ -78,46 +62,6 @@ from .calibration_converter import convert_calibration
 from .post_process_experiment_description import post_process
 
 
-def convert_AveragingMode(orig: AveragingModeDSL):
-    return (
-        next(e for e in AveragingModeDATA if e.name == orig.name)
-        if orig is not None
-        else None
-    )
-
-
-def convert_ExecutionType(orig: ExecutionTypeDSL):
-    return (
-        next(e for e in ExecutionTypeDATA if e.name == orig.name)
-        if orig is not None
-        else None
-    )
-
-
-def convert_RepetitionMode(orig: RepetitionModeDSL):
-    return (
-        next(e for e in RepetitionModeDATA if e.name == orig.name)
-        if orig is not None
-        else None
-    )
-
-
-def convert_SectionAlignment(orig: SectionAlignmentDSL):
-    return (
-        next(e for e in SectionAlignmentDATA if e.name == orig.name)
-        if orig is not None
-        else None
-    )
-
-
-def convert_SectionTimingMode(orig: SectionTimingModeDSL | None):
-    return (
-        next(e for e in SectionTimingModeDATA if e.name == orig.name)
-        if orig is not None
-        else None
-    )
-
-
 def convert_Acquire(orig: AcquireDSL):
     if orig is None:
         return None
@@ -136,22 +80,21 @@ def convert_AcquireLoopRt(orig: AcquireLoopRtDSL):
     if orig is None:
         return None
     retval = AcquireLoopRtDATA()
-    retval.alignment = convert_SectionAlignment(orig.alignment)
+    retval.alignment = orig.alignment
     retval.children = convert_dynamic(orig.children, converter_function_directory)
-    retval.execution_type = convert_ExecutionType(orig.execution_type)
+    retval.execution_type = orig.execution_type
     retval.length = orig.length
     retval.on_system_grid = orig.on_system_grid
     retval.play_after = convert_dynamic(orig.play_after, converter_function_directory)
     retval.trigger = convert_dynamic(orig.trigger, converter_function_directory)
     retval.uid = orig.uid
     retval.acquisition_type = orig.acquisition_type
-    retval.averaging_mode = convert_AveragingMode(orig.averaging_mode)
+    retval.averaging_mode = orig.averaging_mode
     retval.count = orig.count
-    retval.execution_type = convert_ExecutionType(orig.execution_type)
-    retval.repetition_mode = convert_RepetitionMode(orig.repetition_mode)
+    retval.repetition_mode = orig.repetition_mode
     retval.repetition_time = orig.repetition_time
     retval.reset_oscillator_phase = orig.reset_oscillator_phase
-    retval.section_timing_mode = convert_SectionTimingMode(orig.section_timing_mode)
+    retval.section_timing_mode = orig.section_timing_mode
     retval.uid = orig.uid
     return retval
 
@@ -169,16 +112,16 @@ def convert_Case(orig: CaseDSL):
     if orig is None:
         return None
     retval = CaseDATA()
-    retval.alignment = convert_SectionAlignment(orig.alignment)
+    retval.alignment = orig.alignment
     retval.children = convert_dynamic(orig.children, converter_function_directory)
-    retval.execution_type = convert_ExecutionType(orig.execution_type)
+    retval.execution_type = orig.execution_type
     retval.length = orig.length
     retval.on_system_grid = orig.on_system_grid
     retval.play_after = convert_dynamic(orig.play_after, converter_function_directory)
     retval.trigger = convert_dynamic(orig.trigger, converter_function_directory)
     retval.uid = orig.uid
     retval.state = orig.state
-    retval.section_timing_mode = convert_SectionTimingMode(orig.section_timing_mode)
+    retval.section_timing_mode = orig.section_timing_mode
     retval.uid = orig.uid
     return retval
 
@@ -233,9 +176,9 @@ def convert_Match(orig: MatchDSL):
     if orig is None:
         return None
     retval = MatchDATA()
-    retval.alignment = convert_SectionAlignment(orig.alignment)
+    retval.alignment = orig.alignment
     retval.children = convert_dynamic(orig.children, converter_function_directory)
-    retval.execution_type = convert_ExecutionType(orig.execution_type)
+    retval.execution_type = orig.execution_type
     retval.length = orig.length
     retval.on_system_grid = orig.on_system_grid
     retval.play_after = convert_dynamic(orig.play_after, converter_function_directory)
@@ -250,7 +193,7 @@ def convert_Match(orig: MatchDSL):
         orig.sweep_parameter, converter_function_directory
     )
     retval.local = orig.local
-    retval.section_timing_mode = convert_SectionTimingMode(orig.section_timing_mode)
+    retval.section_timing_mode = orig.section_timing_mode
     retval.uid = orig.uid
     return post_process(orig, retval, converter_function_directory)
 
@@ -330,12 +273,12 @@ def convert_Section(orig: SectionDSL) -> SectionDATA | None:
     if orig is None:
         return None
     retval = SectionDATA()
-    retval.alignment = convert_SectionAlignment(orig.alignment)
+    retval.alignment = orig.alignment
     retval.children = convert_dynamic(orig.children, converter_function_directory)
-    retval.execution_type = convert_ExecutionType(orig.execution_type)
+    retval.execution_type = orig.execution_type
     retval.length = orig.length
     retval.on_system_grid = orig.on_system_grid
-    retval.section_timing_mode = convert_SectionTimingMode(orig.section_timing_mode)
+    retval.section_timing_mode = orig.section_timing_mode
     retval.play_after = convert_dynamic(orig.play_after, converter_function_directory)
     retval.trigger = convert_dynamic(orig.trigger, converter_function_directory)
     retval.uid = orig.uid
@@ -355,7 +298,7 @@ def convert_Sweep(orig: SweepDSL):
     if orig is None:
         return None
     retval = SweepDATA()
-    retval.execution_type = convert_ExecutionType(orig.execution_type)
+    retval.execution_type = orig.execution_type
     retval.parameters = convert_dynamic(orig.parameters, converter_function_directory)
     retval.children = convert_dynamic(orig.children, converter_function_directory)
     retval.reset_oscillator_phase = orig.reset_oscillator_phase
@@ -363,7 +306,7 @@ def convert_Sweep(orig: SweepDSL):
     retval.chunk_count = orig.chunk_count
     retval.auto_chunking = orig.auto_chunking
     retval.alignment = convert_dynamic(orig.alignment, converter_function_directory)
-    retval.section_timing_mode = convert_SectionTimingMode(orig.section_timing_mode)
+    retval.section_timing_mode = orig.section_timing_mode
     return retval
 
 
@@ -403,8 +346,8 @@ def convert_PRNGSample(prng_sample: PRNGSampleDSL):
 def convert_PRNGSetup(prng_setup: PRNGSetupDSL):
     return PRNGSetupDATA(
         uid=prng_setup.uid,
-        alignment=convert_SectionAlignment(prng_setup.alignment),
-        execution_type=convert_ExecutionType(prng_setup.execution_type),
+        alignment=prng_setup.alignment,
+        execution_type=prng_setup.execution_type,
         length=convert_dynamic(prng_setup.length, converter_function_directory),
         play_after=convert_dynamic(prng_setup.play_after, converter_function_directory),
         children=convert_dynamic(prng_setup.children, converter_function_directory),
@@ -415,8 +358,8 @@ def convert_PRNGSetup(prng_setup: PRNGSetupDSL):
 def convert_PRNGLoop(prng_loop: PRNGLoopDSL):
     return PRNGLoopDATA(
         uid=prng_loop.uid,
-        alignment=convert_SectionAlignment(prng_loop.alignment),
-        execution_type=convert_ExecutionType(prng_loop.execution_type),
+        alignment=prng_loop.alignment,
+        execution_type=prng_loop.execution_type,
         length=convert_dynamic(prng_loop.length, converter_function_directory),
         play_after=convert_dynamic(prng_loop.play_after, converter_function_directory),
         children=convert_dynamic(prng_loop.children, converter_function_directory),

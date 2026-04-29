@@ -7,14 +7,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List
 
-from laboneq.core.types.enums import ReferenceClockSource
+from laboneq.core.types.enums import (
+    IODirection,
+    PhysicalChannelType,
+    ReferenceClockSource,
+)
 from laboneq.data import EnumReprMixin
 from laboneq.data.calibration import Calibration
-
-
-class IODirection(EnumReprMixin, Enum):
-    IN = "in"
-    OUT = "out"
 
 
 class DeviceType(EnumReprMixin, Enum):
@@ -35,11 +34,6 @@ class DeviceType(EnumReprMixin, Enum):
     SHFPPC = "shfppc"
     ZQCS = "zqcs"
     UNMANAGED = "unmanaged"
-
-
-class PhysicalChannelType(EnumReprMixin, Enum):
-    IQ_CHANNEL = "iq_channel"
-    RF_CHANNEL = "rf_channel"
 
 
 class PortType(EnumReprMixin, Enum):

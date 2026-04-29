@@ -20,3 +20,13 @@ impl FromStr for PortMode {
         }
     }
 }
+
+impl std::fmt::Display for PortMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            PortMode::LF => "LF",
+            PortMode::RF => "RF",
+        };
+        write!(f, "{}", s)
+    }
+}

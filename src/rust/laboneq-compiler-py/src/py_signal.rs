@@ -7,12 +7,19 @@ use pyo3::prelude::*;
 pub struct AmplifierPumpPy {
     pub device: String,
     pub channel: u16,
+    pub alc_on: bool,
+    pub pump_on: bool,
+    pub pump_filter_on: bool,
     pub pump_power: Py<PyAny>,
     pub pump_frequency: Py<PyAny>,
+    pub probe_on: bool,
     pub probe_power: Py<PyAny>,
     pub probe_frequency: Py<PyAny>,
+    pub cancellation_on: bool,
     pub cancellation_phase: Py<PyAny>,
     pub cancellation_attenuation: Py<PyAny>,
+    pub cancellation_source: String, // INTERNAL | EXTERNAL
+    pub cancellation_source_frequency: Option<f64>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -22,22 +29,36 @@ impl AmplifierPumpPy {
     pub fn new(
         device: String,
         channel: u16,
+        alc_on: bool,
+        pump_on: bool,
+        pump_filter_on: bool,
         pump_power: Py<PyAny>,
         pump_frequency: Py<PyAny>,
+        probe_on: bool,
         probe_power: Py<PyAny>,
         probe_frequency: Py<PyAny>,
+        cancellation_on: bool,
         cancellation_phase: Py<PyAny>,
         cancellation_attenuation: Py<PyAny>,
+        cancellation_source: String,
+        cancellation_source_frequency: Option<f64>,
     ) -> Self {
         Self {
             device,
             channel,
+            alc_on,
+            pump_on,
+            pump_filter_on,
             pump_power,
             pump_frequency,
+            probe_on,
             probe_power,
             probe_frequency,
+            cancellation_on,
             cancellation_phase,
             cancellation_attenuation,
+            cancellation_source,
+            cancellation_source_frequency,
         }
     }
 }

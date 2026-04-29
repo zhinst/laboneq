@@ -13,18 +13,11 @@ if TYPE_CHECKING:
     from laboneq.compiler.common.iface_code_generator import ICodeGenerator
     from laboneq.compiler.common.iface_compiler_output import CombinedOutput
     from laboneq.compiler.common.iface_linker import ILinker
-    from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
-    from laboneq.compiler.workflow.compiler import (
-        AWGMapping,
-    )
-    from laboneq.data.awg_info import AWGInfo
     from laboneq.data.recipe import Recipe
 
 
 @dataclass
 class GenerateRecipeArgs:
-    awgs: list[AWGInfo]
-    experiment_dao: ExperimentDAO
     experiment_rs: compiler_rs.ExperimentInfo
     combined_compiler_output: CombinedOutput
 
@@ -49,10 +42,6 @@ class CompilerHooks(ABC):
     @staticmethod
     @abstractmethod
     def compiler_module() -> compiler_rs: ...
-
-    @staticmethod
-    @abstractmethod
-    def calc_awgs(dao: ExperimentDAO) -> AWGMapping: ...
 
 
 T = TypeVar("T", bound=CompilerHooks)
@@ -122,14 +111,6 @@ class CompilerHooksSeqC(CompilerHooks):
 
         assert isinstance(args.combined_compiler_output, CombinedRTOutputSeqC)
         return generate_recipe(
-            args.awgs,
-            args.experiment_dao,
             args.experiment_rs,
             args.combined_compiler_output,
         )
-
-    @staticmethod
-    def calc_awgs(dao: ExperimentDAO) -> AWGMapping:
-        from laboneq.compiler.workflow.compiler import calc_awgs
-
-        return calc_awgs(dao)

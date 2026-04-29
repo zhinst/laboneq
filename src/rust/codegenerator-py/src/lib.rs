@@ -6,9 +6,10 @@ use codegenerator::generate_code;
 use laboneq_common::compiler_settings::CompilerSettings;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::named_id::resolve_ids;
+use laboneq_compiler_py::py_experiment_ir::ExperimentIrPy;
 use laboneq_error::LabOneQError;
 use laboneq_opentelemetry_python::attach_otel_context;
-use laboneq_py_utils::experiment_ir::ExperimentIrPy;
+use laboneq_qccs_backend::QccsBackendPreprocessedData;
 use laboneq_tracing::tracing_is_enabled;
 use laboneq_tracing::with_tracing;
 use pyo3::prelude::*;
@@ -42,8 +43,17 @@ fn generate_code_py(py: Python, ir_experiment: &ExperimentIrPy) -> PyResult<SeqC
 }
 
 fn generate_code_py_impl(py: Python, ir_experiment: &ExperimentIrPy) -> PyResult<SeqCGenOutputPy> {
+    let backend_data = ir_experiment
+        .backend_data
+        .as_any()
+        .downcast_ref::<QccsBackendPreprocessedData>()
+        .ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyTypeError, _>("Invalid backend data type")
+        })?;
+
     let id_store = &ir_experiment.inner.id_store;
-    let codegen_ir = ir_to_codegen_ir(&ir_experiment.inner).map_err(|e| to_pyerr(e, id_store))?;
+    let codegen_ir =
+        ir_to_codegen_ir(&ir_experiment.inner, backend_data).map_err(|e| to_pyerr(e, id_store))?;
     let sampler = WaveformSamplerPy::new(
         py,
         &ir_experiment.inner.pulses,

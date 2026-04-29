@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any, cast
 
@@ -76,9 +77,10 @@ class RemoteController(ControllerAPI):
         pass
 
     def get_default_devicesetup(self) -> DeviceSetup:
-        serialized = self._request("GET", "v1/device-setup")
-        device_setup = cast(DeviceSetup, from_dict(serialized))
-        return device_setup
+        data = self._request_json("GET", "v1/devicesetup")
+        if data.get("device_setup") is None:
+            raise APIError("Server has no device setup configured")
+        return cast(DeviceSetup, from_dict(data["device_setup"]))
 
     def submit_experiment(
         self, scheduled_experiment: ScheduledExperiment
@@ -89,20 +91,45 @@ class RemoteController(ControllerAPI):
         self._request("PUT", f"v1/experiments/{handle.hex}", json=serialized)
         return handle
 
-    def wait_for_experiment(self, handle: SubmissionHandle):
-        raise NotImplementedError
+    def wait_for_experiment(self, handle: SubmissionHandle) -> None:
+        _TERMINAL = {
+            SubmissionStatus.COMPLETED,
+            SubmissionStatus.FAILED,
+            SubmissionStatus.CANCELED,
+        }
+        poll_interval = 0.5
+        while True:
+            exp_status = self.get_experiment_status(handle)
+            if exp_status in _TERMINAL:
+                return
+            time.sleep(poll_interval)
 
     def get_experiment_status(self, handle: SubmissionHandle) -> SubmissionStatus:
-        raise NotImplementedError
+        data = self._request_json("GET", f"v1/experiments/{handle.hex}/status")
+        return SubmissionStatus(data["status"])
 
     def get_experiment(self, handle: SubmissionHandle) -> Results:
-        raise NotImplementedError
+        data = self._request_json("GET", f"v1/experiments/{handle.hex}")
+        if data.get("error"):
+            raise APIError(data["error"])
+        if data.get("results") is not None:
+            return cast(Results, from_dict(data["results"]))
+        raise APIError(f"Experiment has no results (status: {data.get('status')})")
 
-    def cancel_experiment(self, handle: SubmissionHandle):
-        raise NotImplementedError
+    def cancel_experiment(self, handle: SubmissionHandle) -> None:
+        self._request("DELETE", f"v1/experiments/{handle.hex}")
 
-    def close_submission(self, handle: SubmissionHandle):
-        raise NotImplementedError
+    def close_submission(self, handle: SubmissionHandle) -> None:
+        self.cancel_experiment(handle)
+
+    def _request_json(
+        self, method: str, path: str, json: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Like _request, but raises APIError if the response is not a JSON object."""
+        data = self._request(method, path, json=json)
+        if not isinstance(data, dict):
+            raise APIError("Unexpected response from server")
+        return data
 
     def _request(self, method: str, path: str, json: dict[str, Any] | None = None):
         url = f"{self._remote_url}/{path.lstrip('/')}"

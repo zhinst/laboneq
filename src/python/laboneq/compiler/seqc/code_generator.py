@@ -65,7 +65,6 @@ class CodeGenerator(ICodeGenerator):
         self._feedback_register_config: dict[
             AwgKey, codegen_rs.FeedbackRegisterConfig
         ] = {}
-        self._shfppc_sweep_configs: dict[AwgKey, dict[str, object]] = {}
         self._total_execution_time: float | None = None
         self._measurements: list[codegen_rs.Measurement] = []
         self._integration_unit_allocations: dict[
@@ -76,6 +75,8 @@ class CodeGenerator(ICodeGenerator):
             defaultdict(list)
         )
         self._integration_weights: dict[AwgKey, AwgWeights] = {}
+        self._ppc_settings: list[codegen_rs.PpcSettings] = []
+        self._device_properties: list[codegen_rs.DeviceProperties] = []
 
     def get_output(self):
         return SeqCGenOutput(
@@ -93,10 +94,11 @@ class CodeGenerator(ICodeGenerator):
             pulse_map=self.pulse_map(),
             parameter_phase_increment_map=self.parameter_phase_increment_map(),
             feedback_register_configurations=self.feedback_register_config(),
-            shfppc_sweep_configurations=self.shfppc_sweep_configs(),
             measurements=self._measurements,
             integration_unit_allocations=self._integration_unit_allocations,
             channel_properties=self._channel_properties,
+            ppc_settings=self._ppc_settings,
+            device_properties=self._device_properties,
         )
 
     def result_handle_maps(self) -> dict[ResultSource, list[set[str]]]:
@@ -148,8 +150,11 @@ class CodeGenerator(ICodeGenerator):
         self._append_to_pulse_map(signature_pulse_map, sig_string)
 
     def _gen_waves(self):
+        devices_types: dict[str, str] = {
+            dev.uid: dev.device_type for dev in self._device_properties
+        }
         for awg_key in self._awg_keys:
-            device_type: str = self._experiment_ir.device_type_by_uid(awg_key.device_id)
+            device_type: str = devices_types.get(awg_key.device_id)
             awg_properties = self._awg_properties[awg_key]
             # Handle integration weights separately
             integration_weights = self._integration_kernels.get(awg_key, [])
@@ -269,6 +274,8 @@ class CodeGenerator(ICodeGenerator):
             for k, v in codegen_result.result_handle_maps.items()
         }
         self._measurements = codegen_result.measurements
+        self._ppc_settings = codegen_result.ppc_settings
+        self._device_properties = codegen_result.device_properties
 
         for awg_code_output in codegen_result.awg_results:
             awg_key = AwgKey(*awg_code_output.awg_properties.key)
@@ -320,8 +327,6 @@ class CodeGenerator(ICodeGenerator):
                     k: [i if i >= 0 else COMPLEX_USAGE for i in v]
                     for k, v in awg_code_output.parameter_phase_increment_map.items()
                 }
-            if awg_code_output.shf_sweeper_config is not None:
-                self._shfppc_sweep_configs[awg_key] = awg_code_output.shf_sweeper_config
 
         self._gen_waves()
 
@@ -356,6 +361,3 @@ class CodeGenerator(ICodeGenerator):
     ) -> dict[AwgKey, codegen_rs.FeedbackRegisterConfig]:
         # convert defaultdict to dict
         return dict(self._feedback_register_config)
-
-    def shfppc_sweep_configs(self) -> dict[AwgKey, dict[str, object]]:
-        return self._shfppc_sweep_configs

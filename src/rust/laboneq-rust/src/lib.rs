@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use pyo3::prelude::*;
+use pyo3::wrap_pyfunction;
+
+mod compiler;
 
 #[pymodule]
 #[pyo3(name = "_rust")]
@@ -22,6 +25,10 @@ fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     let compiler = laboneq_compiler_py::create_py_module(m.py(), "compiler")
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
+    compiler.add_function(wrap_pyfunction!(
+        compiler::build_experiment_capnp_py,
+        &compiler
+    )?)?;
     modules.set_item("laboneq._rust.compiler", &compiler)?;
     m.add_submodule(&compiler)?;
     Ok(())

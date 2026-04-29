@@ -13,7 +13,6 @@ const statusColorMap = {
     running: "#ffcc33",
     passed: "#38e171",
     failed: "#ff1616",
-    mixed: "#cc3366",
     deactivated: "#888888",
 };
 
@@ -181,7 +180,6 @@ function renderNodes(
         drawCanvas = ".node-canvas",
     },
 ) {
-    const src = startPos || pos;
     const finalOpacity = toLayers ? 0 : 1;
     const enterOpacity = duration > 0 ? 1 - finalOpacity : finalOpacity;
 
@@ -235,6 +233,15 @@ function renderNodes(
                     .attr("fill", "black")
                     .text((d) => d.elements);
 
+                const gear = ng
+                    .filter((d) => d.logic)
+                    .append("g")
+                    .attr("class", "node-gear");
+
+                gear.append("path").attr("class", "gear-teeth");
+
+                gear.append("circle").attr("class", "gear-hole");
+
                 return ng;
             },
             (update) => update,
@@ -263,6 +270,22 @@ function renderNodes(
         .attr("y", (d) => `${nodeRadius / 2.5}px`)
         .style("font-size", (d) => `${nodeRadius / 1.75}px`)
         .style("opacity", finalOpacity);
+
+    // Logic gear
+    const gr = nodeRadius * 0.75;
+    const gearSel = nodeSel.select(".node-gear");
+
+    maybeTransition(gearSel, duration).attr(
+        "transform",
+        `translate(${nodeRadius - gr * 0.2}, -${nodeRadius - gr * 0.2})`,
+    );
+
+    maybeTransition(gearSel.select(".gear-teeth"), duration).attr(
+        "d",
+        gearPath(gr),
+    );
+
+    maybeTransition(gearSel.select(".gear-hole"), duration).attr("r", gr * 0.3);
 }
 
 function renderGraph(

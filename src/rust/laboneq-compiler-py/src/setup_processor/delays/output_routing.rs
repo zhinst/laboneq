@@ -1,9 +1,9 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-pub(super) struct RoutedOutput {
-    pub target: u16,
-    pub channel: u16,
+pub(super) struct RoutedOutput<'a> {
+    pub target: &'a str,
+    pub source: &'a str,
 }
 
 /// Delay in samples introduced by output routing on SHFSG devices.
@@ -15,13 +15,13 @@ pub(super) const OUTPUT_ROUTE_DELAY_SAMPLES: i64 = 52;
 /// where the both channels must be on the same device.
 ///
 /// Returns an iterator of tuples where each tuple contains the channel and the corresponding delay in samples.
-pub(super) fn calculate_output_route_delay(
-    outputs: impl Iterator<Item = RoutedOutput>,
-) -> impl Iterator<Item = (u16, i64)> {
+pub(super) fn calculate_output_route_delay<'a>(
+    outputs: impl Iterator<Item = RoutedOutput<'a>>,
+) -> impl Iterator<Item = (&'a str, i64)> {
     outputs.flat_map(|output| {
-        vec![
+        [
             (output.target, OUTPUT_ROUTE_DELAY_SAMPLES),
-            (output.channel, OUTPUT_ROUTE_DELAY_SAMPLES),
+            (output.source, OUTPUT_ROUTE_DELAY_SAMPLES),
         ]
     })
 }

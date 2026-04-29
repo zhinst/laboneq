@@ -69,7 +69,6 @@ class AsyncLocalController(AsyncControllerAPI):
         controller: Controller,
     ):
         self._device_setup = device_setup
-        # Keep reference to avoid garbage collection
         self._controller = controller
         self._submissions: dict[int, ControllerSubmission] = {}
         # TODO: Remove _legacy_session_data tests once the RuntimeContext endpoints are removed

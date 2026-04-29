@@ -8,7 +8,7 @@ use laboneq_dsl::types::{
 };
 use std::collections::{HashMap, HashSet};
 
-use laboneq_common::types::DeviceKind;
+use laboneq_common::types::{DeviceKind, SignalKind};
 use numeric_array::NumericArray;
 
 use crate::error::{Error, Result};
@@ -17,7 +17,6 @@ use crate::experiment_validation::{
     ExperimentContext, ParamsContext, ValidationContext, validate_parameters::*,
     validate_pulses::*, validate_signals::*,
 };
-use laboneq_ir::signal::SignalKind;
 
 /// Validates [Operation] variants in an experiment.
 pub(super) fn validate_experiment_operations(ctx: &ExperimentContext) -> Result<()> {
@@ -194,7 +193,7 @@ fn check_markers(
         .ok_or(Error::new("Internal error: section not found."))?;
     if matches!(signal.device_kind(), DeviceKind::Hdawg)
         && matches!(signal.signal_kind(), SignalKind::Rf)
-        && signal.channels().len() == 1
+        && signal.ports().len() == 1
         && pulse
             .markers
             .iter()

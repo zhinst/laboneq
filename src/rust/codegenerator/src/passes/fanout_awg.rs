@@ -171,12 +171,12 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
             new_node.add_child_nodes(children);
             nodes.push(new_node);
         }
-        NodeKind::PpcSweepStep(ob) => {
+        NodeKind::PpcStep(ob) => {
             if !contains_signal(ctx, ob.signal.uid) {
                 return;
             }
             let new_node = IrNode::new(
-                NodeKind::PpcSweepStep(ob.clone()),
+                NodeKind::PpcStep(ob.clone()),
                 *node.offset() + parent_offset,
             );
             nodes.push(new_node);

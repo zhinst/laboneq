@@ -51,6 +51,7 @@ pub(crate) enum MixerTypePy {
     /// Mixer performs full complex modulation
     IQ,
     /// Mixer only performs envelope modulation (UHFQA-style)
+    #[pyo3(name = "UHFQA_ENVELOPE")]
     UhfqaEnvelope,
 }
 

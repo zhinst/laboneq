@@ -4,9 +4,9 @@
 use std::collections::HashMap;
 
 use laboneq_common::device_traits::DeviceTraits;
-use laboneq_common::types::{DeviceKind, PhysicalDeviceUid};
-use laboneq_dsl::signal_calibration::{OutputRoute, Precompensation};
-use laboneq_dsl::types::SignalUid;
+use laboneq_common::types::DeviceKind;
+use laboneq_dsl::signal_calibration::Precompensation;
+use laboneq_dsl::types::{DeviceUid, SignalUid};
 use laboneq_units::duration::{Duration, Second};
 use smallvec::SmallVec;
 
@@ -19,7 +19,7 @@ use super::precompensation::precompensation_delay_samples;
 #[derive(Debug)]
 pub(crate) struct DelayRegistry {
     signal_delays: HashMap<SignalUid, SignalDelayInfo>,
-    lead_delays: HashMap<PhysicalDeviceUid, Duration<Second>>,
+    lead_delays: HashMap<DeviceUid, Duration<Second>>,
 }
 
 impl DelayRegistry {
@@ -35,7 +35,7 @@ impl DelayRegistry {
             .map_or(0.0.into(), |info| info.port_delay)
     }
 
-    pub(crate) fn device_lead_delay(&self, device: PhysicalDeviceUid) -> Duration<Second> {
+    pub(crate) fn device_lead_delay(&self, device: DeviceUid) -> Duration<Second> {
         self.lead_delays
             .get(&device)
             .map_or(0.0.into(), |&delay| delay)
@@ -48,7 +48,7 @@ impl DelayRegistry {
         }
     }
 
-    fn add_lead_delay(&mut self, device: PhysicalDeviceUid, delay: Duration<Second>) {
+    fn add_lead_delay(&mut self, device: DeviceUid, delay: Duration<Second>) {
         self.lead_delays.insert(device, delay);
     }
 
@@ -76,11 +76,11 @@ struct SignalDelayInfo {
 
 pub(crate) struct SignalDelayProperties<'a> {
     uid: SignalUid,
-    channels: SmallVec<[u16; 4]>,
-    physical_device: PhysicalDeviceUid,
+    ports: &'a Vec<String>,
+    device_uid: DeviceUid,
     sampling_rate: f64,
     sample_multiple: u16,
-    output_routes: Vec<&'a OutputRoute>,
+    output_route_ports: SmallVec<[&'a str; 4]>,
     precompensation: Option<&'a Precompensation>,
     device_kind: DeviceKind,
 }
@@ -88,14 +88,14 @@ pub(crate) struct SignalDelayProperties<'a> {
 impl<'a> SignalDelayProperties<'a> {
     pub(crate) fn new(
         uid: SignalUid,
-        channels: SmallVec<[u16; 4]>,
-        physical_device: PhysicalDeviceUid,
+        ports: &'a Vec<String>,
         sampling_rate: f64,
+        device_uid: DeviceUid,
         device_kind: DeviceKind,
-        output_routes: Vec<&'a OutputRoute>,
+        output_route_ports: SmallVec<[&'a str; 4]>,
         precompensation: Option<&'a Precompensation>,
     ) -> Result<Self, &'static str> {
-        if device_kind != DeviceKind::Shfsg && !output_routes.is_empty() {
+        if device_kind != DeviceKind::Shfsg && !output_route_ports.is_empty() {
             return Err("Output routing is only supported for SHFSG devices");
         }
         let traits = DeviceTraits::from_device_kind(&device_kind);
@@ -104,11 +104,11 @@ impl<'a> SignalDelayProperties<'a> {
         }
         Ok(Self {
             uid,
-            channels,
-            physical_device,
+            ports,
+            device_uid,
             sampling_rate,
             sample_multiple: traits.sample_multiple,
-            output_routes,
+            output_route_ports,
             precompensation,
             device_kind,
         })
@@ -158,7 +158,7 @@ pub(crate) fn compute_signal_delays(
                 (on_device_delay.on_signal + lead_delay.value()).into(),
                 on_device_delay.on_port.into(),
             );
-            delays.add_lead_delay(signal.physical_device, lead_delay);
+            delays.add_lead_delay(signal.device_uid, lead_delay);
         }
     }
 
@@ -183,12 +183,12 @@ fn calculate_output_route_signal_delays(
         // If the device is not SHFSG, skip the output routing delay calculation as it is only relevant for SHFSG devices.
         if signal.device_kind != DeviceKind::Shfsg {
             assert!(
-                signal.output_routes.is_empty(),
+                signal.output_route_ports.is_empty(),
                 "Output routes are only supported for SHFSG devices"
             );
             return acc;
         }
-        acc.entry(signal.physical_device)
+        acc.entry(signal.device_uid)
             .or_insert_with(Vec::new)
             .push(signal);
         acc
@@ -197,33 +197,38 @@ fn calculate_output_route_signal_delays(
     let mut delays_by_signal = HashMap::new();
     for device_signals in signals_by_device.values() {
         // Multiple signals can point to the same channel, but we only need to calculate the delay once per channel
-        let signals_by_channel: HashMap<u16, Vec<SignalUid>> =
+        let signals_by_channel: HashMap<&str, Vec<SignalUid>> =
             device_signals
                 .iter()
                 .fold(HashMap::new(), |mut acc, signal| {
-                    for &channel in &signal.channels {
-                        acc.entry(channel).or_insert_with(Vec::new).push(signal.uid);
+                    for port in signal.ports {
+                        acc.entry(port.as_str())
+                            .or_insert_with(Vec::new)
+                            .push(signal.uid);
                     }
                     acc
                 });
         let routed_outputs = device_signals.iter().flat_map(|signal| {
             assert_eq!(
-                signal.channels.len(),
+                signal.ports.len(),
                 DeviceTraits::from_device_kind(&signal.device_kind).channels_per_awg as usize,
-                "Invalid number of output channels for SHFSG. Expected {}, got {}",
+                "Invalid number of output ports for SHFSG. Expected {}, got {}",
                 DeviceTraits::from_device_kind(&signal.device_kind).channels_per_awg,
-                signal.channels.len(),
+                signal.ports.len(),
             );
-            signal.channels.iter().flat_map(|&channel| {
-                signal.output_routes.iter().map(move |output| RoutedOutput {
-                    target: channel,
-                    channel: output.source_channel,
-                })
+            signal.ports.iter().flat_map(|port| {
+                signal
+                    .output_route_ports
+                    .iter()
+                    .map(move |output_port| RoutedOutput {
+                        target: port,
+                        source: output_port,
+                    })
             })
         });
         let output_delays = calculate_output_route_delay(routed_outputs);
-        for (channel, delay) in output_delays {
-            if let Some(uids) = signals_by_channel.get(&channel) {
+        for (port, delay) in output_delays {
+            if let Some(uids) = signals_by_channel.get(port) {
                 for &uid in uids {
                     delays_by_signal.insert(uid, delay);
                 }

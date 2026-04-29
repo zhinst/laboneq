@@ -188,12 +188,13 @@ def convert_device_type(device_type: codegen_rs.DeviceType) -> DeviceType:
 
 
 def convert_mixer_type(mixer_type: codegen_rs.MixerType | None) -> MixerType | None:
-    """Convert a Rust mixer type to a Python mixer type."""
     if mixer_type == codegen_rs.MixerType.IQ:
         return MixerType.IQ
-    if mixer_type == codegen_rs.MixerType.UhfqaEnvelope:
+    if mixer_type == codegen_rs.MixerType.UHFQA_ENVELOPE:
         return MixerType.UHFQA_ENVELOPE
-    return mixer_type
+    if mixer_type is None:
+        return None
+    raise RuntimeError(f"Unsupported mixer type {mixer_type}.")
 
 
 def sample_and_compress(
@@ -202,7 +203,7 @@ def sample_and_compress(
     sampling_rate: float,
     signal_type: codegen_rs.SignalType,
     device_type: codegen_rs.DeviceType,
-    mixer_type: MixerType | None,
+    mixer_type: codegen_rs.MixerType | None,
     rf_signal=False,
 ) -> (
     SampledWaveformSignature | list[codegen_rs.PlayHold | codegen_rs.PlaySamples] | None
@@ -231,7 +232,7 @@ def sample_integration_weight(
     oscillator_frequency: float,
     signals: set[str],
     sampling_rate: float,
-    mixer_type: MixerType | None,
+    mixer_type: codegen_rs.MixerType | None,
 ) -> tuple[npt.ArrayLike, npt.ArrayLike]:
     pulse_parameters = pulse_parameters.parameters if pulse_parameters else {}
     pulse_def = pulse_id
@@ -270,7 +271,7 @@ def sample_waveform(
     sampling_rate: float,
     signal_type: str,
     device_type: DeviceType,
-    mixer_type: MixerType | None,
+    mixer_type: codegen_rs.MixerType | None,
     rf_signal=False,
 ) -> SampledWaveformSignature:
     """Sample a single waveform signature."""

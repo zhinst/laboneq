@@ -85,12 +85,10 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
     def after_final_run(self, combined: CombinedRTCompilerOutputContainer):
         from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC
 
-        for co in combined.combined_output.values():
-            if isinstance(co, CombinedRTOutputSeqC):
-                compiler_output = co
-                break
-        else:
+        compiler_output = combined.combined_output
+        if not isinstance(compiler_output, CombinedRTOutputSeqC):
             return
+
         if self._settings.LOG_REPORT:
             self.compute_pulse_map_statistics(compiler_output)
             self.calculate_total(compiler_output)
@@ -101,12 +99,10 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
     ):
         from laboneq.compiler.seqc.linker import SeqCGenOutput
 
-        for co in rt_compiler_output.codegen_output.values():
-            if isinstance(co, SeqCGenOutput):
-                compiler_output = co
-                break
-        else:
+        compiler_output = rt_compiler_output.codegen_output
+        if not isinstance(compiler_output, SeqCGenOutput):
             return
+
         report = []
         for awg_key, seqc_program in compiler_output.src.items():
             seqc_loc = len(seqc_program.src.splitlines())

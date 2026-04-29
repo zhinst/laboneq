@@ -1,3 +1,10 @@
+// Copyright 2026 Zurich Instruments AG
+// SPDX-License-Identifier: Apache-2.0
+
+const ROOT_LAYER_KEY = "root";
+const ROOT_NODE_KEY = "root";
+const ROOT_NODE_ID = "root_root";
+
 function renderStatusLegend() {
     const container = d3.select("#status-legend-items");
     container.selectAll("*").remove();
@@ -45,7 +52,9 @@ function renderLayerLegend(layers, layerMap) {
         )
         .text((d) => layerMap.get(d.key));
 
-    left.append("span").text((d) => (d.key === "root" ? "root" : d.key));
+    left.append("span").text((d) =>
+        d.key === ROOT_LAYER_KEY ? ROOT_LAYER_KEY : d.key,
+    );
 }
 
 function openImageModal(src) {
@@ -106,7 +115,7 @@ function buildNodeInfoRows(d, isLayers) {
             ? [
                   {
                       label: "Sequential",
-                      value: d.key === "root" ? "N/A" : d.sequential,
+                      value: d.key === ROOT_LAYER_KEY ? "N/A" : d.sequential,
                   },
               ]
             : []),
@@ -114,33 +123,79 @@ function buildNodeInfoRows(d, isLayers) {
         { label: "Timestamp", value: d.timestamp || "N/A" },
         {
             label: "Fail count",
-            value:
-                d.key === "root" || d.key === "root_root"
-                    ? "N/A"
-                    : d.fail_count,
+            value: d.key === ROOT_LAYER_KEY ? "N/A" : d.fail_count,
         },
         {
             label: "Pass count",
-            value:
-                d.key === "root" || d.key === "root_root"
-                    ? "N/A"
-                    : d.pass_count,
+            value: d.key === ROOT_LAYER_KEY ? "N/A" : d.pass_count,
         },
         {
             label: "Depends on",
             value: formatDependsOn(d, isLayers),
         },
+        ...(d.logic
+            ? [
+                  {
+                      label: "Logic",
+                      value: formatLogic(d.logic),
+                  },
+              ]
+            : []),
     ];
+}
+
+function formatLogic(logic) {
+    if (!logic) return "None";
+    const { class: cls, ...params } = logic;
+    return cls + formatObject(params, 0);
+}
+
+/**
+ * Formats objects into a string with nested indents.
+ * The padding on each line is four non-breaking spaces.
+ */
+function formatObject(obj, indent) {
+    const entries = Object.entries(obj);
+    if (!entries.length) return "";
+    const pad = "\u00a0\u00a0\u00a0\u00a0".repeat(indent + 1);
+    return (
+        "\n" +
+        entries
+            .map(
+                ([k, v]) =>
+                    `${pad}${formatValue(k)}: ${formatValue(v, indent)}`,
+            )
+            .join("\n")
+    );
+}
+
+/**
+ * Format a bool, string containing a number, number or object into a string.
+ */
+function formatValue(v, indent) {
+    if (Array.isArray(v))
+        return `[${v.map((x) => formatValue(x, indent)).join(", ")}]`;
+    if (v !== null && typeof v === "object") return formatObject(v, indent + 1);
+    if (v === null || v === undefined) return "None";
+    if (typeof v === "boolean") return v ? "True" : "False";
+    if (typeof v === "string" && v !== "" && !isNaN(v)) v = Number(v);
+    if (typeof v === "number") {
+        if (Math.abs(v) >= 1e6 || (Math.abs(v) < 1e-3 && v !== 0))
+            return v.toExponential(2);
+        if (Number.isInteger(v)) return String(v);
+        return v.toPrecision(4);
+    }
+    return String(v);
 }
 
 function formatDependsOn(d, isLayers) {
     if (isLayers) {
-        if (d.key === "root") return "N/A";
-        return d.depends_on.join(", ") || "root";
+        if (d.key === ROOT_LAYER_KEY) return "N/A";
+        return d.depends_on.join(", ") || ROOT_LAYER_KEY;
     }
 
-    if (d.key === "root_root") return "N/A";
-    return d.depends_on.join(", ") || "root_root";
+    if (d.key === ROOT_NODE_ID) return "N/A";
+    return d.depends_on.join(", ") || ROOT_NODE_ID;
 }
 
 function renderNodeInfoRows(rows) {
@@ -161,7 +216,14 @@ function renderNodeInfoRows(rows) {
 }
 
 function showNodeInfoPanel() {
+    document.getElementById("node-info-rows").classList.add("open");
     d3.select("#node-info").classed("visible", true);
+}
+
+function closeNodeInfoPanel() {
+    document.getElementById("node-info-rows").classList.remove("open");
+    resetNodeResultsSection(getNodeInfoElements());
+    d3.select("#node-info").classed("visible", false);
 }
 
 function shouldShowNodeResult(d, isLayers) {
@@ -209,6 +271,11 @@ function renderNodeResultThumbnail(d, elements) {
 function updateRunElementButton(d, btnRunElement) {
     btnRunElement.dataset.layer = d.layer;
     btnRunElement.dataset.node = d.key;
+    btnRunElement.hidden = false;
+}
+
+function hideRunElementButton(d, btnRunElement) {
+    btnRunElement.hidden = true;
 }
 
 function refreshNodeInfoLegend() {
@@ -232,7 +299,12 @@ function refreshNodeInfoLegend() {
         resetNodeResultsSection(elements);
     }
 
-    updateRunElementButton(d, elements.btnRunElement);
+    // Hide run element button on root node
+    if (d.layer === ROOT_LAYER_KEY || d.key === ROOT_NODE_KEY) {
+        hideRunElementButton(d, elements.btnRunElement);
+    } else {
+        updateRunElementButton(d, elements.btnRunElement);
+    }
 }
 
 function toggleCollapse(elementId, headerElement) {

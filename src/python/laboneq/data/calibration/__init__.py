@@ -10,20 +10,10 @@ from enum import Enum
 import numpy as np
 from numpy.typing import ArrayLike
 
+from laboneq.core.types.enums import ModulationType, PortMode
 from laboneq.core.types.units import Quantity
 from laboneq.data import EnumReprMixin
 from laboneq.data.parameter import Parameter
-
-
-class ModulationType(EnumReprMixin, Enum):
-    AUTO = "auto"
-    HARDWARE = "hardware"
-    SOFTWARE = "software"
-
-
-class PortMode(EnumReprMixin, Enum):
-    LF = "lf"
-    RF = "rf"
 
 
 @dataclass

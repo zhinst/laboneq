@@ -1,3 +1,24 @@
+# LabOne Q 26.4.0 (2026-04-30)
+
+## Features
+
+- Added remote controller service for running experiments on remote machines.
+- Released the LabOne Q Automation framework and added a [tutorial](https://docs.zhinst.com/labone_q_user_manual/core/functionality_and_concepts/07a_automation/tutorials/00_automation.html).
+
+## Bug Fixes
+
+- Fixed a bug where markers were not held during compressed pulse playback in the output simulator.
+- Fixed a bug where PRNG match sections inside non-compressed sweep loops allocated duplicate command table entries on each sweep step, preventing the SeqC compressor from collapsing repeated bodies and potentially exhausting the command table entries.
+- Fixed a vulnerability issue where a crafted serialized file could cause the deserialization engine to import and invoke arbitrary Python classes, resulting in arbitrary code execution.
+- Fixed a bug where an incorrect exception was raised when injecting incompatible results in `run_experiment`.
+- Fixed a bug where multiplexed SHFQA output channels used invalid oscillator frequencies (HBAR-2509)
+
+
+## Removals from the Codebase
+
+- Remote controller service: drop the admin reset endpoint, the `connection_state` field of the `/v1/info` response, and the implicit on-demand hardware connect.  The service now connects at startup via `ControllerContainer.create()` and aborts if the connection fails.
+- internal cleanup: Remove some indirection enums that were adding no functionality.
+
 # LabOne Q 26.4.0b5 (2026-04-09)
 
 ## Features

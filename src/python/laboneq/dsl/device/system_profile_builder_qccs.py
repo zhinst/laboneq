@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from zhinst.core import __version__ as zhinst_version
 
@@ -23,10 +23,11 @@ from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInst
 from laboneq.dsl.device.system_profile_builder import register_profile_builder
 
 if TYPE_CHECKING:
-    from laboneq.controller import Controller
-    from laboneq.controller.devices.device_zi import DeviceZI
     from laboneq.dsl.device import DeviceSetup, Instrument
-    from laboneq.dsl.device.system_profile_qccs import SystemProfile
+    from laboneq.dsl.device.system_profile_qccs import (
+        DeviceCapabilitiesQCCS,
+        SystemProfile,
+    )
 
 _DEVICE_DEMO_DATA: dict[type, tuple[str, list[str]]] = {
     HDAWG: ("HDAWG8", ["CNT", "FF", "ME", "MF", "PC", "SKW"]),
@@ -38,26 +39,29 @@ _DEVICE_DEMO_DATA: dict[type, tuple[str, list[str]]] = {
     UHFQA: ("UHFQA", ["AWG", "DIG", "QA"]),
 }
 
-_SessionClass = TypeVar("_SessionClass")
-
 
 def _build_from_devices(
     device_setup: DeviceSetup,
-    controller: Controller[_SessionClass] | None,
     *,
     demo: bool = False,
+    server_version: str | None = None,
+    device_capabilities: dict[str, dict[str, Any] | DeviceCapabilitiesQCCS]
+    | None = None,
 ) -> SystemProfile:
-    """Build QCCS system profile from connected devices.
+    """Build QCCS system profile from pre-extracted device capabilities.
 
     Args:
-        device_setup: Device setup to build profile for
-        controller: Controller for hardware queries; required if demo is False
-        demo: If True, build a demo profile without querying hardware
+        device_setup: Device setup to build profile for.
+        demo: If True, build a demo profile with synthetic data.
+        server_version: LabOne server version string (required unless demo=True).
+        device_capabilities: Pre-extracted device capabilities keyed by
+            uppercased serial number. Values may be
+            :class:`DeviceCapabilitiesQCCS` instances or plain dicts with
+            ``device_model`` and ``device_options`` keys.
 
     Returns:
-        System profile with device capabilities
+        System profile with device capabilities.
     """
-    from laboneq.controller.devices.device_zi import DeviceBase
     from laboneq.dsl.device.system_profile_qccs import (
         DeviceCapabilitiesQCCS,
         SystemProfileQCCS,
@@ -98,31 +102,13 @@ def _build_from_devices(
                 )
         return profile
 
-    assert controller is not None
-    devices = controller.devices
-
-    device: DeviceZI
-    for device in devices.values():
-        if not isinstance(device, DeviceBase):
-            continue
-        assert device.server_qualifier.host == profile.server_address
-        assert device.server_qualifier.port == profile.server_port
-        if not profile.server_version:
-            profile.server_version = str(device.setup_caps.server_version or "")
-        else:
-            assert profile.server_version == str(device.setup_caps.server_version)
-        device_key = device.serial
-        if device.options.is_qc:
-            if isinstance(device, SHFQA):
-                device_key += f"{device.serial}_QA"
-            else:
-                device_key += f"{device.serial}_SG"
-
-        assert device.serial not in profile.devices
-        profile.devices[device.serial.upper()] = DeviceCapabilitiesQCCS(
-            device_model=device.options.dev_type,
-            device_options=device.dev_opts,
-        )
+    if server_version:
+        profile.server_version = server_version
+    if device_capabilities:
+        for serial, caps in device_capabilities.items():
+            if isinstance(caps, dict):
+                caps = DeviceCapabilitiesQCCS(**caps)
+            profile.devices[serial] = caps
 
     return profile
 

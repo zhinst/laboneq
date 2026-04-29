@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Literal
 
 import numpy as np
@@ -12,20 +11,13 @@ from numpy import typing as npt
 
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
+from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.types.numpy_support import NumPyArray
 from laboneq.core.validators import dicts_equal
-from laboneq.data import EnumReprMixin
 from laboneq.data.awg_info import AwgKey
 from laboneq.data.recipe import Recipe
 from laboneq.executor.executor import Statement
-
-
-class MixerType(EnumReprMixin, Enum):
-    #: Mixer performs full complex modulation
-    IQ = "IQ"
-    #: Mixer only performs envelope modulation (UHFQA-style)
-    UHFQA_ENVELOPE = "UHFQA_ENVELOPE"
 
 
 @dataclass

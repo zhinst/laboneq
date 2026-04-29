@@ -105,6 +105,20 @@ class ChannelProperties:
     amplitude: float | str | None  # Can be a float or a parameter name
     voltage_offset: float | str | None  # Can be a float or a parameter name
     gains: Gains | None
+    port_mode: Literal["rf", "lf"] | None
+    port_delay: float | str | None  # Can be a float or a parameter name
+    range: Quantity | None
+    lo_frequency: float | str | None  # Can be a float or a parameter name
+    routed_outputs: list[RoutedOutput]
+
+class RoutedOutput:
+    source_channel: int
+    amplitude_scaling: float | str  # Can be a float or a parameter name
+    phase_shift: float | str  # Can be a float or a parameter name
+
+class Quantity:
+    value: float
+    unit: str | None
 
 class Gains:
     diagonal: float | str  # Can be a float or a parameter name
@@ -114,10 +128,29 @@ class AwgProperties:
     key: tuple[str, int]  # (device UID, AWG index)
     signal_type: Literal["IQ", "SINGLE", "DOUBLE"]
 
-class PpcSweeperConfig:
-    ppc_device: str
-    ppc_channel: int
-    json: str
+class DeviceProperties:
+    uid: str
+    device_type: str
+    sampling_rate: float | None
+
+class PpcSettings:
+    device: str
+    channel: int
+    pump_on: bool
+    pump_filter_on: bool
+    pump_power: float | str | None  # Can be a float or a parameter name
+    pump_frequency: float | str | None  # Can be a float or a parameter name
+    probe_on: bool
+    probe_power: float | str | None  # Can be a float or a parameter name
+    probe_frequency: float | str | None  # Can be a float or a parameter name
+    cancellation_on: bool
+    cancellation_phase: float | str | None  # Can be a float or a parameter name
+    cancellation_attenuation: float | str | None  # Can be a float or a parameter name
+    cancellation_source: Literal["INTERNAL", "EXTERNAL"]
+    cancellation_source_frequency: (
+        float | str | None
+    )  # Can be a float or a parameter name
+    sweep_config: str | None  # JSON string with sweep config
 
 class SeqCProgram:
     src: str
@@ -137,7 +170,6 @@ class AwgCodeGenerationResult:
     seqc: SeqCProgram
     wave_indices: list[tuple[str, tuple[int, str]]]
     command_table: str | None
-    shf_sweeper_config: PpcSweeperConfig | None
     sampled_waveforms: list[SampledWaveform]
     integration_kernels: list[IntegrationKernel]
     # Signal delays in seconds to be applied to the signal
@@ -184,12 +216,15 @@ class SeqCGenOutput:
         result_handle_maps: For each result source contains a mask that identifies the
                            acquire handles corresponding to incoming stream of data.
         measurements: List of Measurement objects.
+        ppc_settings: List of PpcSettings objects.
     """
 
     awg_results: list[AwgCodeGenerationResult]
     total_execution_time: float
     result_handle_maps: dict[ResultSource, list[list[str]]]
     measurements: list[Measurement]
+    ppc_settings: list[PpcSettings]
+    device_properties: list[DeviceProperties]
 
 def generate_code(
     ir_experiment: ExperimentIr,

@@ -52,5 +52,6 @@ class RTCompilerOutputContainer:
     """Container (by device class) for the output of the code gen backend for a single
     run."""
 
-    codegen_output: dict[int, RTCompilerOutput]
+    device_class: int
+    codegen_output: RTCompilerOutput
     schedule: dict[str, Any] | None

@@ -19,7 +19,6 @@ use std::collections::HashMap;
 use std::num::NonZeroU32;
 
 use crate::error::{Error, Result};
-use crate::signal_properties::SignalProperties;
 
 use laboneq_capnp::pulse::v1::{
     calibration_capnp, common_capnp, device_setup_capnp, experiment_capnp, operation_capnp,
@@ -28,10 +27,10 @@ use laboneq_capnp::pulse::v1::{
 use laboneq_common::device_options::DeviceOptions;
 use laboneq_common::named_id::{NamedId, NamedIdStore};
 use laboneq_common::types::{
-    AuxiliaryDeviceKind, AwgKey, DeviceKind, PhysicalDeviceUid, ReferenceClock,
+    AuxiliaryDeviceKind, DeviceKind, PhysicalDeviceUid, ReferenceClock, SignalKind,
 };
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::device_setup::AuxiliaryDevice;
+use laboneq_dsl::device_setup::{AuxiliaryDevice, DeviceSignal};
 use laboneq_dsl::operation::{
     Acquire, AveragingLoop, Case, Chunking, Delay, Match, Operation, PlayPulse, PrngLoop,
     PrngSetup, PulseParameterValue, Reserve, ResetOscillatorPhase, Section, Sweep,
@@ -45,10 +44,10 @@ use laboneq_dsl::types::{
     AcquisitionType, AmplifierPump, AveragingMode, ComplexOrFloat, ExternalParameterUid,
     FunctionalPulse, HandleUid, Marker, MarkerSelector, MatchTarget, NumericLiteral, Oscillator,
     OscillatorKind, ParameterUid, PrngSampleUid, PulseDef, PulseFunction, PulseKind,
-    PulseParameterUid, PulseUid, Quantity, RepetitionMode, SampledPulse, SectionAlignment,
-    SectionTimingMode, SectionUid, SignalUid, SweepParameter, Trigger, Unit, ValueOrParameter,
+    PulseParameterUid, PulseUid, PumpCancellationSource, Quantity, RepetitionMode, SampledPulse,
+    SectionAlignment, SectionTimingMode, SectionUid, SignalUid, SweepParameter, Trigger, Unit,
+    ValueOrParameter,
 };
-use laboneq_ir::signal::SignalKind;
 use laboneq_ir::system::AwgDevice;
 use laboneq_units::duration::seconds;
 use num_complex::Complex64;
@@ -68,7 +67,7 @@ pub(crate) struct DeserializedExperiment {
     // Device setup properties
     pub awg_devices: Vec<AwgDevice>,
     pub auxiliary_devices: Vec<AuxiliaryDevice>,
-    pub signals: Vec<SignalProperties>,
+    pub signals: Vec<DeviceSignal>,
 }
 
 // === Pure helper functions ===
@@ -509,7 +508,7 @@ struct Deserializer<'py> {
     pulse_definition_params: HashMap<PulseUid, HashMap<PulseParameterUid, PulseParameterValue>>,
     awg_devices: Vec<AwgDevice>,
     auxiliary_devices: Vec<AuxiliaryDevice>,
-    signals: Vec<SignalProperties>,
+    signals: Vec<DeviceSignal>,
     oscillators: Vec<Oscillator>,
     // A map of driver -> derived parameters.
     driving_parameters: HashMap<ParameterUid, Vec<ParameterUid>>,
@@ -1606,7 +1605,6 @@ impl<'py> Deserializer<'py> {
 
         for signal in signals_reader.iter() {
             let uid = text_to_str(signal.get_uid().map_err(Error::new)?)?;
-            let awg_key = signal.get_awg_core();
             let device_uid = signal.get_instrument_uid().map_err(Error::new)?;
 
             // Ports
@@ -1617,13 +1615,7 @@ impl<'py> Deserializer<'py> {
                 .map(|p| text_to_str(p.map_err(Error::new)?))
                 .collect::<Result<Vec<_>>>()?;
             // Ports are string integers, convert them to integers and store as channels
-            let channels = ports
-                .iter()
-                .map(|p| {
-                    p.parse::<u16>()
-                        .map_err(|e| Error::new(format!("Invalid port number '{p}': {e}")))
-                })
-                .collect::<Result<Vec<u16>>>()?;
+            let ports = ports.iter().map(|p| p.to_string()).collect::<Vec<_>>();
 
             // Signal kind
             let kind = match signal
@@ -1650,31 +1642,15 @@ impl<'py> Deserializer<'py> {
                     ))
                 })?;
 
-            let signal_props = SignalProperties {
+            let signal_props = DeviceSignal {
                 uid: self.id_store.get_or_insert(uid).into(),
-                awg_key: AwgKey(awg_key),
                 device_uid: self
                     .id_store
                     .get_or_insert(text_to_str(device_uid).map_err(Error::new)?)
                     .into(),
-                channels: channels.into(),
+                ports,
                 kind,
-
-                // Calibration fields
-                amplitude: calibration.amplitude,
-                port_mode: calibration.port_mode,
-                oscillator: calibration.oscillator,
-                lo_frequency: calibration.lo_frequency,
-                voltage_offset: calibration.voltage_offset,
-                amplifier_pump: calibration.amplifier_pump,
-                automute: calibration.automute,
-                range: calibration.range,
-                precompensation: calibration.precompensation,
-                added_outputs: calibration.added_outputs,
-                port_delay: calibration.port_delay,
-                signal_delay: calibration.signal_delay,
-                thresholds: calibration.thresholds,
-                mixer_calibration: calibration.mixer_calibration,
+                calibration,
             };
 
             signals.push(signal_props);
@@ -1697,9 +1673,9 @@ impl<'py> Deserializer<'py> {
         )?;
         let voltage_offset =
             self.deserialize_value_f64(&reader.get_voltage_offset().map_err(Error::new)?)?;
-        let port_delay = self
-            .deserialize_value_duration(&reader.get_port_delay().map_err(Error::new)?)?
-            .unwrap_or(ValueOrParameter::Value(0.0.into()));
+
+        let port_delay =
+            self.deserialize_value_duration(&reader.get_port_delay().map_err(Error::new)?)?;
         let range = reader
             .has_range()
             .then(|| self.deserialize_range(reader.get_range().map_err(Error::new)?))
@@ -1937,25 +1913,48 @@ impl<'py> Deserializer<'py> {
         &mut self,
         reader: calibration_capnp::amplifier_pump::Reader<'_>,
     ) -> Result<AmplifierPump> {
+        let cancellation_source = match reader.get_cancellation_source().map_err(Error::new)? {
+            calibration_capnp::CancellationSource::Unspecified => PumpCancellationSource::default(),
+            calibration_capnp::CancellationSource::Internal => PumpCancellationSource::Internal,
+            calibration_capnp::CancellationSource::External => PumpCancellationSource::External,
+        };
+
+        use calibration_capnp::amplifier_pump::cancellation_source_frequency::Which as CancellationFreqWhich;
+        let cancellation_source_frequency = match reader
+            .get_cancellation_source_frequency()
+            .which()
+            .map_err(Error::new)?
+        {
+            CancellationFreqWhich::None(()) => None,
+            CancellationFreqWhich::Value(val) => Some(val),
+        };
+
         let amplifier_pump = AmplifierPump {
             device: self
                 .id_store
                 .get_or_insert(text_to_str(reader.get_device_uid().map_err(Error::new)?)?)
                 .into(),
             channel: reader.get_channel(),
+            alc_on: reader.get_alc_on(),
+            pump_on: reader.get_pump_on(),
+            pump_filter_on: reader.get_pump_filter_on(),
             pump_power: self
                 .deserialize_value_f64(&reader.get_pump_power().map_err(Error::new)?)?,
             pump_frequency: self
                 .deserialize_value_f64(&reader.get_pump_frequency().map_err(Error::new)?)?,
+            probe_on: reader.get_probe_on(),
             probe_power: self
                 .deserialize_value_f64(&reader.get_probe_power().map_err(Error::new)?)?,
             probe_frequency: self
                 .deserialize_value_f64(&reader.get_probe_frequency().map_err(Error::new)?)?,
+            cancellation_on: reader.get_cancellation_on(),
             cancellation_phase: self
                 .deserialize_value_f64(&reader.get_cancellation_phase().map_err(Error::new)?)?,
             cancellation_attenuation: self.deserialize_value_f64(
                 &reader.get_cancellation_attenuation().map_err(Error::new)?,
             )?,
+            cancellation_source,
+            cancellation_source_frequency,
         };
         Ok(amplifier_pump)
     }

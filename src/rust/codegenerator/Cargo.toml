@@ -35,6 +35,7 @@ laboneq-log = { workspace = true }
 laboneq-ir = { workspace = true }
 laboneq-dsl = { workspace = true }
 codegenerator-utils = { workspace = true }
+laboneq-qccs-backend = { workspace = true }
 
 [dev-dependencies]
 laboneq-dsl = { workspace = true, features = ["test_utils"] }

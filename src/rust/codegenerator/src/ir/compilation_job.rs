@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use laboneq_common::device_options::DeviceOptions;
-use laboneq_dsl::signal_calibration::MixerCalibration;
+use laboneq_dsl::signal_calibration::{MixerCalibration, PortMode};
+use laboneq_dsl::types::Quantity;
 use laboneq_error::{LabOneQError, laboneq_error};
+use laboneq_units::duration::{Duration, Second};
 use numeric_array::NumericArray;
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
@@ -12,7 +14,7 @@ use std::sync::Arc;
 
 use crate::device_traits;
 use crate::ir::SignalUid;
-use crate::result::FixedValueOrParameter;
+use crate::result::{FixedValueOrParameter, PpcSettings, RoutedOutput};
 use crate::utils::normalize_f64;
 
 pub type Samples = i64;
@@ -418,7 +420,7 @@ impl DeviceKind {
         }
     }
 
-    pub(crate) fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             DeviceKind::HDAWG => "HDAWG",
             DeviceKind::SHFQA => "SHFQA",
@@ -531,4 +533,11 @@ pub(crate) struct InitialSignalProperties {
     pub amplitude: Option<FixedValueOrParameter<f64>>,
     pub thresholds: Vec<f64>,
     pub mixer_calibration: Option<MixerCalibration>,
+    pub port_mode: Option<PortMode>,
+    pub port_delay: Option<FixedValueOrParameter<Duration<Second>>>,
+    pub ppc_settings: Option<PpcSettings>,
+    pub voltage_offset: Option<FixedValueOrParameter<f64>>,
+    pub range: Option<Quantity>,
+    pub lo_frequency: Option<FixedValueOrParameter<f64>>,
+    pub routed_outputs: Vec<RoutedOutput>,
 }

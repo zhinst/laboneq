@@ -1,8 +1,11 @@
+<!-- Copyright 2026 Zurich Instruments AG -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+
 {% extends "base.html" %}
 {% block content %}
     <div id="app-wrapper">
         <div id="header">
-            <a href="https://docs.zhinst.com/labone_q_user_manual/applications_library/index.html"
+            <a href="https://docs.zhinst.com/labone_q_user_manual/core/functionality_and_concepts/07a_automation/tutorials/00_automation.html"
                target="_blank">
                 <img class="logo logo-full"
                      src="static/images/laboneq_automation_logo.png"
@@ -104,7 +107,7 @@
                     <span id="btn-run-element"></span>
                 </button>
             </div>
-            <div id="node-info-rows" class="legend-items open"></div>
+            <div id="node-info-rows" class="legend-items node-legend-items"></div>
             <div id="node-results-section" hidden>
                 <h3>Node results</h3>
                 <span class="node-result-message" hidden>File not found</span>
@@ -129,6 +132,7 @@
 </div>
 {% endblock %}
 {% block scripts %}
+    <script src="{{ url_for('static', filename='js/d3.latest.min.js') }}"></script>
     <script src="{{ url_for('static', filename='js/automation_methods.js') }}"></script>
     <script src="{{ url_for('static', filename='js/helpers.js') }}"></script>
     <script src="{{ url_for('static', filename='js/layout.js') }}"></script>
