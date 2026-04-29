@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from laboneq.dsl.quantum.qpu import QPU
 from laboneq.dsl.quantum.qpu_topology import TopologyEdge
+from laboneq.dsl.quantum.quantum_operations import QuantumOperations
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.core import from_dict, import_cls, to_dict
 from laboneq.serializers.serializer_registry import serializer
@@ -87,7 +88,11 @@ class QPUSerializer(VersionedClassSerializer[QPU]):
                 groups[key] = [_quantum_element_map[v] for v in value]
             quantum_elements = groups
 
-        qop_cls = import_cls(data["quantum_operations_class"])
+        qop_cls = import_cls(
+            data["quantum_operations_class"],
+            base_cls=QuantumOperations,
+            prefix_restrictions=None,  # user subclasses may live in any package; base_cls is the guard
+        )
         qop = qop_cls()
         qpu = QPU(
             quantum_elements=quantum_elements,
@@ -111,7 +116,11 @@ class QPUSerializer(VersionedClassSerializer[QPU]):
 
         data = serialized_data["__data__"]
         quantum_elements = [from_dict(q) for q in data["quantum_elements"]]
-        qop_cls = import_cls(data["quantum_operations_class"])
+        qop_cls = import_cls(
+            data["quantum_operations_class"],
+            base_cls=QuantumOperations,
+            prefix_restrictions=None,  # user subclasses may live in any package; base_cls is the guard
+        )
         qop = qop_cls()
         qpu = QPU(
             quantum_elements=quantum_elements,
@@ -133,7 +142,11 @@ class QPUSerializer(VersionedClassSerializer[QPU]):
     ) -> QPU:
         data = serialized_data["__data__"]
         qubits = [from_dict(q) for q in data["qubits"]]
-        qop_cls = import_cls(data["quantum_operations_class"])
+        qop_cls = import_cls(
+            data["quantum_operations_class"],
+            base_cls=QuantumOperations,
+            prefix_restrictions=None,  # user subclasses may live in any package; base_cls is the guard
+        )
         qop = qop_cls()
         return QPU(
             quantum_elements=qubits,

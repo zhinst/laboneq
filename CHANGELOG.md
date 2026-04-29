@@ -1,3 +1,17 @@
+# LabOne Q 26.1.2 (2026-04-29)
+
+## Bug Fixes
+
+- Fixed a vulnerability issue where a crafted serialized file could cause the deserialization engine to import and invoke arbitrary Python classes, resulting in arbitrary code execution.
+
+
+# LabOne Q 26.1.1 (2026-04-08)
+
+## Features
+
+- Relaxed the `zhinst-toolkit` dependency from `==1.2.0` to `>=1.2.0`, allowing compatibility with newer patch versions of LabOne.
+
+
 # LabOne Q 26.1.0 (2026-01-30)
 
 ## Features

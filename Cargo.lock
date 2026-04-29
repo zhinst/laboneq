@@ -153,7 +153,7 @@ checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
 
 [[package]]
 name = "codegenerator"
-version = "26.1.1"
+version = "26.1.2"
 dependencies = [
  "anyhow",
  "derive_more",
@@ -175,7 +175,7 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-py"
-version = "26.1.1"
+version = "26.1.2"
 dependencies = [
  "anyhow",
  "codegenerator",
@@ -388,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "interval-calculator"
-version = "26.1.1"
+version = "26.1.2"
 dependencies = [
  "anyhow",
  "thiserror",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-common"
-version = "26.1.1"
+version = "26.1.2"
 dependencies = [
  "laboneq-units",
  "regex",
@@ -439,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-dsl"
-version = "26.1.1"
+version = "26.1.2"
 dependencies = [
  "laboneq-common",
  "laboneq-units",
@@ -450,14 +450,14 @@ dependencies = [
 
 [[package]]
 name = "laboneq-log"
-version = "26.1.1"
+version = "26.1.2"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "laboneq-rust"
-version = "26.1.1"
+version = "26.1.2"
 dependencies = [
  "anyhow",
  "approx",
@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-scheduler"
-version = "26.1.1"
+version = "26.1.2"
 dependencies = [
  "anyhow",
  "itertools 0.14.0",
@@ -495,7 +495,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-units"
-version = "26.1.1"
+version = "26.1.2"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -588,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "numeric-array"
-version = "26.1.1"
+version = "26.1.2"
 dependencies = [
  "approx",
  "num-complex",
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "rccow"
-version = "26.1.1"
+version = "26.1.2"
 
 [[package]]
 name = "regex"
@@ -1019,7 +1019,7 @@ checksum = "7264e107f553ccae879d21fbea1d6724ac785e8c3bfc762137959b5802826ef3"
 
 [[package]]
 name = "utils"
-version = "26.1.1"
+version = "26.1.2"
 dependencies = [
  "criterion",
  "indexmap",
