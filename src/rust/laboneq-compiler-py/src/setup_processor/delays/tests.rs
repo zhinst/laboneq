@@ -5,14 +5,12 @@
 mod test_compute_delays {
     use approx::assert_abs_diff_eq;
 
-    use laboneq_common::{
-        device_traits::{DEFAULT_HDAWG_LEAD_DESKTOP_SETUP, DEFAULT_UHFQA_LEAD_PQSC},
-        types::DeviceKind,
-    };
+    use laboneq_common::types::DeviceKind;
     use laboneq_dsl::signal_calibration::{
         BounceCompensation, ExponentialCompensation, FirCompensation, HighPassCompensation,
         Precompensation,
     };
+    use laboneq_units::duration::{Duration, Second};
     use smallvec::SmallVec;
 
     use crate::setup_processor::delays::{
@@ -32,6 +30,7 @@ mod test_compute_delays {
         ports: &'a Vec<String>,
         output_route_channels: &'a SmallVec<[String; 4]>,
         precompensation: Option<&'a Precompensation>,
+        lead_delay: Duration<Second>,
     ) -> SignalDelayProperties<'a> {
         SignalDelayProperties::new(
             uid.into(),
@@ -41,6 +40,7 @@ mod test_compute_delays {
             device_kind,
             output_route_channels.iter().map(|s| s.as_str()).collect(),
             precompensation,
+            lead_delay,
         )
         .unwrap()
     }
@@ -90,15 +90,39 @@ mod test_compute_delays {
 
         let output_routes = &SmallVec::new();
 
-        let signal_a =
-            create_signal_props(0, 0, DeviceKind::Shfsg, 2e9, ports_0, output_routes, None);
-        let signal_b =
-            create_signal_props(1, 1, DeviceKind::Hdawg, 2e9, ports_1, output_routes, None);
-        let signal_c =
-            create_signal_props(2, 0, DeviceKind::Shfsg, 2e9, ports_2, output_routes, None);
+        let signal_a = create_signal_props(
+            0,
+            0,
+            DeviceKind::Shfsg,
+            2e9,
+            ports_0,
+            output_routes,
+            None,
+            0.0.into(),
+        );
+        let signal_b = create_signal_props(
+            1,
+            1,
+            DeviceKind::Hdawg,
+            2e9,
+            ports_1,
+            output_routes,
+            None,
+            0.0.into(),
+        );
+        let signal_c = create_signal_props(
+            2,
+            0,
+            DeviceKind::Shfsg,
+            2e9,
+            ports_2,
+            output_routes,
+            None,
+            0.0.into(),
+        );
 
         let signals = vec![signal_a, signal_b, signal_c];
-        let delays = compute_signal_delays(&signals, false);
+        let delays = compute_signal_delays(&signals);
 
         // All signals should have zero delay when no precompensation or output routing
         assert_abs_diff_eq!(
@@ -128,15 +152,39 @@ mod test_compute_delays {
         let output_routes_0 = &SmallVec::from_vec(vec!["0".to_string(), "1".to_string()]);
         let output_routes_1 = &SmallVec::new();
 
-        let signal_sg_0 =
-            create_signal_props(0, 1, DeviceKind::Shfsg, 2e9, ports_0, output_routes_0, None);
-        let signal_sg_1 =
-            create_signal_props(1, 1, DeviceKind::Shfsg, 2e9, ports_1, output_routes_1, None);
-        let signal_hdawg_0 =
-            create_signal_props(2, 2, DeviceKind::Hdawg, 2e9, ports_0, output_routes_1, None);
+        let signal_sg_0 = create_signal_props(
+            0,
+            1,
+            DeviceKind::Shfsg,
+            2e9,
+            ports_0,
+            output_routes_0,
+            None,
+            0.0.into(),
+        );
+        let signal_sg_1 = create_signal_props(
+            1,
+            1,
+            DeviceKind::Shfsg,
+            2e9,
+            ports_1,
+            output_routes_1,
+            None,
+            0.0.into(),
+        );
+        let signal_hdawg_0 = create_signal_props(
+            2,
+            2,
+            DeviceKind::Hdawg,
+            2e9,
+            ports_0,
+            output_routes_1,
+            None,
+            0.0.into(),
+        );
 
         let signals = vec![signal_sg_0, signal_sg_1, signal_hdawg_0];
-        let delays = compute_signal_delays(&signals, false);
+        let delays = compute_signal_delays(&signals);
 
         // Signals using output routing should have the same total delay
         let delay_sg_0 = delays.signal_start_delay(0.into()) + delays.signal_port_delay(0.into());
@@ -163,8 +211,16 @@ mod test_compute_delays {
 
         let precomp = dummy_precompensation(0, true, false, false);
 
-        let signal_output_route =
-            create_signal_props(0, 0, DeviceKind::Shfsg, 2e9, ports_0, output_routes_0, None);
+        let signal_output_route = create_signal_props(
+            0,
+            0,
+            DeviceKind::Shfsg,
+            2e9,
+            ports_0,
+            output_routes_0,
+            None,
+            0.0.into(),
+        );
         let signal_precomp = create_signal_props(
             1,
             1,
@@ -173,10 +229,11 @@ mod test_compute_delays {
             ports_1,
             output_routes_1,
             Some(&precomp),
+            0.0.into(),
         );
 
         let signals = vec![signal_output_route, signal_precomp];
-        let delays = compute_signal_delays(&signals, false);
+        let delays = compute_signal_delays(&signals);
 
         // Calculate total delays including precompensation effects
         let delay_output_route =
@@ -209,6 +266,7 @@ mod test_compute_delays {
             ports_0,
             output_routes_0,
             None,
+            5.0.into(),
         );
         let signal_uhfqa = create_signal_props(
             1,
@@ -218,19 +276,17 @@ mod test_compute_delays {
             ports_0,
             output_routes_0,
             None,
+            5.0.into(),
         );
 
         let signals = vec![signal_hdawg, signal_uhfqa];
-        let delays = compute_signal_delays(&signals, true);
+        let delays = compute_signal_delays(&signals);
 
         let delay_hdawg = delays.signal_start_delay(0.into()) + delays.signal_port_delay(0.into());
         let delay_uhfqa = delays.signal_start_delay(1.into()) + delays.signal_port_delay(1.into());
 
         // No additional delays, just base lead times
-        assert_abs_diff_eq!(
-            delay_hdawg.value(),
-            DEFAULT_HDAWG_LEAD_DESKTOP_SETUP.value(),
-        );
-        assert_abs_diff_eq!(delay_uhfqa.value(), DEFAULT_UHFQA_LEAD_PQSC.value(),);
+        assert_abs_diff_eq!(delay_hdawg.value(), 5.0,);
+        assert_abs_diff_eq!(delay_uhfqa.value(), 5.0);
     }
 }

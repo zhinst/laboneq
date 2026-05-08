@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from collections.abc import ItemsView, Iterator
+from collections.abc import Callable, ItemsView, Iterator
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import (
@@ -34,7 +34,6 @@ from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.types.enums.awg_signal_type import AWGSignalType
 from laboneq.core.types.enums.wave_type import WaveType
-from laboneq.data.awg_info import AwgKey as AwgKeyFromData
 from laboneq.data.calibration import PortMode as RecipePortMode
 from laboneq.data.recipe import IO, Initialization, Recipe
 from laboneq.data.scheduled_experiment import (
@@ -44,6 +43,8 @@ from laboneq.data.scheduled_experiment import (
     WeightInfo,
 )
 from laboneq.executor.executor import (
+    ExecutorBase,
+    LoopingMode,
     Statement,
 )
 
@@ -57,8 +58,6 @@ _logger = logging.getLogger(__name__)
 
 
 MIN_LABONEQ_VERSION_FOR_COMPILED_EXPERIMENT = Version("2.52.0")
-
-VIRTUAL_SHFSG_UID_SUFFIX = "_sg"
 
 
 @dataclass(frozen=True)
@@ -106,10 +105,6 @@ class AwgConfigs:
     def max_result_length(self) -> int:
         return self._max_result_length
 
-    def update_max_result_length(self, result_length: int):
-        if result_length > self._max_result_length:
-            self._max_result_length = result_length
-
     def __getitem__(self, key: AwgKey) -> AwgConfig:
         return self._configs[key]
 
@@ -121,6 +116,8 @@ class AwgConfigs:
 
     def add(self, key: AwgKey, config: AwgConfig):
         assert key not in self._configs
+        if config.result_length or 0 > self._max_result_length:
+            self._max_result_length = config.result_length
         self._configs[key] = config
 
     def by_signal(self, signal_id: str) -> tuple[AwgKey, AwgConfig]:
@@ -380,8 +377,21 @@ class RecipeData:
         return refs
 
 
-def _validate_scheduled_experiment(
-    scheduled_experiment: ScheduledExperiment, devices: DeviceCollection
+class _NeartimeCallbackCollector(ExecutorBase):
+    """Walk the execution tree and collect near-time callback names."""
+
+    def __init__(self) -> None:
+        super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY | LoopingMode.ONCE)
+        self.callbacks: set[str] = set()
+
+    def nt_callback_handler(self, func_name: str, args: dict[str, Any]):
+        self.callbacks.add(func_name)
+
+
+def validate_scheduled_experiment(
+    scheduled_experiment: ScheduledExperiment,
+    devices: DeviceCollection,
+    neartime_callbacks: dict[str, Callable[..., Any]],
 ):
     recipe = scheduled_experiment.recipe
     assert recipe is not None  # Recipe is present
@@ -413,6 +423,17 @@ def _validate_scheduled_experiment(
         )
 
     assert scheduled_experiment.execution is not None
+
+    # Validate callbacks
+    collector = _NeartimeCallbackCollector()
+    collector.run(scheduled_experiment.execution)
+    missing = collector.callbacks - set(neartime_callbacks)
+    if missing:
+        raise LabOneQControllerException(
+            f"Experiment requires callbacks not registered on the "
+            f"controller: {sorted(missing)}. "
+            f"Available: {sorted(neartime_callbacks)}."
+        )
 
 
 def _pre_process_iq_settings_hdawg(
@@ -731,6 +752,7 @@ def _calculate_awg_configs(
                     else AwgSignalType.SINGLE
                 ),
                 signals=awg.signals,
+                result_length=awg.result_length,
                 source_feedback_register=awg.source_feedback_register,
                 register_selector_shift=awg.codeword_bitshift,
                 register_selector_bitmask=awg.codeword_bitmask,
@@ -754,14 +776,6 @@ def _calculate_awg_configs(
             awg_index=integrator_allocation.awg,
         )
         awg_configs[awg_key].acquire_signals.add(integrator_allocation.signal_id)
-
-    for awg_key, awg_config in awg_configs.items():
-        result_length = scheduled_experiment.result_shape_info.result_lengths.get(
-            AwgKeyFromData(awg_key.device_uid, awg_key.awg_index)
-        )
-        if result_length is not None:
-            awg_config.result_length = result_length
-            awg_configs.update_max_result_length(result_length)
 
     # Determine the raw acquisition lengths across various acquire events.
     # Will use the maximum length, as scope / monitor can only be configured for one.
@@ -824,8 +838,6 @@ def pre_process_compiled(
     scheduled_experiment: ScheduledExperiment,
     devices: DeviceCollection,
 ) -> RecipeData:
-    _validate_scheduled_experiment(scheduled_experiment, devices)
-
     rt_loop_properties = scheduled_experiment.rt_loop_properties
     rt_execution_info = RtExecutionInfo(
         uid=rt_loop_properties.uid,

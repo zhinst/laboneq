@@ -25,6 +25,16 @@ impl<T> ValueOrParameter<T> {
             _ => None,
         }
     }
+
+    /// Return the parameter UID if this is a parameter (resolved or not). Otherwise, return None.
+    pub fn parameter_uid(&self) -> Option<ParameterUid> {
+        match self {
+            ValueOrParameter::Parameter(uid) | ValueOrParameter::ResolvedParameter { uid, .. } => {
+                Some(*uid)
+            }
+            ValueOrParameter::Value(_) => None,
+        }
+    }
 }
 
 impl TryFrom<ValueOrParameter<f64>> for f64 {

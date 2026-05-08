@@ -4,45 +4,15 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from enum import Enum
 from typing import TYPE_CHECKING
 
+from laboneq.controller.api.commons import SubmissionHandle
+from laboneq.controller.controller import SubmissionStatus
 from laboneq.dsl.device.device_setup import DeviceSetup
 
 if TYPE_CHECKING:
     from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.dsl.result.results import Results
-
-
-class SubmissionHandle:
-    """
-    A handle representing a submitted experiment.
-
-    This handle is an anonymous object used to track the status and results
-    of an experiment submission. It does not expose any public attributes or methods,
-    all interactions are done via the ControllerAPI methods.
-    """
-
-    def __init__(self, handle_id: int | None = None):
-        self.id = id(self) if handle_id is None else handle_id
-
-    def __hash__(self) -> int:
-        return self.id
-
-    @property
-    def hex(self) -> str:
-        """Hexadecimal string representation of the handle ID."""
-        return "%032x" % self.id
-
-
-class SubmissionStatus(Enum):
-    """The status of an experiment submission."""
-
-    QUEUED = "queued"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELED = "canceled"
 
 
 class ControllerAPI(ABC):
@@ -58,11 +28,14 @@ class ControllerAPI(ABC):
 
     @abstractmethod
     def submit_experiment(
-        self, scheduled_experiment: ScheduledExperiment
+        self,
+        scheduled_experiment: ScheduledExperiment,
+        handle: SubmissionHandle | None = None,
     ) -> SubmissionHandle:
         """Submit an experiment for execution and return a handle.
 
         The handle is returned immediately and can be used to track the submission status.
+        Optional unique handle can be provided to track the submission. If not provided, a new handle is generated.
         """
 
     @abstractmethod

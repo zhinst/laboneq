@@ -1,9 +1,9 @@
 # Copyright 2025 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""Extract hardware data from a connected controller for system profile building.
+"""Extract hardware data from a connected controller for system description building.
 
-The profile builders (``system_profile_builder_*.py``) are pure data
+The description builders (``system_description_builder_*.py``) are pure data
 transformations that never touch the controller.  This module bridges the
 gap: it reads device-level attributes and packages them as plain dicts
 that the session layer forwards to the builders.
@@ -23,32 +23,32 @@ if TYPE_CHECKING:
 _ZQCS_DEVICE_CLASS = 0x1
 
 
-def extract_profile_data(
+def extract_description_data(
     device_setup: DeviceSetup,
     controller: Controller[Any],
 ) -> tuple[str, dict[str, Any]]:
     """Determine the system type and extract the matching hardware data.
 
     Returns ``(system_type, hw_kwargs)`` where *hw_kwargs* can be
-    unpacked directly into :func:`build_profile`.
+    unpacked directly into :func:`build_system_description`.
     """
     if (
         len(device_setup.instruments) == 1
         and getattr(device_setup.instruments[0], "device_class", 0)
         == _ZQCS_DEVICE_CLASS
     ):
-        return "ZQCS", _extract_zqcs_profile_data(device_setup, controller)
-    return "QCCS", _extract_qccs_profile_data(controller)
+        return "ZQCS", _extract_zqcs_system_description_data(device_setup, controller)
+    return "QCCS", _extract_qccs_system_description_data(controller)
 
 
-def _extract_zqcs_profile_data(
+def _extract_zqcs_system_description_data(
     device_setup: DeviceSetup,
     controller: Controller[Any],
 ) -> dict[str, Any]:
     """Extract ZQCS hardware data from a connected controller.
 
     Returns a dict with ``scm_version`` and ``setup_description``,
-    suitable for unpacking into :func:`build_profile`.
+    suitable for unpacking into :func:`build_system_description`.
     """
     [device] = device_setup.instruments
     controller_device = controller.devices[device.uid]
@@ -58,13 +58,13 @@ def _extract_zqcs_profile_data(
     }
 
 
-def _extract_qccs_profile_data(
+def _extract_qccs_system_description_data(
     controller: Controller[Any],
 ) -> dict[str, Any]:
     """Extract QCCS device capabilities from a connected controller.
 
     Returns a dict with ``server_version`` and ``device_capabilities``,
-    suitable for unpacking into :func:`build_profile`.
+    suitable for unpacking into :func:`build_system_description`.
     """
     server_version: str | None = None
     device_capabilities: dict[str, dict[str, Any]] = {}

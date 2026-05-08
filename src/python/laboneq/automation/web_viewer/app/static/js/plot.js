@@ -1,25 +1,43 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-let svg, g, zoom;
+import {
+    renderStatusLegend,
+    renderLayerLegend,
+    refreshNodeInfoLegend,
+    showNodeInfoPanel,
+    closeNodeInfoPanel,
+} from "./legend.js";
+
+import {
+    calculateNodeRadius,
+    getContainerSize,
+    gearPath,
+    buildLayerMap,
+    showToast,
+} from "./helpers.js";
+
+import {
+    setupControls,
+    highlightLayer,
+    clearHighlight,
+    attachZoom,
+} from "./layout.js";
+
+let svg, g;
 let currentMode = "layers";
 let cachedGraphData = null;
 
-const TRANSITION_DURATION = 750;
+const ANIM_NODE_THRESHOLD = 600;
 
-const statusColorMap = {
-    root: "#009ee0",
-    ready: "#a2daf4",
-    running: "#ffcc33",
-    passed: "#38e171",
-    failed: "#ff1616",
-    deactivated: "#888888",
-};
-
-const colorPalette = {
-    zi_blue: "#009ee0",
-    gray: "#888888",
-};
+/**
+ * Stop transition animation is the number of nodes is above ANIM_NODE_THRESHOLD
+ */
+function updateAnimState(graphData) {
+    const n = (graphData.nodes?.length || 0) + (graphData.layers?.length || 0);
+    const heavy = n > ANIM_NODE_THRESHOLD;
+    d3.select("#graph").classed("no-anim", heavy);
+}
 
 async function fetchGraphData() {
     try {
@@ -27,6 +45,7 @@ async function fetchGraphData() {
         return response.ok ? await response.json() : null;
     } catch (e) {
         console.error("Error fetching graph data:", e);
+        showToast("Error", "Disconnected from server!");
         return null;
     }
 }
@@ -50,13 +69,18 @@ function setupSVG() {
     g.append("g").attr("class", "layer-links");
     g.append("g").attr("class", "node-canvas");
     g.append("g").attr("class", "layer-canvas");
-    zoom = d3
-        .zoom()
-        .scaleExtent([0.75, 20])
-        .on("zoom", (event) => g.attr("transform", event.transform));
-    svg.call(zoom).call(zoom.transform, d3.zoomIdentity);
+    d3.select("#graph").classed("mode-layers", currentMode === "layers");
+    attachZoom(svg);
 }
 
+function clearSelectedNode() {
+    g.selectAll(".node.selected").classed("selected", false);
+}
+
+/**
+ * Rescale positions of nodes to fit the canvas width and height
+ * with some padding.
+ */
 function computePositions(items, width, height, pad = 0.15) {
     const [minX, maxX] = d3.extent(items, (d) => d.x);
     const [minY, maxY] = d3.extent(items, (d) => d.y);
@@ -82,217 +106,82 @@ function computePositions(items, width, height, pad = 0.15) {
     return pos;
 }
 
-function buildLayerMap(layers) {
-    return new Map(layers.map((layer, i) => [layer.key, i]));
+/**
+ * Links between nodes are rendered as a path.
+ * The optional parameter drawCanvas is either ".node-links"
+ * or ".layer-links" and is used for grouping of elements.
+ */
+function renderLinks(links, pos, { drawCanvas = ".node-links" } = {}) {
+    const d = (links || [])
+        .map(([a, b]) => {
+            const p = pos[a],
+                q = pos[b];
+            return p && q ? `M${p.x},${p.y}L${q.x},${q.y}` : "";
+        })
+        .join("");
+
+    g.select(drawCanvas)
+        .selectAll("path.links")
+        .data([d])
+        .join("path")
+        .attr("class", "links")
+        .attr("d", d);
 }
 
-function buildNodeMap(nodes) {
-    const map = new Map();
-
-    for (const node of nodes) {
-        if (!map.has(node.layer)) {
-            map.set(node.layer, []);
-        }
-        map.get(node.layer).push(node);
-    }
-
-    return map;
-}
-
-function calculateNodeRadius(nodes, layers, width, height, mode) {
-    const nodeMap = buildNodeMap(nodes);
-    const nodeRadius = new Map();
-    const defaultBaseSize = 25;
-    var minSize = defaultBaseSize;
-
-    for (const layer of layers) {
-        const layerNodes = nodeMap.get(layer.key) || [];
-        let extent = 0;
-
-        if (mode !== "layers" && layerNodes.length > 1) {
-            extent = layerNodes[layerNodes.length - 1].x - layerNodes[0].x;
-        }
-
-        const baseX =
-            mode === "nodes" ? width / layerNodes.length / 3 : defaultBaseSize;
-        const baseY = height / layers.length / 4;
-        const baseSize = Math.min(
-            Math.min(baseX || defaultBaseSize, baseY || defaultBaseSize),
-            defaultBaseSize,
-        );
-        if (minSize > baseSize) {
-            minSize = baseSize;
-        }
-    }
-
-    return minSize;
-}
-
-function nodeColor(d) {
-    return statusColorMap[d.status] || colorPalette.zi_blue;
-}
-
-function maybeTransition(selection, duration) {
-    return duration > 0 ? selection.transition().duration(duration) : selection;
-}
-
-function renderLinks(
-    links,
-    pos,
-    startPos,
-    duration,
-    { drawCanvas = ".node-links" },
-) {
-    const src = startPos || pos;
-    const sel = g
-        .select(drawCanvas)
-        .selectAll("line.link")
-        .data(links || [], (d) => `${d[0]}->${d[1]}`)
-        .join(
-            (enter) =>
-                enter
-                    .append("line")
-                    .attr("class", "link")
-                    .attr("x1", (d) => src[d[0]]?.x)
-                    .attr("y1", (d) => src[d[0]]?.y)
-                    .attr("x2", (d) => src[d[1]]?.x)
-                    .attr("y2", (d) => src[d[1]]?.y),
-            (update) => update,
-            (exit) => exit.remove(),
-        );
-
-    maybeTransition(sel, duration)
-        .attr("x1", (d) => pos[d[0]]?.x)
-        .attr("y1", (d) => pos[d[0]]?.y)
-        .attr("x2", (d) => pos[d[1]]?.x)
-        .attr("y2", (d) => pos[d[1]]?.y);
-}
-
+/**
+ * Nodes are rendered as circles with a top label which is the layer number
+ * and bottom label which is the element key string. If there is logic attached
+ * to the layer it is drawn as a gear in the top right corner.
+ *
+ * The optional parameter drawCanvas is either ".node-links"
+ * or ".layer-links" and is used for grouping of elements.
+ */
 function renderNodes(
     items,
     pos,
-    {
-        startPos,
-        duration,
-        layerMap,
-        nodeRadius,
-        toLayers,
-        drawCanvas = ".node-canvas",
-    },
+    layerMap,
+    { drawCanvas = ".node-canvas" } = {},
 ) {
-    const finalOpacity = toLayers ? 0 : 1;
-    const enterOpacity = duration > 0 ? 1 - finalOpacity : finalOpacity;
-
-    const nodeSel = g
+    const sel = g
         .select(drawCanvas)
         .selectAll("g.node")
         .data(items || [], (d) => d.key)
         .join(
             (enter) => {
                 const ng = enter.append("g").attr("class", "node");
-
                 ng.append("circle")
                     .attr("class", "node-circle")
-                    .attr("fill", nodeColor)
-                    .attr("stroke", colorPalette.gray)
-                    .on("click", (event, d) => {
-                        toLayers = currentMode === "layers";
-
-                        const isLayers = currentMode === "layers";
-                        clearSelectedNode();
-
-                        const cur = d3.select(event.currentTarget.parentNode);
-                        cur.classed("selected", true);
-
-                        if (!isLayers) highlightLayer(d.layer);
-                        refreshNodeInfoLegend();
-                        showNodeInfoPanel();
-                    });
-
-                ng.on("mouseenter", function () {
-                    d3.select(this)
-                        .select("circle")
-                        .style("stroke", colorPalette.zi_blue);
-                }).on("mouseleave", function () {
-                    d3.select(this)
-                        .select("circle")
-                        .style("stroke", null)
-                        .style("stroke-width", null);
-                });
-
+                    .on("click", onNodeClick);
                 ng.append("text")
                     .attr("class", "top-label")
-                    .attr("text-anchor", "middle")
-                    .attr("dominant-baseline", "top")
                     .text((d) => layerMap.get(d.layer));
-
                 ng.append("text")
                     .attr("class", "bottom-label")
-                    .attr("text-anchor", "middle")
-                    .attr("dominant-baseline", "central")
-                    .attr("fill", "black")
                     .text((d) => d.elements);
-
-                const gear = ng
-                    .filter((d) => d.logic)
-                    .append("g")
-                    .attr("class", "node-gear");
-
-                gear.append("path").attr("class", "gear-teeth");
-
-                gear.append("circle").attr("class", "gear-hole");
-
                 return ng;
             },
             (update) => update,
             (exit) => exit.remove(),
-        );
-
-    // Always update colors immediately
-    nodeSel.select(".node-circle").attr("fill", nodeColor);
-
-    // Position, radius, label opacity — animated or immediate
-    maybeTransition(nodeSel, duration).attr(
-        "transform",
-        (d) => `translate(${pos[d.key].x},${pos[d.key].y})`,
-    );
-
-    maybeTransition(nodeSel.select(".node-circle"), duration)
-        .attr("r", (d) => nodeRadius)
-        .attr("stroke-width", (d) => nodeRadius / 10);
-
-    maybeTransition(nodeSel.select(".top-label"), duration).style(
-        "font-size",
-        (d) => `${nodeRadius}px`,
-    );
-
-    maybeTransition(nodeSel.select(".bottom-label"), duration)
-        .attr("y", (d) => `${nodeRadius / 2.5}px`)
-        .style("font-size", (d) => `${nodeRadius / 1.75}px`)
-        .style("opacity", finalOpacity);
-
-    // Logic gear
-    const gr = nodeRadius * 0.75;
-    const gearSel = nodeSel.select(".node-gear");
-
-    maybeTransition(gearSel, duration).attr(
-        "transform",
-        `translate(${nodeRadius - gr * 0.2}, -${nodeRadius - gr * 0.2})`,
-    );
-
-    maybeTransition(gearSel.select(".gear-teeth"), duration).attr(
-        "d",
-        gearPath(gr),
-    );
-
-    maybeTransition(gearSel.select(".gear-hole"), duration).attr("r", gr * 0.3);
+        )
+        .attr("data-status", (d) => d.status)
+        .attr("transform", (d) => `translate(${pos[d.key].x},${pos[d.key].y})`);
+    if (drawCanvas === ".layer-canvas") renderLogicGear(sel);
 }
 
-function renderGraph(
-    graphData,
-    mode,
-    { animateFromMode = null, duration = TRANSITION_DURATION } = {},
-) {
+function renderLogicGear(sel) {
+    sel.selectAll("g.node-gear")
+        .data((d) => (d.logic ? [d] : []))
+        .join((enter) => {
+            const gear = enter.append("g").attr("class", "node-gear");
+            gear.append("path")
+                .attr("class", "gear-teeth")
+                .attr("d", gearPath(1));
+            gear.append("circle").attr("class", "gear-hole");
+            return gear;
+        });
+}
+
+function renderGraph(graphData, mode) {
     const nodes = graphData.nodes || [];
     const layers = graphData.layers || [];
     if (!nodes.length && !layers.length) return;
@@ -307,6 +196,7 @@ function renderGraph(
         : {};
 
     const nodeRadius = calculateNodeRadius(nodes, layers, width, height, mode);
+    document.documentElement.style.setProperty("--node-r", nodeRadius);
 
     const toLayers = mode === "layers";
     const nodeLayerPos = {};
@@ -314,88 +204,76 @@ function renderGraph(
         nodeLayerPos[n.key] = layerPos[n.layer] || nodePos[n.key];
     });
 
-    const startPos = toLayers ? nodePos : nodeLayerPos;
-    const endPos = toLayers ? nodeLayerPos : nodePos;
+    const nodesAt = toLayers ? nodeLayerPos : nodePos;
 
+    updateAnimState(graphData);
     // Plot the links between nodes
-    renderLinks(graphData.node_links, endPos, startPos, duration, {});
-    renderLinks(graphData.layer_links, layerPos, null, duration, {
+    renderLinks(graphData.node_links, nodesAt, {});
+    renderLinks(graphData.layer_links, layerPos, {
         drawCanvas: ".layer-links",
     });
 
     // Plot the node circles - this is performed always
     // either in the node position or moved to the layer position
-    renderNodes(nodes, endPos, {
-        startPos,
-        duration: duration,
-        layerMap,
-        nodeRadius,
-        toLayers,
-    });
+    renderNodes(nodes, nodesAt, layerMap);
 
     // Plot the layer circles
     // They are shown only in "layers" mode, otherwise they are hidden
-    renderNodes(layers, layerPos, {
-        duration: duration,
-        layerMap,
-        toLayers,
-        nodeRadius,
+    renderNodes(layers, layerPos, layerMap, {
         drawCanvas: ".layer-canvas",
     });
 
-    if (currentMode === "layers") {
-        setTimeout(() => {
-            hideCanvas(".node-links");
-            showCanvas(".layer-links");
-            showCanvas(".layer-canvas", duration);
-        }, duration);
-    } else {
-        hideCanvas(".layer-canvas");
-        hideCanvas(".layer-links");
-        showCanvas(".node-links");
-    }
+    // Re-highlight layer if a node is selected
+    if (!toLayers) highlightLayer();
 }
 
-function resetZoom() {
-    svg.transition()
-        .duration(TRANSITION_DURATION)
-        .call(zoom.transform, d3.zoomIdentity);
+function onNodeClick(event, d) {
+    const toLayers = currentMode === "layers";
+    clearSelectedNode();
+
+    const cur = d3.select(event.currentTarget.parentNode);
+    cur.classed("selected", true);
+
+    if (!toLayers) highlightLayer(d.layer);
+    refreshNodeInfoLegend(currentMode, cachedGraphData?.has_log_path);
+    showNodeInfoPanel();
 }
 
+async function refreshData({ force = false } = {}) {
+    const graphData = await fetchGraphData();
+    if (!graphData) return;
+    if (!force && cachedGraphData.version === graphData.version) return;
+    cachedGraphData = graphData;
+    renderGraph(graphData, currentMode);
+    refreshNodeInfoLegend(currentMode, cachedGraphData?.has_log_path);
+}
+
+/**
+ * Switch between layer view `mode = "layers"`,
+ * and node view `mode = "nodes`.
+ * Any highlighted layer is cleared on mode switch.
+ */
 function setMode(mode) {
     if (currentMode === mode) return;
     const prevMode = currentMode;
     currentMode = mode;
+    d3.select("#graph").classed("mode-layers", mode === "layers");
     if (cachedGraphData) {
         renderGraph(cachedGraphData, mode, { animateFromMode: prevMode });
-    } else {
-        refreshData({ force: true });
     }
-}
-
-async function refreshData({
-    force = false,
-    duration = TRANSITION_DURATION,
-} = {}) {
-    const graphData = await fetchGraphData();
-    if (!graphData) return;
-    if (!force && cachedGraphData.version === graphData.version) return;
     clearHighlight();
-    cachedGraphData = graphData;
-    renderGraph(graphData, currentMode, { duration: 0 });
-    refreshNodeInfoLegend();
+    closeNodeInfoPanel();
 }
 
 async function init() {
     setupSVG();
-    setupControls();
+    setupControls({ onModeChange: setMode });
     renderStatusLegend();
-    await refreshData({ force: true, duration: 0 });
+    await refreshData({ force: true });
     setInterval(refreshData, 200);
     window.addEventListener("resize", () => {
         const { width, height } = getContainerSize();
         svg.attr("width", width).attr("height", height);
-        clearHighlight();
         if (cachedGraphData) {
             renderGraph(cachedGraphData, currentMode);
         }

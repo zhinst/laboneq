@@ -21,7 +21,7 @@ __all__ = [  # noqa: RUF022
     "QuantumElementSerializer",
     "ResultsSerializer",
     "RunExperimentResultsSerializer",
-    "SystemProfileSerializer",
+    "SystemDescriptionSerializer",
     "LabOneQEnumSerializer",
     # Workflow objects
     "WorkflowOptionsSerializer",
@@ -44,6 +44,6 @@ from .qpu import QPUSerializer
 from .quantum_element import QuantumElementSerializer, QuantumParametersSerializer
 from .results import ResultsSerializer
 from .run_experiment_results import RunExperimentResultsSerializer
-from .system_profile import SystemProfileSerializer
+from .system_description import SystemDescriptionSerializer
 from .workflow_namespace import WorkflowNamespaceSerializer
 from .workflow_options import TaskOptionsSerializer, WorkflowOptionsSerializer

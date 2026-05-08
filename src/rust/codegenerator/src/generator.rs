@@ -21,7 +21,6 @@ use crate::ir::compilation_job::ChannelIndex;
 use crate::ir::compilation_job::DeviceKind;
 use crate::ir::compilation_job::InitialSignalProperties;
 use crate::ir::compilation_job::SignalKind;
-use crate::ir::experiment::AcquisitionType;
 use crate::ir::experiment::Handle;
 use crate::ir_adapter::value_or_parameter_to_fixed;
 use crate::par_trace;
@@ -30,7 +29,8 @@ use crate::passes::analyze_awg::AwgCompilationInfo;
 use crate::passes::analyze_awg::analyze_awg_ir;
 use crate::passes::analyze_measurements;
 use crate::passes::fanout_awg::fanout_for_awg;
-use crate::result::Acquisition;
+use crate::passes::handle_result_shapes::AwgMeasurementShapes;
+use crate::passes::handle_result_shapes::calculate_measure_shapes;
 use crate::result::AwgCodeGenerationResult;
 use crate::result::AwgProperties;
 use crate::result::ChannelProperties;
@@ -43,7 +43,6 @@ use crate::result::IntegrationWeight;
 use crate::result::IntegratorAllocation;
 use crate::result::Measurement;
 use crate::result::PpcSettings;
-use crate::result::ResultSource;
 use crate::result::SampledWaveform;
 use crate::result::SeqCGenOutput;
 use crate::result::SeqCProgram;
@@ -66,6 +65,7 @@ use laboneq_error::LabOneQError;
 use laboneq_error::WithContext;
 use laboneq_error::resource_usage::ResourceExhaustionError;
 use laboneq_error::resource_usage::handle_resource_exhaustion;
+use laboneq_error::resource_usage::intercept_and_collect;
 use laboneq_error::{bail, laboneq_error};
 use laboneq_log::warn;
 use laboneq_units::tinysample::{tiny_samples, tinysamples_to_seconds};
@@ -122,6 +122,8 @@ fn generate_code_for_awg<T: SampleWaveforms>(
     let root = fanout_for_awg(root, awg);
     let awg_info = analyze_awg_ir(&root, awg)?;
     let measurement_info = analyze_measurements(&root, awg.device_kind(), awg.sampling_rate)?;
+    let measurement_shapes =
+        calculate_measure_shapes(&root, awg, &measurement_info.integration_lengths, ctx)?;
     let mut awg_node = transform_ir_to_awg_events(
         root,
         awg,
@@ -186,18 +188,21 @@ fn generate_code_for_awg<T: SampleWaveforms>(
         sampled_waveforms,
         integration_weights,
         measurement_info,
+        measurement_shapes,
         &awg_info,
         ctx,
     )?;
     Ok(output)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn construct_awg_result<T>(
     awg: &AwgCore,
     awg_events: SeqcResults,
     sampled_waveforms: Vec<SampledWaveform<T::Signature>>,
     integration_weights: Vec<T::SampledIntegrationKernel>,
     measurement_info: MeasurementAnalysis,
+    measurement_shapes: Option<AwgMeasurementShapes>,
     awg_info: &AwgCompilationInfo,
     ctx: &CodeGenContext,
 ) -> Result<AwgCodeGenerationResult<T>>
@@ -395,6 +400,12 @@ where
         input_channel_properties,
         integration_weights: integration_weight_infos,
         integrator_allocations: construct_integration_allocations(awg, ctx),
+        result_length: measurement_shapes
+            .as_ref()
+            .and_then(|shapes| shapes.result_length),
+        result_handle_maps: measurement_shapes
+            .map(|shapes| shapes.result_handle_maps)
+            .unwrap_or_default(),
     };
     Ok(result)
 }
@@ -506,7 +517,7 @@ fn generate_code_for_multiple_awgs<T: SampleWaveforms + Sync + Send>(
     waveform_sampler: &T,
 ) -> Result<Vec<AwgCodeGenerationResult<T>>> {
     let trace_ctx = ParallelTraceContext::new();
-    let awg_results: Vec<AwgCodeGenerationResult<T>> = awgs
+    let awg_results: Vec<Result<AwgCodeGenerationResult<T>>> = awgs
         .par_iter()
         .map(|awg| -> Result<AwgCodeGenerationResult<T>> {
             par_trace!(trace_ctx, "generate_code_for_awg", {
@@ -522,77 +533,12 @@ fn generate_code_for_multiple_awgs<T: SampleWaveforms + Sync + Send>(
                 })
             })
         })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(awg_results)
+        .collect::<Vec<_>>();
+    intercept_and_collect(awg_results.into_iter())
 }
 
 fn estimate_total_execution_time(root: &IrNode) -> f64 {
     tinysamples_to_seconds(tiny_samples(root.data().length())).into()
-}
-
-fn construct_result_handle_maps(
-    simultaneous_acquires: Vec<Vec<Acquisition>>,
-    awgs: &[AwgCore],
-    ctx: &CodeGenContext,
-) -> HashMap<ResultSource, Vec<Vec<String>>> {
-    fn _awg_has_acquires(awg: &AwgCore, acquires: &[Acquisition]) -> bool {
-        for acq in acquires {
-            for sig in &awg.signals {
-                if sig.uid == acq.signal {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-    let simultaneous_awgs = simultaneous_acquires
-        .iter()
-        .map(|acquires| awgs.iter().filter(|awg| _awg_has_acquires(awg, acquires)));
-    let mut result_handle_maps: HashMap<ResultSource, Vec<Vec<String>>> = HashMap::new();
-    let mut signal_to_result_source = HashMap::new();
-    for (acquires, awgs) in std::iter::zip(simultaneous_acquires.iter(), simultaneous_awgs) {
-        let mut result_map_for_this_round: HashMap<ResultSource, Vec<String>> = HashMap::new();
-        for awg in awgs {
-            for sig in &awg.signals {
-                if sig.is_output() {
-                    continue;
-                }
-                let Some(integration_units) = ctx.integration_units_for_signal(sig.uid) else {
-                    continue;
-                };
-                let integrator_idx = match ctx.acquisition_type {
-                    AcquisitionType::RAW => None,
-                    _ => Some(integration_units[0]),
-                };
-                let result_source = ResultSource {
-                    device_id: awg.device.uid().to_string(),
-                    awg_id: awg.uid,
-                    integrator_idx,
-                };
-                result_map_for_this_round
-                    .entry(result_source.clone())
-                    .or_default();
-                signal_to_result_source.insert(&sig.uid, result_source);
-            }
-        }
-        for acq in acquires {
-            let _ = result_map_for_this_round
-                .entry(signal_to_result_source.get(&acq.signal).unwrap().clone())
-                .and_modify(|entry| {
-                    entry.push(acq.handle.to_string());
-                });
-        }
-        result_map_for_this_round
-            .into_iter()
-            .for_each(|(result_source, val)| {
-                result_handle_maps
-                    .entry(result_source)
-                    .or_default()
-                    .push(val);
-            });
-    }
-
-    result_handle_maps
 }
 
 #[instrument(name = "laboneq.compiler.generate-code-rs", skip_all)] // Named with `-rs` suffix to distinguish from Python wrapper function
@@ -618,14 +564,15 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
         );
     }
     // Context construction
-    let mut feedback_config = collect_feedback_config(root, &awgs)
+    let feedback_config = collect_feedback_config(root, &awgs)
         .with_context(|| "Error while processing feedback configuration")?;
     let integration_unit_allocation = allocate_integration_units(root, &awgs, &acquisition_type)?;
     let feedback_register_layout =
         calculate_feedback_register_layout(&awgs, &integration_unit_allocation, &feedback_config);
-    let simulaneous_acquires = feedback_config.take_acquisitions();
     let mut ctx = CodeGenContext {
         acquisition_type,
+        averaging_mode: codegen_ir.averaging_mode,
+        averaging_count: codegen_ir.averaging_count,
         feedback_register_layout,
         feedback_config,
         integration_unit_allocation,
@@ -645,7 +592,6 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
     // Result construction
     let total_execution_time = estimate_total_execution_time(root);
     let measurements = evaluate_measurement_per_device(&awg_results);
-    let result_handle_maps = construct_result_handle_maps(simulaneous_acquires, &awgs, &ctx);
     let ppc_settings = merge_ppc_steps(&mut awg_results, &mut ctx.initial_signal_properties)?;
 
     let result = SeqCGenOutput {
@@ -653,7 +599,6 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
         auxiliary_device_properties: codegen_ir.auxiliary_devices,
         awg_results,
         total_execution_time,
-        result_handle_maps,
         measurements,
         ppc_settings,
     };
@@ -764,7 +709,7 @@ fn evaluate_measurement_per_device(
         .flatten()
         .collect::<Vec<Measurement>>();
     // Sorted for output consistency
-    measurements.sort_by(|a, b| a.channel.cmp(&b.channel));
+    measurements.sort_by_key(|a| a.channel);
     measurements
 }
 

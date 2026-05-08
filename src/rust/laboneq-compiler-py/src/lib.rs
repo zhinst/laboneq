@@ -31,6 +31,8 @@ use crate::py_experiment::ExperimentPy;
 use crate::py_experiment_ir::ExperimentIrPy;
 use crate::py_signal::AmplifierPumpPy;
 use crate::qccs_feedback_calculator::QccsFeedbackCalculator;
+use crate::result_shape::ResultShapes;
+use crate::result_shape::extract_result_shapes;
 use crate::setup_processor::DelayRegistry;
 use crate::setup_processor::process_setup;
 
@@ -68,6 +70,8 @@ pub mod compiler_backend;
 mod py_device_setup_capnp;
 pub mod py_experiment;
 pub mod py_experiment_ir;
+mod py_result_shape;
+mod result_shape;
 mod setup_processor;
 
 pub(crate) struct SetupProperties {
@@ -90,7 +94,6 @@ fn serialize_experiment_py(
 pub fn build_experiment_with_backend_capnp_py<B: CompilerBackend>(
     py: Python<'_>,
     capnp_data: &[u8],
-    desktop_setup: bool,
     packed: bool,
     compiler_settings: Option<Bound<'_, PyDict>>,
     backend: B,
@@ -104,7 +107,7 @@ where
         .transpose()?
         .unwrap_or_default();
 
-    let processed = build_experiment_capnp(py, capnp_data, desktop_setup, packed, backend)?;
+    let processed = build_experiment_capnp(py, capnp_data, packed, backend)?;
 
     let exp_py = ExperimentPy {
         inner: processed.inner,
@@ -113,6 +116,7 @@ where
         delay_compensation: processed.delay_compensation,
         compiler_settings: compiler_settings.clone(),
         backend_data: Arc::new(processed.backend_data),
+        result_shapes: processed.result_shapes,
     };
     Ok(exp_py)
 }
@@ -126,13 +130,13 @@ pub struct ProcessedExperiment<D> {
     /// Delay compensation for signals on devices.
     delay_compensation: DelayRegistry,
     backend_data: D,
+    result_shapes: ResultShapes,
 }
 
 /// Build an experiment from Cap'n Proto bytes plus device/signal configuration.
 fn build_experiment_capnp<B: CompilerBackend>(
     py: Python<'_>,
     capnp_data: &[u8],
-    desktop_setup: bool,
     packed: bool,
     backend: B,
 ) -> Result<ProcessedExperiment<impl PreprocessedBackendData>> {
@@ -150,13 +154,10 @@ fn build_experiment_capnp<B: CompilerBackend>(
         &mut deserialized.id_store,
         &deserialized.parameters,
         &deserialized.pulses,
-        &deserialized.awg_devices,
+        deserialized.instruments,
         &deserialized.auxiliary_devices,
-        &deserialized.signals,
+        deserialized.signals,
     ))?;
-    deserialized
-        .signals
-        .extend(backend_processed.additional_signals().iter().cloned());
 
     let mut experiment = Experiment {
         root: deserialized.root,
@@ -166,8 +167,8 @@ fn build_experiment_capnp<B: CompilerBackend>(
         py_object_store: py_object_store.into(),
     };
     let setup_properties = SetupProperties {
-        signals: deserialized.signals,
-        awg_devices: deserialized.awg_devices,
+        signals: backend_processed.device_signals,
+        awg_devices: backend_processed.backend_data.awg_devices().to_vec(),
         auxiliary_devices: deserialized.auxiliary_devices,
     };
 
@@ -178,8 +179,7 @@ fn build_experiment_capnp<B: CompilerBackend>(
 
     let processed_setup = process_setup(
         setup_properties,
-        &backend_processed,
-        desktop_setup,
+        &backend_processed.backend_data,
         &experiment.id_store,
         &context,
     )
@@ -195,7 +195,6 @@ fn build_experiment_capnp<B: CompilerBackend>(
             .collect(),
         processed_setup.devices,
         processed_setup.auxiliary_devices,
-        desktop_setup,
     )
     .map_err(Error::new)?;
 
@@ -207,13 +206,23 @@ fn build_experiment_capnp<B: CompilerBackend>(
         let msg = create_error_message(e);
         Error::new(resolve_ids(&msg, &experiment.id_store))
     })?;
+    let result_shapes = extract_result_shapes(
+        &experiment.root,
+        experiment.parameters.values(),
+        Arc::get_mut(&mut experiment.id_store).expect("Expected no additional ID stores"),
+    )
+    .map_err(|e| {
+        let msg = create_error_message(e);
+        Error::new(resolve_ids(&msg, &experiment.id_store))
+    })?;
 
     let res = ProcessedExperiment {
         inner: experiment,
         device_setup: Arc::new(device_setup),
         context,
         delay_compensation: processed_setup.on_device_delays,
-        backend_data: backend_processed,
+        backend_data: backend_processed.backend_data,
+        result_shapes,
     };
     Ok(res)
 }

@@ -5,16 +5,14 @@ from __future__ import annotations
 
 import logging
 import math
+import types
 from bisect import bisect_left
-from collections import Counter
 from typing import TYPE_CHECKING
 
 # reporter import is required to register the CompilationReportGenerator hook
 import laboneq.compiler.workflow.reporter  # noqa: F401
 from laboneq.compiler.common import compiler_settings
 from laboneq.compiler.common.resource_usage import ResourceLimitationError
-from laboneq.compiler.common.result_shape import construct_result_shape_info
-from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
 from laboneq.compiler.workflow.compiler_hooks import (
     GenerateRecipeArgs,
     get_compiler_hooks,
@@ -28,11 +26,12 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.data.compilation_job import (
     ChunkingInfo,
     CompilationJob,
-    DeviceInfo,
     DeviceInfoType,
+    ExperimentInfo,
 )
 from laboneq.data.recipe import Recipe
 from laboneq.data.scheduled_experiment import (
+    HandleResultShape,
     ResultShapeInfo,
     ScheduledExperiment,
 )
@@ -66,82 +65,16 @@ def _chunk_count_trial(requested: int, candidates: list[int]) -> int:
 class Compiler:
     def __init__(self, settings: dict | None = None):
         self._device_setup_fingerprint: str = ""
-        self._experiment_dao: ExperimentDAO = None
         self._execution: Statement = None
         self._chunking_info: ChunkingInfo | None = None
         self._compiler_settings = settings or {}
         self._settings = compiler_settings.from_dict(settings)
-        self._is_desktop_setup: bool = False
 
         _logger.info("Starting LabOne Q Compiler run...")
 
-    @staticmethod
-    def _get_first_instr_of(device_infos: list[DeviceInfo], type: str) -> DeviceInfo:
-        return next(
-            (instr for instr in device_infos if instr.device_type.value == type)
-        )
-
-    def _analyze_setup(self, experiment_dao: ExperimentDAO):
-        device_infos = experiment_dao.device_infos()
-        device_type_list = [i.device_type.value for i in device_infos]
-        type_counter = Counter(device_type_list)
-        has_pqsc = type_counter["pqsc"] > 0
-        has_qhub = type_counter["qhub"] > 0
-        has_hdawg = type_counter["hdawg"] > 0
-        shf_types = {"shfsg", "shfqa", "shfqc"}
-
-        # Basic validity checks
-        signal_infos = [
-            experiment_dao.signal_info(signal_id)
-            for signal_id in experiment_dao.signals()
-        ]
-        used_devices = set(info.device.device_type.value for info in signal_infos)
-        if (
-            "hdawg" in used_devices
-            and "uhfqa" in used_devices
-            and bool(shf_types.intersection(used_devices))
-        ):
-            raise RuntimeError(
-                "Setups with signals on each of HDAWG, UHFQA and SHF type "
-                + "instruments are not supported"
-            )
-
-        device_infos_without_ppc = [
-            d for d in device_infos if d and d.device_type != DeviceInfoType.SHFPPC
-        ]
-        standalone_qc = len(device_infos_without_ppc) <= 2 and all(
-            dev.is_qc for dev in device_infos_without_ppc
-        )
-        if "zqcs" in used_devices:
-            self._is_desktop_setup = True
-        else:
-            self._is_desktop_setup = (
-                not has_pqsc
-                and not has_qhub
-                and (
-                    used_devices == {"hdawg"}
-                    or used_devices == {"shfsg"}
-                    or used_devices == {"shfqa"}
-                    or (used_devices == {"shfqa", "shfsg"} and standalone_qc)
-                    or used_devices == {"hdawg", "uhfqa"}
-                    or (used_devices == {"uhfqa"} and has_hdawg)  # No signal on leader
-                )
-            )
-        if (
-            not has_pqsc
-            and not has_qhub
-            and not self._is_desktop_setup
-            and used_devices != {"uhfqa"}
-            and bool(used_devices)  # Allow empty experiment (used in tests)
-            and "zqcs" not in used_devices
-        ):
-            raise RuntimeError(
-                f"Unsupported device combination {used_devices} for small setup"
-            )
-
     def _compile_whole_or_with_chunks(
         self,
-        experiment: compiler_rs.ExperimentInfo,
+        experiment: compiler_rs.Experiment,
         chunk_count: int | None,
         device_class: int,
         compiler_module: compiler_rs,
@@ -169,7 +102,7 @@ class Compiler:
         combined_output = combined_compiler_output.get_first_combined_output()
         if combined_output is None:
             recipe = Recipe()
-            result_shape_info = ResultShapeInfo({}, {}, {})
+            result_shape_info = ResultShapeInfo({}, {})
         else:
             generate_recipe_args = GenerateRecipeArgs(
                 experiment_rs=experiment,
@@ -178,13 +111,25 @@ class Compiler:
             recipe = get_compiler_hooks(device_class).generate_recipe(
                 generate_recipe_args
             )
-            result_shape_info = construct_result_shape_info(
-                self._execution,
-                rt_loop_properties,
-                combined_output,
-                self._experiment_dao.device_infos(),
-                self._settings,
-                recipe.integrator_allocations,
+            shapes = {
+                shape.handle: HandleResultShape(
+                    signal=shape.signal,
+                    shape=tuple(shape.shape),
+                    axis_names=[
+                        axis_names[0] if len(axis_names) == 1 else axis_names
+                        for axis_names in shape.axis_names
+                    ],
+                    axis_values=[
+                        axis_values[0] if len(axis_values) == 1 else axis_values
+                        for axis_values in shape.axis_values
+                    ],
+                    chunked_axis_index=shape.chunked_axis_index,
+                    match_case_mask=shape.match_case_mask or None,
+                )
+                for shape in experiment.get_result_shapes(combined_output)
+            }
+            result_shape_info = ResultShapeInfo(
+                shapes=shapes, result_handle_maps=combined_output.result_handle_maps
             )
 
         return ScheduledExperiment(
@@ -198,15 +143,16 @@ class Compiler:
         )
 
     def _process_experiment(
-        self, compiler_module: compiler_rs, device_class: int
+        self,
+        experiment_info: ExperimentInfo,
+        compiler_module: compiler_rs,
+        device_class: int,
     ) -> ScheduledExperiment:
         experiment = build_rs_experiment(
-            experiment_dao=self._experiment_dao,
+            experiment_info=experiment_info,
             compiler_module=compiler_module,
-            desktop_setup=self._is_desktop_setup,
             compiler_settings=self._compiler_settings,
         )
-
         chunking = self._chunking_info
         if chunking is None or not chunking.auto:
             if chunking is None:
@@ -283,18 +229,18 @@ class Compiler:
                         candidates=divisors,
                     )
 
-    def run(self, data: CompilationJob) -> ScheduledExperiment:
+    def run(self, job: CompilationJob) -> ScheduledExperiment:
         _logger.debug("Start LabOne Q Compiler run")
 
-        compiler_module, device_class = _resolve_compiler_module_device_class(data)
+        compiler_module, device_class = _resolve_compiler_module_device_class(job)
 
-        self._device_setup_fingerprint = data.experiment_info.device_setup_fingerprint
-        self._experiment_dao = ExperimentDAO(data.experiment_info)
-        self._execution = data.execution
-        self._chunking_info = data.experiment_info.chunking
+        self._device_setup_fingerprint = job.experiment_info.device_setup_fingerprint
+        self._execution = job.execution
+        self._chunking_info = job.experiment_info.chunking
 
-        self._analyze_setup(self._experiment_dao)
-        compiler_output = self._process_experiment(compiler_module, device_class)
+        compiler_output = self._process_experiment(
+            job.experiment_info, compiler_module, device_class
+        )
 
         assert compiler_output is not None
         _logger.info("Finished LabOne Q Compiler run.")
@@ -303,7 +249,7 @@ class Compiler:
 
 def _resolve_compiler_module_device_class(
     job: CompilationJob,
-) -> tuple[compiler_rs, int]:
+) -> tuple[types.ModuleType, int]:
     device_classes = {
         _eval_device_class(info.device_type) for info in job.experiment_info.devices
     }

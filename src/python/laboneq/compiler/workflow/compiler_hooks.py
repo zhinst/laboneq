@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class GenerateRecipeArgs:
-    experiment_rs: compiler_rs.ExperimentInfo
+    experiment_rs: compiler_rs.Experiment
     combined_compiler_output: CombinedOutput
 
 

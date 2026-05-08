@@ -133,7 +133,7 @@ mod tests {
     use laboneq_common::named_id::NamedIdStore;
     use laboneq_dsl::{
         node_structure,
-        operation::{AveragingLoop, Reserve, Sweep},
+        operation::{AveragingLoop, Reserve, Sweep, builders::SweepBuilder},
         types::{
             AcquisitionType, RepetitionMode, SectionAlignment, SectionTimingMode, SectionUid,
             SignalUid,
@@ -141,15 +141,13 @@ mod tests {
     };
 
     fn make_sweep(store: &mut NamedIdStore, name: &str) -> Sweep {
-        Sweep {
-            uid: SectionUid(store.get_or_insert(name)),
-            parameters: vec![],
-            alignment: SectionAlignment::Right,
-            reset_oscillator_phase: false,
-            count: NonZeroU32::new(1).unwrap(),
-            chunking: None,
-            section_timing_mode: SectionTimingMode::Relaxed,
-        }
+        let builder = SweepBuilder::new(
+            SectionUid(store.get_or_insert(name)),
+            vec![],
+            1.try_into().unwrap(),
+        )
+        .alignment(SectionAlignment::Right);
+        builder.build()
     }
 
     fn make_acquire_rt(

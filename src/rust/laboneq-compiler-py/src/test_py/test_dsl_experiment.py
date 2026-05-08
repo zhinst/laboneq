@@ -81,8 +81,6 @@ def run_experiment():
     device_setup_rs.add_instrument(
         uid="device_hdawg",
         device_type="HDAWG",
-        physical_device_uid=0,
-        is_shfqc=False,
     )
     device_setup_rs.add_signal_with_calibration(
         uid="q0/drive",
@@ -124,8 +122,6 @@ def create_derived_param_experiment_calibration():
     device_setup_rs.add_instrument(
         uid="device_hdawg",
         device_type="HDAWG",
-        physical_device_uid=0,
-        is_shfqc=False,
     )
     device_setup_rs.add_signal_with_calibration(
         uid="q0/drive",
@@ -169,8 +165,6 @@ def create_derived_param_experiment_operation_field():
     device_setup_rs.add_instrument(
         uid="device_hdawg",
         device_type="HDAWG",
-        physical_device_uid=0,
-        is_shfqc=False,
     )
     device_setup_rs.add_signal_with_calibration(
         uid="q0/drive",
@@ -200,7 +194,5 @@ def create_missing_signal_experiment():
     device_setup_rs.add_instrument(
         uid="device_hdawg",
         device_type="HDAWG",
-        physical_device_uid=0,
-        is_shfqc=False,
     )
     return compiler_rs.serialize_experiment(exp, device_setup_rs, packed=False)

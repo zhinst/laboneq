@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Optional
 
-from laboneq.data.compilation_job import DeviceInfo, DeviceInfoType
+from laboneq.data.compilation_job import DeviceInfoType
 
 
 @dataclass(eq=True, frozen=True)
@@ -25,20 +25,6 @@ class DeviceTraits:
     lo_frequency_granularity: Optional[float] = None
     min_lo_frequency: Optional[float] = None
     max_lo_frequency: Optional[float] = None
-    max_result_vector_length: int | None = None
-    scope_max_segments: int | None = None
-
-    def scope_memory_size_samples(self, device_info: DeviceInfo) -> int:
-        if self == DeviceType.SHFQA and device_info.is_qc:
-            return 64 * 1024
-        if self == DeviceType.SHFQA:
-            return 256 * 1024
-        if self == DeviceType.UHFQA:
-            return 4096
-        if self == DeviceType.ZQCS:
-            return 133120
-
-        return 0
 
 
 class DeviceType(DeviceTraits, Enum):
@@ -83,8 +69,6 @@ class DeviceType(DeviceTraits, Enum):
         channels_per_awg=2,
         # Verified by PW (2022-10-13) on dev2086, rev 68366. Observed ~25 ns.
         reset_osc_duration=40e-9,
-        max_result_vector_length=1 << 20,
-        scope_max_segments=1,
     )
 
     SHFQA = DeviceTraits(
@@ -107,8 +91,6 @@ class DeviceType(DeviceTraits, Enum):
         lo_frequency_granularity=100e6,
         min_lo_frequency=1e9,
         max_lo_frequency=8.5e9,
-        max_result_vector_length=1 << 19,
-        scope_max_segments=1024,
     )
     SHFSG = DeviceTraits(
         str_value="shfsg",

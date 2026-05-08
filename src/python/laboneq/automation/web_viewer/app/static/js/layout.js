@@ -1,9 +1,37 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-let toastTimer = null;
+import * as auto from "./automation_methods.js";
+import { TRANSITION_DURATION } from "./helpers.js";
 
-function setupControls() {
+export const zoom = d3
+    .zoom()
+    .scaleExtent([0.75, 20])
+    .on("zoom", (event) => d3.select("g").attr("transform", event.transform));
+
+export function attachZoom(svgSelection) {
+    svgSelection.call(zoom).call(zoom.transform, d3.zoomIdentity);
+}
+
+function resetZoom() {
+    d3.select("#graph svg")
+        .transition()
+        .duration(TRANSITION_DURATION)
+        .call(zoom.transform, d3.zoomIdentity);
+}
+
+export function statusColor(status) {
+    return (
+        getComputedStyle(document.documentElement)
+            .getPropertyValue(`--status-${status}`)
+            .trim() ||
+        getComputedStyle(document.documentElement)
+            .getPropertyValue("--status-default")
+            .trim()
+    );
+}
+
+export function setupControls({ onModeChange }) {
     const toggle = document.getElementById("viewToggle");
     const btnReset = document.getElementById("btnResetZoom");
     const btnRunAuto = document.getElementById("btnRunAuto");
@@ -13,76 +41,51 @@ function setupControls() {
     toggle?.addEventListener("click", () => {
         if (toggle.dataset.locked) return;
         const next = toggle.dataset.active === "layers" ? "nodes" : "layers";
-        switchMode(toggle, next);
-        closeNodeInfoPanel();
+        onModeChange(next);
+        toggleSlider(toggle, next);
     });
 
     btnRunElement?.addEventListener("click", () => {
         const { layer, node } = btnRunElement.dataset;
-        if (layer && node && toggle.dataset.active === "nodes") runNode(node);
-        else if (layer && toggle.dataset.active === "layers") runLayer(layer);
+        if (layer && node && toggle.dataset.active === "nodes")
+            auto.runNode(node);
+        else if (layer && toggle.dataset.active === "layers")
+            auto.runLayer(layer);
     });
 
     if (btnReset) btnReset.addEventListener("click", resetZoom);
-    if (btnRunAuto) btnRunAuto.addEventListener("click", runAutomation);
-    if (btnResetAuto) btnResetAuto.addEventListener("click", resetAutomation);
+    if (btnRunAuto) btnRunAuto.addEventListener("click", auto.runAutomation);
+    if (btnResetAuto) btnResetAuto.addEventListener("click", resetAndClear);
 }
 
-function switchMode(toggle, mode) {
+function resetAndClear() {
+    auto.resetAutomation();
+    clearHighlight();
+}
+
+function toggleSlider(toggle, mode) {
     toggle.dataset.active = mode;
     toggle.dataset.locked = true;
-
-    clearHighlight();
-    setMode(mode);
 
     setTimeout(() => {
         delete toggle.dataset.locked;
     }, TRANSITION_DURATION);
 }
 
-function showToast(title, text, { persistent = false, duration = 2500 } = {}) {
-    const el = document.getElementById("automation-status");
-    const toastText = document.getElementById("toast-text");
-    const toastHTML = `<strong>${title}:</strong> ${text}`;
-
-    clearTimeout(toastTimer);
-    el.classList.remove("fading");
-    el.style.display = "block";
-    toastText.innerHTML = toastHTML;
-
-    if (persistent) return;
-
-    toastTimer = setTimeout(() => {
-        el.classList.add("fading");
-        toastTimer = setTimeout(() => {
-            el.style.display = "none";
-            el.classList.remove("fading");
-        }, TRANSITION_DURATION);
-    }, duration);
+export function highlightLayer(layerKey) {
+    if (layerKey === undefined) {
+        const selected = d3.select("g.node.selected");
+        if (selected.empty()) return clearHighlight();
+        layerKey = selected.datum().layer;
+    }
+    d3.select("#graph").classed("highlight-active", true);
+    d3.selectAll("g.node").classed("highlighted", (d) => d.layer === layerKey);
+    placeLayerLabel(layerKey);
 }
 
-function hideToast() {
-    const el = document.getElementById("automation-status");
-    clearTimeout(toastTimer);
-    el.classList.remove("fading");
-    el.style.display = "none";
-}
-
-function highlightLayer(layerKey) {
-    g.selectAll("g.node")
-        .select("circle")
-        .attr("fill", (d) => {
-            const color = statusColorMap[d.status] || colorPalette.zi_blue;
-            return d.layer === layerKey ? color : d3.color(color).darker(1.5);
-        })
-        .style("filter", (d) => {
-            if (d.layer !== layerKey) return null;
-            const color = statusColorMap[d.status] || colorPalette.zi_blue;
-            return `drop-shadow(0 0 8px ${color})`;
-        });
-
-    g.selectAll(".layer-label").remove();
-    const match = g.selectAll("g.node").filter((d) => d.layer === layerKey);
+function placeLayerLabel(layerKey) {
+    d3.selectAll(".layer-label").remove();
+    const match = d3.selectAll("g.node").filter((d) => d.layer === layerKey);
     if (!match.empty()) {
         let minX = Infinity;
         let leftmostNode = null;
@@ -104,7 +107,8 @@ function highlightLayer(layerKey) {
         const gap = 16;
         const px = 6;
 
-        const label = g
+        const label = d3
+            .select("#graph > svg > g")
             .append("g")
             .attr("class", "layer-label")
             .attr("transform", nodeTransform);
@@ -130,11 +134,10 @@ function highlightLayer(layerKey) {
     }
 }
 
-function clearHighlight() {
-    g.selectAll("g.node")
-        .select("circle")
-        .attr("fill", (d) => statusColorMap[d.status] || colorPalette.zi_blue)
-        .style("filter", null);
-    g.selectAll(".link").style("stroke", null);
-    g.selectAll(".layer-label").remove();
+export function clearHighlight() {
+    d3.selectAll(".node.selected").classed("selected", false);
+    d3.select("#graph").classed("highlight-active", false);
+    d3.selectAll("g.node").classed("highlighted", false);
+    d3.selectAll(".link").style("stroke", null);
+    d3.selectAll(".layer-label").remove();
 }

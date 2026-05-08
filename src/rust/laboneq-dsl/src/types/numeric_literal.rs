@@ -19,6 +19,14 @@ impl NumericLiteral {
             other => other, // Float and Complex unchanged
         }
     }
+
+    pub fn to_complex(self) -> Complex64 {
+        match self {
+            NumericLiteral::Complex(c) => c,
+            NumericLiteral::Float(f) => Complex64::new(f, 0.0),
+            NumericLiteral::Int(i) => Complex64::new(i as f64, 0.0),
+        }
+    }
 }
 
 impl Eq for NumericLiteral {}

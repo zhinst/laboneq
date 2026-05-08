@@ -231,6 +231,7 @@ pub(crate) fn insert_frame_changes(mut nodes: Vec<(Option<u16>, &mut ir::IrNode)
     let mut nodes_to_be_removed = vec![];
     for (idx, (state, node)) in nodes.iter_mut().enumerate() {
         let (node_data, node_offset) = node.data_and_offset_mut();
+        #[allow(clippy::collapsible_match)] // https://github.com/rust-lang/rust-clippy/issues/16903
         match node_data {
             ir::NodeKind::FrameChange(ob) => {
                 if tracker.try_insert_frame_change(

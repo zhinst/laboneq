@@ -334,14 +334,14 @@ class AutomationLayer(ABC):
             return Status.EMPTY
 
     @property
-    def max_fail_count(self) -> dict[NodeKey, int | None]:
+    def max_fail_count(self) -> dict[NodeKey, int]:
         max_fail_count_dict = {}
         for k, v in self.nodes.items():
             max_fail_count_dict[k] = v.max_fail_count
         return max_fail_count_dict
 
     @max_fail_count.setter
-    def max_fail_count(self, value: dict[NodeKey, int | None]):
+    def max_fail_count(self, value: dict[NodeKey, int]):
         for k, v in value.items():
             self.nodes[k].max_fail_count = v
 

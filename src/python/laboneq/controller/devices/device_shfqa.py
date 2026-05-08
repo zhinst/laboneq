@@ -22,7 +22,6 @@ from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import RawReadoutData
 from laboneq.controller.devices.qachannel import QAChannel, SHFQAMixIn
 from laboneq.controller.recipe_processor import (
-    VIRTUAL_SHFSG_UID_SUFFIX,
     AwgType,
     RecipeData,
     RtExecutionInfo,
@@ -30,6 +29,7 @@ from laboneq.controller.recipe_processor import (
 )
 from laboneq.controller.utilities.for_each import for_each
 from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
+from laboneq.data.execution_payload import VIRTUAL_SHFSG_UID_SUFFIX
 from laboneq.data.recipe import (
     Initialization,
     NtStepKey,

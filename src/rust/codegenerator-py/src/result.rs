@@ -188,6 +188,8 @@ pub(crate) struct AwgCodeGenerationResultPy {
     integration_weights: Vec<IntegrationWeightPy>,
     #[pyo3(get)]
     integration_unit_allocations: Vec<Py<IntegrationUnitAllocationPy>>,
+    #[pyo3(get)]
+    result_length: Option<usize>,
 }
 
 #[pyclass(name = "DeviceProperties", skip_from_py_object, eq, frozen)]
@@ -521,6 +523,7 @@ impl AwgCodeGenerationResultPy {
                 })
                 .collect(),
             integration_unit_allocations,
+            result_length: result.result_length,
         };
         Ok(output)
     }
@@ -611,6 +614,30 @@ impl SeqCGenOutputPy {
         mut results: SeqCGenOutput<WaveformSamplerPy>,
         id_store: &NamedIdStore,
     ) -> Self {
+        let result_handle_maps = results
+            .awg_results
+            .iter()
+            .flat_map(|result| {
+                result.result_handle_maps.iter().map(move |(source, map)| {
+                    (
+                        ResultSourcePy {
+                            device_id: source.device_id.to_string(),
+                            awg_id: source.awg_id,
+                            integrator_idx: source.integrator_idx,
+                        },
+                        map.iter()
+                            .map(|handles| {
+                                handles
+                                    .iter()
+                                    .map(|handle| handle.to_string())
+                                    .collect::<Vec<String>>()
+                            })
+                            .collect::<Vec<Vec<String>>>(),
+                    )
+                })
+            })
+            .collect();
+
         let awg_results: Vec<Py<AwgCodeGenerationResultPy>> = results
             .awg_results
             .drain(..)
@@ -620,21 +647,6 @@ impl SeqCGenOutputPy {
                     AwgCodeGenerationResultPy::create(py, result, id_store).unwrap(),
                 )
                 .expect("Failed to create AwgCodeGenerationResultPy")
-            })
-            .collect();
-
-        let result_handle_maps = results
-            .result_handle_maps
-            .drain()
-            .map(|(result_source, map)| {
-                (
-                    ResultSourcePy {
-                        device_id: result_source.device_id,
-                        awg_id: result_source.awg_id,
-                        integrator_idx: result_source.integrator_idx,
-                    },
-                    map,
-                )
             })
             .collect();
 

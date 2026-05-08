@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from numpy.typing import ArrayLike
 
 from laboneq.core.types.compiled_experiment import CompiledExperiment
+from laboneq.data.execution_payload import VIRTUAL_SHFSG_UID_SUFFIX
 from laboneq.data.recipe import RealtimeExecutionInit
 from laboneq.dsl.device.device_setup import DeviceSetup
 from laboneq.dsl.device.instruments.shfqc import SHFQC
@@ -92,23 +93,7 @@ class _AWG_ID:
     ):
         internal_device_name = self._dev_uid
         if self._is_qc():
-            qc_channels = {
-                ch.name
-                for ch in self._device_setup.physical_channel_groups[
-                    self._dev_uid
-                ].channels.values()
-            }
-            qa_channels = {
-                f"qachannels_{ch}_{suffix}"
-                for ch in range(4)
-                for suffix in ("output", "input")
-            }
-            # only add the _sg suffix if qc was split into sg and qa (which only happens if qa channels are present)
-            internal_device_name = (
-                self._dev_uid
-                if qc_channels.isdisjoint(qa_channels)
-                else f"{self._dev_uid}_sg"
-            )
+            internal_device_name = f"{self._dev_uid}{VIRTUAL_SHFSG_UID_SUFFIX}"
         self.is_out = True
         self.channels = [0, 1]
         self.find_seqc(internal_device_name, int(chs[0]), realtime_inits)

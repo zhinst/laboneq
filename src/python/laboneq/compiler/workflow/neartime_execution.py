@@ -23,7 +23,6 @@ from laboneq.core.types.numpy_support import NumPyArray
 from laboneq.data.scheduled_experiment import RtLoopProperties
 from laboneq.executor.executor import (
     ExecutorBase,
-    LoopFlags,
     LoopingMode,
 )
 
@@ -130,17 +129,14 @@ class NtCompilerExecutor(ExecutorBase):
         value: float,
         axis_name: str,
         values: NumPyArray,
-        is_user_registered: bool,
     ):
-        super().set_sw_param_handler(
-            name, index, value, axis_name, values, is_user_registered
-        )
+        super().set_sw_param_handler(name, index, value, axis_name, values)
         self._iteration_stack.set_parameter_value(name, value)
 
-    def for_loop_entry_handler(self, count: int, index: int, loop_flags: LoopFlags):
+    def for_loop_entry_handler(self, count: int, index: int):
         self._iteration_stack.push(count, index, {})
 
-    def for_loop_exit_handler(self, count: int, index: int, loop_flags: LoopFlags):
+    def for_loop_exit_handler(self, count: int, index: int):
         self._iteration_stack.pop()
 
     def rt_entry_handler(

@@ -12,6 +12,8 @@ pub(crate) mod handle_oscillators;
 pub(crate) mod handle_playwaves;
 pub(crate) mod handle_precompensation_resets;
 pub(crate) mod handle_prng;
+pub(crate) mod handle_result_shapes;
+
 mod handle_qa_events;
 pub(crate) use handle_qa_events::handle_qa_events;
 pub(crate) mod fanout_awg;

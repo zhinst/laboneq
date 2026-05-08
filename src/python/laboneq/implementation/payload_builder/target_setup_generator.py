@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Iterator
 
 from laboneq.data.execution_payload import (
+    VIRTUAL_SHFSG_UID_SUFFIX,
     TargetChannelCalibration,
     TargetChannelType,
     TargetDevice,
@@ -148,6 +149,13 @@ class TargetSetupGenerator:
             else:
                 calibrations = None
 
+            connected_outputs_sg = cls._connected_outputs_from_instrument(shfsg)
+            internal_connections_sg = cls._internal_connections(shfsg, setup)
+            if with_calibration:
+                calibrations_sg = cls._target_calibrations_from_instrument(shfsg, setup)
+            else:
+                calibrations_sg = None
+
             target_device_qa = (
                 TargetDevice(
                     uid=instrument.uid,
@@ -162,6 +170,7 @@ class TargetSetupGenerator:
                     calibrations=calibrations,
                     is_qc=True,
                     qc_with_qa=True,
+                    qc_with_sg=connected_outputs_sg != {},
                     reference_clock_source=instrument.reference_clock.source,
                     device_class=instrument.device_class,
                 )
@@ -171,32 +180,20 @@ class TargetSetupGenerator:
             if target_device_qa is not None:
                 yield target_device_qa
 
-            connected_outputs = cls._connected_outputs_from_instrument(shfsg)
-            internal_connections = cls._internal_connections(shfsg, setup)
-            if with_calibration:
-                calibrations = cls._target_calibrations_from_instrument(shfsg, setup)
-            else:
-                calibrations = None
-
-            uid = (
-                f"{instrument.uid}_sg"
-                if target_device_qa is not None
-                else instrument.uid
-            )
-
             target_device_sg = TargetDevice(
-                uid=uid,
+                uid=f"{instrument.uid}{VIRTUAL_SHFSG_UID_SUFFIX}",
                 server=server,
                 device_serial=instrument.address,
                 device_type=TargetDeviceType.SHFSG,
                 device_options=instrument.device_options,
                 interface=instrument.interface,
                 has_signals=len(instrument.connections) > 0,
-                connected_outputs=connected_outputs,
-                internal_connections=internal_connections,
-                calibrations=calibrations,
+                connected_outputs=connected_outputs_sg,
+                internal_connections=internal_connections_sg,
+                calibrations=calibrations_sg,
                 is_qc=True,
                 qc_with_qa=target_device_qa is not None,
+                qc_with_sg=connected_outputs_sg != {},
                 reference_clock_source=instrument.reference_clock.source,
                 device_class=instrument.device_class,
             )
@@ -228,6 +225,7 @@ class TargetSetupGenerator:
                 calibrations=calibrations,
                 is_qc=False,
                 qc_with_qa=False,
+                qc_with_sg=False,
                 reference_clock_source=instrument.reference_clock.source,
                 device_class=instrument.device_class,
             )
@@ -238,19 +236,17 @@ class TargetSetupGenerator:
         to also represent both parts."""
 
         split_qcs = {
-            i.uid.removesuffix("_sg") for i in instruments if i.is_qc and i.qc_with_qa
+            i.uid.removesuffix(VIRTUAL_SHFSG_UID_SUFFIX) for i in instruments if i.is_qc
         }
-
         for d in instruments:
             if d.device_type not in (TargetDeviceType.PQSC, TargetDeviceType.QHUB):
                 continue
 
             extra_connections = [
-                f"{instr_uid}_sg"
+                f"{instr_uid}{VIRTUAL_SHFSG_UID_SUFFIX}"
                 for instr_uid in d.internal_connections
                 if instr_uid in split_qcs
             ]
-
             d.internal_connections.extend(extra_connections)
 
     @classmethod

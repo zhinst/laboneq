@@ -7,7 +7,7 @@
         <div id="header">
             <a href="https://docs.zhinst.com/labone_q_user_manual/core/functionality_and_concepts/07a_automation/tutorials/00_automation.html"
                target="_blank">
-                <img class="logo logo-full"
+                <img class="logo"
                      src="static/images/laboneq_automation_logo.png"
                      alt="LabOne Q Automation"
                      title="Documentation">
@@ -133,9 +133,6 @@
 {% endblock %}
 {% block scripts %}
     <script src="{{ url_for('static', filename='js/d3.latest.min.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/automation_methods.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/helpers.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/layout.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/legend.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/plot.js') }}"></script>
+    <script type="module" src="{{ url_for('static', filename='js/layout.js') }}"></script>
+    <script type="module" src="{{ url_for('static', filename='js/plot.js') }}"></script>
 {% endblock %}

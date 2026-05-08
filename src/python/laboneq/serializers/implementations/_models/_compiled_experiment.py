@@ -125,6 +125,7 @@ class AWGModel:
     feedback_register_index_select: int | None
     command_table_match_offset: int | None
     target_feedback_register: int | Literal["local"] | None
+    result_length: int | None
     _target_class: ClassVar[Type] = AWG
 
 
@@ -232,7 +233,6 @@ class HandleResultShapeModel:
 class ResultShapeInfoModel:
     shapes: dict[str, HandleResultShapeModel]
     result_handle_maps: dict[ResultSource, list[set[str]]]
-    result_lengths: dict[AwgKey, int]
 
     _target_class: ClassVar[Type] = ResultShapeInfo
 

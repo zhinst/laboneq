@@ -30,11 +30,6 @@ struct Instrument {
 
   referenceClockSource @3 :ReferenceClock;
   # The instrument's reference clock source.
-
-  physicalDeviceUid @4 :UInt16; 
-  # TODO: Temporary migration field, shall be removed
-  isShfqc @5 :Bool; 
-  # TODO: Temporary migration field, shall be removed
 }
 
 enum ReferenceClock {

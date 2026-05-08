@@ -45,7 +45,7 @@ _logger = logging.getLogger(__name__)
 
 
 class RecipeGenerator:
-    def __init__(self, experiment_rs: compiler_rs.ExperimentInfo):
+    def __init__(self, experiment_rs: compiler_rs.Experiment):
         self._experiment_rs = experiment_rs
         self._sampling_rates_by_device = {}
         for signal_id in experiment_rs.signals():
@@ -207,11 +207,13 @@ class RecipeGenerator:
         signal_type: AWGSignalType,
         feedback_register_config: FeedbackRegisterConfig | None,
         signals: set[str],
+        result_length: int | None = None,
     ):
         awg = AWG(
             awg=awg_number,
             signal_type=signal_type,
             signals=signals,
+            result_length=result_length,
         )
         if feedback_register_config is not None:
             awg.command_table_match_offset = (
@@ -265,7 +267,7 @@ class RecipeGenerator:
 
 def calc_outputs(
     combined_compiler_output: CombinedRTOutputSeqC,
-    experiment_rs: compiler_rs.ExperimentInfo,
+    experiment_rs: compiler_rs.Experiment,
 ):
     all_channels = {}
 
@@ -381,7 +383,7 @@ def calc_inputs(
 
 
 def generate_recipe(
-    experiment_rs: compiler_rs.ExperimentInfo,
+    experiment_rs: compiler_rs.Experiment,
     combined_compiler_output: CombinedRTOutputSeqC,
 ) -> Recipe:
     recipe_generator = RecipeGenerator(experiment_rs)
@@ -454,7 +456,6 @@ def generate_recipe(
 
     for step in combined_compiler_output.neartime_steps:
         recipe_generator.add_neartime_execution_step(step)
-
     for awg_key, awg_properties in combined_compiler_output.awg_properties.items():
         channels = combined_compiler_output.channel_properties[awg_key]
         recipe_generator.add_awg(
@@ -465,6 +466,7 @@ def generate_recipe(
                 awg_key
             ),
             signals={c.signal for c in channels},
+            result_length=combined_compiler_output.result_lengths.get(awg_key),
         )
 
     for (

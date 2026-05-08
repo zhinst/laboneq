@@ -16,7 +16,6 @@ pub struct DeviceSetup {
     signals: HashMap<SignalUid, Signal>,
     awg_devices: Vec<AwgDevice>,
     auxiliary_devices: Vec<AuxiliaryDevice>,
-    is_desktop_setup: bool,
 
     // Indexes for lookup
     awg_devices_indices: HashMap<DeviceUid, usize>,
@@ -27,7 +26,6 @@ impl DeviceSetup {
         signals: HashMap<SignalUid, Signal>,
         awg_devices: Vec<AwgDevice>,
         auxiliary_devices: Vec<AuxiliaryDevice>,
-        is_desktop_setup: bool,
     ) -> Result<Self, String> {
         // Validate all signals reference existing devices
         for signal in signals.values() {
@@ -49,7 +47,6 @@ impl DeviceSetup {
             signals,
             awg_devices,
             auxiliary_devices,
-            is_desktop_setup,
             awg_devices_indices,
         })
     }
@@ -66,10 +63,6 @@ impl DeviceSetup {
         self.awg_devices_indices
             .get(uid)
             .map(|&idx| &self.awg_devices[idx])
-    }
-
-    pub fn is_desktop_setup(&self) -> bool {
-        self.is_desktop_setup
     }
 
     pub fn awg_devices(&self) -> impl Iterator<Item = &AwgDevice> {

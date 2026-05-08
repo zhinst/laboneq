@@ -22,7 +22,6 @@ class ExperimentStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
-    CANCELED = "canceled"
 
 
 class ErrorCode(str, Enum):
@@ -31,6 +30,8 @@ class ErrorCode(str, Enum):
     These codes are part of the public API contract and must remain
     backwards-compatible once introduced.
     """
+
+    CONTROLLER_ERROR = "CONTROLLER_ERROR"
 
     # --- Experiment submission ---
     INVALID_EXPERIMENT_UUID = "INVALID_EXPERIMENT_UUID"
@@ -62,9 +63,9 @@ class ErrorCode(str, Enum):
 class DeviceSetupResponse(BaseModel):
     """Response from GET /v1/devicesetup."""
 
-    device_setup: dict[str, Any] | None = Field(
+    device_setup: dict[str, Any] = Field(
         description=(
-            "Serialized DeviceSetup object, or null if no default is configured. "
+            "Serialized DeviceSetup object. "
             "Deserialize with laboneq.serializers.core.from_dict()."
         )
     )

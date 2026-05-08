@@ -1,7 +1,7 @@
 # Copyright 2025 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""QCCS SystemProfile serialization models (Gen2 devices)."""
+"""QCCS SystemDescription serialization models (Gen2 devices)."""
 
 from __future__ import annotations
 
@@ -13,9 +13,9 @@ from typing import Any, ClassVar, Type, cast
 import attrs
 
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.dsl.device.system_profile_qccs import (
+from laboneq.dsl.device.system_description_qccs import (
     DeviceCapabilitiesQCCS,
-    SystemProfileQCCS,
+    SystemDescriptionQCCS,
 )
 from laboneq.serializers.implementations._models._common import (
     collect_models,
@@ -23,7 +23,7 @@ from laboneq.serializers.implementations._models._common import (
 )
 from laboneq.serializers.implementations._models._device_setup import (
     _converter,
-    register_system_profile_plugin,
+    register_system_description_plugin,
 )
 
 
@@ -57,16 +57,16 @@ class DateTimeModel:
 
 
 @attrs.define
-class SystemProfileQCCSModel:
+class SystemDescriptionQCCSModel:
     version: str
     generated_at: DateTimeModel
     laboneq_version: str
     setup_uid: str
     devices: dict[str, DeviceCapabilitiesQCCSModel]
-    _target_class: ClassVar[Type] = SystemProfileQCCS
+    _target_class: ClassVar[Type] = SystemDescriptionQCCS
 
     @classmethod
-    def _unstructure(cls, obj: SystemProfileQCCS) -> dict[str, Any]:
+    def _unstructure(cls, obj: SystemDescriptionQCCS) -> dict[str, Any]:
         result: dict[str, Any] = {}
         result["version"] = obj.version
         result["generated_at"] = DateTimeModel._unstructure(obj.generated_at)
@@ -83,12 +83,12 @@ class SystemProfileQCCSModel:
         return result
 
     @classmethod
-    def _structure(cls, obj: dict[str, Any], _) -> SystemProfileQCCS:
+    def _structure(cls, obj: dict[str, Any], _) -> SystemDescriptionQCCS:
         devices = {
             cast(str, uid): _converter.structure(dev, DeviceCapabilitiesQCCSModel)
             for uid, dev in obj["devices"].items()
         }
-        result = SystemProfileQCCS(
+        result = SystemDescriptionQCCS(
             version=obj["version"],
             generated_at=DateTimeModel._structure(obj["generated_at"], None),
             laboneq_version=obj["laboneq_version"],
@@ -101,5 +101,7 @@ class SystemProfileQCCSModel:
         return result
 
 
-register_system_profile_plugin("QCCS", SystemProfileQCCS, SystemProfileQCCSModel)
+register_system_description_plugin(
+    "QCCS", SystemDescriptionQCCS, SystemDescriptionQCCSModel
+)
 register_models(_converter, collect_models(sys.modules[__name__]))

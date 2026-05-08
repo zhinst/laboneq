@@ -3,6 +3,8 @@
 
 from typing import TypedDict
 
+from laboneq.compiler.common.iface_compiler_output import CombinedOutput
+from laboneq.core.types.numpy_support import NumPyArray
 from laboneq.dsl.experiment import Experiment as DslExperiment
 from laboneq.dsl.parameter import Parameter
 
@@ -15,7 +17,7 @@ class Experiment:
     def signals(self) -> list[str]: ...
     def signal_device_uid(self, signal_uid: str) -> str: ...
     def signal_sampling_rate(self, signal_uid: str) -> float: ...
-    def device_lead_delay(self, physical_device_uid: int) -> float: ...
+    def device_lead_delay(self, device_uid: str) -> float: ...
     def signal_delay_compensation(self, signal_uid: str) -> float: ...
     def signal_hw_oscillator(
         self, signal_uid: str
@@ -29,6 +31,18 @@ class Experiment:
         """
     def signal_precompensation(self, signal_uid: str) -> Precompensation | None: ...
     def signal_automute(self, signal_uid: str) -> bool: ...
+    def get_result_shapes(
+        self, combined_output: CombinedOutput
+    ) -> list[HandleResultShape]: ...
+
+class HandleResultShape:
+    handle: str
+    signal: str
+    shape: list[int]
+    axis_names: list[list[str]]
+    axis_values: list[list[NumPyArray]]
+    chunked_axis_index: int | None
+    match_case_mask: dict[int, list[int]]
 
 class DeviceSetupBuilder:
     def __init__(self): ...
@@ -36,10 +50,8 @@ class DeviceSetupBuilder:
         self,
         uid: str,
         device_type: str,
-        physical_device_uid: int,
         options: list[str] | None = None,
         reference_clock_source: str | None = None,
-        is_shfqc: bool = False,
     ) -> None: ...
     def add_signal_with_calibration(
         self,
@@ -140,7 +152,6 @@ def serialize_experiment(
 
 def build_experiment_capnp(
     capnp_data: bytes,
-    desktop_setup: bool,
     packed: bool = False,
     compiler_settings: dict | None = None,
 ) -> Experiment:

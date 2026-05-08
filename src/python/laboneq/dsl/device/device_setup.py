@@ -23,7 +23,7 @@ from ._device_setup_generator import _DeviceSetupGenerator
 
 if TYPE_CHECKING:
     from laboneq.dsl import quantum
-    from laboneq.dsl.device import SystemProfile
+    from laboneq.dsl.device import SystemDescription
     from laboneq.dsl.device.logical_signal_group import LogicalSignal
 
     from ._device_setup_generator import (
@@ -48,7 +48,7 @@ class DeviceSetup:
         logical_signal_groups (Optional[dict[str, LogicalSignalGroup]]): Logical signal groups of this device setup, by name of the group.
         qubits (Optional[dict[str, quantum.QuantumElement]]): Experimental: Qubits of this device setup, by the name of the qubit.
             Qubits are generated from the descriptor `qubits` section.
-        system_profile (Optional[SystemProfile]): System profile with hardware capabilities.
+        system_description (Optional[SystemDescription]): System description with hardware capabilities.
             Populated automatically during session connection.
 
     !!! version-changed "Changed in version 2.61.0"
@@ -71,8 +71,8 @@ class DeviceSetup:
     physical_channel_groups: dict[str, PhysicalChannelGroup] = attrs.field(factory=dict)
     logical_signal_groups: dict[str, LogicalSignalGroup] = attrs.field(factory=dict)
     qubits: dict[str, "quantum.QuantumElement"] = attrs.field(factory=dict)
-    # Do not include system_profile in equality checks and repr - they are volatile data
-    system_profile: SystemProfile | None = attrs.field(
+    # Do not include system_description in equality checks and repr - they are volatile data
+    system_description: SystemDescription | None = attrs.field(
         default=None, eq=False, repr=False
     )
 

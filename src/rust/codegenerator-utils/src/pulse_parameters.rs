@@ -46,7 +46,7 @@ pub fn hash_hashmap_with_pulse_parameter_values(
 
     // Sort by key to ensure deterministic hashing regardless of HashMap iteration order
     let mut sorted_entries: Vec<_> = map.iter().collect();
-    sorted_entries.sort_by(|a, b| a.0.0.cmp(&b.0.0));
+    sorted_entries.sort_by_key(|a| a.0.0);
 
     for (key, value) in sorted_entries {
         key.hash(&mut hasher);

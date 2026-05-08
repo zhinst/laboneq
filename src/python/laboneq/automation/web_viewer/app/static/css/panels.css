@@ -1,0 +1,221 @@
+/* Copyright 2026 Zurich Instruments AG */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#status-legend {
+    position: absolute;
+    bottom: var(--panel-gap);
+    left: var(--panel-gap);
+}
+
+#node-info {
+    position: absolute;
+    top: calc(var(--header-h) + var(--panel-gap));
+    right: var(--panel-gap);
+    border: 0.1rem solid var(--zi-blue);
+    opacity: 0;
+    visibility: hidden;
+    transition:
+        opacity 0.3s ease-out 0.3s,
+        visibility 0.3s 0.3s;
+}
+
+#node-info.visible {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0s ease-out;
+}
+
+.run-element-button {
+    height: 2rem;
+}
+
+.run-element-button[hidden] {
+    display: none;
+}
+
+#layer-legend {
+    position: absolute;
+    top: calc(var(--header-h) + var(--panel-gap));
+    left: var(--panel-gap);
+}
+
+#node-results-section h3,
+#node-info h3,
+#status-legend h3,
+#layer-legend h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: bold;
+    color: var(--light-black);
+    cursor: pointer;
+}
+
+#node-info-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+#node-info-rows {
+    min-width: stretch;
+}
+
+#node-info h3 {
+    margin-right: 2rem;
+}
+
+/* Node result thumbnail */
+#node-results-section h3 {
+    padding-bottom: 20px;
+    padding-top: 16px;
+}
+
+#node-results-section[hidden] {
+    display: none;
+}
+
+.node-result-message[hidden] {
+    display: none;
+}
+
+.node-result-thumbnail {
+    display: block;
+    max-width: 20rem;
+    min-width: 10vw;
+    min-height: 0;
+    overflow: hidden;
+    opacity: 0;
+    cursor: pointer;
+    transition:
+        opacity 0.4s,
+        max-height 0.4s;
+    border-radius: 0.4vmin;
+    border: 0.1vmin solid var(--dark-gray);
+}
+
+.node-result-thumbnail-wrapper.visible .node-result-thumbnail {
+    opacity: 1;
+}
+
+.node-result-thumbnail-wrapper:hover {
+    opacity: 0.85;
+}
+
+/* Full-screen image modal */
+#image-modal {
+    position: fixed;
+    inset: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+    cursor: pointer;
+}
+#image-modal-img {
+    max-width: 90vw;
+    max-height: 90vh;
+    object-fit: contain;
+    border-radius: 6px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+    pointer-events: none;
+}
+
+/* Grey out graph when modal is open */
+#graph.modal-open {
+    filter: brightness(0.4) grayscale(0.3);
+    transition: filter 0.2s ease;
+}
+
+/* Layer/Status panel look */
+.legend-panel {
+    background-color: white;
+    border-radius: 0.5rem;
+    box-shadow: 0 0.1rem 0.5rem rgba(0, 0, 0, 0.15);
+    z-index: 100;
+    width: max-content;
+}
+
+.legend-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    overflow: hidden;
+    max-height: 0;
+    max-width: 0;
+    padding: 0;
+    margin-top: 0;
+    /* Closing: height first, then width */
+    transition:
+        max-height 0.4s ease,
+        margin-top 0.4s ease,
+        max-width 0.4s ease,
+        padding 0.4s ease;
+}
+
+.node-legend-items {
+    max-width: inherit;
+}
+
+.legend-items.open {
+    max-height: 1000px;
+    max-width: 1000px;
+    margin-top: 20px;
+    /* Opening: width first, then height */
+    transition:
+        max-width 0.4s ease,
+        padding 0.4s ease,
+        max-height 0.4s ease,
+        margin-top 0.4s ease;
+}
+
+.legend-row {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: 0.75rem;
+    align-items: baseline;
+    font-size: 1.25rem;
+    white-space: pre-wrap;
+}
+
+#layer-legend.legend-panel .legend-row,
+#status-legend.legend-panel .legend-row {
+    padding-right: 1rem;
+}
+
+.legend-left {
+    display: inline-flex;
+    align-items: center;
+    gap: 1rem;
+    min-width: 0;
+}
+
+.legend-right {
+    justify-self: end;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.legend-dot,
+.legend-badge {
+    height: 1.75rem;
+    flex: 0 0 1.75rem;
+    border-radius: 50%;
+    border: 1px solid var(--dark-gray);
+    color: white;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.chevron {
+    font-size: 1.25rem;
+    transition: transform 0.3s ease;
+    transform-origin: center center;
+    display: inline-block;
+}
+
+.chevron.expanded {
+    transform: rotate(90deg);
+    transform-origin: center center;
+}

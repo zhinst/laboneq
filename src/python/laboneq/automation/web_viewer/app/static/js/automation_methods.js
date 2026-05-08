@@ -1,34 +1,30 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-async function resetAutomation() {
+import { showToast } from "./helpers.js";
+
+export async function resetAutomation() {
     if (!confirm("Are you sure you want to reset the automation?")) return;
 
     const resp = await fetch("/reset", { method: "POST" });
-    const data = await resp.json().catch(() => ({}));
+    await resp.json().catch(() => ({}));
     if (resp.status == 202) {
-        refreshData(true);
         showToast("Automation", "reset!");
     }
-    clearHighlight();
 }
 
-async function runAutomation() {
-    clearHighlight();
-
+export async function runAutomation() {
     showToast("Automation", "running...", { persistent: true });
 
     const resp = await fetch("/run", { method: "POST" });
-    const data = await resp.json().catch(() => ({}));
+    await resp.json().catch(() => ({}));
 
     if (resp.status === 202) {
         showToast("Automation", "run finished!");
     }
 }
 
-async function runLayer(layerKey) {
-    clearHighlight();
-
+export async function runLayer(layerKey) {
     showToast("Automation", `running layer ${layerKey}...`, {
         persistent: true,
     });
@@ -36,16 +32,14 @@ async function runLayer(layerKey) {
     const resp = await fetch(`/run?layer_key=${layerKey}`, {
         method: "POST",
     });
-    const data = await resp.json().catch(() => ({}));
+    await resp.json().catch(() => ({}));
 
     if (resp.status === 202) {
         showToast("Automation", "run finished!");
     }
 }
 
-async function runNode(nodeId) {
-    clearHighlight();
-
+export async function runNode(nodeId) {
     showToast("Automation", `running node ${nodeId}...`, {
         persistent: true,
     });
@@ -53,7 +47,7 @@ async function runNode(nodeId) {
     const resp = await fetch(`/run?node_id=${nodeId}`, {
         method: "POST",
     });
-    const data = await resp.json().catch(() => ({}));
+    await resp.json().catch(() => ({}));
 
     if (resp.status === 202) {
         showToast("Automation", "run finished!");

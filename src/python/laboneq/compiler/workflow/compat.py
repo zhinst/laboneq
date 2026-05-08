@@ -10,20 +10,22 @@ import os
 import warnings
 from typing import TYPE_CHECKING, Any
 
-from laboneq.data.compilation_job import DeviceInfoType, ParameterInfo, SignalInfo
+from laboneq.data.compilation_job import (
+    DeviceInfoType,
+    ExperimentInfo,
+    ParameterInfo,
+    SignalInfo,
+)
 from laboneq.implementation.utils.devices import parse_device_options
 
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
-    from laboneq.compiler.experiment_access.experiment_dao import ExperimentDAO
     from laboneq.data.parameter import Parameter as DataParameter
     from laboneq.dsl.calibration import Oscillator
     from laboneq.dsl.parameter import Parameter
 
 
-def _resolve_default_options(
-    options: str, device_type: DeviceInfoType, is_qc: bool
-) -> list[str]:
+def _resolve_default_options(options: str, device_type: DeviceInfoType) -> list[str]:
     dev_type, options = parse_device_options(options)
     options = options or []
     # TODO(2K): This is a workaround, as options string is still not
@@ -34,7 +36,7 @@ def _resolve_default_options(
         dev_type = "UHFQA"
     elif device_type == DeviceInfoType.HDAWG:
         dev_type = "HDAWG8"
-    elif is_qc:
+    elif device_type == DeviceInfoType.SHFQC:
         options = ["QC6CH"] if not options else options
         return ["SHFQC", *options]
     elif device_type == DeviceInfoType.SHFQA:
@@ -49,9 +51,8 @@ def _resolve_default_options(
 
 
 def build_rs_experiment(
-    experiment_dao: ExperimentDAO,
+    experiment_info: ExperimentInfo,
     compiler_module: compiler_rs,
-    desktop_setup: bool,
     compiler_settings: dict | None = None,
 ):
     """Builds a Rust representation of the experiment."""
@@ -60,24 +61,21 @@ def build_rs_experiment(
 
     # Builder the device setup capnp payload
     device_setup_capnp = compiler_rs.DeviceSetupBuilder()
-    setup_builder = DeviceSetupCompat(device_setup_capnp, experiment_dao.dsl_parameters)
+    setup_builder = DeviceSetupCompat(
+        device_setup_capnp, experiment_info.dsl_parameters
+    )
 
-    for device in experiment_dao.device_infos():
+    for device in experiment_info.devices:
         device_setup_capnp.add_instrument(
             uid=device.uid,
             device_type=device.device_type.name,
-            options=_resolve_default_options(
-                device.options, device.device_type, device.is_qc
-            ),
+            options=_resolve_default_options(device.options, device.device_type),
             reference_clock_source=device.reference_clock_source.name
             if device.reference_clock_source is not None
             else None,
-            physical_device_uid=device.physical_device_uid,
-            is_shfqc=device.is_qc,
         )
 
-    for signal in experiment_dao.signals():
-        signal_info = experiment_dao.signal_info(signal)
+    for signal_info in experiment_info.signals:
         device_uid = signal_info.device.uid
         ports = list(signal_info.channel_to_port.values())
         device_setup_capnp.add_signal_with_calibration(
@@ -164,13 +162,12 @@ def build_rs_experiment(
         "yes",
     )
     capnp_bytes = compiler_rs.serialize_experiment(
-        experiment_dao.source_experiment,
+        experiment_info.src,
         device_setup=device_setup_capnp,
         packed=use_packed,
     )
     return compiler_rs.build_experiment_capnp(
         capnp_bytes,
-        desktop_setup=desktop_setup,
         packed=use_packed,
         compiler_settings=_sanitize_compiler_settings(compiler_settings),
     )

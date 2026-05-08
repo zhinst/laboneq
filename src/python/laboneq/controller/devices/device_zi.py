@@ -262,14 +262,6 @@ class DeviceZI(DeviceAbstract):
     ):
         pass
 
-    def add_waveform_replacement(
-        self, awg_index: int, wave: WaveformItem, acquisition_type: AcquisitionType
-    ):
-        pass
-
-    def add_command_table_replacement(self, awg_index: int, command_table: dict):
-        pass
-
     ### Result processing
     async def fetch_errors(self) -> str | list[str]:
         return []

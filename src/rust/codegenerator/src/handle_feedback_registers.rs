@@ -8,7 +8,6 @@ use crate::ir::compilation_job::{AwgCore, AwgKey, DeviceUid, Signal};
 use crate::ir::experiment::Handle;
 use crate::ir::{IrNode, NodeKind, Samples, SignalUid};
 use crate::{FeedbackRegister, FeedbackRegisterLayout, Result, SingleFeedbackRegisterLayoutItem};
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -23,8 +22,6 @@ struct HandleInfo {
     global: bool,
     // Whether the handle is used for feedback or not
     is_feedback: bool,
-    // Timestamps of the each acquisition for this handle
-    timestamps: Vec<Samples>,
 }
 
 fn collect_handles(
@@ -32,21 +29,17 @@ fn collect_handles(
     offset: &Samples,
     handles: &mut HashMap<Handle, HandleInfo>,
 ) -> Result<()> {
+    #[allow(clippy::collapsible_match)]
     match node.data() {
         NodeKind::AcquirePulse(ob) => {
-            if let Some(handle) = handles.get_mut(&ob.handle) {
-                handle.timestamps.push(offset + *node.offset());
-            } else {
-                handles.insert(
-                    ob.handle.clone(),
-                    HandleInfo {
-                        signal: ob.signal.uid,
-                        global: false,
-                        is_feedback: false,
-                        timestamps: vec![offset + *node.offset()],
-                    },
-                );
-            }
+            handles.insert(
+                ob.handle.clone(),
+                HandleInfo {
+                    signal: ob.signal.uid,
+                    global: false,
+                    is_feedback: false,
+                },
+            );
             return Ok(());
         }
         NodeKind::Match(ob) => {
@@ -60,36 +53,6 @@ fn collect_handles(
             }
             for child in node.iter_children() {
                 collect_handles(child, node.offset(), handles)?;
-            }
-        }
-        NodeKind::Loop(ob) => {
-            // Unroll compressed loops to get real number of acquisitions.
-            // The unroll logic should actually apply for all loops that are compressed and are not averaging loops.
-            // Currently only PRNG behaves like this, so we only handle it here.
-            if ob.prng_sample.is_some() {
-                let mut new_handles = HashMap::new();
-                for child in node.iter_children() {
-                    collect_handles(child, &(node.offset() + offset), &mut new_handles)?;
-                }
-                for (handle, mut info) in new_handles.into_iter() {
-                    let mut timestamps = vec![];
-                    for timestamp in &info.timestamps {
-                        for i in 0..ob.count as Samples {
-                            let start_abs = (ob.length / ob.count as Samples) * i + timestamp;
-                            timestamps.push(start_abs);
-                        }
-                    }
-                    if let Some(existing_info) = handles.get_mut(&handle) {
-                        existing_info.timestamps.extend(timestamps);
-                    } else {
-                        info.timestamps.extend(timestamps);
-                        handles.insert(handle, info);
-                    }
-                }
-            } else {
-                for child in node.iter_children() {
-                    collect_handles(child, &(node.offset() + offset), handles)?;
-                }
             }
         }
         _ => {
@@ -153,28 +116,6 @@ fn allocate_feedback_registers(
     Ok(target_feedback_registers)
 }
 
-fn evaluate_simultaneous_acquires(
-    handles: &HashMap<Handle, HandleInfo>,
-) -> Result<Vec<Vec<Acquisition>>> {
-    if handles.is_empty() {
-        return Ok(vec![]);
-    }
-    // Simultaneous acquires must be ordered by timestamp
-    let mut sim_acquires: BTreeMap<Samples, Vec<Acquisition>> = BTreeMap::new();
-    for (handle, info) in handles.iter() {
-        for timestamp in &info.timestamps {
-            sim_acquires
-                .entry(*timestamp)
-                .or_default()
-                .push(Acquisition {
-                    signal: info.signal,
-                    handle: handle.clone(),
-                });
-        }
-    }
-    Ok(sim_acquires.into_values().collect())
-}
-
 pub(crate) struct FeedbackSource {
     pub signal: SignalUid,
     pub awg_key: AwgKey,
@@ -188,19 +129,16 @@ pub struct Acquisition {
 pub(crate) struct FeedbackConfig {
     target_feedback_registers: HashMap<AwgKey, FeedbackRegisterAllocation>,
     feedback_sources: HashMap<Handle, FeedbackSource>,
-    acquisitions: Vec<Vec<Acquisition>>,
 }
 
 impl FeedbackConfig {
     fn new(
         target_feedback_registers: HashMap<AwgKey, FeedbackRegisterAllocation>,
         feedback_sources: HashMap<Handle, FeedbackSource>,
-        acquisitions: Vec<Vec<Acquisition>>,
     ) -> Self {
         Self {
             target_feedback_registers,
             feedback_sources,
-            acquisitions,
         }
     }
 
@@ -221,10 +159,6 @@ impl FeedbackConfig {
     pub(crate) fn handles(&self) -> impl Iterator<Item = &Handle> {
         self.feedback_sources.keys()
     }
-
-    pub(crate) fn take_acquisitions(&mut self) -> Vec<Vec<Acquisition>> {
-        std::mem::take(&mut self.acquisitions)
-    }
 }
 
 /// Collect the feedback configuration from the given IR node for the given AWGs.
@@ -235,7 +169,6 @@ pub(crate) fn collect_feedback_config(node: &IrNode, awgs: &[AwgCore]) -> Result
     let mut handle_to_signal = HashMap::new();
     collect_handles(node, node.offset(), &mut handle_to_signal)?;
     let target_feedback_registers = allocate_feedback_registers(awgs, &handle_to_signal)?;
-    let acquisitions = evaluate_simultaneous_acquires(&handle_to_signal)?;
     let mut signal_lookup: HashMap<SignalUid, (&Signal, AwgKey)> = HashMap::new();
     for awg in awgs.iter() {
         for signal in &awg.signals {
@@ -255,7 +188,7 @@ pub(crate) fn collect_feedback_config(node: &IrNode, awgs: &[AwgCore]) -> Result
             },
         );
     }
-    let config = FeedbackConfig::new(target_feedback_registers, feedback_sources, acquisitions);
+    let config = FeedbackConfig::new(target_feedback_registers, feedback_sources);
     Ok(config)
 }
 

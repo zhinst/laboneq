@@ -6,7 +6,7 @@ use crate::experiment_validation::{ExperimentContext, ParamsContext, ValidationC
 use crate::signal_view::SignalView;
 use laboneq_common::types::DeviceKind;
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::operation::{Chunking, Section, Sweep};
+use laboneq_dsl::operation::{Section, Sweep};
 use laboneq_dsl::types::ValueOrParameter;
 
 /// Validates sweep parameters in an [`Experiment`].
@@ -135,34 +135,56 @@ pub(super) fn check_ppc_sweeper<'a>(
 }
 
 pub(super) fn validate_chunked_sweep(sweep: &Sweep, ctx_params: &mut ParamsContext) -> Result<()> {
-    let Some(chunk_info) = sweep.chunking.as_ref() else {
+    if !sweep.is_chunked() {
         return Ok(());
-    };
-    let chunk_count = match chunk_info {
-        Chunking::Count { count } => Some(*count),
-        _ => None,
-    };
-
-    if let Some(count) = chunk_count
-        && count.get() < 1
-    {
-        let err_msg = format!(
-            "Chunk count must be >= 1, but {} was provided.",
-            count.get(),
-        );
-        return Err(Error::new(&err_msg));
     }
 
-    if matches!(chunk_info, Chunking::Auto) || chunk_count.is_some_and(|c| c.get() > 1) {
-        if !ctx_params.inside_rt_bound {
-            let err_msg = "Sweeps that are not inside real-time execution cannot be chunked.";
-            return Err(Error::new(err_msg));
+    if !ctx_params.inside_rt_bound {
+        let err_msg = "Sweeps that are not inside real-time execution cannot be chunked.";
+        return Err(Error::new(err_msg));
+    }
+    if ctx_params.found_chunked_sweep {
+        let err_msg = "Found multiple chunked sweeps.";
+        return Err(Error::new(err_msg));
+    }
+    ctx_params.found_chunked_sweep = true;
+    Ok(())
+}
+
+pub(super) fn validate_no_nt_parameter_in_rt_sweep(
+    sweep: &Sweep,
+    ctx: &ExperimentContext,
+    ctx_params: &ParamsContext,
+) -> Result<()> {
+    if !ctx_params.inside_rt_bound {
+        return Ok(());
+    }
+    for param_uid in &sweep.parameters {
+        if ctx.nt_only_parameters.contains(param_uid) {
+            return Err(Error::new(format!(
+                "Parameter '{}' can't be swept in real-time, it is bound to a value \
+                 that can only be set in near-time.",
+                param_uid.0,
+            )));
         }
-        if ctx_params.found_chunked_sweep {
-            let err_msg = "Found multiple chunked sweeps.";
-            return Err(Error::new(err_msg));
-        }
-        ctx_params.found_chunked_sweep = true;
+    }
+    Ok(())
+}
+
+pub(super) fn validate_parallel_sweep(sweep: &Sweep, ctx: &ExperimentContext) -> Result<()> {
+    let mut param_counts = sweep
+        .parameters
+        .iter()
+        .filter_map(|p| ctx.parameters.get(p).map(|p| p.len()));
+
+    if let Some(first_count) = param_counts.next()
+        && !param_counts.all(|count| count == first_count)
+    {
+        let err_msg = format!(
+            "Parallel executed sweep parameters must be of same length in sweep '{}'.",
+            sweep.uid.0,
+        );
+        return Err(Error::new(err_msg));
     }
     Ok(())
 }

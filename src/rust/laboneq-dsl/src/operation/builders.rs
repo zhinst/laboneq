@@ -5,7 +5,7 @@ use std::num::NonZeroU32;
 
 use crate::types::{ParameterUid, SectionAlignment, SectionTimingMode, SectionUid};
 
-use crate::operation::{Chunking, Sweep};
+use crate::operation::Sweep;
 
 pub struct SweepBuilder {
     sweep: Sweep,
@@ -17,10 +17,12 @@ impl SweepBuilder {
             sweep: Sweep {
                 uid,
                 parameters,
+                direct_parameters: Vec::new(),
                 count,
                 alignment: SectionAlignment::Left,
                 reset_oscillator_phase: false,
-                chunking: None,
+                chunk_count: 1.try_into().unwrap(),
+                auto_chunking: false,
                 section_timing_mode: Default::default(),
             },
         }
@@ -36,13 +38,23 @@ impl SweepBuilder {
         self
     }
 
-    pub fn chunking(mut self, chunking: Chunking) -> Self {
-        self.sweep.chunking = Some(chunking);
+    pub fn chunk_count(mut self, count: NonZeroU32) -> Self {
+        self.sweep.chunk_count = count;
+        self
+    }
+
+    pub fn auto_chunking(mut self) -> Self {
+        self.sweep.auto_chunking = true;
         self
     }
 
     pub fn section_timing_mode(mut self, section_timing_mode: SectionTimingMode) -> Self {
         self.sweep.section_timing_mode = section_timing_mode;
+        self
+    }
+
+    pub fn direct_parameters(mut self, direct_parameters: Vec<ParameterUid>) -> Self {
+        self.sweep.direct_parameters = direct_parameters;
         self
     }
 

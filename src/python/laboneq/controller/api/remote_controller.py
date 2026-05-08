@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import time
-import uuid
 from typing import Any, cast
 
 import httpx
@@ -83,11 +82,14 @@ class RemoteController(ControllerAPI):
         return cast(DeviceSetup, from_dict(data["device_setup"]))
 
     def submit_experiment(
-        self, scheduled_experiment: ScheduledExperiment
+        self,
+        scheduled_experiment: ScheduledExperiment,
+        handle: SubmissionHandle | None = None,
     ) -> SubmissionHandle:
         serialized = to_dict(scheduled_experiment)
         assert isinstance(serialized, dict)  # to satisfy type checker
-        handle = SubmissionHandle(handle_id=uuid.uuid4().int)
+        if handle is None:
+            handle = SubmissionHandle()
         self._request("PUT", f"v1/experiments/{handle.hex}", json=serialized)
         return handle
 
@@ -95,7 +97,6 @@ class RemoteController(ControllerAPI):
         _TERMINAL = {
             SubmissionStatus.COMPLETED,
             SubmissionStatus.FAILED,
-            SubmissionStatus.CANCELED,
         }
         poll_interval = 0.5
         while True:

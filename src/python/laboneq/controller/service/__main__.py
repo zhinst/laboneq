@@ -40,14 +40,14 @@ from urllib.parse import urlsplit
 
 from laboneq._version import get_version
 from laboneq.controller.service.app import create_app
-from laboneq.controller.service.controller_container import (
-    DeviceSetupLoader,
-    load_callbacks_from_module,
-)
+from laboneq.controller.service.controller_container import load_callbacks_from_module
+from laboneq.serializers import from_json
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Any, NoReturn
+
+    from laboneq.dsl.device import DeviceSetup
 
 logger = logging.getLogger(__name__)
 
@@ -163,17 +163,15 @@ Examples:
     parser.add_argument(
         "--dataserver",
         metavar="HOST[:PORT]",
-        help="LabOne dataserver address injected into every device setup at "
-        "connect time. Format: host or host:port (default port: 8004). "
-        "Required unless --emulation is used.",
+        help="Hardware server address (SCM).  Used for Gen 4 auto-discovery when "
+        "--devicesetup is omitted.  Format: host or host:port (default port: 8004).",
     )
     parser.add_argument(
         "--devicesetup",
         metavar="FILE",
         help="JSON file containing the default DeviceSetup "
-        "(produced by laboneq.serializers.to_json). "
-        "Served at GET /v1/devicesetup so clients do not need to know "
-        "instrument addresses. Reloaded automatically when the file changes.",
+        "(produced by laboneq.serializers.to_json).  Loaded once at startup "
+        "and served at GET /v1/devicesetup.",
     )
     parser.add_argument(
         "--emulation",
@@ -249,24 +247,23 @@ Examples:
             print(f"Error loading callbacks: {e}", file=sys.stderr)
             sys.exit(1)
 
-    # Create device setup loader if a file was provided
-    device_setup_loader: DeviceSetupLoader | None = None
+    # Load device setup file if provided
+    device_setup: DeviceSetup | None = None
     if parsed_args.devicesetup:
-        if not Path(parsed_args.devicesetup).is_file():
+        path = Path(parsed_args.devicesetup)
+        if not path.is_file():
             print(
                 f"Error: device setup file not found: {parsed_args.devicesetup}",
                 file=sys.stderr,
             )
             sys.exit(1)
         try:
-            device_setup_loader = DeviceSetupLoader(parsed_args.devicesetup)
-            logger.info(
-                "Device setup loaded from %s (hot-reloading enabled)",
-                parsed_args.devicesetup,
-            )
+            with path.open(encoding="utf-8") as f:
+                device_setup = from_json(f.read())
         except Exception as e:
             print(f"Error loading device setup: {e}", file=sys.stderr)
             sys.exit(1)
+        logger.info("Device setup loaded from %s", parsed_args.devicesetup)
 
     # Print startup banner and info
     version = get_version()
@@ -285,8 +282,8 @@ Examples:
         print(f"  Callbacks:   {', '.join(neartime_callbacks.keys())}")
     else:
         print("  Callbacks:   None registered")
-    if device_setup_loader is not None:
-        print(f"  Setup:       {parsed_args.devicesetup} (hot-reloading enabled)")
+    if device_setup is not None:
+        print(f"  Setup:       {parsed_args.devicesetup}")
     else:
         print("  Setup:       Auto-discovery from dataserver")
     print()
@@ -294,7 +291,7 @@ Examples:
     app = create_app(
         neartime_callbacks=neartime_callbacks,
         enable_cors=not parsed_args.no_cors,
-        device_setup_loader=device_setup_loader,
+        device_setup=device_setup,
         dataserver=dataserver,
         do_emulation=parsed_args.emulation,
         reset_devices=parsed_args.reset_devices,

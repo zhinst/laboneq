@@ -73,6 +73,15 @@ class DeviceSHFSG(SHFSGMixIn, DeviceSHFBase):
     def is_secondary(self) -> bool:
         return self.options.qc_with_qa
 
+    @property
+    def qc_sg_channels_active(self) -> bool:
+        """Whether SHFQC has SG channels configured in the current setup.
+
+        It is relevant to determine whether the configured SHFQC this device represents has active SG channels,
+        since `DeviceSHFSG` is created whether or not the SHFQC has SG channels, and some functionality (e.g. trigger configuration) depends on that.
+        """
+        return self.options.qc_with_sg
+
     def _process_dev_opts(self):
         self._check_expected_dev_opts()
         self._process_shf_opts()
@@ -237,9 +246,9 @@ class DeviceSHFSG(SHFSGMixIn, DeviceSHFBase):
 
     async def configure_trigger(self, recipe_data: RecipeData):
         device_recipe_data = recipe_data.device_settings[self.uid]
-
-        if not device_recipe_data.is_present:
+        if not device_recipe_data.is_present and not self.qc_sg_channels_active:
             # Happens for SHFQC/SG when only QA part is configured
+            # For standalone SHFQC case, the trigger configuration is still relevant, so we should not skip it if SHFQC is present, even if SG channels are not active.
             return
 
         self._emit_trigger = False

@@ -26,14 +26,12 @@ use laboneq_capnp::pulse::v1::{
 };
 use laboneq_common::device_options::DeviceOptions;
 use laboneq_common::named_id::{NamedId, NamedIdStore};
-use laboneq_common::types::{
-    AuxiliaryDeviceKind, DeviceKind, PhysicalDeviceUid, ReferenceClock, SignalKind,
-};
+use laboneq_common::types::{AuxiliaryDeviceKind, ReferenceClock, SignalKind};
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::device_setup::{AuxiliaryDevice, DeviceSignal};
+use laboneq_dsl::device_setup::{AuxiliaryDevice, DeviceSignal, Instrument, InstrumentKind};
 use laboneq_dsl::operation::{
-    Acquire, AveragingLoop, Case, Chunking, Delay, Match, Operation, PlayPulse, PrngLoop,
-    PrngSetup, PulseParameterValue, Reserve, ResetOscillatorPhase, Section, Sweep,
+    Acquire, AveragingLoop, Case, Delay, Match, Operation, PlayPulse, PrngLoop, PrngSetup,
+    PulseParameterValue, Reserve, ResetOscillatorPhase, Section, Sweep,
 };
 use laboneq_dsl::signal_calibration::{
     BounceCompensation, CorrectionMatrix, ExponentialCompensation, FirCompensation,
@@ -48,7 +46,6 @@ use laboneq_dsl::types::{
     SectionAlignment, SectionTimingMode, SectionUid, SignalUid, SweepParameter, Trigger, Unit,
     ValueOrParameter,
 };
-use laboneq_ir::system::AwgDevice;
 use laboneq_units::duration::seconds;
 use num_complex::Complex64;
 use numeric_array::NumericArray;
@@ -65,7 +62,7 @@ pub(crate) struct DeserializedExperiment {
     pub external_parameter_values: ExternalParameterStore,
 
     // Device setup properties
-    pub awg_devices: Vec<AwgDevice>,
+    pub instruments: Vec<Instrument>,
     pub auxiliary_devices: Vec<AuxiliaryDevice>,
     pub signals: Vec<DeviceSignal>,
 }
@@ -506,7 +503,7 @@ struct Deserializer<'py> {
     parameters: HashMap<ParameterUid, SweepParameter>,
     pulses: HashMap<PulseUid, PulseDef>,
     pulse_definition_params: HashMap<PulseUid, HashMap<PulseParameterUid, PulseParameterValue>>,
-    awg_devices: Vec<AwgDevice>,
+    instruments: Vec<Instrument>,
     auxiliary_devices: Vec<AuxiliaryDevice>,
     signals: Vec<DeviceSignal>,
     oscillators: Vec<Oscillator>,
@@ -528,7 +525,7 @@ impl<'py> Deserializer<'py> {
             parameters: HashMap::new(),
             pulses: HashMap::new(),
             pulse_definition_params: HashMap::new(),
-            awg_devices: Vec::new(),
+            instruments: Vec::new(),
             auxiliary_devices: Vec::new(),
             signals: Vec::new(),
             oscillators: Vec::new(),
@@ -555,7 +552,7 @@ impl<'py> Deserializer<'py> {
             parameters: self.parameters,
             pulses: self.pulses,
             external_parameter_values: self.external_parameter_values,
-            awg_devices: self.awg_devices,
+            instruments: self.instruments,
             auxiliary_devices: self.auxiliary_devices,
             signals: self.signals,
         })
@@ -690,6 +687,23 @@ impl<'py> Deserializer<'py> {
                 deserialize_explicit_sweep(&explicit)?
             }
         };
+
+        let axis_name = if reader.has_axis_name() {
+            let alias = text_to_str(reader.get_axis_name().map_err(Error::new)?)?;
+            if alias.is_empty() {
+                return Err(Error::new(format!(
+                    "Sweep parameter with UID '{}' has an empty axis name",
+                    text_to_str(reader.get_uid().map_err(Error::new)?)?
+                )));
+            }
+            Some(self.id_store.get_or_insert(alias))
+        } else {
+            Default::default()
+        };
+
+        if let Some(axis_name) = axis_name {
+            return SweepParameter::new_with_axis_name(uid, values, axis_name).map_err(Error::new);
+        }
         SweepParameter::new(uid, values).map_err(Error::new)
     }
 
@@ -1015,9 +1029,11 @@ impl<'py> Deserializer<'py> {
         let alignment = deserialize_alignment(reader.get_alignment().map_err(Error::new)?);
         let param_uids = reader.get_parameters().map_err(Error::new)?;
         let mut parameters = Vec::with_capacity(param_uids.len() as usize);
+        let mut direct_parameters = Vec::with_capacity(param_uids.len() as usize);
         for idx in param_uids.iter() {
             let param_uid = ParameterUid(self.resolve_parameter_index(idx)?);
             parameters.push(param_uid);
+            direct_parameters.push(param_uid);
             // Also include all derived parameters driven by the explicitly listed parameters.
             if let Some(derived_params) = self.driving_parameters.get(&param_uid) {
                 for &derived in derived_params {
@@ -1039,12 +1055,8 @@ impl<'py> Deserializer<'py> {
             .and_then(NonZeroU32::new)
             .ok_or_else(|| Error::new("Sweep parameter must have at least one value"))?;
 
-        use section_capnp::sweep_section::chunking::Which as ChunkWhich;
-        let chunking = match reader.get_chunking().which().map_err(Error::new)? {
-            ChunkWhich::None(()) => None,
-            ChunkWhich::Count(v) => NonZeroU32::new(v).map(|count| Chunking::Count { count }),
-            ChunkWhich::Auto(()) => Some(Chunking::Auto),
-        };
+        let chunk_count = reader.get_chunk_count();
+        let auto_chunking = reader.get_auto_chunking();
 
         let section_timing_mode =
             deserialize_section_timing_mode(reader.get_section_timing_mode().map_err(Error::new)?);
@@ -1052,10 +1064,17 @@ impl<'py> Deserializer<'py> {
         Ok(Sweep {
             uid: section_uid,
             parameters,
+            direct_parameters,
             count,
             alignment,
             reset_oscillator_phase: reader.get_reset_oscillator_phase(),
-            chunking,
+            chunk_count: chunk_count.try_into().map_err(|_| {
+                Error::new(format!(
+                    "Chunk count must be >= 1, but {} was provided.",
+                    chunk_count
+                ))
+            })?,
+            auto_chunking,
             section_timing_mode,
         })
     }
@@ -1967,8 +1986,8 @@ impl<'py> Deserializer<'py> {
         &mut self,
         instrument: device_setup_capnp::instrument::Reader<'_>,
     ) -> Result<()> {
-        enum InstrumentKind {
-            DeviceKind(DeviceKind),
+        enum InstrumentType {
+            DeviceKind(InstrumentKind),
             AuxiliaryDeviceKind(AuxiliaryDeviceKind),
         }
 
@@ -2006,36 +2025,34 @@ impl<'py> Deserializer<'py> {
                 .get_reference_clock_source()
                 .map_err(Error::new)?,
         );
-        let physical_device_uid = instrument.get_physical_device_uid();
-        let is_shfqc = instrument.get_is_shfqc();
         let device_kind = match device_type.as_str() {
-            "SHFQA" => InstrumentKind::DeviceKind(DeviceKind::Shfqa),
-            "SHFSG" => InstrumentKind::DeviceKind(DeviceKind::Shfsg),
-            "HDAWG" => InstrumentKind::DeviceKind(DeviceKind::Hdawg),
-            "UHFQA" => InstrumentKind::DeviceKind(DeviceKind::Uhfqa),
-            "ZQCS" => InstrumentKind::DeviceKind(DeviceKind::Zqcs),
-            "PQSC" => InstrumentKind::AuxiliaryDeviceKind(AuxiliaryDeviceKind::Pqsc),
-            "QHUB" => InstrumentKind::AuxiliaryDeviceKind(AuxiliaryDeviceKind::Qhub),
-            "SHFPPC" => InstrumentKind::AuxiliaryDeviceKind(AuxiliaryDeviceKind::Shfppc),
+            "SHFQA" => InstrumentType::DeviceKind(InstrumentKind::Shfqa),
+            "SHFSG" => InstrumentType::DeviceKind(InstrumentKind::Shfsg),
+            "SHFQC" => InstrumentType::DeviceKind(InstrumentKind::Shfqc),
+            "HDAWG" => InstrumentType::DeviceKind(InstrumentKind::Hdawg),
+            "UHFQA" => InstrumentType::DeviceKind(InstrumentKind::Uhfqa),
+            "ZQCS" => InstrumentType::DeviceKind(InstrumentKind::Zqcs),
+            "PQSC" => InstrumentType::AuxiliaryDeviceKind(AuxiliaryDeviceKind::Pqsc),
+            "QHUB" => InstrumentType::AuxiliaryDeviceKind(AuxiliaryDeviceKind::Qhub),
+            "SHFPPC" => InstrumentType::AuxiliaryDeviceKind(AuxiliaryDeviceKind::Shfppc),
             device_type => return Err(Error::new(format!("Unknown device type: {device_type}"))),
         };
 
+        let physical_device_uid = self.instruments.len() as u16;
+
         match device_kind {
-            InstrumentKind::DeviceKind(kind) => {
-                let mut builder = AwgDevice::builder(
-                    self.id_store.get_or_insert(uid).into(),
-                    PhysicalDeviceUid(physical_device_uid),
+            InstrumentType::DeviceKind(kind) => {
+                let instrument = Instrument {
+                    uid: self.id_store.get_or_insert(uid).into(),
                     kind,
-                );
-                builder = builder.shfqc(is_shfqc);
-                builder = builder.options(DeviceOptions::new(options));
-                if let Some(reference_clock) = reference_clock_source {
-                    builder = builder.reference_clock(reference_clock);
-                }
-                let awg_device = builder.build();
-                self.awg_devices.push(awg_device);
+                    physical_device_uid: physical_device_uid.into(),
+                    options: DeviceOptions::new(options),
+                    reference_clock: reference_clock_source,
+                };
+                self.instruments.push(instrument);
             }
-            InstrumentKind::AuxiliaryDeviceKind(aux_device_kind) => {
+            // TODO: Move auxiliary device handling to QCCS backend.
+            InstrumentType::AuxiliaryDeviceKind(aux_device_kind) => {
                 let aux_device =
                     AuxiliaryDevice::new(self.id_store.get_or_insert(uid).into(), aux_device_kind);
                 self.auxiliary_devices.push(aux_device);

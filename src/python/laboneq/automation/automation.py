@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
+import threading
 import warnings
 from pathlib import Path
 from typing import Any, ClassVar, Iterator, Literal, final
@@ -13,6 +14,7 @@ from matplotlib.axes._axes import Axes
 from matplotlib.patches import Patch
 
 from laboneq.automation.layer import AutomationLayer, RootLayer
+from laboneq.automation.logic import AutomationLogic
 from laboneq.automation.node import AutomationNode, RootNode
 from laboneq.automation.serialization import (
     load_automation_parameters_from_file,
@@ -68,13 +70,15 @@ class Automation:
     _node_lookup: dict[str, AutomationNode] = attrs.field(factory=dict, init=False)
     _layer_graph: nx.DiGraph = attrs.field(factory=lambda: nx.DiGraph(), init=False)
     _layer_lookup: dict[str, AutomationLayer] = attrs.field(factory=dict, init=False)
+    _lock: threading.Lock = attrs.field(factory=threading.Lock)
 
     def __attrs_post_init__(self):
         """Initialize the directed automation graph with a root."""
-        self._node_graph.add_node(self.ROOT_NODE.id, subset=0)
-        self._node_lookup[self.ROOT_NODE.id] = self.ROOT_NODE
-        self._layer_graph.add_node(self.ROOT_LAYER.key, subset=0)
-        self._layer_lookup[self.ROOT_LAYER.key] = self.ROOT_LAYER
+        with self._lock:
+            self._node_graph.add_node(self.ROOT_NODE.id, subset=0)
+            self._node_lookup[self.ROOT_NODE.id] = self.ROOT_NODE
+            self._layer_graph.add_node(self.ROOT_LAYER.key, subset=0)
+            self._layer_lookup[self.ROOT_LAYER.key] = self.ROOT_LAYER
 
     def __getitem__(self, elem_id: str) -> AutomationLayer | AutomationNode:
         """Get the automation layer or node by its ID.
@@ -270,8 +274,9 @@ class Automation:
                     f"keys."
                 )
 
-        self._add_layer(layer)
-        self.construct_layer_params_using_auto_params(layer.key)
+        with self._lock:
+            self._add_layer(layer)
+            self.construct_layer_params_using_auto_params(layer.key)
 
     def _add_layer(self, layer: AutomationLayer):
         """Add a layer to the automation framework (internal).
@@ -416,16 +421,17 @@ class Automation:
         isolated_layers = set(nx.descendants(self._layer_graph, layer_key)) | {
             layer_key
         }
-        for isolated_layer_key in isolated_layers:
-            layer = self.get_layer(isolated_layer_key)
-            for node in layer.nodes.values():
-                isolated_nodes.add(node.id)
-                if node.id in self._node_lookup:
-                    del self._node_lookup[node.id]
+        with self._lock:
+            for isolated_layer_key in isolated_layers:
+                layer = self.get_layer(isolated_layer_key)
+                for node in layer.nodes.values():
+                    isolated_nodes.add(node.id)
+                    if node.id in self._node_lookup:
+                        del self._node_lookup[node.id]
 
-            del self._layer_lookup[isolated_layer_key]
-        self._layer_graph.remove_nodes_from(isolated_layers)
-        self._node_graph.remove_nodes_from(isolated_nodes)
+                del self._layer_lookup[isolated_layer_key]
+            self._layer_graph.remove_nodes_from(isolated_layers)
+            self._node_graph.remove_nodes_from(isolated_nodes)
 
     def deactivate_node(
         self,
@@ -521,7 +527,14 @@ class Automation:
 
         Arguments:
             from_layer: The layer to run the automation from.
+
+        Raises:
+            ValueError: If no layers have been added to the automation framework.
         """
+        if next(self.layer_keys(include_root=False), None) is None:
+            raise ValueError(
+                "Cannot run an empty automation. Add at least one layer using `add_layer`."
+            )
         self.update_timestamp()
         if from_layer is None:
             new_layer_key = next(self.layer_keys(include_root=False))
@@ -578,29 +591,52 @@ class Automation:
         # Deactivate after node on failure
         for node in layer.target_nodes.values():
             if node.status == Status.FAILED and (
-                not layer.logic or node.fail_count == node.max_fail_count
+                not layer.logic or node.fail_count >= node.max_fail_count
             ):
                 self.deactivate_node(node.id, include_node=False)
 
         # Apply logic
-        if layer.logic and (
-            layer.status == Status.FAILED
-            or (
-                layer.logic.iterations is not None
-                and (
-                    max(layer.fail_count.values()) + max(layer.pass_count.values()) - 1
-                    < layer.logic.iterations
-                )
-            )
-        ):
-            new_layer_key, new_params = layer.logic.run_executable(layer)
-            nested_update(layer.parameters, new_params)
+        if layer.logic:
+            new_key, new_params = self._apply_logic(layer, layer.logic)
+            if new_params:
+                nested_update(layer.parameters, new_params)
+            if new_key is not None:
+                new_layer_key = new_key
 
         # Clear overrides
         layer._node_keys_override = None
         layer._parameters_override = None
 
         return new_layer_key, new_params
+
+    def _apply_logic(
+        self, layer: AutomationLayer, logic: AutomationLogic
+    ) -> tuple[str | None, dict]:
+        """Perfom checks if the logic is applicable and run the logic executable.
+
+        Arguments:
+            layer: The layer on which to apply the logic.
+            logic: The logic which to apply to the layer.
+
+        Returns:
+            A tuple of (next layer key or None, updated parameters dict).
+        """
+        total_run_count = max(layer.fail_count.values()) + max(
+            layer.pass_count.values()
+        )
+        max_iterations_reached = (
+            logic.iterations is None or total_run_count > logic.iterations
+        )
+
+        failed_nodes = [
+            n for n in layer.target_nodes.values() if n.status == Status.FAILED
+        ]
+        max_fail_reached = any(n.fail_count >= n.max_fail_count for n in failed_nodes)
+
+        if failed_nodes and not max_fail_reached or not max_iterations_reached:
+            return logic.run_executable(layer)
+
+        return None, {}
 
     def run_from_node(self, node_id: str):
         """Run the automation framework from a specific node.

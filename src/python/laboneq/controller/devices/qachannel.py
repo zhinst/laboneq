@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 import asyncio
-import itertools
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 import numpy as np
+from zhinst.utils.shfqa.multistate import QuditSettings  # type: ignore[import-untyped]
 
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
@@ -109,29 +109,14 @@ def ch_hw_modulated(device_uid: str, channel: int, recipe_data: RecipeData) -> b
 
 def _calc_theoretical_assignment_vec(num_weights: int) -> np.ndarray:
     """Calculates the theoretical assignment vector, assuming that
-    zhinst.utils.QuditSettings ws used to calculate the weights
-    and the first d-1 weights were selected as kernels.
-
-    The theoretical assignment vector is determined by the majority vote
-    (winner takes all) principle.
-
-    see zhinst/utils/shfqa/multistate.py
+    zhinst.utils.QuditSettings was used to calculate the weights
+    and the first d-1 weights were selected as integration kernels.
     """
     num_states = num_weights + 1
-    weight_indices = list(itertools.combinations(range(num_states), 2))
-    assignment_len = 2 ** len(weight_indices)
-    assignment_vec = np.zeros(assignment_len, dtype=int)
-
-    for assignment_idx in range(assignment_len):
-        state_counts = np.zeros(num_states, dtype=int)
-        for weight_idx, weight in enumerate(weight_indices):
-            above_threshold = (assignment_idx & (2**weight_idx)) != 0
-            state_idx = weight[0] if above_threshold else weight[1]
-            state_counts[state_idx] += 1
-        winner_state = np.argmax(state_counts)
-        assignment_vec[assignment_idx] = winner_state
-
-    return assignment_vec
+    qs = QuditSettings(
+        np.linspace(start=0.0, stop=1.0, num=num_states).reshape(num_states, 1)
+    )
+    return qs.calc_theoretical_assignment_vec()
 
 
 @dataclass

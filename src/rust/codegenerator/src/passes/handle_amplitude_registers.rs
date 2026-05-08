@@ -17,16 +17,14 @@ impl AmplitudeRegisterAllocation {
         let mut amp_params: Vec<_> = values.into_iter().collect();
         // Deterministic order by the parameter name
         amp_params.sort();
-        let mut reg_counter = 1;
         let mut allocations: HashMap<String, u16> = HashMap::new();
-        for param in amp_params {
+        for (param, reg_counter) in amp_params.into_iter().zip(1..) {
             let count = if reg_counter < amplitude_register_count {
                 reg_counter
             } else {
                 0
             };
             allocations.insert(param.to_string(), count);
-            reg_counter += 1;
         }
         AmplitudeRegisterAllocation {
             allocations,

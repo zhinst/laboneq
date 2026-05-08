@@ -1,3 +1,18 @@
+# LabOne Q 26.7.0b1 (2026-05-08)
+
+## Features
+
+- Improved the performance of the automation web viewer so that it runs smoothly with up to 200 quantum elements per layer. The front end has been simplified and all transitions are now entirely done natively by the browser.
+- Changed exception type from `RuntimeError` to `LabOneQException` when an invalid device combination is provided.
+
+## Bug Fixes
+
+- Fixed a bug where the assignment vector calculation for multi-state discrimination on SHFQA was incorrect. The calculation is now delegated to zhinst-utils.
+
+## Removals from the Codebase
+
+- Removed device setup hot-reloading.
+
 # LabOne Q 26.4.0 (2026-04-30)
 
 ## Features

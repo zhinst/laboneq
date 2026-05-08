@@ -68,6 +68,7 @@ class TargetDevice:
     calibrations: list[TargetChannelCalibration] | None = None
     is_qc: bool = False
     qc_with_qa: bool = False
+    qc_with_sg: bool = False
     reference_clock_source: ReferenceClockSource | None = None
     device_class: int = 0x0
 

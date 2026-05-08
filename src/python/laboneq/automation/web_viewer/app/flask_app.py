@@ -8,6 +8,8 @@ from pathlib import Path
 from flask import Flask
 
 from laboneq.automation import Automation
+from laboneq.workflow.logbook.core import active_logbook_stores
+from laboneq.workflow.logbook.folder_store import FolderStore
 
 
 def set_automation_instance(automation: Automation) -> None:
@@ -27,7 +29,16 @@ def set_log_path(log_path: Path | None) -> None:
 
 def get_log_path() -> Path | None:
     """Get the attached log path."""
-    return app.config.get("LOG_PATH")
+    log_path = app.config.get("LOG_PATH")
+
+    # If no log store is provided try fetching the latest active folder store
+    active_folder_stores = [
+        store for store in active_logbook_stores() if isinstance(store, FolderStore)
+    ]
+    if log_path is None and active_folder_stores:
+        log_path = active_folder_stores[-1].folder
+
+    return log_path
 
 
 current_dir = Path(__file__).resolve().parent

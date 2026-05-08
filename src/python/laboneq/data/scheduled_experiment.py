@@ -15,7 +15,6 @@ from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.types.numpy_support import NumPyArray
 from laboneq.core.validators import dicts_equal
-from laboneq.data.awg_info import AwgKey
 from laboneq.data.recipe import Recipe
 from laboneq.executor.executor import Statement
 
@@ -189,7 +188,6 @@ class RtLoopProperties:
 class ResultShapeInfo:
     shapes: dict[str, HandleResultShape]
     result_handle_maps: dict[ResultSource, list[set[str]]]
-    result_lengths: dict[AwgKey, int]
 
 
 @dataclass

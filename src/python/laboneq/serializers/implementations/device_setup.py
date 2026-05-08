@@ -16,7 +16,7 @@ from laboneq.serializers.implementations._models._device_setup import (
     DataServerModel,
     LogicalSignalGroupModel,
     PhysicalChannelGroupModel,
-    SystemProfileModel,
+    SystemDescriptionModel,
     ZIStandardInstrumentModel,
     make_converter,
 )
@@ -62,10 +62,10 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
             k: QuantumElementSerializer.to_dict(v, options)
             for k, v in obj.qubits.items()
         }
-        system_profile = None
-        if obj.system_profile:
-            system_profile = _converter.unstructure(
-                obj.system_profile, SystemProfileModel
+        system_description = None
+        if obj.system_description:
+            system_description = _converter.unstructure(
+                obj.system_description, SystemDescriptionModel
             )
         return {
             "__serializer__": cls.serializer_id(),
@@ -77,7 +77,7 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
                 "physical_channel_groups": physical_channels_groups,
                 "logical_signal_groups": logical_signal_groups,
                 "qubits": qubits,
-                "system_profile": system_profile,
+                "system_description": system_description,
             },
         }
 
@@ -89,10 +89,12 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
     ) -> DeviceSetup:
         d = cls.from_dict_v3(serialized_data, options)
         sys_prof_data: dict[str, Any] = serialized_data["__data__"].get(
-            "system_profile"
+            "system_description"
         )
         if sys_prof_data:
-            d.system_profile = _converter.structure(sys_prof_data, SystemProfileModel)
+            d.system_description = _converter.structure(
+                sys_prof_data, SystemDescriptionModel
+            )
         return d
 
     @classmethod

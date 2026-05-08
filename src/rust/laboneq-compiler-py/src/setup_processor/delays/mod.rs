@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod calculator;
-mod lead_delay;
 mod on_device;
 mod output_routing;
 mod precompensation;

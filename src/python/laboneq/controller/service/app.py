@@ -26,10 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from laboneq._version import get_version
-from laboneq.controller.service.controller_container import (
-    ControllerContainer,
-    DeviceSetupLoader,
-)
+from laboneq.controller.service.controller_container import ControllerContainer
 from laboneq.controller.service.models import (
     ErrorBody,
     ErrorCode,
@@ -37,6 +34,7 @@ from laboneq.controller.service.models import (
     ReadyzResponse,
 )
 from laboneq.controller.service.routes import ServiceError, router
+from laboneq.dsl.device import DeviceSetup
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
@@ -88,7 +86,7 @@ async def readyz() -> Response:
 def create_app(
     neartime_callbacks: dict[str, Callable[..., Any]] | None = None,
     enable_cors: bool = True,
-    device_setup_loader: DeviceSetupLoader | None = None,
+    device_setup: DeviceSetup | None = None,
     dataserver: tuple[str, str] | None = None,
     do_emulation: bool = False,
     reset_devices: bool = False,
@@ -98,12 +96,10 @@ def create_app(
     Args:
         neartime_callbacks: Pre-registered near-time callbacks.
         enable_cors: Whether to enable CORS middleware.
-        device_setup_loader: Hot-reloadable loader for the default DeviceSetup.
+        device_setup: Explicit :class:`~laboneq.dsl.device.DeviceSetup`.
             ``None`` enables auto-discovery from *dataserver* instead.
-        dataserver: ``(host, port)`` of the hardware server (SCM or LabOne
-            dataserver).  Also injected into every device setup at connect
-            time.
-        do_emulation: Run in emulation mode (no real hardware).
+        dataserver: ``(host, port)`` of the hardware server (SCM).
+        do_emulation: Run in emulation mode (no real hardware); requires device_setup.
         reset_devices: Reset hardware on the first connection.
 
     Returns:
@@ -133,7 +129,7 @@ def create_app(
         logger.info("Starting LabOne Q Controller Service v%s", get_version())
         _app.state.controller_container = await ControllerContainer.create(
             neartime_callbacks=neartime_callbacks,
-            device_setup_loader=device_setup_loader,
+            device_setup=device_setup,
             dataserver=dataserver,
             do_emulation=do_emulation,
             reset_devices=reset_devices,

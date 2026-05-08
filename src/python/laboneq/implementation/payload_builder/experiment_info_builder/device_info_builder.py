@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping, Tuple
+from typing import Mapping
 
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
 from laboneq.data.compilation_job import (
@@ -11,7 +11,6 @@ from laboneq.data.compilation_job import (
     DeviceInfoType,
     ReferenceClockSourceInfo,
 )
-from laboneq.data.execution_payload import VIRTUAL_SHFSG_UID_SUFFIX
 from laboneq.data.setup_description import (
     DeviceType,
     Instrument,
@@ -19,7 +18,6 @@ from laboneq.data.setup_description import (
     PortType,
     Setup,
 )
-from laboneq.implementation.utils import devices
 
 
 def _ref_clk_from_ds(
@@ -32,36 +30,12 @@ def _ref_clk_from_ds(
     return None
 
 
-def _split_shfqc(
-    device: Instrument, physical_device_id: int
-) -> Tuple[DeviceInfo, DeviceInfo]:
-    shfqa = DeviceInfo(
-        uid=device.uid,
-        device_type=DeviceInfoType.SHFQA,
-        options=device.device_options or "",
-        reference_clock_source=_ref_clk_from_ds(device.reference_clock.source),
-        is_qc=True,
-        physical_device_uid=physical_device_id,
-    )
-    shfsg = DeviceInfo(
-        uid=device.uid + VIRTUAL_SHFSG_UID_SUFFIX,
-        device_type=DeviceInfoType.SHFSG,
-        options=device.device_options or "",
-        reference_clock_source=_ref_clk_from_ds(device.reference_clock.source),
-        is_qc=True,
-        physical_device_uid=physical_device_id,
-    )
-    return shfqa, shfsg
-
-
-def _build_non_shfqc(device: Instrument, physical_device_id: int) -> DeviceInfo:
+def _build_device_info(device: Instrument) -> DeviceInfo:
     return DeviceInfo(
         uid=device.uid,
         device_type=DeviceInfoType(device.device_type.name.lower()),
         options=device.device_options or "",
         reference_clock_source=_ref_clk_from_ds(device.reference_clock.source),
-        is_qc=False,
-        physical_device_uid=physical_device_id,
     )
 
 
@@ -89,43 +63,15 @@ class DeviceInfoBuilder:
         for device in self._setup.instruments:
             if device.device_type == DeviceType.UNMANAGED:
                 continue
-            physical_device_id = len(self._device_mapping)
-            # Split SHFQC into SHFQA / SHFSG
-            if device.device_type == DeviceType.SHFQC:
-                shfqa, shfsg = _split_shfqc(device, physical_device_id)
-                # Check whether Physical channel ports in connection belong to SHFSG or SHFQA
-                # to make a LogicalSignal -> SHFQA/SHFSG connection
-                for conn in device.connections:
-                    pc_ports = [p.path for p in conn.physical_channel.ports]
-                    shfqa_ports = [p.path for p in devices.shfqa_ports()]
-                    if set(pc_ports).issubset(shfqa_ports):
-                        self._device_by_ls[conn.logical_signal] = shfqa
-                    else:
-                        self._device_by_ls[conn.logical_signal] = shfsg
-                if (
-                    shfqa in self._device_by_ls.values()
-                    or shfsg not in self._device_by_ls.values()
-                ):
-                    self._device_mapping[shfqa.uid] = shfqa
-                else:
-                    shfsg.uid = shfsg.uid.removesuffix(VIRTUAL_SHFSG_UID_SUFFIX)
-                if shfsg in self._device_by_ls.values():
-                    self._device_mapping[shfsg.uid] = shfsg
-            else:
-                device_info = _build_non_shfqc(device, physical_device_id)
-                self._device_mapping[device.uid] = device_info
-                for conn in device.connections:
-                    self._device_by_ls[conn.logical_signal] = self._device_mapping[
-                        device.uid
-                    ]
+            device_info = _build_device_info(device)
+            self._device_mapping[device.uid] = device_info
+            for conn in device.connections:
+                self._device_by_ls[conn.logical_signal] = self._device_mapping[
+                    device.uid
+                ]
 
         for iconn in self._setup.setup_internal_connections:
             if iconn.from_port is not None and iconn.from_port.type == PortType.RF:
                 continue
             leader = self._device_mapping[iconn.from_instrument.uid]
             leader.followers.append(iconn.to_instrument.uid)
-            if iconn.to_instrument.device_type == DeviceType.SHFQC:
-                sg_uid_candidate = iconn.to_instrument.uid + VIRTUAL_SHFSG_UID_SUFFIX
-                if sg_uid_candidate not in self._device_mapping:
-                    continue
-                leader.followers.append(sg_uid_candidate)

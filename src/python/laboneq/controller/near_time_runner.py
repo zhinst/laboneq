@@ -17,7 +17,7 @@ from laboneq.core.exceptions import AbortExecution
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import NtStepKey
-from laboneq.executor.executor import AsyncExecutorBase, LoopFlags, LoopingMode
+from laboneq.executor.executor import AsyncExecutorBase, LoopingMode
 
 if TYPE_CHECKING:
     from laboneq.controller.controller import Controller, ExecutionContext
@@ -59,7 +59,7 @@ class NearTimeRunner(AsyncExecutorBase):
             # This is necessary to ensure that the existing logic for partial results
             # is not broken by the new asynchronous execution model.
             await self.last_nt_step_result_completed
-        func = self.controller._neartime_callbacks.get(func_name)
+        func = self.controller.neartime_callbacks.get(func_name)
         if func is None:
             raise LabOneQControllerException(
                 f"Near-time callback '{func_name}' is not registered."
@@ -100,18 +100,13 @@ class NearTimeRunner(AsyncExecutorBase):
         value: float,
         axis_name: str,
         values: NumPyArray,
-        is_user_registered: bool,
     ):
         self.sweep_params_tracker.set_param(name, value)
 
-    async def for_loop_entry_handler(
-        self, count: int, index: int, loop_flags: LoopFlags
-    ):
+    async def for_loop_entry_handler(self, count: int, index: int):
         self.nt_loop_indices.append(index)
 
-    async def for_loop_exit_handler(
-        self, count: int, index: int, loop_flags: LoopFlags
-    ):
+    async def for_loop_exit_handler(self, count: int, index: int):
         self.nt_loop_indices.pop()
 
     async def rt_entry_handler(

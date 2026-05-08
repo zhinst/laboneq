@@ -1,19 +1,29 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+import { statusColor } from "./layout.js";
+import { getContainerSize } from "./helpers.js";
+
 const ROOT_LAYER_KEY = "root";
 const ROOT_NODE_KEY = "root";
 const ROOT_NODE_ID = "root_root";
 
-function renderStatusLegend() {
+const STATUSES = [
+    "root",
+    "ready",
+    "running",
+    "passed",
+    "failed",
+    "deactivated",
+];
+
+export function renderStatusLegend() {
     const container = d3.select("#status-legend-items");
     container.selectAll("*").remove();
 
-    const entries = Object.entries(statusColorMap);
-
     const row = container
         .selectAll(".legend-row")
-        .data(entries, (d) => d[0])
+        .data(STATUSES)
         .enter()
         .append("div")
         .attr("class", "legend-row");
@@ -22,16 +32,16 @@ function renderStatusLegend() {
 
     left.append("div")
         .attr("class", "legend-dot")
-        .style("background-color", (d) => d[1]);
+        .style("background-color", (d) => statusColor(d));
 
-    left.append("span").text(([status]) =>
+    left.append("span").text((status) =>
         status === "root"
             ? "Root"
             : status.charAt(0).toUpperCase() + status.slice(1),
     );
 }
 
-function renderLayerLegend(layers, layerMap) {
+export function renderLayerLegend(layers, layerMap) {
     const container = d3.select("#layer-legend-items");
     container.selectAll("*").remove();
 
@@ -48,7 +58,7 @@ function renderLayerLegend(layers, layerMap) {
         .attr("class", "legend-badge")
         .style(
             "background-color",
-            (d) => statusColorMap[d.status] || colorPalette.zi_blue,
+            (d) => statusColor(d.status) || colorPalette.zi_blue,
         )
         .text((d) => layerMap.get(d.key));
 
@@ -215,22 +225,22 @@ function renderNodeInfoRows(rows) {
     merged.select(".legend-right").text((r) => r.value ?? "");
 }
 
-function showNodeInfoPanel() {
+export function showNodeInfoPanel() {
     document.getElementById("node-info-rows").classList.add("open");
     d3.select("#node-info").classed("visible", true);
 }
 
-function closeNodeInfoPanel() {
+export function closeNodeInfoPanel() {
     document.getElementById("node-info-rows").classList.remove("open");
     resetNodeResultsSection(getNodeInfoElements());
     d3.select("#node-info").classed("visible", false);
 }
 
-function shouldShowNodeResult(d, isLayers) {
+function shouldShowNodeResult(d, isLayers, hasLogPath) {
     return (
         !isLayers &&
         (d.status === "passed" || d.status === "failed") &&
-        cachedGraphData?.has_log_path
+        hasLogPath
     );
 }
 
@@ -278,14 +288,19 @@ function hideRunElementButton(d, btnRunElement) {
     btnRunElement.hidden = true;
 }
 
-function refreshNodeInfoLegend() {
+function getSelectedNode() {
+    const sel = d3.select(".node.selected");
+    return sel.empty() ? null : sel;
+}
+
+export function refreshNodeInfoLegend(currentMode, hasLogPath) {
     const selected = getSelectedNode();
     if (!selected) return;
 
     const d = selected.datum();
     if (!d) return;
 
-    isLayers = currentMode === "layers";
+    const isLayers = currentMode === "layers";
     const elements = getNodeInfoElements();
 
     updateNodeInfoHeader(isLayers);
@@ -293,7 +308,7 @@ function refreshNodeInfoLegend() {
     const rows = buildNodeInfoRows(d, isLayers);
     renderNodeInfoRows(rows);
 
-    if (shouldShowNodeResult(d, isLayers)) {
+    if (shouldShowNodeResult(d, isLayers, hasLogPath)) {
         renderNodeResultThumbnail(d, elements);
     } else {
         resetNodeResultsSection(elements);

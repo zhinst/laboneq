@@ -91,8 +91,10 @@ fn visit_node<'a>(
             validate_triggers(&op.triggers, ctx)?;
         }
         Operation::Sweep(op) => {
+            validate_parallel_sweep(op, ctx)?;
             digest_sweep_parameters(op, ctx_params);
             validate_chunked_sweep(op, ctx_params)?;
+            validate_no_nt_parameter_in_rt_sweep(op, ctx, ctx_params)?;
         }
         Operation::RealTimeBoundary => {
             assert_eq!(

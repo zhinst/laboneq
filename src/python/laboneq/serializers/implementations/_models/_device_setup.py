@@ -13,7 +13,7 @@ import attrs
 from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.core.types.enums.io_signal_type import IOSignalType
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
-from laboneq.dsl.device import SystemProfile
+from laboneq.dsl.device import SystemDescription
 from laboneq.dsl.device.connection import Connection
 from laboneq.dsl.device.instruments.hdawg import HDAWG
 from laboneq.dsl.device.instruments.nonqc import NonQC
@@ -229,38 +229,38 @@ class LogicalSignalGroupModel:
 
 
 @attrs.define
-class SystemProfileModel:
-    """Polymorphic model for SystemProfile using plugin registry."""
+class SystemDescriptionModel:
+    """Polymorphic model for SystemDescription using plugin registry."""
 
     _target_class: ClassVar[Type] = None
 
     @classmethod
-    def _unstructure(cls, obj: SystemProfile):
-        for profile_type, (
+    def _unstructure(cls, obj: SystemDescription):
+        for description_type, (
             target_class,
             model_class,
-        ) in _system_profile_plugins.items():
+        ) in _system_description_plugins.items():
             if isinstance(obj, target_class):
                 result = _converter.unstructure(obj, model_class)
-                result["_profile_type"] = profile_type
+                result["_system_description_type"] = description_type
                 return result
 
         raise ValueError(
-            f"Unknown SystemProfile type: {type(obj).__name__}. "
-            f"No registered handler found. Available types: {', '.join(_system_profile_plugins.keys())}"
+            f"Unknown SystemDescription type: {type(obj).__name__}. "
+            f"No registered handler found. Available types: {', '.join(_system_description_plugins.keys())}"
         )
 
     @classmethod
-    def _structure(cls, obj: dict[str, Any], _) -> SystemProfile:
-        profile_type = obj.pop("_profile_type")
+    def _structure(cls, obj: dict[str, Any], _) -> SystemDescription:
+        system_description_type = obj.pop("_system_description_type")
 
-        if profile_type in _system_profile_plugins:
-            _, model_class = _system_profile_plugins[profile_type]
+        if system_description_type in _system_description_plugins:
+            _, model_class = _system_description_plugins[system_description_type]
             return _converter.structure(obj, model_class)
 
         raise ValueError(
-            f"Unknown _profile_type: {profile_type}. "
-            f"Available types: {', '.join(_system_profile_plugins.keys())}"
+            f"Unknown _system_description_type: {system_description_type}. "
+            f"Available types: {', '.join(_system_description_plugins.keys())}"
         )
 
 
@@ -272,18 +272,18 @@ def make_converter():
 
 _converter = make_converter()
 
-_system_profile_plugins: dict[str, tuple[type, type]] = {}
+_system_description_plugins: dict[str, tuple[type, type]] = {}
 
 
-def register_system_profile_plugin(
-    profile_type: str, target_class: type, model_class: type
+def register_system_description_plugin(
+    system_description_type: str, target_class: type, model_class: type
 ) -> None:
     """
-    Register a SystemProfile plugin for optional profile types.
+    Register a SystemDescription plugin for optional system_description types.
 
     Args:
-        profile_type: The discriminator value (e.g., "QCCS")
-        target_class: The target class (e.g., SystemProfileQCCS)
-        model_class: The serialization model class (e.g., SystemProfileQCCSModel)
+        system_description_type: The discriminator value (e.g., "QCCS")
+        target_class: The target class (e.g., SystemDescriptionQCCS)
+        model_class: The serialization model class (e.g., SystemDescriptionQCCSModel)
     """
-    _system_profile_plugins[profile_type] = (target_class, model_class)
+    _system_description_plugins[system_description_type] = (target_class, model_class)

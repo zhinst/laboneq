@@ -24,15 +24,13 @@ impl DeviceSetupCapnpBuilderPy {
         }
     }
 
-    #[pyo3(signature = (uid, device_type, physical_device_uid, options=None, reference_clock_source=None, is_shfqc=false))]
+    #[pyo3(signature = (uid, device_type, options=None, reference_clock_source=None))]
     fn add_instrument(
         &mut self,
         uid: Bound<'_, PyString>,
         device_type: Bound<'_, PyString>,
-        physical_device_uid: u16,
         options: Option<Vec<Bound<'_, PyString>>>,
         reference_clock_source: Option<Bound<'_, PyString>>,
-        is_shfqc: bool,
     ) -> PyResult<()> {
         let payload = InstrumentPayload {
             uid: uid.into(),
@@ -43,8 +41,6 @@ impl DeviceSetupCapnpBuilderPy {
                 .map(|o| o.into())
                 .collect(),
             reference_clock_source: reference_clock_source.map(|s| s.into()),
-            physical_device_uid,
-            is_shfqc,
         };
         self.instruments.push(payload);
         Ok(())
@@ -167,8 +163,6 @@ pub(crate) struct InstrumentPayload {
     pub device_type: Py<PyString>,
     pub options: Vec<Py<PyString>>,
     pub reference_clock_source: Option<Py<PyString>>,
-    pub physical_device_uid: u16,
-    pub is_shfqc: bool,
 }
 
 pub(crate) struct OscillatorPayload {

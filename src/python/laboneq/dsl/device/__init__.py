@@ -12,12 +12,12 @@ from .ports import Port
 from .server import Server
 
 from .device_setup import DeviceSetup  # isort: skip
-from . import system_profile_builder_qccs as _system_profile_builder_qccs
+from . import system_description_builder_qccs as _system_description_builder_qccs
 
 
 @runtime_checkable
-class SystemProfile(Protocol):
-    """Base class for system profiles."""
+class SystemDescription(Protocol):
+    """Base class for system descriptions."""
 
     @abstractmethod
     def get_fingerprint(self) -> str:

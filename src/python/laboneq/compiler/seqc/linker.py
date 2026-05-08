@@ -76,6 +76,7 @@ class CombinedRTOutputSeqC(CombinedOutput):
     )
     device_properties: list[codegen_rs.DeviceProperties] = field(default_factory=list)
     ppc_settings: list[codegen_rs.PpcSettings] = field(default_factory=list)
+    result_lengths: dict[AwgKey, int] = field(default_factory=dict)
 
     def get_artifacts(self) -> CompilerArtifact:
         src: list[dict[str, str | bytes]] = []
@@ -145,6 +146,10 @@ class SeqCGenOutput(RTCompilerOutput):
     awg_properties: dict[AwgKey, codegen_rs.AwgProperties] = field(default_factory=dict)
     device_properties: list[codegen_rs.DeviceProperties] = field(default_factory=list)
     ppc_settings: list[codegen_rs.PpcSettings] = field(default_factory=list)
+    # Each AWG must have the same result lengths across real-time executions.
+    # This means that for near-time steps and chunked experiments,
+    # there should only be one entry per AWG
+    result_lengths: dict[AwgKey, int] = field(default_factory=dict)
 
 
 def _check_compatibility(this: SeqCGenOutput, new: SeqCGenOutput):
@@ -152,14 +157,12 @@ def _check_compatibility(this: SeqCGenOutput, new: SeqCGenOutput):
         raise LabOneQException(
             "Signal delays do not match between real-time iterations"
         )
-    if this.integration_times != new.integration_times:
-        raise LabOneQException(
-            "Integration times do not match between real-time iterations"
-        )
+    if this.result_lengths != new.result_lengths:
+        raise LabOneQException("Measurements do not match between real-time iterations")
     if this.result_handle_maps != new.result_handle_maps:
-        raise LabOneQException(
-            "Acquisition structures do not match between real-time iterations"
-        )
+        raise LabOneQException("Measurements do not match between real-time iterations")
+    if this.integration_times != new.integration_times:
+        raise LabOneQException("Measurements do not match between real-time iterations")
     if this.feedback_register_configurations != new.feedback_register_configurations:
         raise LabOneQException(
             "Feedback register configurations do not match between real-time iterations"
@@ -254,6 +257,7 @@ class SeqCLinker(ILinker):
             channel_properties=output.channel_properties,
             ppc_settings=output.ppc_settings,
             device_properties=output.device_properties,
+            result_lengths=output.result_lengths,
         )
 
     @staticmethod

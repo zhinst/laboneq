@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from functools import singledispatch
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
@@ -11,13 +12,18 @@ import numpy.typing as npt
 import zhinst.utils  # type: ignore[import-untyped]
 
 from laboneq.controller.devices.device_collection import DeviceCollection
+from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.recipe_processor import RecipeData, WaveformItem
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.utilities.replace_phase_increment import calc_ct_replacement
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
 from laboneq.data.recipe import NtStepKey
-from laboneq.data.scheduled_experiment import ArtifactsCodegen, CodegenWaveform
+from laboneq.data.scheduled_experiment import (
+    ArtifactsCodegen,
+    CodegenWaveform,
+    CompilerArtifact,
+)
 
 if TYPE_CHECKING:
     from laboneq.dsl.experiment.pulse import Pulse
@@ -87,8 +93,29 @@ def process_replacements(
             "Cannot apply near-time artifact replacements for chunked experiment."
         )
 
-    artifacts = recipe_data.get_artifacts(ArtifactsCodegen)
+    artifacts = recipe_data.scheduled_experiment.artifacts
+    process_replacements_impl(artifacts, recipe_data, devices, nt_step, replacements)
 
+
+@singledispatch
+def process_replacements_impl(
+    artifacts: CompilerArtifact,
+    recipe_data: RecipeData,
+    devices: DeviceCollection,
+    nt_step: NtStepKey,
+    replacements: NearTimeReplacements,
+):
+    raise NotImplementedError(f"Unknown type of artifacts: {artifacts.__class__}")
+
+
+@process_replacements_impl.register
+def process_replacements_qccs(
+    artifacts: ArtifactsCodegen,
+    recipe_data: RecipeData,
+    devices: DeviceCollection,
+    nt_step: NtStepKey,
+    replacements: NearTimeReplacements,
+):
     has_rt_exec_inits = any(
         r.nt_step == nt_step for r in recipe_data.recipe.realtime_execution_init
     )
@@ -144,6 +171,7 @@ def _process_pulse_replacements(
                 awg_key = recipe_data.awg_by_seqc_name(seqc_name)
                 assert awg_key is not None
                 device = devices.find_by_uid(awg_key.device_uid)
+                assert isinstance(device, DeviceBase), "unexpected device type"
 
                 if repl.replacement_type == ReplacementType.I_Q:
                     assert isinstance(repl.samples, list)
@@ -194,4 +222,5 @@ def _process_phase_increment_replacements(
                 awg_key = recipe_data.awg_by_seqc_name(seqc_name)
                 assert awg_key is not None
                 device = devices.find_by_uid(awg_key.device_uid)
+                assert isinstance(device, DeviceBase), "unexpected device type"
                 device.add_command_table_replacement(awg_key.awg_index, repl["ct"])

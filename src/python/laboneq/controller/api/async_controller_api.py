@@ -6,7 +6,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-from laboneq.controller.api.controller_api import SubmissionHandle, SubmissionStatus
+from laboneq.controller.api.commons import SubmissionHandle
+from laboneq.controller.controller import SubmissionStatus
 from laboneq.dsl.device.device_setup import DeviceSetup
 
 if TYPE_CHECKING:
@@ -27,11 +28,14 @@ class AsyncControllerAPI(ABC):
 
     @abstractmethod
     async def submit_experiment(
-        self, scheduled_experiment: ScheduledExperiment
+        self,
+        scheduled_experiment: ScheduledExperiment,
+        handle: SubmissionHandle | None = None,
     ) -> SubmissionHandle:
         """Submit an experiment for execution and return a handle.
 
         The handle is returned immediately and can be used to track the submission status.
+        Optional unique handle can be provided to track the submission. If not provided, a new handle is generated.
         """
 
     @abstractmethod

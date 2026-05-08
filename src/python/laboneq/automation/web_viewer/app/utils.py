@@ -10,6 +10,7 @@ import json
 from typing import TYPE_CHECKING, Any, Literal
 
 import attr
+import networkx as nx
 
 from laboneq.automation.utils import hierarchical_layout
 
@@ -36,11 +37,11 @@ def _serialize_logic(logic):
 
 def build_json_data(
     automation: Automation,
+    graph: nx.DiGraph,
     graph_type: Literal["nodes", "layers"],
 ) -> list[dict]:
     """Build JSON data."""
     is_layer = graph_type == "layers"
-    graph = automation._layer_graph if is_layer else automation._node_graph
     pos = hierarchical_layout(graph)
     get = automation.get_layer if is_layer else automation.get_node
 
@@ -95,13 +96,21 @@ def export_graph_to_json(automation: Automation) -> dict[str, Any]:
     nodes_data = []
     layers_data = []
 
-    node_graph = automation._node_graph.copy()
-    node_edge_list = node_graph.edges()
-    nodes_data = build_json_data(automation, graph_type="nodes")
+    # The automation instance runs on a different thread than the server,
+    # which causes an error if the json data is built at the same time as
+    # layers are added to the graph. Here we convert these error to a warning,
+    # until a permanent solution is developed.
+    with automation._lock:
+        node_graph = automation._node_graph.copy()
+        nodes_data = build_json_data(automation, graph=node_graph, graph_type="nodes")
 
-    layer_graph = automation._layer_graph.copy()
+        layer_graph = automation._layer_graph.copy()
+        layers_data = build_json_data(
+            automation, graph=layer_graph, graph_type="layers"
+        )
+
+    node_edge_list = node_graph.edges()
     layer_edge_list = layer_graph.edges()
-    layers_data = build_json_data(automation, graph_type="layers")
 
     # Calculate version hash for change detection
     version = _calculate_graph_version(nodes_data, list(node_edge_list))
@@ -138,6 +147,8 @@ def _calculate_graph_version(
                 "key": n["key"],
                 "status": n["status"],
                 "layer": n["layer"],
+                "fail_count": n["fail_count"],
+                "pass_count": n["pass_count"],
             }
             for n in nodes_data
         ],

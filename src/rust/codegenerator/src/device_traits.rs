@@ -1,7 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::ir::Samples;
+use crate::ir::{Samples, compilation_job::DeviceKind};
 use laboneq_common::device_traits as device_traits_common;
 
 /// Device specific traits for code generation
@@ -34,6 +34,8 @@ pub struct DeviceTraits {
     pub ct_schema_version: Option<&'static str>,
     pub num_integration_units_per_acquire_signal: u8,
     pub max_ct_entries: Option<u16>,
+    pub scope_max_segments: Option<u16>,
+    pub max_result_vector_length: Option<usize>,
 }
 
 pub(crate) const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
@@ -59,6 +61,8 @@ pub(crate) const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     ct_schema_version: Some("hd_1.1.0"),
     num_integration_units_per_acquire_signal: 0,
     max_ct_entries: Some(1024),
+    scope_max_segments: None,
+    max_result_vector_length: None,
 };
 
 pub(crate) const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -84,6 +88,8 @@ pub(crate) const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     ct_schema_version: None,
     num_integration_units_per_acquire_signal: 2,
     max_ct_entries: None,
+    scope_max_segments: Some(1),
+    max_result_vector_length: Some(1 << 20),
 };
 
 pub(crate) const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
@@ -113,6 +119,8 @@ pub(crate) const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     ct_schema_version: Some("sg_1.2.0"),
     num_integration_units_per_acquire_signal: 0,
     max_ct_entries: Some(4096),
+    scope_max_segments: None,
+    max_result_vector_length: None,
 };
 
 pub(crate) const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -143,4 +151,15 @@ pub(crate) const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     ct_schema_version: None,
     num_integration_units_per_acquire_signal: 1,
     max_ct_entries: None,
+    scope_max_segments: Some(1024),
+    max_result_vector_length: Some(1 << 19),
 };
+
+pub(crate) fn scope_memory_size_samples(device_type: DeviceKind, is_shfqc: bool) -> usize {
+    match device_type {
+        DeviceKind::SHFQA if is_shfqc => 64 * 1024,
+        DeviceKind::SHFQA => 256 * 1024,
+        DeviceKind::UHFQA => 4096,
+        _ => 0,
+    }
+}

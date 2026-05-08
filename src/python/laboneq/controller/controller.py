@@ -8,7 +8,8 @@ import logging
 import time
 import traceback
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Callable
 
 from numpy import typing as npt
 
@@ -26,6 +27,7 @@ from laboneq.controller.recipe_processor import (
     RecipeData,
     get_execution_time,
     pre_process_compiled,
+    validate_scheduled_experiment,
 )
 from laboneq.controller.results import ResultsBuilder
 from laboneq.controller.runtime_context_impl import LegacySessionData
@@ -66,6 +68,15 @@ class ControllerSubmission:
     results_builder: ResultsBuilder
 
 
+class SubmissionStatus(Enum):
+    """The status of an experiment submission."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 @dataclass
 class ExecutionContext:
     submission: ControllerSubmission
@@ -102,7 +113,7 @@ class Controller(EventLoopMixIn):
         self._last_connect_check_ts: float | None = None
 
         self._neartime_replacements: NearTimeReplacements = NearTimeReplacements()
-        self._neartime_callbacks: dict[str, Callable] = (
+        self._neartime_callbacks: dict[str, Callable[..., Any]] = (
             {} if neartime_callbacks is None else neartime_callbacks
         )
         # TODO: Remove _legacy_session_data tests once the RuntimeContext endpoints are removed
@@ -113,6 +124,10 @@ class Controller(EventLoopMixIn):
 
         _logger.debug("Controller debug logging is on")
         _logger.info("VERSION: laboneq %s", __version__)
+
+    @property
+    def neartime_callbacks(self) -> dict[str, Callable]:
+        return self._neartime_callbacks
 
     def _check_zhinst_core_version_support(self, version: LabOneVersion):
         if version < RECOMMENDED_MINIMUM_LABONE_VERSION:
@@ -371,10 +386,21 @@ class Controller(EventLoopMixIn):
     def submission_results(self, submission: ControllerSubmission) -> ExperimentResults:
         return submission.results_builder.results
 
+    def submission_status(self, submission: ControllerSubmission) -> SubmissionStatus:
+        if not submission.completion_future.done():
+            # TODO(2K): Implement RUNNING status
+            return SubmissionStatus.QUEUED
+        if len(self.submission_results(submission).execution_errors) > 0:
+            return SubmissionStatus.FAILED
+        return SubmissionStatus.COMPLETED
+
     async def _submit_compiled_async(
         self,
         scheduled_experiment: ScheduledExperiment,
     ) -> ControllerSubmission:
+        validate_scheduled_experiment(
+            scheduled_experiment, self._devices, self._neartime_callbacks
+        )
         submission = ControllerSubmission(
             scheduled_experiment=scheduled_experiment,
             completion_future=asyncio.get_running_loop().create_future(),

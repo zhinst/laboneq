@@ -64,6 +64,7 @@ enum SweepParameterKind {
 struct CollectedParameter {
     alias: String,
     kind: SweepParameterKind,
+    axis_name: Option<String>,
 }
 
 #[derive(Debug)]
@@ -292,6 +293,9 @@ impl<'py> Serializer<'py> {
         for (i, param) in self.entities.parameters.iter().enumerate() {
             let mut pb = params_builder.reborrow().get(i as u32);
             pb.set_uid(&param.alias);
+            if let Some(axis_name) = &param.axis_name {
+                pb.set_axis_name(axis_name);
+            }
             match &param.kind {
                 SweepParameterKind::Linear { start, stop, count } => {
                     let mut lin = pb.init_linear();
@@ -693,11 +697,8 @@ impl<'py> Serializer<'py> {
         }
         sweep.set_reset_oscillator_phase(reset_oscillator_phase);
 
-        if auto_chunking {
-            sweep.reborrow().init_chunking().set_auto(());
-        } else if chunk_count > 1 {
-            sweep.reborrow().init_chunking().set_count(chunk_count);
-        }
+        sweep.reborrow().set_chunk_count(chunk_count);
+        sweep.reborrow().set_auto_chunking(auto_chunking);
 
         Ok(())
     }
@@ -722,6 +723,9 @@ impl<'py> Serializer<'py> {
 
         let linear_type = self.dsl_types.laboneq_type(DslType::LinearSweepParameter);
         let sweep_type = self.dsl_types.laboneq_type(DslType::SweepParameter);
+        let axis_name: Option<String> = obj
+            .getattr(intern!(py, "axis_name"))?
+            .extract::<Option<String>>()?;
 
         if is_exact_type(obj, linear_type)? {
             let start = extract_py_numeric(&obj.getattr(intern!(py, "start"))?)?;
@@ -729,6 +733,7 @@ impl<'py> Serializer<'py> {
             let count: u32 = obj.getattr(intern!(py, "count"))?.extract()?;
             self.entities.parameters.push(CollectedParameter {
                 alias: uid_str.to_owned(),
+                axis_name,
                 kind: SweepParameterKind::Linear { start, stop, count },
             });
         } else if is_exact_type(obj, sweep_type)? {
@@ -739,6 +744,7 @@ impl<'py> Serializer<'py> {
             // so we must claim our slot first or they will collide with idx.
             self.entities.parameters.push(CollectedParameter {
                 alias: uid_str.to_owned(),
+                axis_name,
                 kind: SweepParameterKind::Explicit { values },
             });
             self.register_driving_parameters(idx, obj)?;
@@ -1642,9 +1648,6 @@ impl<'py> Serializer<'py> {
                     }
                 }
             }
-
-            instrument_builder.set_physical_device_uid(instrument.physical_device_uid);
-            instrument_builder.set_is_shfqc(instrument.is_shfqc);
         }
         Ok(())
     }

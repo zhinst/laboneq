@@ -101,20 +101,27 @@ pub struct ResetOscillatorPhase {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Chunking {
-    Count { count: NonZeroU32 },
-    Auto,
-}
-
-#[derive(Debug, Clone, PartialEq)]
 pub struct Sweep {
     pub uid: SectionUid,
+    /// List of all parameters that are swept over in this loop.
+    /// Contains both directly defined parameters and derived parameters.
     pub parameters: Vec<ParameterUid>,
+    /// Parameters that are directly defined in the sweep.
+    /// Subset of `parameters`.
+    pub direct_parameters: Vec<ParameterUid>,
     pub count: NonZeroU32,
     pub alignment: SectionAlignment,
     pub reset_oscillator_phase: bool,
-    pub chunking: Option<Chunking>,
+    pub chunk_count: NonZeroU32,
+    pub auto_chunking: bool,
     pub section_timing_mode: SectionTimingMode,
+}
+
+impl Sweep {
+    /// A sweep is considered chunked if either auto-chunking is enabled or a chunk count greater than 1 is specified.
+    pub fn is_chunked(&self) -> bool {
+        self.auto_chunking || self.chunk_count.get() > 1
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::num::NonZero;
 use std::sync::Arc;
 
-use laboneq_common::types::AwgKey as AwgKeyCommon;
+use laboneq_common::types::{AuxiliaryDeviceKind, AwgKey as AwgKeyCommon};
 use laboneq_dsl::device_setup::AuxiliaryDevice;
+use laboneq_dsl::types::AveragingMode;
 use laboneq_error::bail;
 use laboneq_qccs_backend::QccsBackendPreprocessedData;
 use num_complex::Complex;
@@ -46,6 +48,8 @@ pub struct CodegenIr {
     pub(crate) root: IrNode,
     pub pulse_parameters: PulseParameterDeduplicator,
     pub acquisition_type: AcquisitionType,
+    pub(crate) averaging_mode: AveragingMode,
+    pub(crate) averaging_count: NonZero<u32>,
     pub(crate) awg_cores: Vec<AwgCore>,
     pub(crate) initial_signal_properties: Vec<InitialSignalProperties>,
     pub(crate) awg_devices: Vec<DeviceProperties>,
@@ -69,7 +73,10 @@ pub fn ir_to_codegen_ir(
             .device_setup
             .awg_devices()
             .filter_map(|device| device.kind().try_into().ok()),
-        experiment.device_setup.is_desktop_setup(),
+        experiment
+            .device_setup
+            .auxiliary_devices()
+            .map(|x| x.kind()),
     );
 
     let mut awg_core_builders: HashMap<AwgKeyCommon, AwgCoreBuilder> = HashMap::new();
@@ -156,6 +163,8 @@ pub fn ir_to_codegen_ir(
         root: codegen_ir,
         pulse_parameters: lowerer.pulse_parameter_deduplicator,
         acquisition_type: convert_acquisition_type(&experiment.acquisition_type),
+        averaging_mode: lowerer.averaging_mode,
+        averaging_count: lowerer.averaging_count,
         awg_cores: awgs,
         initial_signal_properties: experiment
             .device_setup
@@ -286,15 +295,27 @@ pub(crate) fn value_or_parameter_to_fixed<T>(
 
 fn eval_trigger_modes(
     devices: impl Iterator<Item = DeviceKind>,
-    is_desktop_bool: bool,
+    mut auxiliary_devices: impl Iterator<Item = AuxiliaryDeviceKind>,
 ) -> HashMap<DeviceKind, TriggerMode> {
     let unique_devices = devices.collect::<std::collections::HashSet<_>>();
-    if !is_desktop_bool {
+
+    // Standalone UHFQA
+    if unique_devices == [DeviceKind::UHFQA].into() {
         return unique_devices
             .into_iter()
             .map(|device| (device, TriggerMode::ZSync))
             .collect();
     }
+
+    let has_sync_device = auxiliary_devices
+        .any(|dev| matches!(dev, AuxiliaryDeviceKind::Qhub | AuxiliaryDeviceKind::Pqsc));
+    if has_sync_device {
+        return unique_devices
+            .into_iter()
+            .map(|device| (device, TriggerMode::ZSync))
+            .collect();
+    }
+
     unique_devices
         .iter()
         .map(|device| {
@@ -468,6 +489,8 @@ struct IrToCodeIrLowerer<'a> {
     pulse_parameter_deduplicator: PulseParameterDeduplicator,
     section_info: HashMap<SectionUid, Arc<SectionInfo>>,
     ppc_devices: HashMap<SignalUid, Arc<PpcChannelKey>>,
+    averaging_mode: AveragingMode,
+    averaging_count: NonZero<u32>,
 }
 
 impl<'a> IrToCodeIrLowerer<'a> {
@@ -497,6 +520,8 @@ impl<'a> IrToCodeIrLowerer<'a> {
             pulse_parameter_deduplicator: PulseParameterDeduplicator::new(),
             section_info: HashMap::new(),
             ppc_devices: HashMap::new(),
+            averaging_mode: AveragingMode::default(),
+            averaging_count: 1.try_into().unwrap(),
         }
     }
 
@@ -742,7 +767,11 @@ impl<'a> IrToCodeIrLowerer<'a> {
                 Some(self.id_store.resolve_unchecked(*sample_uid).to_string()),
                 vec![],
             ),
-            _ => (None, vec![]),
+            hir::LoopKind::Averaging { mode } => {
+                self.averaging_mode = *mode;
+                self.averaging_count = obj.iterations;
+                (None, vec![])
+            }
         };
         Loop {
             section_info: self.get_or_create_section_info(&obj.uid),

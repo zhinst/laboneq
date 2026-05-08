@@ -17,6 +17,7 @@ use crate::ir::compilation_job::AwgKind;
 use crate::ir::compilation_job::ChannelIndex;
 use crate::ir::compilation_job::DeviceUid;
 use crate::ir::compilation_job::{AwgKey, DeviceKind};
+use crate::ir::experiment::Handle;
 pub use crate::sample_waveforms::SampledWaveform;
 pub use crate::sampled_event_handler::ParameterPhaseIncrement;
 pub use crate::sampled_event_handler::SHFPPCSweeperConfig;
@@ -33,7 +34,6 @@ pub struct SeqCGenOutput<T: SampleWaveforms> {
     pub auxiliary_device_properties: Vec<AuxiliaryDevice>,
     pub awg_results: Vec<AwgCodeGenerationResult<T>>,
     pub total_execution_time: f64,
-    pub result_handle_maps: HashMap<ResultSource, Vec<Vec<String>>>,
     pub measurements: Vec<Measurement>,
     pub ppc_settings: Vec<PpcSettings>,
 }
@@ -53,6 +53,8 @@ pub struct AwgCodeGenerationResult<T: SampleWaveforms> {
     pub input_channel_properties: Vec<InputChannelProperties>,
     pub integration_weights: Vec<IntegrationWeight>,
     pub integrator_allocations: Vec<IntegratorAllocation>,
+    pub result_length: Option<usize>,
+    pub result_handle_maps: HashMap<ResultSource, Vec<Vec<Handle>>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -167,7 +169,7 @@ pub struct Measurement {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResultSource {
-    pub device_id: String,
+    pub device_id: DeviceUid,
     pub awg_id: u16,
     pub integrator_idx: Option<u8>,
 }

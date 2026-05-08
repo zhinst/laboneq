@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod backend;
+mod experiment_view;
 mod preprocessor;
+mod setup_processor;
 
 pub mod ports;
 pub use backend::QccsBackend;

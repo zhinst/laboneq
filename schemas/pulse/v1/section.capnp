@@ -202,21 +202,15 @@ struct SweepSection {
   resetOscillatorPhase @2 :Bool;
   # Reset oscillator phases at the start of each sweep step.
 
-  chunking :union {
-    # Chunking configuration.
+  chunkCount @3 :UInt32;
+  # Fixed chunk count, or initial guess when `autoChunking` is true. Must be >= 1.
 
-    none @3 :Void;
-    # No chunking (default).
+  autoChunking @4 :Bool;
+  # Let the compiler automatically discover a suitable chunk count based on
+  # available resources. 
+  # If `chunkCount` is set, it is used as the initial guess; otherwise defaults to 1.
 
-    count @4 :UInt32;
-    # Fixed chunk count. Must be >= 1.
-
-    auto @5 :Void;
-    # Let the compiler automatically discover a suitable chunk count based on
-    # available resources.
-  }
-
-  sectionTimingMode @6 :SectionTimingMode;
+  sectionTimingMode @5 :SectionTimingMode;
 }
 
 struct MatchSection {

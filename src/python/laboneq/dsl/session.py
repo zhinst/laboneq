@@ -19,7 +19,11 @@ from laboneq.core.types import CompiledExperiment
 from laboneq.core.utilities.compile_experiment import compile_experiment
 from laboneq.core.utilities.environment import is_testing
 from laboneq.data.experiment_results import ExperimentResults
-from laboneq.dsl.device import DeviceSetup, SystemProfile, system_profile_session
+from laboneq.dsl.device import (
+    DeviceSetup,
+    SystemDescription,
+    system_description_session,
+)
 from laboneq.dsl.device.io_units.logical_signal import (
     LogicalSignalRef,
     resolve_logical_signal_ref,
@@ -94,14 +98,14 @@ class Session:
         experiment: Experiment | None = None,
         include_results_metadata: bool = False,
         server_log: bool = False,
-        system_profile: SystemProfile | Path | str | None = None,
+        system_description: SystemDescription | Path | str | None = None,
     ):
         """Constructor of the session.
 
         Args:
             device_setup: Device setup that should be used for this session.
                 The device setup can also be passed to the session after the construction
-                of the object, but then will not automatically update the system profile
+                of the object, but then will not automatically update the system description
                 with the cached one.
             log_level: Log level of the session.
                 If no log level is specified, the session will use the logging.INFO level.
@@ -123,9 +127,9 @@ class Session:
                 If `True`, the data server log - including device firmware logs - will be forwarded to the LabOneQ
                 log under the logger named `server.log.<server_uid>`. Additionally, it will be written to the file
                 `server.log` alongside the regular LabOneQ log, assuming the standard logging configuration is used.
-            system_profile: System profile to use for this session.
-                Can be a SystemProfile object, path to a profile YAML file (str or Path),
-                or None to auto-load from cache. If not provided, the profile will be
+            system_description: system description to use for this session.
+                Can be a SystemDescription object, path to a system description YAML file (str or Path),
+                or None to auto-load from cache. If not provided, the system description will be
                 loaded from cache based on device_setup.uid when needed.
 
         !!! version-removed "Removed in version 2.57.0"
@@ -160,7 +164,7 @@ class Session:
             Added the `include_results_metadata` argument.
         """
         self._device_setup = device_setup if device_setup else DeviceSetup()
-        self._controller: Controller[Any] | None = None
+        self._controller: Controller | None = None
         self._connection_state: ConnectionState = ConnectionState()
         self._experiment_definition = experiment
         self._compiled_experiment = compiled_experiment
@@ -181,9 +185,11 @@ class Session:
         self._neartime_callbacks: Dict[str, Callable] = {}
         self._toolkit_devices = ToolkitDevices()
 
-        resolved_profile = system_profile_session.resolve_system_profile(system_profile)
-        if resolved_profile is not None:
-            self._device_setup.system_profile = resolved_profile
+        resolved_description = system_description_session.resolve_system_description(
+            system_description
+        )
+        if resolved_description is not None:
+            self._device_setup.system_description = resolved_description
 
     def __del__(self):
         self.disconnect()
@@ -250,7 +256,7 @@ class Session:
         use_async_api: bool | None = None,
         disable_runtime_checks: bool = True,
         timeout: float | None = None,
-        update_profile: bool = True,
+        update_description: bool = True,
     ) -> ConnectionState:
         """Connects the session to the QCCS system.
 
@@ -281,9 +287,9 @@ class Session:
 
             timeout (float): Specifies the timeout for the initial connection to the instrument in seconds.
 
-            update_profile (bool): If True (default), query hardware capabilities and update
-                the cached system profile. If False, use existing cached profile if available.
-                Automatically disabled when using emulation mode. Set to False to skip profile
+            update_description (bool): If True (default), query hardware capabilities and update
+                the cached system description. If False, use existing cached system description if available.
+                Automatically disabled when using emulation mode. Set to False to skip system description
                 updates when hardware configuration has not changed.
 
         Returns:
@@ -326,12 +332,12 @@ class Session:
         else:
             self._toolkit_devices = ToolkitDevices(controller.devices)
 
-        if update_profile and not do_emulation and self._controller is not None:  # type: ignore
-            profile = system_profile_session.update_system_profile(
+        if update_description and not do_emulation and self._controller is not None:  # type: ignore
+            description = system_description_session.update_system_description(
                 self._device_setup, self._controller
             )
-            if profile is not None:
-                self._device_setup.system_profile = profile
+            if description is not None:
+                self._device_setup.system_description = description
 
         self._connection_state.connected = True
         return self._connection_state

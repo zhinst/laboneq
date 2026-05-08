@@ -10,7 +10,6 @@ use laboneq_dsl::types::{DeviceUid, SignalUid};
 use laboneq_units::duration::{Duration, Second};
 use smallvec::SmallVec;
 
-use super::lead_delay::get_lead_delay;
 use super::on_device::{SignalDelay, compute_on_device_delays};
 use super::output_routing::{RoutedOutput, calculate_output_route_delay};
 use super::precompensation::precompensation_delay_samples;
@@ -83,9 +82,11 @@ pub(crate) struct SignalDelayProperties<'a> {
     output_route_ports: SmallVec<[&'a str; 4]>,
     precompensation: Option<&'a Precompensation>,
     device_kind: DeviceKind,
+    lead_delay: Duration<Second>,
 }
 
 impl<'a> SignalDelayProperties<'a> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         uid: SignalUid,
         ports: &'a Vec<String>,
@@ -94,6 +95,7 @@ impl<'a> SignalDelayProperties<'a> {
         device_kind: DeviceKind,
         output_route_ports: SmallVec<[&'a str; 4]>,
         precompensation: Option<&'a Precompensation>,
+        lead_delay: Duration<Second>,
     ) -> Result<Self, &'static str> {
         if device_kind != DeviceKind::Shfsg && !output_route_ports.is_empty() {
             return Err("Output routing is only supported for SHFSG devices");
@@ -111,14 +113,12 @@ impl<'a> SignalDelayProperties<'a> {
             output_route_ports,
             precompensation,
             device_kind,
+            lead_delay,
         })
     }
 }
 
-pub(crate) fn compute_signal_delays(
-    signals: &[SignalDelayProperties],
-    desktop_setup: bool,
-) -> DelayRegistry {
+pub(crate) fn compute_signal_delays(signals: &[SignalDelayProperties]) -> DelayRegistry {
     // Calculate the output routing delays for all signals, and the precompensation delays for signals with precompensation settings.
     let output_delays = calculate_output_route_signal_delays(signals);
     let precomp_delays = signals
@@ -151,8 +151,7 @@ pub(crate) fn compute_signal_delays(
     for on_device_delay in compute_on_device_delays(signal_delays) {
         if let Some(signal) = signals.iter().find(|s| s.uid == on_device_delay.signal_uid) {
             // Lastly add the lead delay to the start delay.
-            let lead_delay =
-                get_lead_delay(&signal.device_kind, signal.sampling_rate, desktop_setup);
+            let lead_delay = signal.lead_delay;
             delays.add_delay(
                 on_device_delay.signal_uid,
                 (on_device_delay.on_signal + lead_delay.value()).into(),

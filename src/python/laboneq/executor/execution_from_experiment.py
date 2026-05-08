@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import numpy as np
 
-from laboneq.core.utilities.prng import PRNG
 from laboneq.data.parameter import (
     LinearSweepParameter as DataLinearSweepParameter,
 )
@@ -13,23 +12,15 @@ from laboneq.data.parameter import (
     SweepParameter as DataSweepParameter,
 )
 from laboneq.dsl.experiment import (
-    Acquire,
     AcquireLoopRt,
     Call,
-    Case,
-    Delay,
     Experiment,
-    Match,
     Operation,
-    PlayPulse,
-    Reserve,
     Section,
     SetNode,
     Sweep,
 )
-from laboneq.dsl.experiment.section import PRNGLoop
 from laboneq.dsl.parameter import LinearSweepParameter, Parameter, SweepParameter
-from laboneq.dsl.prng import PRNGSample
 from laboneq.executor import executor
 
 
@@ -56,7 +47,7 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
             if isinstance(child, Operation):
                 self._append_statement(self._statement_from_operation(child))
             elif isinstance(child, AcquireLoopRt):
-                loop_body = self._sub_scope(self._handle_children, child.children)
+                loop_body = self._sub_scope(self._handle_children, [])
                 loop = executor.ExecRT(
                     count=child.count,
                     body=loop_body,
@@ -73,33 +64,6 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
                     assert isinstance(parameter, SweepParameter)
                     count = len(parameter.values)
                 loop_body = self._sub_scope(self._handle_sweep, child)
-                flag = (
-                    executor.LoopFlags.CHUNKED
-                    if child.chunk_count > 1 or child.auto_chunking
-                    else executor.LoopFlags.NONE
-                )
-                self._append_statement(
-                    executor.ForLoop(count=count, body=loop_body, loop_flags=flag)
-                )
-            elif isinstance(child, Match):
-                sweep_parameter = child.sweep_parameter
-                cases = self._sub_scope(self._handle_children, child.children)
-                self._append_statement(
-                    executor.MatchSection(
-                        sweep_parameter=sweep_parameter.uid
-                        if sweep_parameter is not None
-                        else None,
-                        cases=cases,
-                    )
-                )
-            elif isinstance(child, Case):
-                state = child.state
-                body = self._sub_scope(self._handle_children, child.children)
-                self._append_statement(executor.CaseSection(state=state, body=body))
-            elif isinstance(child, PRNGLoop):
-                prng_sample = child.prng_sample
-                count = prng_sample.count
-                loop_body = self._sub_scope(self._handle_prng_loop, child)
                 self._append_statement(executor.ForLoop(count=count, body=loop_body))
             else:
                 sub_sequence = self._sub_scope(self._handle_children, child.children)
@@ -109,27 +73,21 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
         seen_params = set()
         for parameter in sweep.parameters:
             seen_params.add(parameter.uid)
-            self._append_statement(self._statement_from_param(parameter, True))
+            self._append_statement(self._statement_from_param(parameter))
 
             for driven_param in self._driver_parameter_map.get(parameter.uid, []):
                 if driven_param.uid in seen_params:
                     continue
                 seen_params.add(driven_param.uid)
-                self._append_statement(self._statement_from_param(driven_param, False))
+                self._append_statement(self._statement_from_param(driven_param))
         self._handle_children(sweep.children)
-
-    def _handle_prng_loop(self, loop: PRNGLoop):
-        self._append_statement(self._statement_from_param(loop.prng_sample, True))
-        self._handle_children(loop.children)
 
     def _statement_from_param(
         self,
         parameter: SweepParameter
         | LinearSweepParameter
         | DataSweepParameter
-        | DataLinearSweepParameter
-        | PRNGSample,
-        is_user_registered: bool,
+        | DataLinearSweepParameter,
     ):
         # TODO(DSL cutover): Remove Data* once setup calibration uses DSL types.
         if isinstance(parameter, (SweepParameter, DataSweepParameter)):
@@ -138,18 +96,12 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
         elif isinstance(parameter, (LinearSweepParameter, DataLinearSweepParameter)):
             values = np.linspace(parameter.start, parameter.stop, parameter.count)
             axis_name = parameter.axis_name
-        elif isinstance(parameter, PRNGSample):
-            prng = parameter.prng
-            prng_sim = PRNG(seed=prng.seed, upper=prng.range - 1)
-            values = np.array([next(prng_sim) for _ in range(parameter.count)])
-            axis_name = parameter.uid
         else:
             raise TypeError(f"Unrecognized parameter type: {type(parameter)}")
         return executor.SetSoftwareParam(
             name=parameter.uid,
             axis_name=axis_name,
             values=values,
-            is_user_registered=is_user_registered,
         )
 
     def _statement_from_operation(self, operation):
@@ -157,13 +109,4 @@ class ExecutionFactoryFromExperiment(executor.ExecutionFactory):
             return executor.ExecNeartimeCall(operation.func_name, operation.args)
         if isinstance(operation, SetNode):
             return executor.ExecSet(operation.path, operation.value)
-        if isinstance(operation, PlayPulse):
-            return executor.Nop()
-        if isinstance(operation, Delay):
-            return executor.Nop()
-        if isinstance(operation, Reserve):
-            return executor.Nop()
-        if isinstance(operation, Acquire):
-            assert operation.signal is not None
-            return executor.ExecAcquire(operation.handle, operation.signal)
         return executor.Nop()

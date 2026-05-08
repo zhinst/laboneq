@@ -608,7 +608,7 @@ pub(crate) fn analyze_measurements(
     let mut measurements: HashMap<u32, SectionMeasurement<'_>> = HashMap::new();
     collect_section_measurements(node, None, 0, &mut measurements, sampling_rate)?;
     let mut measurements: Vec<SectionMeasurement<'_>> = measurements.into_values().collect();
-    measurements.sort_by(|a, b| a.section_start.cmp(&b.section_start));
+    measurements.sort_by_key(|a| a.section_start);
     let sample_converter = SampleToSecondsConverter::new(sampling_rate);
     let integration_times = calculate_integration_times(&measurements, &sample_converter)?;
     let signal_delays = calculate_measurement_delays(measurements, device, &sample_converter)?;

@@ -1,0 +1,163 @@
+/* Copyright 2026 Zurich Instruments AG */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+#graph {
+    position: absolute;
+    top: var(--header-h);
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--light-gray);
+}
+
+#graph .node-links,
+#graph .node-canvas {
+    opacity: 1;
+    visibility: visible;
+}
+
+#graph .layer-links,
+#graph .layer-canvas {
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+}
+
+#graph.mode-layers .node-links,
+#graph.mode-layers .node-canvas {
+    pointer-events: none;
+    visibility: hidden var(--transition);
+}
+
+#graph.mode-layers .layer-links,
+#graph.mode-layers .layer-canvas {
+    pointer-events: all;
+    visibility: visible;
+    opacity: 1;
+    transition: opacity var(--transition) var(--transition);
+}
+
+#graph.no-anim *,
+#graph.no-anim {
+    transition: none !important;
+}
+
+#graph.highlight-active .node-circle {
+    filter: brightness(0.45) saturate(0.7);
+}
+
+#graph.highlight-active .node.highlighted .node-circle {
+    filter: drop-shadow(0 0 calc(var(--node-r) * 0.8 * 1px) var(--node-color));
+}
+
+.node,
+.node-circle,
+.top-label,
+.bottom-label,
+.node-gear,
+.gear-teeth,
+.gear-hole,
+path.links {
+    transition: all var(--transition);
+}
+
+path.links {
+    stroke: var(--dark-gray);
+    stroke-width: calc(var(--node-r) / 10 * 1px);
+    stroke-opacity: 0.6;
+    fill: none;
+    z-index: -100;
+}
+
+.node[data-status="root"] {
+    --node-color: var(--status-root);
+}
+.node[data-status="ready"] {
+    --node-color: var(--status-ready);
+}
+.node[data-status="running"] {
+    --node-color: var(--status-running);
+}
+.node[data-status="passed"] {
+    --node-color: var(--status-passed);
+}
+.node[data-status="failed"] {
+    --node-color: var(--status-failed);
+}
+.node[data-status="deactivated"] {
+    --node-color: var(--status-deactivated);
+}
+
+.node {
+    cursor: pointer;
+}
+
+.node-circle {
+    r: calc(var(--node-r) * 1px);
+    stroke-width: calc(var(--node-r) / 10 * 1px);
+    fill: var(--node-color, #f00);
+    transition:
+        fill 300ms,
+        filter 300ms;
+}
+
+.node:hover .node-circle {
+    stroke: var(--zi-dark-blue);
+}
+
+.top-label {
+    font-size: calc(var(--node-r) * 1px);
+    transform: translateY(calc(var(--node-r) * -0.05 * 1px));
+    text-anchor: middle;
+}
+
+.bottom-label {
+    font-size: calc(var(--node-r) * 0.7 * 1px);
+    text-anchor: middle;
+    transform: translateY(calc(var(--node-r) * 0.65 * 1px));
+    opacity: 1;
+}
+
+.mode-layers .bottom-label {
+    opacity: 0;
+}
+
+.node .gear-hole {
+    fill: var(--light-gray);
+    r: calc(var(--node-r, 25) * 0.225 * 1px);
+}
+
+.node .gear-teeth {
+    fill: var(--light-black);
+    transform: scale(calc(var(--node-r, 25) * 0.75));
+}
+
+.node-gear {
+    transform: translate(
+        calc(var(--node-r, 25) * 0.85 * 1px),
+        calc(var(--node-r, 25) * -0.85 * 1px)
+    );
+}
+
+.node.selected > .node-circle {
+    stroke: var(--zi-blue);
+}
+
+.node text {
+    pointer-events: none;
+}
+
+.layer-label text {
+    fill: var(--light-black);
+    pointer-events: none;
+    transition: all var(--transition);
+}
+
+.layer-label rect {
+    fill: white;
+    fill-opacity: 0.6;
+    filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.15));
+    stroke: var(--zi-blue);
+    stroke-width: 0.05rem;
+    transition: all var(--transition);
+}

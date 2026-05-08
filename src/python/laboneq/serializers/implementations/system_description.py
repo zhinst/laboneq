@@ -5,10 +5,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from laboneq.dsl.device import SystemProfile
+from laboneq.dsl.device import SystemDescription
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.implementations._models._device_setup import (
-    SystemProfileModel,
+    SystemDescriptionModel,
     make_converter,
 )
 from laboneq.serializers.serializer_registry import serializer
@@ -21,21 +21,21 @@ from laboneq.serializers.types import (
 _converter = make_converter()
 
 
-@serializer(types=SystemProfile, public=True)
-class SystemProfileSerializer(VersionedClassSerializer[SystemProfile]):
-    SERIALIZER_ID = "laboneq.serializers.implementations.SystemProfileSerializer"
+@serializer(types=SystemDescription, public=True)
+class SystemDescriptionSerializer(VersionedClassSerializer[SystemDescription]):
+    SERIALIZER_ID = "laboneq.serializers.implementations.SystemDescriptionSerializer"
     VERSION = 1
 
     @classmethod
     def to_dict(
-        cls, obj: SystemProfile, options: SerializationOptions | None = None
+        cls, obj: SystemDescription, options: SerializationOptions | None = None
     ) -> JsonSerializableType:
-        system_profile = _converter.unstructure(obj, SystemProfileModel)
+        system_description = _converter.unstructure(obj, SystemDescriptionModel)
         return {
             "__serializer__": cls.serializer_id(),
             "__version__": cls.version(),
             "__data__": {
-                "system_profile": system_profile,
+                "system_description": system_description,
             },
         }
 
@@ -44,10 +44,10 @@ class SystemProfileSerializer(VersionedClassSerializer[SystemProfile]):
         cls,
         serialized_data: JsonSerializableType,
         options: DeserializationOptions | None = None,
-    ) -> SystemProfile:
+    ) -> SystemDescription:
         assert isinstance(serialized_data, dict)
         sys_prof_data: dict[str, Any] = serialized_data["__data__"].get(
-            "system_profile"
+            "system_description"
         )
         assert isinstance(sys_prof_data, dict)
-        return _converter.structure(sys_prof_data, SystemProfileModel)
+        return _converter.structure(sys_prof_data, SystemDescriptionModel)

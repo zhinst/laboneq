@@ -37,6 +37,7 @@ class DeviceInfoType(EnumReprMixin, Enum):
     HDAWG = "hdawg"
     SHFQA = "shfqa"
     SHFSG = "shfsg"
+    SHFQC = "shfqc"
     PQSC = "pqsc"
     QHUB = "qhub"
     SHFPPC = "shfppc"
@@ -93,17 +94,10 @@ class ParameterInfo:
 class DeviceInfo:
     uid: str
     device_type: DeviceInfoType
-    # Physical device UID
-    # Multiple devices can map to the same physical device (e.g., SHFQA and SHFSG
-    # from a SHFQC)
-    # This UID is used to group virtual devices that share the same
-    # physical hardware, enabling proper device detection.
-    physical_device_uid: int
     options: str = field(default_factory=str)
     dev_type: str | None = None
     dev_opts: list[str] = field(default_factory=list)
     reference_clock_source: ReferenceClockSourceInfo | None = None
-    is_qc: bool | None = None
     followers: list[str] = field(default_factory=list)
 
 
@@ -274,7 +268,6 @@ class Marker:
 
 @dataclass
 class ExperimentInfo:
-    uid: str
     device_setup_fingerprint: str
     devices: list[DeviceInfo]
     signals: list[SignalInfo]

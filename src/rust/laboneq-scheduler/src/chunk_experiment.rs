@@ -57,7 +57,7 @@ fn chunk_experiment_impl(
 ) -> Result<bool> {
     match &mut ir.kind {
         Operation::Sweep(obj) => {
-            if obj.chunking.is_none() {
+            if !obj.is_chunked() {
                 for child in ir.children.iter_mut() {
                     chunk_experiment_impl(child.make_mut(), parameters, chunking_info)?;
                 }
@@ -69,7 +69,8 @@ fn chunk_experiment_impl(
                 parameters.insert(old_param.uid, new_param);
             }
             obj.count = chunking_info.chunk_size(obj.count);
-            obj.chunking = None;
+            obj.chunk_count = 1.try_into().unwrap();
+            obj.auto_chunking = false;
             Ok(true)
         }
         _ => {
@@ -89,12 +90,11 @@ mod tests {
     use super::{ChunkingInfo, chunk_experiment};
     use laboneq_common::named_id::NamedId;
     use laboneq_dsl::node_structure;
+    use laboneq_dsl::operation::Operation;
     use laboneq_dsl::operation::builders::SweepBuilder;
-    use laboneq_dsl::operation::{Chunking, Operation};
     use laboneq_dsl::types::{ParameterUid, SectionUid, SweepParameter};
     use numeric_array::NumericArray;
     use std::collections::HashMap;
-    use std::num::NonZeroU32;
     use std::vec;
 
     #[test]
@@ -107,9 +107,7 @@ mod tests {
             vec![parameter0.uid],
             (parameter0.len() as u32).try_into().unwrap(),
         )
-        .chunking(Chunking::Count {
-            count: NonZeroU32::new(3).unwrap(),
-        })
+        .chunk_count(3.try_into().unwrap())
         .build();
         let mut root = node_structure!(Operation::Root, [(Operation::Sweep(chunked_sweep), [])]);
 
@@ -152,9 +150,7 @@ mod tests {
             vec![parameter0.uid],
             (parameter0.len() as u32).try_into().unwrap(),
         )
-        .chunking(Chunking::Count {
-            count: NonZeroU32::new(3).unwrap(),
-        })
+        .chunk_count(3.try_into().unwrap())
         .build();
 
         // Source experiment

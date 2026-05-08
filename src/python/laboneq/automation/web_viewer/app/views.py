@@ -80,30 +80,44 @@ def run_automation() -> tuple[Response, int]:
 @app.route("/node-image")
 def node_image() -> Response:
     """Return the result PNG for a given layer and element."""
-    layer = request.args.get("layer", "")
+    layer_key = request.args.get("layer", "")
     qe = request.args.get("qe", "")
-    if not _SAFE_COMPONENT_RE.match(layer) or not _SAFE_COMPONENT_RE.match(qe):
+    if not _SAFE_COMPONENT_RE.match(layer_key) or not _SAFE_COMPONENT_RE.match(qe):
         abort(404)
+
+    run_dir = _layer_results_dir(layer_key)
+    if run_dir is None:
+        abort(404)
+
+    plot_file = _glob_plot_from_dir(run_dir, qe)
+    if not plot_file:
+        return Response(status=204)
+
+    return send_file(plot_file, mimetype="image/png")
+
+
+def _glob_plot_from_dir(run_dir: Path, qe: str) -> Path | None:
+    """Return the path to the most recent PNG in the run directory."""
+    matches = [
+        p for p in run_dir.glob(f"**/*{qe}.png") if not p.name.startswith("Raw-data")
+    ]
+    if matches:
+        return max(matches, key=lambda p: p.stat().st_mtime)
+    else:
+        return None
+
+
+def _layer_results_dir(layer_key: str) -> Path | None:
+    """Resolve the directory in which the layer results were saved."""
     log_path = get_log_path()
+
     automation = get_automation_instance()
     if log_path is None or automation is None:
-        abort(404)
-    run_dir = (
-        Path(log_path)
-        / automation.timestamp[:8]
-        / f"{automation.timestamp}-{automation.name}"
-        / layer
-    )
-    if not run_dir.is_dir():
-        abort(404)
-    last_qe = qe.split("-")[-1]
-    matches = [
-        p
-        for p in run_dir.glob(f"**/*{last_qe}.png")
-        if not p.name.startswith("Raw-data")
-    ]
-    if not matches:
-        return Response(status=204)
-    return send_file(
-        max(matches, key=lambda p: p.stat().st_mtime), mimetype="image/png"
-    )
+        return None
+    else:
+        return (
+            Path(log_path)
+            / automation.timestamp[:8]
+            / f"{automation.timestamp}-{automation.name}"
+            / layer_key
+        )

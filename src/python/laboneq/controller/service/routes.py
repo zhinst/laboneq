@@ -35,6 +35,7 @@ from laboneq.controller.service.models import (
     ServerInfoResponse,
     SubmitExperimentResponse,
 )
+from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.serializers import core as serializers
 
 if TYPE_CHECKING:
@@ -76,7 +77,6 @@ _STATUS_MAP: dict[SubmissionStatus, ExperimentStatus] = {
     SubmissionStatus.RUNNING: ExperimentStatus.RUNNING,
     SubmissionStatus.COMPLETED: ExperimentStatus.COMPLETED,
     SubmissionStatus.FAILED: ExperimentStatus.FAILED,
-    SubmissionStatus.CANCELED: ExperimentStatus.CANCELED,
 }
 
 
@@ -165,6 +165,11 @@ def map_service_errors(fn: Callable[..., Any]) -> Callable[..., Any]:
             raise _error_response(ErrorCode.EXPERIMENT_NOT_FOUND, message) from exc
         except (ValueError, RuntimeError) as exc:
             raise _error_response(ErrorCode.INTERNAL_ERROR, str(exc)) from exc
+        except LabOneQControllerException as exc:
+            raise _error_response(
+                ErrorCode.CONTROLLER_ERROR,
+                str(exc),
+            ) from exc
         except Exception as exc:
             logger.exception("Unhandled error in %s", fn.__name__)
             raise _error_response(
@@ -246,17 +251,12 @@ async def require_client_version(
     tags=["system"],
 )
 async def get_device_setup(
-    manager: ControllerContainer = Depends(get_controller_container),
+    controller_container: ControllerContainer = Depends(get_controller_container),
 ) -> DeviceSetupResponse:
-    """Return the default device setup configured on this server.
-
-    Returns ``null`` when the server was started without ``--devicesetup``
-    (hardware is auto-discovered instead).
-    """
-    device_setup = manager.get_device_setup()
-    if device_setup is None:
-        return DeviceSetupResponse(device_setup=None)
-    return DeviceSetupResponse(device_setup=serializers.to_dict(device_setup))
+    """Return the device setup configured on this server."""
+    serialized = serializers.to_dict(controller_container.device_setup)
+    assert isinstance(serialized, dict), "Expected device setup to serialize to a dict"
+    return DeviceSetupResponse(device_setup=serialized)
 
 
 @router.get(
@@ -265,14 +265,14 @@ async def get_device_setup(
     tags=["system"],
 )
 async def server_info(
-    manager: ControllerContainer = Depends(get_controller_container),
+    controller_container: ControllerContainer = Depends(get_controller_container),
 ) -> ServerInfoResponse:
     """Server information including version and available callbacks."""
     return ServerInfoResponse(
-        queue_depth=manager.get_queue_depth(),
+        queue_depth=-1,
         registered_callbacks={
             name: CallbackInfo(signature=info["signature"], docstring=info["docstring"])
-            for name, info in manager.registered_callback_info.items()
+            for name, info in controller_container.registered_callback_info.items()
         },
     )
 
@@ -280,6 +280,16 @@ async def server_info(
 # =============================================================================
 # Experiment submission & lifecycle
 # =============================================================================
+
+
+def _get_handle_id(uuid_str: str) -> int:
+    try:
+        return _uuid_mod.UUID(uuid_str).int
+    except ValueError as exc:
+        raise _error_response(
+            ErrorCode.INVALID_EXPERIMENT_UUID,
+            f"Invalid experiment UUID: {uuid_str!r}",
+        ) from exc
 
 
 @router.put(
@@ -294,7 +304,7 @@ async def server_info(
 async def submit_experiment(
     uuid: str,
     request: Request,
-    manager: ControllerContainer = Depends(get_controller_container),
+    controller_container: ControllerContainer = Depends(get_controller_container),
     client_version: str = Depends(require_client_version),
 ) -> SubmitExperimentResponse:
     """Submit an experiment for execution.
@@ -302,14 +312,9 @@ async def submit_experiment(
     The client generates the UUID (v4 recommended) and places it in the URL.
     If the UUID already exists the server responds with 400.
     """
-    try:
-        _uuid_mod.UUID(uuid)
-    except ValueError as exc:
-        raise _error_response(
-            ErrorCode.INVALID_EXPERIMENT_UUID,
-            f"Invalid experiment UUID: {uuid!r}",
-        ) from exc
-
+    # Keep handle_id conversion early to prevent invalid payload exceptions triggered before it.
+    # TODO(2K): Fix UUID tests so they no longer trigger payload validation errors.
+    handle_id = _get_handle_id(uuid)
     try:
         body = await request.json()
     except Exception as exc:
@@ -322,14 +327,14 @@ async def submit_experiment(
         "ScheduledExperiment",
         _deserialize(body, "scheduled experiment"),
     )
-    queue_position = await manager.submit_experiment(
-        experiment_id=uuid,
+    await controller_container.submit_experiment(
+        experiment_id=handle_id,
         scheduled_experiment=scheduled_experiment,
     )
     return SubmitExperimentResponse(
         id=uuid,
         status=ExperimentStatus.QUEUED,
-        queue_position=queue_position,
+        queue_position=-1,
     )
 
 
@@ -344,14 +349,15 @@ async def submit_experiment(
 @map_service_errors
 async def get_experiment(
     uuid: str,
-    manager: ControllerContainer = Depends(get_controller_container),
+    controller_container: ControllerContainer = Depends(get_controller_container),
 ) -> ExperimentResponse:
     """Full experiment state including results when complete.
 
     Returns the current state immediately.  If the experiment is still
     running, ``results`` will be ``null`` — poll until a terminal status.
     """
-    status_val, queue_pos = await manager.get_submission_status(uuid)
+    handle_id = _get_handle_id(uuid)
+    status_val = await controller_container.get_submission_status(handle_id)
 
     results_dict: dict[str, Any] | None = None
     error: str | None = None
@@ -359,21 +365,15 @@ async def get_experiment(
     if status_val in (
         SubmissionStatus.COMPLETED,
         SubmissionStatus.FAILED,
-        SubmissionStatus.CANCELED,
     ):
-        results, error = await manager.get_submission_results(uuid)
+        results = await controller_container.get_submission_results(handle_id)
         if results is not None:
-            try:
-                results_dict = cast("dict[str, Any]", serializers.to_dict(results))
-            except Exception as exc:
-                logger.exception("Failed to serialize results for %s", uuid)
-                results_dict = None
-                error = f"Failed to serialize results: {exc}"
+            results_dict = cast(dict[str, Any], serializers.to_dict(results))
 
     return ExperimentResponse(
         id=uuid,
         status=_to_api_status(status_val),
-        queue_position=queue_pos,
+        queue_position=-1,
         results=results_dict,
         error=error,
     )
@@ -390,20 +390,16 @@ async def get_experiment(
 @map_service_errors
 async def get_experiment_status(
     uuid: str,
-    manager: ControllerContainer = Depends(get_controller_container),
+    controller_container: ControllerContainer = Depends(get_controller_container),
 ) -> ExperimentStatusResponse:
     """Lightweight status poll — no results payload."""
-    status_val, queue_pos = await manager.get_submission_status(uuid)
-
-    error: str | None = None
-    if status_val in (SubmissionStatus.FAILED, SubmissionStatus.CANCELED):
-        _results, error = await manager.get_submission_results(uuid)
+    status_val = await controller_container.get_submission_status(_get_handle_id(uuid))
 
     return ExperimentStatusResponse(
         id=uuid,
         status=_to_api_status(status_val),
-        queue_position=queue_pos,
-        error=error,
+        queue_position=-1,
+        error=None,
     )
 
 
@@ -417,11 +413,11 @@ async def get_experiment_status(
 @map_service_errors
 async def cancel_experiment(
     uuid: str,
-    manager: ControllerContainer = Depends(get_controller_container),
+    controller_container: ControllerContainer = Depends(get_controller_container),
 ) -> dict[str, str]:
     """Cancel or release an experiment.
 
     Queued → dropped; running → stopped (best-effort); complete → released.
     """
-    await manager.cancel_experiment(uuid)
+    await controller_container.cancel_experiment(_get_handle_id(uuid))
     return {"status": "ok"}

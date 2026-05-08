@@ -82,6 +82,9 @@ class AWG:
     # TODO(2K): This value is not used by controller, but used in tests. Consider removing it.
     target_feedback_register: int | Literal["local"] | None = None
 
+    # Result length, `None` if the AWG has no acquisitions.
+    result_length: int | None = None
+
 
 @dataclass
 class Measurement:

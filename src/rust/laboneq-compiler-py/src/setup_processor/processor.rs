@@ -36,7 +36,6 @@ pub(crate) struct ProcessedSetup {
 pub(crate) fn process_setup(
     setup: SetupProperties,
     backend_processed: &impl PreprocessedBackendData,
-    desktop_setup: bool,
     id_store: &NamedIdStore,
     context: &ExperimentContext,
 ) -> Result<ProcessedSetup> {
@@ -63,7 +62,7 @@ pub(crate) fn process_setup(
     adapt_precompensation_on_signals(&mut signals, &device_map, backend_processed)?;
 
     // Compute the on-device delays based on the signal properties and device information.
-    let delays = compute_delays(&signals, &device_map, &sampling_rates, desktop_setup)
+    let delays = compute_delays(&signals, &device_map, &sampling_rates, backend_processed)
         .map_err(Error::new)?;
 
     // Process the signals, generating the final signal configurations with the computed delays and adapted precompensation settings.
@@ -439,7 +438,7 @@ fn compute_delays(
     signals: &[DeviceSignal],
     devices: &HashMap<DeviceUid, &AwgDevice>,
     sampling_rates: &HashMap<SignalUid, Frequency<Hertz>>,
-    desktop_setup: bool,
+    backend_processed: &impl PreprocessedBackendData,
 ) -> Result<DelayRegistry> {
     let signal_delay_props = signals
         .iter()
@@ -457,12 +456,13 @@ fn compute_delays(
                     .map(|r| r.source_channel.as_str())
                     .collect(),
                 s.calibration.precompensation.as_ref(),
+                backend_processed.lead_delay(s.uid),
             )
             .map_err(Error::new)
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let delays = compute_signal_delays(&signal_delay_props, desktop_setup);
+    let delays = compute_signal_delays(&signal_delay_props);
     Ok(delays)
 }
 

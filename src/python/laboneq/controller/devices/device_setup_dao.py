@@ -31,6 +31,7 @@ class DeviceOptions:
     dev_type: str | None = None
     is_qc: bool | None = False
     qc_with_qa: bool = False
+    qc_with_sg: bool = False
     gen2: bool = False
     force_internal_clock_source: bool | None = None
     expected_dev_type: str | None = None
@@ -82,6 +83,7 @@ def _make_device_qualifier(
         dev_type=target_device.device_type.name,
         is_qc=target_device.is_qc,
         qc_with_qa=target_device.qc_with_qa,
+        qc_with_sg=target_device.qc_with_sg,
         gen2=has_shf,
         force_internal_clock_source=force_internal,
     )

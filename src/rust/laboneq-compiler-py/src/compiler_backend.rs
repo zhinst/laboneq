@@ -8,9 +8,10 @@ use std::collections::HashMap;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::types::AwgKey;
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::device_setup::{AuxiliaryDevice, DeviceSignal};
+use laboneq_dsl::device_setup::{AuxiliaryDevice, DeviceSignal, Instrument};
 use laboneq_dsl::types::{ParameterUid, PulseDef, PulseUid, SignalUid, SweepParameter};
 use laboneq_ir::system::AwgDevice;
+use laboneq_units::duration::{Duration, Second};
 
 pub type CompilerBackendResult<T, E = laboneq_error::LabOneQError> = Result<T, E>;
 
@@ -32,7 +33,7 @@ pub trait CompilerBackend {
     fn preprocess_experiment(
         &self,
         experiment: ExperimentView,
-    ) -> CompilerBackendResult<Self::Output>;
+    ) -> CompilerBackendResult<PreprocessOutput<Self::Output>>;
 }
 
 /// A view of the experiment and device setup passed to a [`CompilerBackend`].
@@ -43,9 +44,9 @@ pub struct ExperimentView<'a> {
     pub pulses: &'a HashMap<PulseUid, PulseDef>,
 
     // Device setup properties
-    pub awg_devices: &'a [AwgDevice],
+    pub instruments: Vec<Instrument>,
     pub auxiliary_devices: &'a [AuxiliaryDevice],
-    pub signals: &'a [DeviceSignal],
+    pub signals: Vec<DeviceSignal>,
 }
 
 impl<'a> ExperimentView<'a> {
@@ -54,18 +55,37 @@ impl<'a> ExperimentView<'a> {
         id_store: &'a mut NamedIdStore,
         parameters: &'a HashMap<ParameterUid, SweepParameter>,
         pulses: &'a HashMap<PulseUid, PulseDef>,
-        awg_devices: &'a [AwgDevice],
+        instruments: Vec<Instrument>,
         auxiliary_devices: &'a [AuxiliaryDevice],
-        signals: &'a [DeviceSignal],
+        signals: Vec<DeviceSignal>,
     ) -> Self {
         ExperimentView {
             root,
             id_store,
             parameters,
             pulses,
-            awg_devices,
+            instruments,
             auxiliary_devices,
             signals,
+        }
+    }
+}
+
+/// Output of the [`CompilerBackend`] preprocessing stage, containing hardware-specific data and optionally modified device signals.
+///
+/// The backend can modify the device signals if needed (e.g. add virtual signals, modify existing signals, etc.).
+/// For backends that do not need to modify the signals, the input signals can simply be returned as-is.
+pub struct PreprocessOutput<T: PreprocessedBackendData> {
+    pub(crate) backend_data: T,
+    pub(crate) device_signals: Vec<DeviceSignal>,
+}
+
+impl<T: PreprocessedBackendData> PreprocessOutput<T> {
+    /// Create a new `PreprocessOutput` with the given backend data and device signals.
+    pub fn new(backend_data: T, device_signals: Vec<DeviceSignal>) -> Self {
+        PreprocessOutput {
+            backend_data,
+            device_signals,
         }
     }
 }
@@ -79,10 +99,10 @@ pub trait PreprocessedBackendData: Any {
     /// Get channels for signal. May not be available for all backends/devices.
     fn channels(&self, signal_uid: SignalUid) -> Option<&SmallVec<[u16; 4]>>;
 
-    /// Get additional signals to be added to the device setup. This can be used to add virtual signals that are not part of the original experiment definition, e.g., for triggering/synchronization purposes.
-    fn additional_signals(&self) -> &[DeviceSignal] {
-        &[]
-    }
+    /// Get lead delay for signal.
+    fn lead_delay(&self, signal_uid: SignalUid) -> Duration<Second>;
+
+    fn awg_devices(&self) -> &[AwgDevice];
 
     /// Returns `&dyn Any` to allow downcasting to the concrete type.
     ///

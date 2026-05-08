@@ -188,7 +188,7 @@ pub struct SamplesSignatureID {
 }
 
 pub fn sort_pulses(pulses: &mut [PulseSignature]) {
-    pulses.sort_by(|a, b| (a.start, a.channel).cmp(&(b.start, b.channel)));
+    pulses.sort_by_key(|a| (a.start, a.channel));
 }
 
 /// Signature of a waveform as stored in waveform memory.

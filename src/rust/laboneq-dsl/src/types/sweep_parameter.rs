@@ -5,12 +5,14 @@ use numeric_array::NumericArray;
 use std::sync::Arc;
 
 use crate::types::{NumericLiteral, ParameterUid};
+use laboneq_common::named_id::NamedId;
 
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct SweepParameter {
     pub uid: ParameterUid,
     pub values: Arc<NumericArray>,
+    pub axis_name: Option<NamedId>,
 }
 
 impl SweepParameter {
@@ -22,7 +24,18 @@ impl SweepParameter {
         Ok(Self {
             uid,
             values: Arc::new(values),
+            axis_name: None,
         })
+    }
+
+    pub fn new_with_axis_name<T: Into<NumericArray>>(
+        uid: ParameterUid,
+        values: T,
+        axis_name: NamedId,
+    ) -> Result<Self, &'static str> {
+        let mut sweep_parameter = Self::new(uid, values)?;
+        sweep_parameter.axis_name = Some(axis_name);
+        Ok(sweep_parameter)
     }
 
     pub fn len(&self) -> usize {
@@ -45,6 +58,7 @@ impl SweepParameter {
         Self {
             uid: self.uid,
             values: self.values.slice(range).into(),
+            axis_name: self.axis_name,
         }
     }
 
@@ -56,5 +70,9 @@ impl SweepParameter {
                 Box::new(arr.iter().map(|v| NumericLiteral::Complex(*v)))
             }
         }
+    }
+
+    pub fn inner_values(&self) -> &Arc<NumericArray> {
+        &self.values
     }
 }

@@ -22,16 +22,6 @@ if TYPE_CHECKING:
     from laboneq.core.types.numpy_support import NumPyArray
 
 
-class LoopFlags(Flag):
-    NONE = auto()
-    AVERAGE = auto()
-    CHUNKED = auto()
-
-    @property
-    def is_average(self) -> bool:
-        return bool(self & LoopFlags.AVERAGE)
-
-
 class LoopingMode(Flag):
     NEAR_TIME_ONLY = auto()
     ONCE = auto()
@@ -74,14 +64,9 @@ class ExecutionScope:
 class StatementType(Enum):
     Set = auto()
     NTCallback = auto()
-    Acquire = auto()
     SetSwParam = auto()
     ForLoopEntry = auto()
     ForLoopExit = auto()
-    MatchContextEntry = auto()
-    MatchContextExit = auto()
-    CaseContextEntry = auto()
-    CaseContextExit = auto()
     RTEntry = auto()
     RTExit = auto()
 
@@ -186,31 +171,6 @@ class ExecNeartimeCall(Statement):
         return f"ExecNeartimeCall({repr(self.func_name)}, {repr(self.args)})"
 
 
-class ExecAcquire(Statement):
-    def __init__(self, handle: str, signal: str):
-        self.handle = handle
-        self.signal = min(signal) if isinstance(signal, list) else signal
-
-    def run(self, scope: ExecutionScope) -> Iterator[Notification]:
-        yield Notification(
-            statement_type=StatementType.Acquire,
-            args=dict(handle=self.handle, signal=self.signal),
-        )
-
-    def __eq__(self, other):
-        if other is self:
-            return True
-        if type(other) is ExecAcquire:
-            return (self.handle, self.signal) == (
-                other.handle,
-                other.signal,
-            )
-        return NotImplemented
-
-    def __repr__(self):
-        return f"ExecAcquire({repr(self.handle)}, {repr(self.signal)})"
-
-
 class SetSoftwareParamLinear(Statement):
     def __init__(
         self, name: str, start: float, step: float, axis_name: str | None = None
@@ -257,11 +217,9 @@ class SetSoftwareParam(Statement):
         name: str,
         axis_name: str | None,
         values: ArrayLike,
-        is_user_registered: bool,
     ):
         self.name = name
         self.values = np.asarray(values)
-        self.is_user_registered = is_user_registered
         self.axis_name = axis_name
 
     def run(self, scope: ExecutionScope) -> Iterator[Notification]:
@@ -276,7 +234,6 @@ class SetSoftwareParam(Statement):
                 value=value,
                 axis_name=self.axis_name,
                 values=self.values,
-                is_user_registered=self.is_user_registered,
             ),
         )
 
@@ -295,90 +252,14 @@ class SetSoftwareParam(Statement):
         return f"SetSoftwareParam({repr(self.name)}, {repr(self.values)}, {repr(self.axis_name)})"
 
 
-class MatchSection(Statement):
-    def __init__(self, sweep_parameter: str | None, cases: Sequence):
-        self.sweep_parameter = sweep_parameter
-        self.cases = cases
-
-    def run(self, scope):
-        yield Notification(
-            statement_type=StatementType.MatchContextEntry,
-            args=dict(
-                sweep_parameter=self.sweep_parameter,
-            ),
-        )
-
-        yield from self.cases.run(scope.make_sub_scope())
-
-        yield Notification(
-            statement_type=StatementType.MatchContextExit,
-            args=dict(
-                sweep_parameter=self.sweep_parameter,
-            ),
-        )
-
-    def __eq__(self, other):
-        if other is self:
-            return True
-        if isinstance(other, MatchSection):
-            return (self.sweep_parameter, self.cases) == (
-                other.sweep_parameter,
-                other.cases,
-            )
-
-        return False
-
-    def __repr__(self):
-        return f"MatchSection({repr(self.sweep_parameter)}, {repr(self.cases)})"
-
-
-class CaseSection(Statement):
-    def __init__(self, state: int, body: Sequence):
-        self.state = state
-        self.body = body
-
-    def run(self, scope):
-        yield Notification(
-            statement_type=StatementType.CaseContextEntry,
-            args=dict(
-                state=self.state,
-            ),
-        )
-
-        yield from self.body.run(scope.make_sub_scope())
-
-        yield Notification(
-            statement_type=StatementType.CaseContextExit,
-            args=dict(
-                state=self.state,
-            ),
-        )
-
-    def __eq__(self, other):
-        if other is self:
-            return True
-        if isinstance(other, CaseSection):
-            return (self.state, self.body) == (
-                other.state,
-                other.body,
-            )
-
-        return False
-
-    def __repr__(self):
-        return f"CaseSection({self.state}, {repr(self.body)})"
-
-
 class ForLoop(Statement):
     def __init__(
         self,
         count: int,
         body: Sequence,
-        loop_flags: LoopFlags = LoopFlags.NONE,
     ):
         self.count = count
         self.body = body
-        self.loop_flags = loop_flags
 
     def _loop_iterator(self, scope: ExecutionScope) -> Iterator[int]:
         if (
@@ -396,28 +277,27 @@ class ForLoop(Statement):
         for i in self._loop_iterator(scope):
             yield Notification(
                 statement_type=StatementType.ForLoopEntry,
-                args=dict(count=self.count, index=i, loop_flags=self.loop_flags),
+                args=dict(count=self.count, index=i),
             )
             sub_scope.set_variable(LOOP_INDEX, i)
             yield from self.body.run(sub_scope)
             yield Notification(
                 statement_type=StatementType.ForLoopExit,
-                args=dict(count=self.count, index=i, loop_flags=self.loop_flags),
+                args=dict(count=self.count, index=i),
             )
 
     def __eq__(self, other):
         if other is self:
             return True
         if type(other) is ForLoop:
-            return (self.count, self.body, self.loop_flags) == (
+            return (self.count, self.body) == (
                 other.count,
                 other.body,
-                other.loop_flags,
             )
         return NotImplemented
 
     def __repr__(self):
-        return f"ForLoop({self.count}, {self.body}, {self.loop_flags})"
+        return f"ForLoop({self.count}, {self.body})"
 
 
 class ExecRT(ForLoop):
@@ -429,7 +309,7 @@ class ExecRT(ForLoop):
         averaging_mode: AveragingMode,
         acquisition_type: AcquisitionType,
     ):
-        super().__init__(count=count, body=body, loop_flags=LoopFlags.AVERAGE)
+        super().__init__(count=count, body=body)
         self.uid = uid
         self.averaging_mode = averaging_mode
         self.acquisition_type = acquisition_type
@@ -510,14 +390,9 @@ class ExecutorBase:
         self._handlers_map: dict[StatementType, Callable[..., None]] = {
             StatementType.Set: self.set_handler,
             StatementType.NTCallback: self.nt_callback_handler,
-            StatementType.Acquire: self.acquire_handler,
             StatementType.SetSwParam: self.set_sw_param_handler,
             StatementType.ForLoopEntry: self.for_loop_entry_handler,
             StatementType.ForLoopExit: self.for_loop_exit_handler,
-            StatementType.MatchContextEntry: self.match_context_entry_handler,
-            StatementType.MatchContextExit: self.match_context_exit_handler,
-            StatementType.CaseContextEntry: self.case_context_entry_handler,
-            StatementType.CaseContextExit: self.case_context_exit_handler,
             StatementType.RTEntry: self.rt_entry_handler,
             StatementType.RTExit: self.rt_exit_handler,
         }
@@ -528,9 +403,6 @@ class ExecutorBase:
     def nt_callback_handler(self, func_name: str, args: dict[str, Any]):
         pass
 
-    def acquire_handler(self, handle: str, signal: str):
-        pass
-
     def set_sw_param_handler(
         self,
         name: str,
@@ -538,26 +410,13 @@ class ExecutorBase:
         value: float,
         axis_name: str,
         values: NumPyArray,
-        is_user_registered: bool,
     ):
         pass
 
-    def for_loop_entry_handler(self, count: int, index: int, loop_flags: LoopFlags):
+    def for_loop_entry_handler(self, count: int, index: int):
         pass
 
-    def for_loop_exit_handler(self, count: int, index: int, loop_flags: LoopFlags):
-        pass
-
-    def match_context_entry_handler(self, sweep_parameter: str | None):
-        pass
-
-    def match_context_exit_handler(self, sweep_parameter: str | None):
-        pass
-
-    def case_context_entry_handler(self, state: int):
-        pass
-
-    def case_context_exit_handler(self, state: int):
+    def for_loop_exit_handler(self, count: int, index: int):
         pass
 
     def rt_entry_handler(
@@ -595,14 +454,9 @@ class AsyncExecutorBase:
         ] = {
             StatementType.Set: self.set_handler,
             StatementType.NTCallback: self.nt_callback_handler,
-            StatementType.Acquire: self.acquire_handler,
             StatementType.SetSwParam: self.set_sw_param_handler,
             StatementType.ForLoopEntry: self.for_loop_entry_handler,
             StatementType.ForLoopExit: self.for_loop_exit_handler,
-            StatementType.MatchContextEntry: self.match_context_entry_handler,
-            StatementType.MatchContextExit: self.match_context_exit_handler,
-            StatementType.CaseContextEntry: self.case_context_entry_handler,
-            StatementType.CaseContextExit: self.case_context_exit_handler,
             StatementType.RTEntry: self.rt_entry_handler,
             StatementType.RTExit: self.rt_exit_handler,
         }
@@ -613,9 +467,6 @@ class AsyncExecutorBase:
     async def nt_callback_handler(self, func_name: str, args: dict[str, Any]):
         pass
 
-    async def acquire_handler(self, handle: str, signal: str):
-        pass
-
     async def set_sw_param_handler(
         self,
         name: str,
@@ -623,30 +474,13 @@ class AsyncExecutorBase:
         value: float,
         axis_name: str,
         values: NumPyArray,
-        is_user_registered: bool,
     ):
         pass
 
-    async def for_loop_entry_handler(
-        self, count: int, index: int, loop_flags: LoopFlags
-    ):
+    async def for_loop_entry_handler(self, count: int, index: int):
         pass
 
-    async def for_loop_exit_handler(
-        self, count: int, index: int, loop_flags: LoopFlags
-    ):
-        pass
-
-    async def match_context_entry_handler(self, sweep_parameter: str | None):
-        pass
-
-    async def match_context_exit_handler(self, sweep_parameter: str | None):
-        pass
-
-    async def case_context_entry_handler(self, state: int):
-        pass
-
-    async def case_context_exit_handler(self, state: int):
+    async def for_loop_exit_handler(self, count: int, index: int):
         pass
 
     async def rt_entry_handler(

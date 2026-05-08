@@ -52,6 +52,14 @@ fn parse_channel(port: &str) -> Option<Port> {
     channel.map(|channel| Port { channel })
 }
 
+pub(crate) fn is_shfsg_port(port: &str) -> bool {
+    port.starts_with("SGCHANNELS/")
+}
+
+pub(crate) fn is_shfqa_port(port: &str) -> bool {
+    port.starts_with("QACHANNELS/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

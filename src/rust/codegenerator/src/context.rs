@@ -1,6 +1,10 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::num::NonZero;
+
+use laboneq_dsl::types::AveragingMode;
+
 use crate::handle_feedback_registers::FeedbackConfig;
 use crate::integration_units::IntegrationUnitAllocation;
 use crate::ir::SignalUid;
@@ -11,6 +15,8 @@ use crate::{CodeGeneratorSettings, FeedbackRegisterLayout};
 pub(crate) struct CodeGenContext {
     // Configuration
     pub acquisition_type: AcquisitionType,
+    pub averaging_mode: AveragingMode,
+    pub averaging_count: NonZero<u32>,
 
     // Resources
     pub feedback_config: FeedbackConfig,

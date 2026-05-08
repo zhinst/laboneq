@@ -1,3 +1,10 @@
+// Copyright 2026 Zurich Instruments AG
+// SPDX-License-Identifier: Apache-2.0
+
+export const TRANSITION_DURATION = 750;
+
+let toastTimer = null;
+
 const header = document.getElementById("header");
 const ro = new ResizeObserver(() => {
     document.documentElement.style.setProperty(
@@ -7,7 +14,7 @@ const ro = new ResizeObserver(() => {
 });
 ro.observe(header);
 
-function getContainerSize() {
+export function getContainerSize() {
     const el = document.getElementById("graph");
     return {
         width: el.clientWidth,
@@ -15,37 +22,26 @@ function getContainerSize() {
     };
 }
 
-function hideCanvas(canvas, duration = 0) {
-    g.select(canvas)
-        .transition()
-        .duration(duration)
-        .style("opacity", 0)
-        .transition()
-        .duration(duration)
-        .style("visibility", "hidden");
+export function calculateNodeRadius(nodes, layers, width, height, mode) {
+    const nodeMap = buildNodeMap(nodes);
+    const defaultBaseSize = 25;
+    var minSize = defaultBaseSize;
+
+    for (const layer of layers) {
+        const count = (nodeMap.get(layer.key) || []).length;
+        const baseX = mode === "nodes" ? width / count / 3 : defaultBaseSize;
+        const baseY = height / layers.length / 4;
+        const baseSize = Math.min(
+            Math.min(baseX || defaultBaseSize, baseY || defaultBaseSize),
+            defaultBaseSize,
+        );
+        if (minSize > baseSize) minSize = baseSize;
+    }
+
+    return minSize;
 }
 
-function showCanvas(canvas, duration = 0) {
-    const sel = g.select(canvas);
-
-    sel.interrupt()
-        .style("visibility", "visible")
-        .style("pointer-events", "auto")
-        .transition()
-        .duration(duration)
-        .style("opacity", 1);
-}
-
-function getSelectedNode() {
-    const sel = g.select(".node.selected");
-    return sel.empty() ? null : sel;
-}
-
-function clearSelectedNode() {
-    g.selectAll(".node.selected").classed("selected", false);
-}
-
-function gearPath(r, teeth = 6) {
+export function gearPath(r, teeth = 6) {
     const inner = r * 0.5;
     const outer = r * 0.75;
     const pts = [];
@@ -60,4 +56,53 @@ function gearPath(r, teeth = 6) {
         pts.push([inner * Math.cos(a4), inner * Math.sin(a4)]);
     }
     return d3.line()(pts) + "Z";
+}
+
+export function buildLayerMap(layers) {
+    return new Map(layers.map((layer, i) => [layer.key, i]));
+}
+
+function buildNodeMap(nodes) {
+    const map = new Map();
+
+    for (const node of nodes) {
+        if (!map.has(node.layer)) {
+            map.set(node.layer, []);
+        }
+        map.get(node.layer).push(node);
+    }
+
+    return map;
+}
+
+export function showToast(
+    title,
+    text,
+    { persistent = false, duration = 2500 } = {},
+) {
+    const el = document.getElementById("automation-status");
+    const toastText = document.getElementById("toast-text");
+    const toastHTML = `<strong>${title}:</strong> ${text}`;
+
+    clearTimeout(toastTimer);
+    el.classList.remove("fading");
+    el.style.display = "block";
+    toastText.innerHTML = toastHTML;
+
+    if (persistent) return;
+
+    toastTimer = setTimeout(() => {
+        el.classList.add("fading");
+        toastTimer = setTimeout(() => {
+            el.style.display = "none";
+            el.classList.remove("fading");
+        }, TRANSITION_DURATION);
+    }, duration);
+}
+
+export function hideToast() {
+    const el = document.getElementById("automation-status");
+    clearTimeout(toastTimer);
+    el.classList.remove("fading");
+    el.style.display = "none";
 }

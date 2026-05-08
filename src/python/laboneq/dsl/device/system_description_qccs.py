@@ -1,13 +1,13 @@
 # Copyright 2025 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""System Profile data structures for hardware capabilities.
+"""System description data structures for hardware capabilities.
 
-A SystemProfile captures the current hardware configuration, including:
+A SystemDescription captures the current hardware configuration, including:
 - Device capabilities (types, options, versions)
 - Channel types and their capabilities
 
-System profiles are auto-generated from live hardware and cached locally
+System descriptions are auto-generated from live hardware and cached locally
 to enable offline compilation. Defaults are provided for offline testing.
 """
 
@@ -19,7 +19,7 @@ import yaml
 
 from laboneq._version import get_version
 
-from . import SystemProfile
+from . import SystemDescription
 
 
 @attrs.define
@@ -29,7 +29,7 @@ class DeviceCapabilitiesQCCS:
 
 
 @attrs.define
-class SystemProfileQCCS(SystemProfile):
+class SystemDescriptionQCCS(SystemDescription):
     version: str = "1.0"
     generated_at: datetime.datetime = attrs.Factory(datetime.datetime.now)
     laboneq_version: str = attrs.field(default=get_version())
@@ -47,8 +47,8 @@ class SystemProfileQCCS(SystemProfile):
         essential = attrs.asdict(
             self,
             filter=attrs.filters.exclude(
-                attrs.fields(SystemProfileQCCS).generated_at,
-                attrs.fields(SystemProfileQCCS).laboneq_version,
+                attrs.fields(SystemDescriptionQCCS).generated_at,
+                attrs.fields(SystemDescriptionQCCS).laboneq_version,
             ),
         )
         content = yaml.dump(essential, sort_keys=True)

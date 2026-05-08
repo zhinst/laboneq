@@ -37,7 +37,7 @@ class AutomationNode:
 
     status: Status = Status.READY
     # node execution parameters
-    max_fail_count: int | None = 4
+    max_fail_count: int = 4
     time_valid: int | None = None
     time_until_invalid: int | None = None
     # node status parameters

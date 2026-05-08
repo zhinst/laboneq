@@ -102,7 +102,6 @@ class ExperimentInfoBuilder:
             ls: exp for exp, ls in self._signal_mappings.items()
         }
         self._params: dict[str, ParameterInfo] = {}
-        self._nt_only_params: set[str] = set()
         self._chunking_info: ChunkingInfo | None = None
         self._signal_infos: dict[str, SignalInfo] = {}
 
@@ -134,7 +133,6 @@ class ExperimentInfoBuilder:
         self._validate_realtime(self._experiment.sections)
 
         experiment_info = ExperimentInfo(
-            uid=self._experiment.uid,
             device_setup_fingerprint=device_setup_fingerprint(self._device_setup),
             devices=list(self._device_info.device_mapping.values()),
             signals=sorted(self._signal_infos.values(), key=lambda s: s.uid),
@@ -378,18 +376,14 @@ class ExperimentInfoBuilder:
 
         calibration = self._get_signal_calibration(signal, mapped_ls)
         if calibration is not None:
-            signal_info.port_delay = self.opt_param(
-                calibration.port_delay, nt_only=True
-            )
+            signal_info.port_delay = self.opt_param(calibration.port_delay)
             signal_info.delay_signal = calibration.delay_signal
 
             if (oscillator := calibration.oscillator) is not None:
-                self.opt_param(oscillator.frequency, nt_only=False)
+                self.opt_param(oscillator.frequency)
                 signal_info.oscillator = oscillator
 
-            signal_info.voltage_offset = self.opt_param(
-                calibration.voltage_offset, nt_only=True
-            )
+            signal_info.voltage_offset = self.opt_param(calibration.voltage_offset)
 
             if (mixer_cal := calibration.mixer_calibration) is not None:
                 signal_info.mixer_calibration = self._load_mixer_cal(mixer_cal)
@@ -397,7 +391,7 @@ class ExperimentInfoBuilder:
                 signal_info.precompensation = self._load_precompensation(precomp)
 
             signal_info.lo_frequency = self.opt_param(
-                self._get_lo_frequency(calibration), nt_only=True
+                self._get_lo_frequency(calibration)
             )
 
             if isinstance(signal_range := calibration.range, Quantity):
@@ -410,7 +404,7 @@ class ExperimentInfoBuilder:
                 signal_info.signal_range = None
             signal_info.port_mode = calibration.port_mode
             signal_info.threshold = calibration.threshold
-            signal_info.amplitude = self.opt_param(calibration.amplitude, nt_only=True)
+            signal_info.amplitude = self.opt_param(calibration.amplitude)
             if (amp_pump := calibration.amplifier_pump) is not None:
                 if physical_channel.direction != IODirection.IN:
                     _logger.warning(
@@ -519,10 +513,8 @@ class ExperimentInfoBuilder:
                             self._setup_helper.logical_signal_path(source_signal)
                         ),
                         from_port=from_port.path,
-                        amplitude=self.opt_param(route_amplitude, nt_only=True),
-                        phase=self.opt_param(
-                            self._route_phase(output_router), nt_only=True
-                        ),
+                        amplitude=self.opt_param(route_amplitude),
+                        phase=self.opt_param(self._route_phase(output_router)),
                     )
                 )
             signal_info.automute = calibration.automute
@@ -534,7 +526,7 @@ class ExperimentInfoBuilder:
 
         self._signal_infos[signal.uid] = signal_info
 
-    def _add_parameter(self, value: Any, nt_only=False) -> ParameterInfo:
+    def _add_parameter(self, value: Any) -> ParameterInfo:
         # TODO(DSL cutover): Remove Data* once setup calibration uses DSL types.
 
         def recursive_drivers(param: Parameter) -> set[str]:
@@ -580,28 +572,24 @@ class ExperimentInfoBuilder:
             raise LabOneQException(
                 f"Found multiple, inconsistent values for parameter {value.uid} with same UID."
             )
-        if nt_only:
-            self._nt_only_params.add(param_info.uid)
         self._dsl_parameters[value.uid] = value
         return param_info
 
-    def opt_param(self, value: T | Any, nt_only=False) -> T | ParameterInfo:
+    def opt_param(self, value: T | Any) -> T | ParameterInfo:
         """Pass through numbers, but convert `Parameter` to `ParameterInfo`
 
         Args:
             value: the value that is possibly a parameter
-            nt_only: whether the quantity that the value will be assigned to can only be
-              possibly swept in near-time.
 
         Returns:
             the value or a `ParameterInfo`
         """
         if self._is_parameter(value):
-            return self._add_parameter(value, nt_only)
+            return self._add_parameter(value)
         return value
 
     def opt_param_ref(self, value: float | int | complex | Any):
-        val_or_param_info = self.opt_param(value, False)
+        val_or_param_info = self.opt_param(value)
         if isinstance(val_or_param_info, ParameterInfo):
             return UIDReference(val_or_param_info.uid)
         return val_or_param_info
@@ -663,14 +651,6 @@ class ExperimentInfoBuilder:
             count = int(section.count)  # cast to int; user may provide float via pow()
 
         if isinstance(section, Sweep):
-            sweep_params_equal_len = all(
-                len(section.parameters[0]) == len(section.parameters[i])
-                for i in range(len(section.parameters))
-            )
-            if not sweep_params_equal_len:
-                raise LabOneQException(
-                    f"Error in experiment section '{section.uid}': Parallel executed sweep parameters must be of same length. {section.uid}"
-                )
             for parameter in section.parameters:
                 self._add_parameter(parameter)
                 if isinstance(
@@ -719,13 +699,6 @@ class ExperimentInfoBuilder:
                     f"Section '{section.uid}' is marked as real-time, but it is"
                     f" located outside the RT averaging loop"
                 )
-            if in_realtime and isinstance(section, Sweep):
-                for parameter in section.parameters:
-                    if parameter.uid in self._nt_only_params:
-                        raise LabOneQException(
-                            f"Parameter {parameter.uid} can't be swept in real-time, it"
-                            " is bound to a value that can only be set in near-time"
-                        )
             for child in section.children:
                 traverse_set_execution_type_and_check_rt_loop(child, in_realtime)
 

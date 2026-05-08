@@ -77,6 +77,7 @@ class CodeGenerator(ICodeGenerator):
         self._integration_weights: dict[AwgKey, AwgWeights] = {}
         self._ppc_settings: list[codegen_rs.PpcSettings] = []
         self._device_properties: list[codegen_rs.DeviceProperties] = []
+        self._result_lengths: dict[AwgKey, int] = {}
 
     def get_output(self):
         return SeqCGenOutput(
@@ -85,6 +86,7 @@ class CodeGenerator(ICodeGenerator):
             integration_weights=self._integration_weights,
             integration_times=self.integration_times(),
             result_handle_maps=self.result_handle_maps(),
+            result_lengths=self._result_lengths,
             src=self.src(),
             total_execution_time=self.total_execution_time(),
             waves=self.waves(),
@@ -293,6 +295,8 @@ class CodeGenerator(ICodeGenerator):
                     is_play=integration_time.is_play,
                     length_in_samples=integration_time.length,
                 )
+            if awg_code_output.result_length is not None:
+                self._result_lengths[awg_key] = awg_code_output.result_length
             self._integration_kernels[awg_key] = awg_code_output.integration_kernels
             self._integration_weights[awg_key] = [
                 WeightInfo(
