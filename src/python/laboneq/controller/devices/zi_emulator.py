@@ -16,11 +16,15 @@ from dataclasses import InitVar, dataclass, field
 from enum import Enum
 from functools import partial
 from types import SimpleNamespace
-from typing import Any, Callable, Iterator, cast, overload
-from weakref import ReferenceType, ref
+from typing import TYPE_CHECKING, Any, Callable, Iterator, cast, overload
+from weakref import ref
 
 import numpy as np
-from numpy import typing as npt
+
+if TYPE_CHECKING:
+    from weakref import ReferenceType
+
+    from numpy import typing as npt
 
 _logger = logging.getLogger(__name__)
 
@@ -611,7 +615,7 @@ class DevEmuHDAWG(DevEmuHW):
         self.schedule(
             delay=0.001,
             action=self._ref_clock_switched,
-            argument=(cast(NodeInt, node).value,),
+            argument=(cast("NodeInt", node).value,),
         )
 
     def _node_def(self) -> dict[str, NodeInfo]:
@@ -812,7 +816,7 @@ class Gen2Base(DevEmuHW):
         self.schedule(
             delay=0.001,
             action=self._ref_clock_switched,
-            argument=(cast(NodeInt, node).value,),
+            argument=(cast("NodeInt", node).value,),
         )
 
     def _node_def_gen2(self) -> dict[str, NodeInfo]:
@@ -1694,7 +1698,7 @@ class ziDAQServerEmulator:
         results = self._resolve_paths_and_perform(path, self._listNodesJSON)
         combined_result = {}
         for r in results.values():
-            combined_result.update(cast(dict, r))
+            combined_result.update(cast("dict", r))
         return json.dumps(combined_result)
 
     def _subscribe(self, device: DevEmu, dev_path: str):

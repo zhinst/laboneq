@@ -49,6 +49,14 @@ impl From<PyErr> for Error {
     }
 }
 
+impl From<Error> for laboneq_error::LabOneQError {
+    // TODO: Actually use `LabOneQError` in the compiler instead of anyhow::Error
+    fn from(error: Error) -> Self {
+        let Error::Anyhow(e) = error;
+        laboneq_error::laboneq_error!("{e}")
+    }
+}
+
 impl From<laboneq_error::LabOneQError> for Error {
     // TODO: Actually use `LabOneQError` in the compiler instead of anyhow::Error
     fn from(error: laboneq_error::LabOneQError) -> Self {

@@ -3,27 +3,54 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+import enum
+from contextlib import nullcontext
+from typing import TYPE_CHECKING, ClassVar
 
 import attrs
 import numpy as np
-from numpy.typing import NDArray
 
 from laboneq.simple import (
     AcquisitionType,
-    AveragingMode,
     Calibration,
     Experiment,
-    ModulationType,
     Oscillator,
     SectionAlignment,
     SignalCalibration,
     SweepParameter,
 )
-from laboneq.simple import pulse_library as pl
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
+    from laboneq.simple import (
+        AveragingMode,
+        ModulationType,
+    )
+    from laboneq.simple import pulse_library as pl
+
+from ._target import TargetPlatform
 
 
-def create_resonator_spectroscopy(settings: ResonatorSpectroscopySettings):
+class ResonatorSpectroscopyStrategy(enum.Enum):
+    """Implementation strategy for a resonator spectroscopy experiment.
+
+    Attributes:
+        REALTIME_CW: Use real-time frequency changes with continuous wave signals.
+        REALTIME_PULSED: Use real-time frequency changes with pulsed signals.
+        NEARTIME_CW: Use near-time frequency changes with continuous wave signals.
+        NEARTIME_PULSED: Use near-time frequency changes with pulsed signals.
+    """
+
+    REALTIME_CW = "REALTIME_CW"
+    REALTIME_PULSED = "REALTIME_PULSED"
+    NEARTIME_CW = "NEARTIME_CW"
+    NEARTIME_PULSED = "NEARTIME_PULSED"
+
+
+def create_resonator_spectroscopy(
+    settings: ResonatorSpectroscopySettings, target: TargetPlatform
+):
     """Create a pulsed resonator spectroscopy experiment parallelized to multiple qubits.
 
     The returned experiment will have signals of the form:
@@ -44,7 +71,7 @@ def create_resonator_spectroscopy(settings: ResonatorSpectroscopySettings):
 
     """
     builder = ResonatorSpectroscopyBuilder()
-    return builder.build(settings)
+    return builder.build(settings, target)
 
 
 @attrs.frozen(kw_only=True)
@@ -59,6 +86,9 @@ class ResonatorSpectroscopySettings:
             signals. These are the absolute frequencies of the signal that goes out
             the wire and that are swept to perform spectroscopy.
         readout_functional: Functional to be used for measure pulses and acquisition kernels.
+            If using a CW strategy, this defines the integration kernel. For
+            PULSED strategies, the provided functional is used both as the
+            measure pulse and as the integration kernel.
         relaxation_length: Relaxation time.
         acquire_delay: Delay between the measure pulse and the beginning of the acquisitiong.
         qa_lo_frequencies: Mapping from readout signal (non-local) oscillator
@@ -68,6 +98,7 @@ class ResonatorSpectroscopySettings:
         averaging_type: Averaging type of the real-time loop.
         modulation_type: Modulation type for the intermediate frequency
             oscillator. WARNING: This may affect the pulse schedule.
+        strategy: Implementation strategy for resonator spectroscopy.
     """
 
     qubit_ids: list[str]
@@ -82,6 +113,7 @@ class ResonatorSpectroscopySettings:
     acquisition_type: AcquisitionType = attrs.field()
     averaging_mode: AveragingMode = attrs.field()
     modulation_type: ModulationType = attrs.field()
+    strategy: ResonatorSpectroscopyStrategy = attrs.field()
 
     @resonator_sweep_frequencies.validator  # type: ignore
     @qa_lo_frequencies.validator  # type: ignore
@@ -97,7 +129,46 @@ class ResonatorSpectroscopyBuilder:
         {"measure", "acquire"}
     )
 
-    def build(self, settings: ResonatorSpectroscopySettings) -> Experiment:
+    def _validate(
+        self,
+        *,
+        acquisition_type: AcquisitionType,
+        strategy: ResonatorSpectroscopyStrategy,
+        target: TargetPlatform,
+    ):
+        if target in [
+            TargetPlatform.GEN1,
+            TargetPlatform.GEN2,
+        ] and acquisition_type not in [
+            AcquisitionType.SPECTROSCOPY,
+            AcquisitionType.SPECTROSCOPY_IQ,
+            AcquisitionType.SPECTROSCOPY_PSD,
+        ]:
+            match strategy:
+                case ResonatorSpectroscopyStrategy.NEARTIME_CW:
+                    raise ValueError(
+                        f"{acquisition_type=!s} is not compatible with {strategy=!s} for {target=!s}. "
+                        f"For {target=!s}, continuous-wave implementation of resonator spectroscopy requires "
+                        "spectroscopy mode, e.g. `AcquisitionType.SPECTROSCOPY`."
+                    )
+                case (
+                    ResonatorSpectroscopyStrategy.REALTIME_CW
+                    | ResonatorSpectroscopyStrategy.REALTIME_PULSED
+                ):
+                    raise ValueError(
+                        f"{acquisition_type=!s} is not compatible with {strategy=!s} for {target=!s}. "
+                        f"For {target=!s}, real-time implementation of resonator spectroscopy requires "
+                        "spectroscopy mode, e.g. `AcquisitionType.SPECTROSCOPY`."
+                    )
+
+    def build(
+        self, settings: ResonatorSpectroscopySettings, target: TargetPlatform
+    ) -> Experiment:
+        self._validate(
+            acquisition_type=settings.acquisition_type,
+            strategy=settings.strategy,
+            target=target,
+        )
         signals = [
             f"{q}_{signal_type}"
             for q in settings.qubit_ids
@@ -118,32 +189,56 @@ class ResonatorSpectroscopyBuilder:
             )
             osc_frequency_sweep_parameters[qid] = SweepParameter(values=values)
 
-        with exp.acquire_loop_rt(
-            count=settings.n_average,
-            acquisition_type=settings.acquisition_type,
-            averaging_mode=settings.averaging_mode,
-        ):
-            with exp.sweep(
-                parameter=list(osc_frequency_sweep_parameters.values()),
-                alignment=SectionAlignment.RIGHT,
+        sweep_context = exp.sweep(
+            parameter=list(osc_frequency_sweep_parameters.values()),
+            alignment=SectionAlignment.RIGHT,
+        )
+
+        match settings.strategy:
+            case (
+                ResonatorSpectroscopyStrategy.NEARTIME_CW
+                | ResonatorSpectroscopyStrategy.NEARTIME_PULSED
             ):
-                for qubit_id in settings.qubit_ids:
-                    with exp.section(alignment=SectionAlignment.RIGHT) as excitation:
-                        exp.play(
-                            signal=f"{qubit_id}_measure",
-                            pulse=settings.readout_functional,
-                        )
-                    with exp.section(play_after=excitation) as acquisition:
-                        exp.acquire(
-                            f"{qubit_id}_acquire",
-                            handle=f"ac_{qubit_id}",
-                            kernel=settings.readout_functional,
-                        )
-                    with exp.section(
-                        length=settings.relaxation_length, play_after=acquisition
-                    ):
-                        exp.reserve(f"{qubit_id}_measure")
-                        exp.reserve(f"{qubit_id}_acquire")
+                maybe_outer_sweep = sweep_context
+                maybe_inner_sweep = nullcontext()
+            case (
+                ResonatorSpectroscopyStrategy.REALTIME_CW
+                | ResonatorSpectroscopyStrategy.REALTIME_PULSED
+            ):
+                maybe_outer_sweep = nullcontext()
+                maybe_inner_sweep = sweep_context
+            case _:
+                raise ValueError(f"unknown {settings.strategy=}")
+
+        with maybe_outer_sweep:
+            with exp.acquire_loop_rt(
+                count=settings.n_average,
+                acquisition_type=settings.acquisition_type,
+                averaging_mode=settings.averaging_mode,
+            ):
+                with maybe_inner_sweep:
+                    for qubit_id in settings.qubit_ids:
+                        with exp.section(alignment=SectionAlignment.RIGHT) as readout:
+                            if settings.strategy in (
+                                ResonatorSpectroscopyStrategy.REALTIME_PULSED,
+                                ResonatorSpectroscopyStrategy.NEARTIME_PULSED,
+                            ):
+                                exp.play(
+                                    signal=f"{qubit_id}_measure",
+                                    pulse=settings.readout_functional,
+                                )
+                            # NOTE: Not playing a pulse implicitly enables a CW
+                            # tone on the output in spectroscopy mode.
+                            exp.acquire(
+                                f"{qubit_id}_acquire",
+                                handle=f"ac_{qubit_id}",
+                                kernel=settings.readout_functional,
+                            )
+                        with exp.section(
+                            length=settings.relaxation_length, play_after=readout
+                        ):
+                            exp.reserve(f"{qubit_id}_measure")
+                            exp.reserve(f"{qubit_id}_acquire")
 
         exp.set_calibration(
             self._make_calibration(

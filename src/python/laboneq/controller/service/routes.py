@@ -12,17 +12,12 @@ from fastapi import (
     APIRouter,
     Depends,
     Header,
-    Request,
+    Request,  # noqa: TC002 - used in dependency, required for FastAPI injection / validation
     status,
 )
 
 from laboneq._version import get_version
-from laboneq.controller.api.async_controller_api import SubmissionStatus
-from laboneq.controller.service.controller_container import (
-    ExperimentAlreadyExistsError,
-    FingerprintMismatchError,
-    MissingCallbacksError,
-)
+from laboneq.controller.controller import SubmissionStatus
 from laboneq.controller.service.models import (
     CallbackInfo,
     DeviceSetupResponse,
@@ -152,23 +147,11 @@ def map_service_errors(fn: Callable[..., Any]) -> Callable[..., Any]:
             return await fn(*args, **kwargs)
         except ServiceError:
             raise
-        except ExperimentAlreadyExistsError as exc:
-            raise _error_response(
-                ErrorCode.EXPERIMENT_ALREADY_EXISTS, str(exc)
-            ) from exc
-        except FingerprintMismatchError as exc:
-            raise _error_response(ErrorCode.SETUP_HASH_MISMATCH, str(exc)) from exc
-        except MissingCallbacksError as exc:
-            raise _error_response(ErrorCode.CALLBACK_NOT_REGISTERED, str(exc)) from exc
-        except KeyError as exc:
-            message = exc.args[0] if exc.args else str(exc)
-            raise _error_response(ErrorCode.EXPERIMENT_NOT_FOUND, message) from exc
-        except (ValueError, RuntimeError) as exc:
-            raise _error_response(ErrorCode.INTERNAL_ERROR, str(exc)) from exc
         except LabOneQControllerException as exc:
             raise _error_response(
                 ErrorCode.CONTROLLER_ERROR,
                 str(exc),
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             ) from exc
         except Exception as exc:
             logger.exception("Unhandled error in %s", fn.__name__)
@@ -360,7 +343,6 @@ async def get_experiment(
     status_val = await controller_container.get_submission_status(handle_id)
 
     results_dict: dict[str, Any] | None = None
-    error: str | None = None
 
     if status_val in (
         SubmissionStatus.COMPLETED,
@@ -368,14 +350,13 @@ async def get_experiment(
     ):
         results = await controller_container.get_submission_results(handle_id)
         if results is not None:
-            results_dict = cast(dict[str, Any], serializers.to_dict(results))
+            results_dict = cast("dict[str, Any]", serializers.to_dict(results))
 
     return ExperimentResponse(
         id=uuid,
         status=_to_api_status(status_val),
         queue_position=-1,
         results=results_dict,
-        error=error,
     )
 
 

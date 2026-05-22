@@ -8,7 +8,6 @@ from __future__ import annotations
 import importlib
 import warnings
 from enum import Enum
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -22,6 +21,8 @@ from laboneq.serializers.serializer_registry import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from laboneq.serializers.serializer_registry import SerializerRegistry
     from laboneq.serializers.types import (
         DeserializationOptions,

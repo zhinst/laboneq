@@ -6,8 +6,6 @@ use std::collections::{HashMap, HashSet};
 use laboneq_common::device_traits;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::types::{DeviceKind, SignalKind};
-use laboneq_dsl::device_setup::AuxiliaryDevice;
-use laboneq_dsl::device_setup::DeviceSignal;
 use laboneq_dsl::types::{AcquisitionType, DeviceUid, OscillatorKind, SignalUid};
 use laboneq_ir::signal::Signal;
 use laboneq_ir::system::AwgDevice;
@@ -15,18 +13,22 @@ use laboneq_log::{debug, info, warn};
 use laboneq_units::duration::{Duration, Frequency, Hertz, Second};
 use smallvec::SmallVec;
 
-use crate::SetupProperties;
 use crate::compiler_backend::PreprocessedBackendData;
 use crate::error::{Error, Result};
+use crate::experiment::DeviceSignal;
 use crate::experiment_context::ExperimentContext;
 use crate::setup_processor::DelayRegistry;
 use crate::setup_processor::delays::{SignalDelayProperties, compute_signal_delays};
 use crate::setup_processor::precompensation::{AssignedPrecompensation, adapt_precompensations};
 
+pub(crate) struct SetupProperties {
+    pub signals: Vec<DeviceSignal>,
+    pub awg_devices: Vec<AwgDevice>,
+}
+
 pub(crate) struct ProcessedSetup {
     pub signals: Vec<Signal>,
     pub devices: Vec<AwgDevice>,
-    pub auxiliary_devices: Vec<AuxiliaryDevice>,
     pub on_device_delays: DelayRegistry,
 }
 
@@ -78,7 +80,6 @@ pub(crate) fn process_setup(
     Ok(ProcessedSetup {
         signals,
         devices: setup.awg_devices,
-        auxiliary_devices: setup.auxiliary_devices,
         on_device_delays: delays,
     })
 }

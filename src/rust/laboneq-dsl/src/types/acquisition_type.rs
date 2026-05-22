@@ -1,9 +1,10 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-#[derive(Debug, Clone, PartialEq, Copy, Eq)]
+#[derive(Debug, Clone, PartialEq, Copy, Eq, Default)]
 pub enum AcquisitionType {
     Raw,
+    #[default]
     Integration,
     Discrimination,
     Spectroscopy,

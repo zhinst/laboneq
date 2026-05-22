@@ -26,7 +26,6 @@ if TYPE_CHECKING:
     from laboneq.dsl.calibration.oscillator import Oscillator
     from laboneq.dsl.experiment import Experiment
     from laboneq.dsl.parameter import Parameter
-    from laboneq.executor.executor import Statement
 
 
 #
@@ -56,49 +55,13 @@ class SignalInfoType(EnumReprMixin, Enum):
     INTEGRATION = "integration"
 
 
-#
-# Data Classes
-#
-
-
-@dataclass
-class ParameterInfo:
-    uid: str
-    start: float | None = None
-    step: float | None = None
-    values: ArrayLike | None = None
-    axis_name: str | None = None
-
-    # auto generated __eq__ fails to compare array-likes correctly
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, ParameterInfo):
-            if (self.values is None) != (other.values is None):
-                return False
-            try:
-                values_equal = (
-                    self.values is None and other.values is None
-                ) or np.allclose(self.values, other.values)
-            except ValueError:
-                # numpy raises ValueError if the shapes mismatch
-                return False
-            return (self.uid, self.start, self.step, self.axis_name) == (
-                other.uid,
-                other.start,
-                other.step,
-                other.axis_name,
-            ) and values_equal
-        return NotImplemented
-
-
 @dataclass
 class DeviceInfo:
     uid: str
     device_type: DeviceInfoType
     options: str = field(default_factory=str)
-    dev_type: str | None = None
     dev_opts: list[str] = field(default_factory=list)
     reference_clock_source: ReferenceClockSourceInfo | None = None
-    followers: list[str] = field(default_factory=list)
 
 
 @dataclass()
@@ -153,20 +116,14 @@ class PulseDef:
 
 
 @dataclass
-class PRNGInfo:
-    range: int
-    seed: int
-
-
-@dataclass
 class MixerCalibrationInfo:
-    voltage_offsets: tuple[float | ParameterInfo, float | ParameterInfo] = (0.0, 0.0)
+    voltage_offsets: tuple[float | Parameter, float | Parameter] = (0.0, 0.0)
     correction_matrix: (
         tuple[
-            tuple[float | ParameterInfo, float | ParameterInfo],
-            tuple[float | ParameterInfo, float | ParameterInfo],
+            tuple[float | Parameter, float | Parameter],
+            tuple[float | Parameter, float | Parameter],
         ]
-        | list[list[float | ParameterInfo]]
+        | list[list[float | Parameter]]
     ) = (
         (1.0, 0.0),
         (0.0, 1.0),
@@ -191,8 +148,8 @@ class OutputRoute:
     to_signal: str
     from_signal: str | None
     from_port: str | None
-    amplitude: float | ParameterInfo
-    phase: float | ParameterInfo
+    amplitude: float | Parameter
+    phase: float | Parameter
 
 
 @dataclass
@@ -212,58 +169,44 @@ class SignalRange:
 @dataclass
 class AmplifierPumpInfo:
     ppc_device: DeviceInfo | None = None
-    pump_frequency: float | ParameterInfo | None = None
-    pump_power: float | ParameterInfo | None = None
+    pump_frequency: float | Parameter | None = None
+    pump_power: float | Parameter | None = None
     pump_on: bool = True
     pump_filter_on: bool = True
     cancellation_on: bool = True
-    cancellation_phase: float | ParameterInfo | None = None
-    cancellation_attenuation: float | ParameterInfo | None = None
+    cancellation_phase: float | Parameter | None = None
+    cancellation_attenuation: float | Parameter | None = None
     cancellation_source: CancellationSource = CancellationSource.INTERNAL
     cancellation_source_frequency: float | None = None
     alc_on: bool = True
     probe_on: bool = False
-    probe_frequency: float | ParameterInfo | None = None
-    probe_power: float | ParameterInfo | None = None
+    probe_frequency: float | Parameter | None = None
+    probe_power: float | Parameter | None = None
     channel: int | None = None
 
 
 @dataclass
 class SignalInfo:
     uid: str
-    device: DeviceInfo = None
+    device_uid: str
+    ports: list[str]
+
+    type: SignalInfoType
+
     oscillator: Oscillator | None = None
-    channels: list[int] = field(default_factory=list)
-    channel_to_port: dict[str, str] = field(default_factory=dict)
-    type: SignalInfoType = None
-    voltage_offset: float | ParameterInfo | None = None
+    voltage_offset: float | Parameter | None = None
     mixer_calibration: MixerCalibrationInfo | None = None
     precompensation: PrecompensationInfo | None = None
-    lo_frequency: float | ParameterInfo | None = None
+    lo_frequency: float | Parameter | None = None
     signal_range: SignalRange | None = None
-    port_delay: float | ParameterInfo | None = None
+    port_delay: float | Parameter | None = None
     delay_signal: float | None = None
     port_mode: PortMode | None = None
     threshold: float | list[float] | None = None
-    amplitude: float | ParameterInfo | None = None
+    amplitude: float | Parameter | None = None
     amplifier_pump: AmplifierPumpInfo | None = None
     output_routing: list[OutputRoute] | None = field(default_factory=list)
     automute: bool = False
-
-
-@dataclass
-class AcquireInfo:
-    handle: str
-    acquisition_type: str
-
-
-@dataclass
-class Marker:
-    marker_selector: str
-    enable: bool
-    start: float
-    length: float
-    pulse_id: str | None
 
 
 @dataclass
@@ -271,23 +214,5 @@ class ExperimentInfo:
     device_setup_fingerprint: str
     devices: list[DeviceInfo]
     signals: list[SignalInfo]
-    chunking: ChunkingInfo | None
     # Scheduler Rust integration fields
     src: Experiment | None = field(default=None)
-    # All DSL parameters used in the experiment.
-    dsl_parameters: list[Parameter] = field(default_factory=list)
-    # Map from driver -> driven parameters
-    driving_parameters: dict[str, set[str]] = field(default_factory=dict)
-
-
-@dataclass
-class ChunkingInfo:
-    auto: bool
-    chunk_count: int
-    sweep_iterations: int
-
-
-@dataclass
-class CompilationJob:
-    experiment_info: ExperimentInfo = None
-    execution: Statement = None

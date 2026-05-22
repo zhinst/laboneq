@@ -6,12 +6,14 @@
 from __future__ import annotations
 
 import functools
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.optimize as opt
-from numpy.typing import ArrayLike
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
 
 
 def fit(

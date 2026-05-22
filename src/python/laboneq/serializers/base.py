@@ -3,14 +3,18 @@
 
 from __future__ import annotations
 
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from laboneq.serializers.serializer_registry import serializer
 from laboneq.serializers.types import (
     ClassSerializer,
-    DeserializationOptions,
-    JsonSerializableType,
 )
+
+if TYPE_CHECKING:
+    from laboneq.serializers.types import (
+        DeserializationOptions,
+        JsonSerializableType,
+    )
 
 
 class UnwrappedData:

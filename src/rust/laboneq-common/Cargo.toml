@@ -12,6 +12,8 @@ version.workspace = true
 [dependencies]
 string-interner = { workspace = true }
 regex = { workspace = true }
+num-complex = { workspace = true }
+
 laboneq-units = { workspace = true }
 laboneq-error = { workspace = true }
 

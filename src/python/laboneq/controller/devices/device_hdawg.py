@@ -4,18 +4,15 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
 from enum import IntEnum
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
 import numpy as np
 
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
     DeviceAttribute,
-    DeviceAttributesView,
 )
-from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_utils import FloatWithTolerance, NodeCollector
 from laboneq.controller.devices.device_zi import (
     DeviceBase,
@@ -25,17 +22,27 @@ from laboneq.controller.devices.hdawg_core import HDAwgCore
 from laboneq.controller.devices.node_control import (
     Command,
     Condition,
-    NodeControlBase,
     Prepare,
     Response,
     Setting,
     WaitCondition,
 )
-from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
-from laboneq.data.recipe import (
-    Initialization,
-    NtStepKey,
-)
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from laboneq.controller.attribute_value_tracker import (
+        DeviceAttributesView,
+    )
+    from laboneq.controller.devices.core_base import CoreBase
+    from laboneq.controller.devices.node_control import (
+        NodeControlBase,
+    )
+    from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
+    from laboneq.data.recipe import (
+        Initialization,
+        NtStepKey,
+    )
 
 _logger = logging.getLogger(__name__)
 

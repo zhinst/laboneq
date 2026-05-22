@@ -5,11 +5,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-
-from numpy.typing import ArrayLike
+from typing import TYPE_CHECKING
 
 from laboneq.data import EnumReprMixin
-from laboneq.data.setup_description import ReferenceClockSource
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
+
+    from laboneq.data.setup_description import ReferenceClockSource
 
 # Added when SHFQC is split into virtual SHFSG & SHFQA
 # SHFQC(uid="shfqc") --> SHFSG(uid="shfqc_sg"), SHFQA(uid="shfqc")

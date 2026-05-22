@@ -58,6 +58,7 @@
 
 #node-info-rows {
     min-width: stretch;
+    max-width: 35ch;
 }
 
 #node-info h3 {

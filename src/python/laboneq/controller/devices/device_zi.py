@@ -31,11 +31,8 @@ from laboneq.controller.devices.node_control import (
     filter_wait_conditions,
 )
 from laboneq.controller.recipe_processor import (
-    AwgType,
-    DeviceRecipeData,
     get_execution_time,
 )
-from laboneq.controller.results import ResultsBuilder
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.for_each import for_each, for_each_sync
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
@@ -58,10 +55,13 @@ if TYPE_CHECKING:
         AwgConfig,
         AwgConfigs,
         AwgKey,
+        AwgType,
+        DeviceRecipeData,
         RecipeData,
         RtExecutionInfo,
         WaveformItem,
     )
+    from laboneq.controller.results import ResultsBuilder
     from laboneq.controller.versioning import SetupCaps
     from laboneq.core.types.numpy_support import NumPyArray
     from laboneq.data.recipe import Initialization, NtStepKey

@@ -5,24 +5,17 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-import laboneq._rust.codegenerator as codegen_rs
-from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.iface_compiler_output import (
     CombinedOutput,
     NeartimeStepBase,
     RTCompilerOutput,
 )
 from laboneq.compiler.common.iface_linker import ILinker
-from laboneq.compiler.common.integration_times import IntegrationTimes
-from laboneq.compiler.seqc.types import (
-    SignalDelays,
-)
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.utilities import seqc_compile
 from laboneq.core.utilities.seqc_compile import SeqCCompileItem
 from laboneq.data.awg_info import AwgKey
@@ -30,14 +23,25 @@ from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import (
     COMPLEX_USAGE,
     ArtifactsCodegen,
-    AwgWeights,
-    CodegenWaveform,
     CommandTableMapEntry,
-    CompilerArtifact,
     ParameterPhaseIncrementMap,
-    PulseMapEntry,
-    ResultSource,
 )
+
+if TYPE_CHECKING:
+    import laboneq._rust.codegenerator as codegen_rs
+    from laboneq.compiler import CompilerSettings
+    from laboneq.compiler.common.integration_times import IntegrationTimes
+    from laboneq.compiler.seqc.types import (
+        SignalDelays,
+    )
+    from laboneq.core.types.enums.wave_type import WaveType
+    from laboneq.data.scheduled_experiment import (
+        AwgWeights,
+        CodegenWaveform,
+        CompilerArtifact,
+        PulseMapEntry,
+        ResultSource,
+    )
 
 
 @dataclass

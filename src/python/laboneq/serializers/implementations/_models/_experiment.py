@@ -6,13 +6,13 @@ from __future__ import annotations
 import sys
 from enum import Enum
 from functools import partial
+from types import NoneType
 from typing import Callable, ClassVar, NewType, Optional, Type, Union
 
 import attrs
 import numpy
 from cattrs import Converter
 
-from laboneq._utils import UIDReference
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.types.enums.dsl_version import DSLVersion
@@ -43,8 +43,10 @@ from laboneq.dsl.prng import PRNG, PRNGSample
 from laboneq.serializers._cache import PulseCache, SectionCache
 
 from ._calibration import (
+    LinearSweepParameterModel,
     ParameterModel,
     SignalCalibrationModel,
+    SweepParameterModel,
     structure_basic_or_parameter_model,
     unstructure_basic_or_parameter_model,
 )
@@ -53,6 +55,8 @@ from ._calibration import (
 )
 from ._common import (
     ArrayLike_Model,
+    BytesModel,
+    ComplexModel,
     collect_models,
     register_models,
     structure_union_generic_type,
@@ -144,11 +148,41 @@ class PulseSampledModel:
 class PulseFunctionalModel:
     function: str
     uid: str
-    amplitude: float | complex | numpy.number | None
-    length: float | None
+    amplitude: ParameterModel | float | complex | numpy.number | None
+    length: ParameterModel | float | None
     can_compress: bool
     pulse_parameters: PulseParameterModel | None
     _target_class: ClassVar[Type] = PulseFunctional
+
+    @classmethod
+    def _unstructure(cls, obj):
+        return {
+            "function": obj.function,
+            "uid": obj.uid,
+            "amplitude": unstructure_basic_or_parameter_model(
+                obj.amplitude, _converter
+            ),
+            "length": unstructure_basic_or_parameter_model(obj.length, _converter),
+            "can_compress": obj.can_compress,
+            "pulse_parameters": None
+            if obj.pulse_parameters is None
+            else _unstructure_pulse_parameter_model(obj.pulse_parameters),
+        }
+
+    @classmethod
+    def _structure(cls, obj, _):
+        # cattrs refuses to guess when structuring complex | numpy.number | ArbitraryModel
+        # so we have to do it manually.
+        return cls._target_class(
+            function=obj["function"],
+            uid=obj["uid"],
+            amplitude=structure_basic_or_parameter_model(obj["amplitude"], _converter),
+            length=structure_basic_or_parameter_model(obj["length"], _converter),
+            can_compress=obj["can_compress"],
+            pulse_parameters=None
+            if obj["pulse_parameters"] is None
+            else _structure_pulse_parameter_model(obj["pulse_parameters"]),
+        )
 
 
 PulseModel = PulseSampledModel | PulseFunctionalModel
@@ -167,31 +201,176 @@ def _structure_pulse_model(d, _, _converter):
     )
 
 
-# assume to be a dict with simple types
-PulseParameterModel = dict[
-    str, Union[float, int, str, bool, complex, ParameterModel, list[ParameterModel]]
-]
+PulseParameterValueBasicTypes = (
+    # Pulse parameter value types that are stored using the
+    # basic structure and unstructure functions from _common:
+    int,
+    float,
+    str,
+    bool,
+    type(None),
+)
+
+
+PulseParameterValueModels = (
+    # The models corresponding to the types in PulseParameterValueModelTypes:
+    BytesModel,
+    ComplexModel,
+    SweepParameterModel,
+    LinearSweepParameterModel,
+)
+
+PulseParameterValueModelTypes = tuple(
+    model._target_class for model in PulseParameterValueModels
+)
+
+PulseParameterValueModel = (
+    Union[PulseParameterValueBasicTypes]
+    | Union[PulseParameterValueModelTypes]
+    | list["PulseParameterValueModel"]
+    | dict[str, "PulseParameterValueModel"]
+)
+
+PulseParameterModel = dict[str, PulseParameterValueModel]
 
 
 def _unstructure_pulse_parameter_model(obj):
-    return {
-        k: _converter.unstructure(
-            v,
-            Union[float, int, str, bool, complex, ParameterModel, list[ParameterModel]],
+    return {k: _unstructure_pulse_parameter_value(v) for k, v in obj.items()}
+
+
+def _unstructure_pulse_parameter_value(value):
+    if isinstance(value, list):
+        return [_unstructure_pulse_parameter_value(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _unstructure_pulse_parameter_value(v) for k, v in value.items()}
+    if isinstance(value, PulseParameterValueModelTypes):
+        return unstructure_union_generic_type(
+            value,
+            PulseParameterValueModels,
+            _converter,
         )
-        for k, v in obj.items()
-    }
+    if isinstance(value, PulseParameterValueBasicTypes):
+        return value
+    raise ValueError(
+        f"Pulse parameters with type {type(value).__name__} are not supported: {value!r}"
+    )
 
 
 def _structure_pulse_parameter_model(obj):
+    return {k: _structure_pulse_parameter_value(v) for k, v in obj.items()}
+
+
+def _structure_pulse_parameter_value(value):
+    if isinstance(value, list):
+        return [_structure_pulse_parameter_value(item) for item in value]
+    if isinstance(value, dict) and "_type" in value:
+        return structure_union_generic_type(
+            value,
+            PulseParameterValueModels,
+            _converter,
+        )
+    if isinstance(value, dict):
+        return {k: _structure_pulse_parameter_value(v) for k, v in value.items()}
+    if isinstance(value, PulseParameterValueBasicTypes):
+        return value
+    raise ValueError(
+        f"Pulse parameters with type {type(value).__name__} are not supported: {value!r}"
+    )
+
+
+def _guess_sweep_parameter_type_v4_to_v5(obj):
+    """Adds an appropriate _type entry to an unstructured Experiment v4 sweep parameter.
+
+    Arguments:
+        obj:
+            Unstructured Experiment v4 sweep parameter data.
+
+    Returns:
+        Experiment v5 sweep parameter data with an appropriate `_type` key added.
+
+    Raises:
+        ValueError:
+            When `obj` does not appear to be a valid sweep.
+    """
+    if "_type" in obj:
+        pass
+    elif obj.keys() == {"uid", "start", "stop", "count", "axis_name"}:
+        obj = obj | {"_type": "LinearSweepParameter"}
+    elif obj.keys() == {"uid", "values", "axis_name", "driven_by"}:
+        obj = obj | {"_type": "SweepParameter"}
+    else:
+        raise ValueError(
+            f"Unsupported sweep parameter type encountered while converting Experiment v4 to v5: {obj!r}"
+        )
+    return obj
+
+
+def _convert_pulse_parameter_model_v4_to_v5(obj):
+    """Convert unstructured pulse parameter model data from Experiment v4 to v5.
+
+    Arguments:
+        obj:
+            Unstructure Experiment v4 pulse parameter model data.
+
+    Returns:
+        Experiment v5 pulse parameter model data.
+
+    Raises:
+        ValueError:
+            When an unsupported type is encountered.
+    """
+    # In version 4, the PulseParameterModel supported only the following type signature
+    # for pulse parameters:
+    #
+    #  dict[
+    #    str, Union[float, int, str, bool, complex, ParameterModel, list[ParameterModel]]
+    #  ]
+    #
+    # The behaviour was as follows:
+    #
+    # - float, int, str and bool were stored the same way as in v5.
+    # - None was not officially supported but was stored the same way as in v5.
+    # - complex were stored as a list but raised `ValueError: Only input mappings are supported` when deserializing.
+    # - dict was not officially supported but were stored and raised `ValueError: Couldn't disambiguate` when deserializing.
+    # - list was not officially supported except for lists of `ParameterModel` but were stored as a list and
+    #   raised `ValueError: Only input mappings are supported` when deserializing.
+    # - SweepParameter and LinearSweepParameter were both stored as dict without an `_type`. They were disambiguated by
+    #   cattrs magic that looked at the attributes.
+    # - unsupported values did raise when unstructuring in v4. Instead they placed the unsupported object directly in the
+    #   unstructured dictionary and it likely errored later when converting the dict to JSON.
+    #
+    # This converter deals with all of the above using the following logic:
+    #
+    # - float, int, str, bool and None values are kept as-is
+    # - dict values are assumed to be SweepParameters or LinearSweepParameters
+    # - lists are assumed to contain only SweepParameters or LinearSweepParameters
+    # - unstructued SweepParameters and LinearSweepParameters are disambiguated using
+    #   the names of the keys they contain.
+    # - other values raise a ValueError.
     ret = {}
     for k, v in obj.items():
-        if isinstance(v, dict):
-            ret[k] = _converter.structure(v, ParameterModel)
-        elif isinstance(v, list):
-            ret[k] = [_converter.structure(item, ParameterModel) for item in v]
-        else:
+        if isinstance(
+            v,
+            (
+                float,
+                int,
+                str,
+                bool,
+                NoneType,
+            ),
+        ):
+            # float, int, str, bool, None
             ret[k] = v
+        elif isinstance(v, dict):
+            # ParameterModel (SweepParameter or LinearSweepParameter)
+            ret[k] = _guess_sweep_parameter_type_v4_to_v5(v)
+        elif isinstance(v, list) and all(isinstance(item, dict) for item in v):
+            # list[ParameterModel] (list of SweepParameter or LinearSweepParameter)
+            ret[k] = [_guess_sweep_parameter_type_v4_to_v5(item) for item in v]
+        else:
+            raise ValueError(
+                f"Unsupported parameter value encountered while converting Experiment v4 to v5: key={k!r}, value={v!r}"
+            )
     return ret
 
 
@@ -356,45 +535,23 @@ class AcquireModel:
 
 
 @attrs.define
-class UIDReferenceModel:
-    """Reference to an object with an UID.
-
-    Args:
-        uid: UID of the referenced object.
-    """
-
-    uid: str
-    _target_class: ClassVar[Type] = UIDReference
-
-
-@attrs.define
 class CallModel:
     func_name: str | Callable
-    # args could be anything, here we limit it to simple types
-    # and UIDReference
+    # args could be anything, here we limit it to simple types.
     args: dict[
         str,
-        ParameterModel | str | int | float | bool | complex | None | UIDReferenceModel,
+        Union[ParameterModel | str | int | float | bool | complex | None],
     ]
     _target_class: ClassVar[Type] = Call
 
     @classmethod
     def _unstructure(cls, obj):
-        args = {
-            k: _converter.unstructure(v, ParameterModel)
-            if isinstance(v, (SweepParameter, LinearSweepParameter))
-            else v
-            for k, v in obj.args.items()
-        }
         args = {}
         for k, v in obj.args.items():
-            if isinstance(v, UIDReference):
-                args[k] = _converter.unstructure(v, UIDReferenceModel)
-            elif isinstance(v, (SweepParameter, LinearSweepParameter)):
+            if isinstance(v, (SweepParameter, LinearSweepParameter)):
                 args[k] = _converter.unstructure(v, ParameterModel)
             else:
                 args[k] = v
-
         if callable(obj.func_name):
             func_name = obj.func_name.__name__
         else:
@@ -408,10 +565,8 @@ class CallModel:
     def _structure(cls, obj, _):
         args = {}
         for k, v in obj["args"].items():
-            if hasattr(v, "_type"):
+            if isinstance(v, dict):
                 args[k] = _converter.structure(v, ParameterModel)
-            elif isinstance(v, dict) and v.get("uid") is not None:
-                args[k] = _converter.structure(v, UIDReferenceModel)
             else:
                 args[k] = v
         return cls._target_class(

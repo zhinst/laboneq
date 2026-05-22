@@ -5,23 +5,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import StringIO
-from typing import Optional, cast
+from typing import TYPE_CHECKING, Optional, cast
 
 from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from laboneq.compiler import CompilerSettings
-from laboneq.compiler.common.iface_compiler_output import (
-    CombinedOutput,
-    RTCompilerOutputContainer,
-)
-from laboneq.compiler.workflow.compiler_output import (
-    CombinedRTCompilerOutputContainer,
-)
 from laboneq.core.types.enums.wave_type import WaveType
-from laboneq.data.awg_info import AwgKey
-from laboneq.data.scheduled_experiment import CodegenWaveform
 from laboneq.laboneq_logging import get_logger
 
 _logger = get_logger(__name__)
@@ -31,6 +21,18 @@ from laboneq.compiler.workflow.neartime_execution import (
     NtCompilerExecutor,
     NtCompilerExecutorDelegate,
 )
+
+if TYPE_CHECKING:
+    from laboneq.compiler import CompilerSettings
+    from laboneq.compiler.common.iface_compiler_output import (
+        CombinedOutput,
+        RTCompilerOutputContainer,
+    )
+    from laboneq.compiler.workflow.compiler_output import (
+        CombinedRTCompilerOutputContainer,
+    )
+    from laboneq.data.awg_info import AwgKey
+    from laboneq.data.scheduled_experiment import CodegenWaveform
 
 
 def _count_samples(
@@ -137,7 +139,7 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
         total_samples = sum(
             _count_samples(compiler_output.waves, wi)
             for wil in compiler_output.wave_indices
-            for wi in cast(dict[str, tuple[int, WaveType]], wil["value"]).items()
+            for wi in cast("dict[str, tuple[int, WaveType]]", wil["value"]).items()
         )
         self._total = ReportEntry(
             nt_step_indices=(),

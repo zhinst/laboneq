@@ -3,6 +3,9 @@
 
 use std::sync::{atomic::AtomicBool, atomic::Ordering};
 
+mod stage_timing;
+pub use stage_timing::StageTiming;
+
 #[doc(hidden)]
 pub use log as _log;
 

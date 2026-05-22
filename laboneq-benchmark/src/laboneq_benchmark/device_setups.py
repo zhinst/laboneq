@@ -8,6 +8,7 @@ from __future__ import annotations
 import math
 import random
 from itertools import takewhile
+from typing import TYPE_CHECKING
 
 from laboneq_applications.qpu_types.tunable_transmon import (
     TunableTransmonOperations,
@@ -24,7 +25,10 @@ from laboneq.contrib.example_helpers.generate_device_setup import (
     generate_device_setup,
 )
 from laboneq.dsl.quantum import QPU
-from laboneq.simple import DeviceSetup, dsl
+from laboneq.simple import dsl
+
+if TYPE_CHECKING:
+    from laboneq.simple import DeviceSetup
 
 
 # to compare version from string versions

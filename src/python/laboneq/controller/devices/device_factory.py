@@ -1,18 +1,27 @@
 # Copyright 2022 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from laboneq.controller.devices.device_hdawg import DeviceHDAWG
 from laboneq.controller.devices.device_nonqc import DeviceNonQC
 from laboneq.controller.devices.device_pqsc import DevicePQSC
 from laboneq.controller.devices.device_qhub import DeviceQHUB
-from laboneq.controller.devices.device_setup_dao import DeviceQualifier, ServerQualifier
 from laboneq.controller.devices.device_shfppc import DeviceSHFPPC
 from laboneq.controller.devices.device_shfqa import DeviceSHFQA
 from laboneq.controller.devices.device_shfsg import DeviceSHFSG
 from laboneq.controller.devices.device_uhfqa import DeviceUHFQA
-from laboneq.controller.devices.device_zi import DeviceZI
 from laboneq.controller.utilities.exception import LabOneQControllerException
-from laboneq.controller.versioning import SetupCaps
+
+if TYPE_CHECKING:
+    from laboneq.controller.devices.device_setup_dao import (
+        DeviceQualifier,
+        ServerQualifier,
+    )
+    from laboneq.controller.devices.device_zi import DeviceZI
+    from laboneq.controller.versioning import SetupCaps
 
 
 class DeviceFactory:

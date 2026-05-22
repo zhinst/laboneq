@@ -3,11 +3,13 @@
 
 from .acquisition_type import AcquisitionType
 from .averaging_mode import AveragingMode
+from .awg_signal_type import AWGSignalType
 from .carrier_type import CarrierType
 from .dsl_version import DSLVersion
 from .execution_type import ExecutionType
 from .io_direction import IODirection
 from .io_signal_type import IOSignalType
+from .mixer_type import MixerType
 from .modulation_type import ModulationType
 from .physical_channel_type import PhysicalChannelType
 from .port_mode import PortMode
@@ -15,3 +17,24 @@ from .reference_clock_source import ReferenceClockSource
 from .repetition_mode import RepetitionMode
 from .section_alignment import SectionAlignment
 from .section_timing_mode import SectionTimingMode
+from .wave_type import WaveType
+
+__all__ = [
+    "AWGSignalType",
+    "AcquisitionType",
+    "AveragingMode",
+    "CarrierType",
+    "DSLVersion",
+    "ExecutionType",
+    "IODirection",
+    "IOSignalType",
+    "MixerType",
+    "ModulationType",
+    "PhysicalChannelType",
+    "PortMode",
+    "ReferenceClockSource",
+    "RepetitionMode",
+    "SectionAlignment",
+    "SectionTimingMode",
+    "WaveType",
+]

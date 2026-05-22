@@ -6,12 +6,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-from laboneq.controller.api.commons import SubmissionHandle
-from laboneq.controller.controller import SubmissionStatus
-from laboneq.dsl.device.device_setup import DeviceSetup
-
 if TYPE_CHECKING:
+    from laboneq.controller.api.commons import SubmissionHandle
+    from laboneq.controller.controller import SubmissionStatus
     from laboneq.data.scheduled_experiment import ScheduledExperiment
+    from laboneq.dsl.device.device_setup import DeviceSetup
     from laboneq.dsl.result.results import Results
 
 

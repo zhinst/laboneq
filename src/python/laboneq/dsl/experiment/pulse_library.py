@@ -4,16 +4,18 @@
 from __future__ import annotations
 
 import warnings
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
-from numpy.typing import ArrayLike
 
 from laboneq.core.utilities.pulse_sampler import _pulse_factories, _pulse_samplers
 from laboneq.dsl.experiment.pulse import (
     PulseFunctional,
     PulseSampled,
 )
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
 
 # deprecated alias for _pulse_samples, use pulse_library.pulse_sampler(...) instead:
 pulse_function_library = _pulse_samplers
@@ -31,19 +33,29 @@ def register_pulse_functional(sampler: Callable, name: str | None = None):
     ```
 
     The vector ``x`` marks the points where the pulse function is to be evaluated. The
-    values of ``x`` range from -1 to +1. The argument ``pulse_params`` contains all
-    the sweep parameters, evaluated for the current iteration.
+    values of ``x`` range from -1 to +1.
+
+    The argument ``pulse_params`` contains the parameters passed via the `play(...)`
+    command's `pulse_parameters` argument. The parameter values may consist of:
+
+        - `int`, `float`, `complex`, `str`, `bytes`, `bool`, `None` or `laboneq.dsl.Parameter`
+        - lists of the above
+        - dictionaries of the above with `str` keys
+
+    The lists and dictionaries may be nested and need not have homogeneous value types.
+
+    Other value types are not supported by the LabOne Q serializer.
+
     In addition, ``pulse_params``  also contains the following keys:
 
-    - ``length``: the true length of the pulse
-    - ``amplitude``: the true amplitude of the pulse
-    - ``sampling_rate``: the sampling rate
+        - ``length``: the true length of the pulse
+        - ``amplitude``: the true amplitude of the pulse
+        - ``sampling_rate``: the sampling rate
 
     Typically, the sampler function should discard ``length`` and ``amplitude``, and
     instead assume that the pulse extends from -1 to 1, and that it has unit
     amplitude. LabOne Q will automatically rescale the sampler's output to the correct
     amplitude and length.
-
 
     Args:
         sampler:

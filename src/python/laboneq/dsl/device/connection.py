@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import warnings
-from typing import Iterable, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 
 import attrs
 
 from laboneq.core import path as qct_path
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
-from laboneq.dsl.enums import IODirection, IOSignalType
+from laboneq.dsl.enums import IODirection
+
+if TYPE_CHECKING:
+    from laboneq.dsl.enums import IOSignalType
 
 
 @classformatter

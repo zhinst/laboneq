@@ -4,21 +4,25 @@
 from __future__ import annotations
 
 import math
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
     DeviceAttribute,
-    DeviceAttributesView,
 )
-from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.devices.ppchannel import PPChannel
-from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.data.calibration import CancellationSource
-from laboneq.data.recipe import Initialization
+
+if TYPE_CHECKING:
+    from laboneq.controller.attribute_value_tracker import (
+        DeviceAttributesView,
+    )
+    from laboneq.controller.devices.core_base import CoreBase
+    from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
+    from laboneq.data.recipe import Initialization
 
 
 class DeviceSHFPPC(DeviceBase):

@@ -3,24 +3,29 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 import attrs
-import numpy as np
-from numpy.typing import NDArray
 
 from laboneq.simple import (
-    AcquisitionType,
-    AveragingMode,
     Calibration,
     Experiment,
-    ModulationType,
     Oscillator,
     SectionAlignment,
     SignalCalibration,
     SweepParameter,
 )
-from laboneq.simple import pulse_library as pl
+
+if TYPE_CHECKING:
+    import numpy as np
+    from numpy.typing import NDArray
+
+    from laboneq.simple import (
+        AcquisitionType,
+        AveragingMode,
+        ModulationType,
+    )
+    from laboneq.simple import pulse_library as pl
 
 
 def create_rabi_experiment(settings: RabiExperimentSettings):

@@ -5,22 +5,27 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
-from numpy.typing import ArrayLike
 
 from laboneq.core.types.enums import (
     AveragingMode,
     ExecutionType,
-    RepetitionMode,
-    SectionAlignment,
-    SectionTimingMode,
 )
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.data.calibration import Calibration
-from laboneq.data.parameter import Parameter
-from laboneq.data.prng import PRNG, PRNGSample
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
+
+    from laboneq.core.types.enums import (
+        RepetitionMode,
+        SectionAlignment,
+        SectionTimingMode,
+    )
+    from laboneq.data.prng import PRNG, PRNGSample
+    from laboneq.dsl.parameter import Parameter
 
 
 @dataclass

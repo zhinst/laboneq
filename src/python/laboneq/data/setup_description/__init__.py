@@ -5,15 +5,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List
+from typing import TYPE_CHECKING, Dict, List
 
-from laboneq.core.types.enums import (
-    IODirection,
-    PhysicalChannelType,
-    ReferenceClockSource,
-)
 from laboneq.data import EnumReprMixin
 from laboneq.data.calibration import Calibration
+
+if TYPE_CHECKING:
+    from laboneq.core.types.enums import (
+        IODirection,
+        PhysicalChannelType,
+        ReferenceClockSource,
+    )
 
 
 class DeviceType(EnumReprMixin, Enum):

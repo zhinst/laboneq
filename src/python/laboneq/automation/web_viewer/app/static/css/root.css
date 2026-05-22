@@ -22,6 +22,7 @@
     --status-running: #ffcc33;
     --status-passed: #38e171;
     --status-failed: #ff1616;
+    --status-error: #8f2447;
     --status-deactivated: #888888;
     --status-default: --zi-blue;
 

@@ -26,7 +26,6 @@ import numpy as np
 from zhinst.comms_schemas.labone import KernelInfo, KernelSession
 from zhinst.comms_schemas.labone.core import (
     AnnotatedValue,
-    DataQueue,
     ShfGeneratorWaveformVectorData,
     ZIContext,
 )
@@ -38,23 +37,32 @@ from zhinst.comms_schemas.labone.core.errors import (
 
 from laboneq.controller.devices.device_utils import (
     NodeActionSet,
-    NodeCollector,
     is_expected,
     to_l1_timeout,
     zhinst_core_version,
 )
-from laboneq.controller.devices.zi_emulator import EmulatorState, KernelSessionEmulator
+from laboneq.controller.devices.zi_emulator import KernelSessionEmulator
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.versioning import (
     RECOMMENDED_MINIMUM_LABONE_VERSION,
     LabOneVersion,
-    SetupCaps,
 )
 
 if TYPE_CHECKING:
+    from zhinst.comms_schemas.labone.core import (
+        DataQueue,
+    )
+
     from laboneq.controller.devices.device_setup_dao import (
         DeviceQualifier,
         ServerQualifier,
+    )
+    from laboneq.controller.devices.device_utils import (
+        NodeCollector,
+    )
+    from laboneq.controller.devices.zi_emulator import EmulatorState
+    from laboneq.controller.versioning import (
+        SetupCaps,
     )
     from laboneq.core.types.numpy_support import NumPyArray
 
@@ -196,7 +204,7 @@ class DataServerConnection:
         else:
             # Fool the type checker that the KernelSessionEmulator is a KernelSession
             data_server = cast(
-                KernelSession,
+                "KernelSession",
                 KernelSessionEmulator(serial="ZI", emulator_state=emulator_state),
             )
 
@@ -366,7 +374,7 @@ class InstrumentConnection:
         if emulator_state is not None:
             # Fool the type checker that the KernelSessionEmulator is a KernelSession
             instrument = cast(
-                KernelSession,
+                "KernelSession",
                 KernelSessionEmulator(
                     serial=device_qualifier.options.serial,
                     emulator_state=emulator_state,

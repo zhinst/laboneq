@@ -5,10 +5,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from laboneq.workflow.blocks.block import Block
 from laboneq.workflow.executor import ExecutionStatus, ExecutorState
+from laboneq.workflow.opts import OptionBuilder
 from laboneq.workflow.reference import Reference
 from laboneq.workflow.result import TaskResult
 from laboneq.workflow.timestamps import utc_now
@@ -53,6 +54,23 @@ class TaskBlock(Block):
         """Name of the task."""
         return self.task.name
 
+    @staticmethod
+    def _validate_options(task_name: str, options: Any) -> None:  # noqa: ANN401
+        """Validate options passed to a task.
+
+        Raises:
+            TypeError: If options is an OptionBuilder instead of a
+                concrete options instance.
+        """
+        if isinstance(options, OptionBuilder):
+            raise TypeError(
+                f"Cannot pass an OptionBuilder directly to task"
+                f" '{task_name}'."
+                f" Use 'options.task_options(\"{task_name}\")' to extract"
+                f" the options for this task, or run the parent workflow"
+                f" with 'my_workflow(options=options)' instead."
+            )
+
     def execute(self, executor: ExecutorState) -> None:
         """Execute the task."""
         if self.hidden:
@@ -66,6 +84,7 @@ class TaskBlock(Block):
             params = executor.resolve_inputs(self)
             if self.options_type and params.get("options") is None:
                 params["options"] = executor.get_options(self.name)
+            self._validate_options(self.name, params.get("options"))
         executor.set_block_status(self, ExecutionStatus.IN_PROGRESS)
         try:
             executor.set_variable(self.ref, self.task.func(**params))
@@ -78,6 +97,7 @@ class TaskBlock(Block):
             params = executor.resolve_inputs(self)
             if self.options_type and params.get("options") is None:
                 params["options"] = executor.get_options(self.name)
+            self._validate_options(self.name, params.get("options"))
         task = TaskResult(
             task=self.task,
             output=None,

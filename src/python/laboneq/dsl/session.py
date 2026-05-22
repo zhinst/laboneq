@@ -7,8 +7,7 @@ import logging
 import sys
 import warnings
 from copy import deepcopy
-from pathlib import Path
-from typing import Any, Callable, Dict, NoReturn, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, NoReturn, Union
 
 from laboneq import laboneq_logging
 from laboneq.controller import Controller
@@ -21,11 +20,9 @@ from laboneq.core.utilities.environment import is_testing
 from laboneq.data.experiment_results import ExperimentResults
 from laboneq.dsl.device import (
     DeviceSetup,
-    SystemDescription,
     system_description_session,
 )
 from laboneq.dsl.device.io_units.logical_signal import (
-    LogicalSignalRef,
     resolve_logical_signal_ref,
 )
 from laboneq.dsl.experiment import Experiment
@@ -33,6 +30,16 @@ from laboneq.dsl.result import Results
 from laboneq.implementation.legacy_adapters.converters_target_setup import (
     convert_dsl_to_target_setup,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from laboneq.dsl.device import (
+        SystemDescription,
+    )
+    from laboneq.dsl.device.io_units.logical_signal import (
+        LogicalSignalRef,
+    )
 
 _logger = logging.getLogger(__name__)
 

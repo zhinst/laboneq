@@ -1,3 +1,54 @@
+# LabOne Q 26.7.0b2 (2026-05-22)
+
+## Features
+
+- The compiler now raises an exception when an SHF oscillator intermediate frequency (IF) has an absolute value >= 1 GHz. SHF instruments do not support IF frequencies in this range.
+- Added error tracking and visualization for failed layer executions. The exceptions from `run_layer_executable` are recorded via a new AutomationStatus.ERROR status and error attribute, with errored nodes blinking yellow-to-red in the web viewer and displaying the error message in the info panel on click.
+- Multiple automation web viewers can now run simultaneously. Each `start_web_viewer` call launches an independent server on its own port for a separate `Automation` instance.
+- Added the `quantum_element_uids` property to the `QPU` class, which returns the list of quantum element UIDs in the QPU.
+- Added `reset_oscillator_phase` to `laboneq.simple.dsl` namespace.
+  This function existed already but was not directly exposed.
+  It resets the phase of the oscillator associated with a given logical signal.
+- Improved the "Node results" image discovery for nodes with multiple quantum elements by searching for the target quantum element UID in the results image file names if the node key string is not found.
+- Updated the Experiment serializer to support a richer set of values as pulse parameters.
+
+  Previously the Experiment serializer supported only a limited basic set of pulse parameter types:
+
+  - float, int, str, bool, complex
+  - SweepParameter, LinearSweepParameter
+  - list[SweepParameter], list[LinearSweepParameter]
+
+  This set of types proved too restrictive for some use cases.
+
+  Now the Experiment serializer supports an extended set of types for pulse parameters:
+
+  - int, float, complex, str, bytes, bool, None, SweepParameter or LinearSweepParameter
+  - lists of the above
+  - dictionaries of the above with str keys
+
+  The lists and dictionaries may be nested and need not have homogeneous element types.
+
+  The previous Experiment serializer format was version 4. The new format is version 5.
+
+
+## Bug Fixes
+
+- Fixed a bug where compilation would fail when a chunked sweep contained both the driving parameter and the derived parameter.
+- Fixed a bug where passing workflow OptionBuilder options directly to a task called outside a workflow context raised a ValueError.
+- Fixed a bug where differences in comments produced excessively long, uncompressed SeqC.
+- Fixed a bug in the automation web viewer, where the "Node results" section of the node info panel sometimes displayed the results of the previously-clicked node.
+- Fixed a bug where a minor rounding error biased phase increments by up to +0.3 µrad.
+
+## Documentation
+
+- Added documentation and unit tests for the list of real-time sweepable parameters vs near-time only parameters.
+
+## Removals from the Codebase
+
+- Removed `LabOneQInstrumentor` traces: `laboneq.compiler.schedule` and `laboneq.compiler.generate-code`.
+
+  Capturing compiler traces from Python now requires `laboneq.instrumentation.tracing.laboneq_tracing()`.
+
 # LabOne Q 26.7.0b1 (2026-05-08)
 
 ## Features

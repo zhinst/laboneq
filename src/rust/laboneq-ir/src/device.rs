@@ -1,11 +1,10 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_common::{
-    device_options::DeviceOptions,
-    device_traits::DeviceTraits,
-    types::{DeviceKind, PhysicalDeviceUid, ReferenceClock},
-};
+use laboneq_common::device_options::DeviceOptions;
+
+use laboneq_common::device_traits::DeviceTraits;
+use laboneq_common::types::{DeviceKind, PhysicalDeviceUid};
 use laboneq_dsl::types::DeviceUid;
 
 /// Device used in the experiment.
@@ -19,7 +18,6 @@ pub struct AwgDevice {
     is_shfqc: bool,
     kind: DeviceKind,
     options: Option<DeviceOptions>,
-    reference_clock: Option<ReferenceClock>,
 }
 
 impl AwgDevice {
@@ -62,10 +60,6 @@ impl AwgDevice {
             .is_some_and(|opts| opts.contains(option))
     }
 
-    pub fn reference_clock(&self) -> Option<&ReferenceClock> {
-        self.reference_clock.as_ref()
-    }
-
     pub fn builder(
         uid: DeviceUid,
         physical_device_uid: PhysicalDeviceUid,
@@ -95,7 +89,6 @@ pub mod builder {
                     is_shfqc: false,
                     kind,
                     options: None,
-                    reference_clock: None,
                 },
             }
         }
@@ -107,11 +100,6 @@ pub mod builder {
 
         pub fn options(mut self, options: DeviceOptions) -> Self {
             self.inner.options = Some(options);
-            self
-        }
-
-        pub fn reference_clock(mut self, reference_clock: ReferenceClock) -> Self {
-            self.inner.reference_clock = Some(reference_clock);
             self
         }
 

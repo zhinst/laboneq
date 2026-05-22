@@ -3,13 +3,17 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import attrs
 
 from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
-from laboneq.dsl.device.ports import Port
 
-from .connection import Connection
+if TYPE_CHECKING:
+    from laboneq.dsl.device.ports import Port
+
+    from .connection import Connection
 
 
 @classformatter

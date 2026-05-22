@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from laboneq.dsl.device import SystemDescription
 from laboneq.serializers.base import VersionedClassSerializer
@@ -12,11 +12,13 @@ from laboneq.serializers.implementations._models._device_setup import (
     make_converter,
 )
 from laboneq.serializers.serializer_registry import serializer
-from laboneq.serializers.types import (
-    DeserializationOptions,
-    JsonSerializableType,
-    SerializationOptions,
-)
+
+if TYPE_CHECKING:
+    from laboneq.serializers.types import (
+        DeserializationOptions,
+        JsonSerializableType,
+        SerializationOptions,
+    )
 
 _converter = make_converter()
 

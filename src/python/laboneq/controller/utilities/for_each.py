@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-from collections.abc import Callable, Coroutine, Iterable
-from typing import Any, TypeVar
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from laboneq.controller.devices.async_support import _gather
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine, Iterable
 
 Ret = TypeVar("Ret")
 

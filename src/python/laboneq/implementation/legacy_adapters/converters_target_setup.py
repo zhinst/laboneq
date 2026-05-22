@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from laboneq.data.execution_payload import TargetSetup
 from laboneq.implementation.legacy_adapters.device_setup_converter import (
     convert_device_setup_to_setup,
 )
@@ -14,6 +13,7 @@ from laboneq.implementation.payload_builder.target_setup_generator import (
 )
 
 if TYPE_CHECKING:
+    from laboneq.data.execution_payload import TargetSetup
     from laboneq.dsl.device.device_setup import DeviceSetup
 
 

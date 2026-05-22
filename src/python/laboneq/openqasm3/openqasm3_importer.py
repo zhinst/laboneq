@@ -16,9 +16,6 @@ from laboneq.dsl.enums import (
     AcquisitionType,
     AveragingMode,
 )
-from laboneq.dsl.experiment import Experiment, Section
-from laboneq.dsl.quantum.quantum_element import QuantumElement
-from laboneq.dsl.quantum.quantum_operations import QuantumOperations
 from laboneq.openqasm3 import device
 from laboneq.openqasm3 import options as exp_options
 from laboneq.openqasm3.gate_store import _GateStoreQuantumOperations
@@ -26,11 +23,14 @@ from laboneq.openqasm3.namespace import (
     NamespaceStack,
 )
 from laboneq.openqasm3.openqasm_error import OpenQasmException
-from laboneq.openqasm3.results import ExternResult
 from laboneq.openqasm3.visitor import TranspilerVisitor
 
 if TYPE_CHECKING:
+    from laboneq.dsl.experiment import Experiment, Section
+    from laboneq.dsl.quantum.quantum_element import QuantumElement
+    from laboneq.dsl.quantum.quantum_operations import QuantumOperations
     from laboneq.openqasm3.gate_store import GateStore
+    from laboneq.openqasm3.results import ExternResult
 
 
 def _unwrap_qubit_register(name: str, size: int) -> list[str]:

@@ -15,6 +15,7 @@ const STATUSES = [
     "passed",
     "failed",
     "deactivated",
+    "error",
 ];
 
 export function renderStatusLegend() {
@@ -121,6 +122,7 @@ function buildNodeInfoRows(d, isLayers) {
             : [{ label: "ID", value: d.key }]),
         { label: "Status", value: d.status },
         ...(isLayers ? [] : [{ label: "Layer", value: d.layer }]),
+        ...(d.error ? [{ label: "Error", value: d.error }] : []),
         ...(isLayers
             ? [
                   {
@@ -252,6 +254,9 @@ function renderNodeResultThumbnail(d, elements) {
     const { resultsSection, thumbnailWrapper, thumbnail, message } = elements;
     const url = buildNodeImageUrl(d);
 
+    message.hidden = true;
+    thumbnailWrapper.classList.remove("visible");
+    thumbnail.removeAttribute("src");
     resultsSection.hidden = false;
 
     fetch(url)

@@ -2,13 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Qiskit
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from qiskit import qasm3, transpile
 from qiskit_experiments.library import randomized_benchmarking
 
 # LabOne Q
 from laboneq import openqasm3
-from laboneq.dsl.device import DeviceSetup
-from laboneq.dsl.quantum import QPU
+
+if TYPE_CHECKING:
+    from laboneq.dsl.device import DeviceSetup
+    from laboneq.dsl.quantum import QPU
 
 
 def two_qubit_RB(

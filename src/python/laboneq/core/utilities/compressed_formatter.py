@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
 from copy import copy
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 
 @dataclass

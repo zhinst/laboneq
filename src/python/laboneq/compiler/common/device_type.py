@@ -5,9 +5,10 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-from laboneq.data.compilation_job import DeviceInfoType
+if TYPE_CHECKING:
+    from laboneq.data.compilation_job import DeviceInfoType
 
 
 @dataclass(eq=True, frozen=True)

@@ -5,13 +5,16 @@
 
 from __future__ import annotations
 
-from collections.abc import (
-    Iterable,
-    Iterator,
-    Mapping,
-)
+from typing import TYPE_CHECKING
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
+
+if TYPE_CHECKING:
+    from collections.abc import (
+        Iterable,
+        Iterator,
+        Mapping,
+    )
 
 
 @classformatter

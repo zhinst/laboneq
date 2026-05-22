@@ -1,3 +1,3 @@
 from .runner import BenchmarkResult, benchmark, extract_duration, extract_metadata
 
-__all__ = ["BenchmarkResult", "benchmark"]
+__all__ = ["BenchmarkResult", "benchmark", "extract_duration", "extract_metadata"]

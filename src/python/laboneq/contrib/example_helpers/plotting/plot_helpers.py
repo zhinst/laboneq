@@ -7,7 +7,7 @@ from __future__ import annotations
 
 # regular expressions
 import re
-from typing import List
+from typing import TYPE_CHECKING, List
 
 import matplotlib
 
@@ -17,9 +17,12 @@ import matplotlib.pyplot as plt
 # numpy for mathematics
 import numpy as np
 
-from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.types.enums.acquisition_type import is_spectroscopy
 from laboneq.simulator.output_simulator import OutputSimulator
+
+if TYPE_CHECKING:
+    from laboneq.core.types.compiled_experiment import CompiledExperiment
+    from laboneq.data.scheduled_experiment import WeightInfo
 
 
 def zi_mpl_theme():
@@ -41,7 +44,6 @@ def zi_mpl_theme():
 def _integration_weights_by_signal(
     compiled_experiment: CompiledExperiment,
 ) -> dict[str, list]:
-    from laboneq.data.scheduled_experiment import WeightInfo
 
     scheduled_exp = compiled_experiment.scheduled_experiment
 

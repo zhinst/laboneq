@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use pyo3::types::{PyList, PyTuple};
-use pyo3::{intern, prelude::*};
+use pyo3::{IntoPyObjectExt, intern, prelude::*};
 
 use crate::common_types::{DeviceTypePy, MixerTypePy, SignalTypePy};
 use codegenerator::ir::compilation_job::{
@@ -172,7 +172,10 @@ impl WaveformSamplerPy<'_> {
             .iter()
             .map(|pd| {
                 let pd_py = pulse_def_to_py(py, id_store, pd).unwrap();
-                (id_store.resolve_unchecked(pd.uid).to_string(), pd_py)
+                (
+                    id_store.resolve_unchecked(pd.uid).to_string(),
+                    pd_py.into_py_any(py).unwrap(),
+                )
             })
             .collect();
         let pulse_parameters: HashMap<PulseParametersId, Py<PulseParametersPy>> = dedup

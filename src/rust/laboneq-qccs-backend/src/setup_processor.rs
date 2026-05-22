@@ -18,7 +18,7 @@ use crate::ports::is_shfsg_port;
 pub(crate) fn create_awg_devices(
     experiment: &mut ExperimentViewWrapper,
 ) -> Result<(Vec<AwgDevice>, Vec<ReassignedSignal>)> {
-    let mut instruments = experiment.instruments.iter().map(|instrument| {
+    let mut instruments = experiment.instruments.values().map(|instrument| {
         let signals = experiment
             .signals
             .iter()
@@ -90,9 +90,6 @@ fn instrument_to_awg_device(instrument: &InstrumentProperties) -> AwgDevice {
             .expect("Unsupported device kind"),
     );
     builder = builder.options(instrument.instrument.options.clone());
-    if let Some(reference_clock) = instrument.instrument.reference_clock {
-        builder = builder.reference_clock(reference_clock);
-    }
     builder.build()
 }
 
@@ -131,16 +128,13 @@ fn split_shfqc(
 
     // Create SHFQA device if there are any QA signals.
     let shfqa_device = if has_shfqa_ports {
-        let mut shfqa_builder = AwgDevice::builder(
+        let shfqa_builder = AwgDevice::builder(
             instrument.instrument.uid,
             instrument.instrument.physical_device_uid,
             DeviceKind::Shfqa,
         )
         .options(instrument.instrument.options.clone())
         .shfqc(true);
-        if let Some(reference_clock) = instrument.instrument.reference_clock {
-            shfqa_builder = shfqa_builder.reference_clock(reference_clock);
-        }
         Some(shfqa_builder.build())
     } else {
         None
@@ -154,16 +148,13 @@ fn split_shfqc(
             id_store.get_or_insert(&new_uid).into()
         };
 
-        let mut shfsg_builder = AwgDevice::builder(
+        let shfsg_builder = AwgDevice::builder(
             shfsg_uid,
             instrument.instrument.physical_device_uid,
             DeviceKind::Shfsg,
         )
         .options(instrument.instrument.options.clone())
         .shfqc(true);
-        if let Some(reference_clock) = instrument.instrument.reference_clock {
-            shfsg_builder = shfsg_builder.reference_clock(reference_clock);
-        }
         let shfsg = shfsg_builder.build();
         Some(shfsg)
     } else {

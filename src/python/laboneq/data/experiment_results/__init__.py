@@ -12,9 +12,6 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from laboneq._optional_deps import (
-    Xarray,
-    XarrayDataArray,
-    XarrayDataset,
     import_optional,
 )
 from laboneq.core.exceptions import LabOneQException
@@ -23,6 +20,12 @@ from laboneq.core.validators import dicts_equal
 
 if TYPE_CHECKING:
     from numpy import typing as npt
+
+    from laboneq._optional_deps import (
+        Xarray,
+        XarrayDataArray,
+        XarrayDataset,
+    )
 
 
 @classformatter

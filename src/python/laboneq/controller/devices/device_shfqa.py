@@ -4,13 +4,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
-from laboneq.controller.attribute_value_tracker import (
-    DeviceAttribute,
-    DeviceAttributesView,
-)
 from laboneq.controller.devices.async_support import _gather
 from laboneq.controller.devices.core_base import CoreBase, SHFChannelBase
 from laboneq.controller.devices.device_shf_base import (
@@ -19,22 +14,31 @@ from laboneq.controller.devices.device_shf_base import (
     DeviceSHFBase,
 )
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.device_zi import RawReadoutData
 from laboneq.controller.devices.qachannel import QAChannel, SHFQAMixIn
-from laboneq.controller.recipe_processor import (
-    AwgType,
-    RecipeData,
-    RtExecutionInfo,
-    WaveformItem,
-)
 from laboneq.controller.utilities.for_each import for_each
-from laboneq.core.types.enums.acquisition_type import AcquisitionType, is_spectroscopy
+from laboneq.core.types.enums.acquisition_type import is_spectroscopy
 from laboneq.data.execution_payload import VIRTUAL_SHFSG_UID_SUFFIX
-from laboneq.data.recipe import (
-    Initialization,
-    NtStepKey,
-)
-from laboneq.data.scheduled_experiment import ScheduledExperiment
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from laboneq.controller.attribute_value_tracker import (
+        DeviceAttribute,
+        DeviceAttributesView,
+    )
+    from laboneq.controller.devices.device_zi import RawReadoutData
+    from laboneq.controller.recipe_processor import (
+        AwgType,
+        RecipeData,
+        RtExecutionInfo,
+        WaveformItem,
+    )
+    from laboneq.core.types.enums.acquisition_type import AcquisitionType
+    from laboneq.data.recipe import (
+        Initialization,
+        NtStepKey,
+    )
+    from laboneq.data.scheduled_experiment import ScheduledExperiment
 
 _logger = logging.getLogger(__name__)
 

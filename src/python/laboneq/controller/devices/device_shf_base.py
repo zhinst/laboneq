@@ -5,17 +5,22 @@ from __future__ import annotations
 
 import logging
 from enum import IntEnum
+from typing import TYPE_CHECKING
 
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.devices.node_control import (
     Command,
     Condition,
-    NodeControlBase,
     Response,
     Setting,
     WaitCondition,
 )
+
+if TYPE_CHECKING:
+    from laboneq.controller.devices.node_control import (
+        NodeControlBase,
+    )
 
 _logger = logging.getLogger(__name__)
 

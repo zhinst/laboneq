@@ -5,13 +5,15 @@ from __future__ import annotations
 
 import warnings
 from itertools import takewhile
-from typing import Callable, Dict, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, Tuple
 
 from laboneq._utils import id_generator
 from laboneq.dsl import quantum
 from laboneq.dsl.experiment import Section, builtins_dsl
-from laboneq.dsl.experiment.pulse import Pulse
 from laboneq.openqasm3.openqasm_error import OpenQasmException
+
+if TYPE_CHECKING:
+    from laboneq.dsl.experiment.pulse import Pulse
 
 
 class GateStore:

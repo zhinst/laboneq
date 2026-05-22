@@ -3,17 +3,21 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from laboneq.dsl.result import AcquiredResult, Results
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.implementations.results import _acquired_axis_to_ndarrays
 from laboneq.serializers.serializer_registry import serializer
-from laboneq.serializers.types import (
-    DeserializationOptions,
-    JsonSerializableType,
-    SerializationOptions,
-)
+
+if TYPE_CHECKING:
+    from laboneq.serializers.types import (
+        DeserializationOptions,
+        JsonSerializableType,
+        SerializationOptions,
+    )
 
 
 class RunExperimentResults:

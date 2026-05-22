@@ -6,16 +6,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from laboneq.controller.attribute_value_tracker import (
-    DeviceAttributesView,
-)
 from laboneq.controller.devices.async_support import (
-    AsyncSubscriber,
-    InstrumentConnection,
     ResponseWaiterAsync,
     _gather,
 )
@@ -23,12 +18,8 @@ from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.recipe_processor import (
-    AwgConfig,
     AwgSignalType,
-    DeviceRecipeData,
-    HDAWGRecipeData,
     HWModulation,
-    RecipeData,
     TrigOutSource,
     get_elf,
     prepare_command_table,
@@ -37,6 +28,21 @@ from laboneq.controller.recipe_processor import (
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import ArtifactsCodegen
+
+if TYPE_CHECKING:
+    from laboneq.controller.attribute_value_tracker import (
+        DeviceAttributesView,
+    )
+    from laboneq.controller.devices.async_support import (
+        AsyncSubscriber,
+        InstrumentConnection,
+    )
+    from laboneq.controller.recipe_processor import (
+        AwgConfig,
+        DeviceRecipeData,
+        HDAWGRecipeData,
+        RecipeData,
+    )
 
 
 class ModulationMode(IntEnum):

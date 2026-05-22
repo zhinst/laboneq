@@ -10,9 +10,6 @@ from opentelemetry import trace
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
 
-import laboneq.compiler
-import laboneq.compiler.scheduler.scheduler
-import laboneq.compiler.seqc.code_generator
 import laboneq.controller.controller
 import laboneq.core.utilities.seqc_compile
 import laboneq.dsl.session
@@ -89,37 +86,11 @@ class CompilerInstrumentor(_BaseLabOneQInstrumentor):
         super().__init__()
         self._to_instrument = [
             (
-                laboneq.compiler.scheduler.scheduler.Scheduler,
-                "run",
-                self._wrap_scheduler,
-            ),
-            (
-                laboneq.compiler.seqc.code_generator.CodeGenerator,
-                "generate_code",
-                self._wrap_code_generator,
-            ),
-            (
                 laboneq.core.utilities.seqc_compile,
                 "awg_compile",
                 self._wrap_awg_compile,
             ),
         ]
-
-    def _wrap_scheduler(self, tracer: trace.Tracer):
-        def wrapper(wrapped, instance, args, kwargs):
-            with tracer.start_as_current_span("laboneq.compiler.schedule") as span:
-                span.set_attributes(otel.source_code_attributes(wrapped))
-                return wrapped(*args, **kwargs)
-
-        return wrapper
-
-    def _wrap_code_generator(self, tracer: trace.Tracer):
-        def wrapper(wrapped, instance, args, kwargs):
-            with tracer.start_as_current_span("laboneq.compiler.generate-code") as span:
-                span.set_attributes(otel.source_code_attributes(wrapped))
-                return wrapped(*args, **kwargs)
-
-        return wrapper
 
     def _wrap_awg_compile(self, tracer: trace.Tracer):
         def wrapper(wrapped, instance, args, kwargs):

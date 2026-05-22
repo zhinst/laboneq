@@ -3,15 +3,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import attrs
 import numpy as np
-from numpy.typing import ArrayLike
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.core.utilities.pulse_sampler import pulse_function_library, sample_pulse
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
 
 pulse_id = 0
 
@@ -59,7 +61,21 @@ class PulseSampled(Pulse):
 @classformatter
 @attrs.define
 class PulseFunctional(Pulse):
-    """Pulse based on a function."""
+    """Pulse based on a function.
+
+    The argument ``pulse_params`` contains all the sweep parameters, evaluated for the current iteration.
+
+    The `pulse_parameters` supplied should be appropriate to the pulse `function` and
+    may consist of:
+
+        - `int`, `float`, `complex`, `str`, `bytes`, `bool`, `None` or `laboneq.dsl.Parameter`
+        - lists of the above
+        - dictionaries of the above with `str` keys
+
+            The lists and dictionaries may be nested and need not have homogeneous value types.
+
+            Other value types are not supported by the LabOne Q serializer.
+    """
 
     #: Key for the function used for sampling the pulse.
     function: str

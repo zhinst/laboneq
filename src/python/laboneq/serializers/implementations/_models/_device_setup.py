@@ -10,6 +10,7 @@ from typing import Any, ClassVar, Type, Union
 
 import attrs
 
+from laboneq.core.types.enums import PhysicalChannelType
 from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.core.types.enums.io_signal_type import IOSignalType
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
@@ -27,10 +28,7 @@ from laboneq.dsl.device.instruments.uhfqa import UHFQA
 from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
 from laboneq.dsl.device.instruments.zqcs import ZQCS
 from laboneq.dsl.device.io_units.logical_signal import LogicalSignal
-from laboneq.dsl.device.io_units.physical_channel import (
-    PhysicalChannel,
-    PhysicalChannelType,
-)
+from laboneq.dsl.device.io_units.physical_channel import PhysicalChannel
 from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.device.servers.data_server import DataServer

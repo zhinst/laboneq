@@ -8,23 +8,23 @@ import logging
 import time
 from builtins import frozenset
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from laboneq.compiler import CompilerSettings
-from laboneq.compiler.common.iface_compiler_output import RTCompilerOutputContainer
-from laboneq.compiler.scheduler.parameter_store import ParameterStore
 from laboneq.compiler.workflow import rt_linker
-from laboneq.compiler.workflow.realtime_compiler import RealtimeCompiler
-from laboneq.compiler.workflow.rt_linker import CombinedRTCompilerOutputContainer
-from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.core.types.numpy_support import NumPyArray
-from laboneq.data.scheduled_experiment import RtLoopProperties
+from laboneq.compiler.workflow.realtime_compiler import compile_realtime
 from laboneq.executor.executor import (
     ExecutorBase,
     LoopingMode,
 )
+
+from .parameter_store import ParameterStore
+
+if TYPE_CHECKING:
+    from laboneq._rust import compiler as compiler_rs
+    from laboneq.compiler import CompilerSettings
+    from laboneq.compiler.common.iface_compiler_output import RTCompilerOutputContainer
+    from laboneq.compiler.workflow.rt_linker import CombinedRTCompilerOutputContainer
+    from laboneq.core.types.numpy_support import NumPyArray
 
 _logger = logging.getLogger(__name__)
 
@@ -94,15 +94,16 @@ class NtCompilerExecutor(ExecutorBase):
 
     def __init__(
         self,
-        rt_compiler: RealtimeCompiler,
+        experiment: compiler_rs.Experiment,
         settings: CompilerSettings,
         chunk_count: int | None = None,
+        device_class: int = 0,
     ):
         super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY)
-        self._rt_loop_properties: RtLoopProperties | None = None
-        self._rt_compiler = rt_compiler
+        self._experiment = experiment
         self._settings = settings
         self._chunk_count = chunk_count
+        self._device_class = device_class
         self._iteration_stack = IterationStack()
 
         self._compiler_output_by_param_values: dict[
@@ -146,23 +147,6 @@ class NtCompilerExecutor(ExecutorBase):
         averaging_mode,
         acquisition_type,
     ):
-        if (
-            acquisition_type == AcquisitionType.RAW
-            and averaging_mode == AveragingMode.SEQUENTIAL
-            and count > 1
-        ):
-            raise LabOneQException(
-                "Sequential averaging is not supported for raw acquisitions."
-            )
-
-        self._rt_loop_properties = RtLoopProperties(
-            uid=uid,
-            acquisition_type=acquisition_type,
-            averaging_mode=averaging_mode,
-            shots=count,
-            chunk_count=self._chunk_count,
-        )
-
         if self._chunk_count is None:
             self._rt_entry_handler()
         else:
@@ -204,7 +188,11 @@ class NtCompilerExecutor(ExecutorBase):
             self._iteration_stack.nt_parameter_values()
         )
         tracker = parameter_store.create_tracker()
-        new_compiler_output = self._rt_compiler.run(parameter_store)
+        new_compiler_output = compile_realtime(
+            experiment=self._experiment,
+            near_time_parameters=parameter_store,
+            device_class=self._device_class,
+        )
 
         if self._required_parameters is None:
             self._required_parameters = tracker.queries()
@@ -255,10 +243,6 @@ class NtCompilerExecutor(ExecutorBase):
 
     def combined_compiler_output(self):
         return self._combined_compiler_output
-
-    def rt_loop_properties(self) -> RtLoopProperties:
-        assert self._rt_loop_properties is not None
-        return self._rt_loop_properties
 
     def finalize(self):
         if self._combined_compiler_output is not None:

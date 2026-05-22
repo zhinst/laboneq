@@ -4,41 +4,26 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
 from laboneq._version import get_version
 from laboneq.controller.api.async_controller_api import (
     AsyncControllerAPI,
-    SubmissionHandle,
-    SubmissionStatus,
 )
-from laboneq.data.scheduled_experiment import ScheduledExperiment
-from laboneq.dsl.device.device_setup import DeviceSetup
-from laboneq.dsl.result.results import Results
+from laboneq.controller.api.commons import (
+    APIError,
+    SubmissionHandle,
+    reraise_controller_exception,
+)
+from laboneq.controller.controller import SubmissionStatus
 from laboneq.serializers import from_dict, to_dict
 
-
-# --- Exceptions ---
-class APIError(Exception):
-    pass
-
-
-class NotFound(APIError):
-    pass
-
-
-class Unauthorized(APIError):
-    pass
-
-
-class BadRequest(APIError):
-    pass
-
-
-class ServerError(APIError):
-    pass
+if TYPE_CHECKING:
+    from laboneq.data.scheduled_experiment import ScheduledExperiment
+    from laboneq.dsl.device.device_setup import DeviceSetup
+    from laboneq.dsl.result.results import Results
 
 
 class AsyncRemoteController(AsyncControllerAPI):
@@ -82,7 +67,7 @@ class AsyncRemoteController(AsyncControllerAPI):
 
     async def get_default_devicesetup(self) -> DeviceSetup:
         data = await self._request_json("GET", "v1/devicesetup")
-        return cast(DeviceSetup, from_dict(data["device_setup"]))
+        return cast("DeviceSetup", from_dict(data["device_setup"]))
 
     async def submit_experiment(
         self,
@@ -118,10 +103,8 @@ class AsyncRemoteController(AsyncControllerAPI):
 
     async def get_experiment(self, handle: SubmissionHandle) -> Results:
         data = await self._request_json("GET", f"v1/experiments/{handle.hex}")
-        if data.get("error"):
-            raise APIError(data["error"])
         if data.get("results") is not None:
-            return cast(Results, from_dict(data["results"]))
+            return cast("Results", from_dict(data["results"]))
         raise APIError(f"Experiment has no results (status: {data.get('status')})")
 
     async def cancel_experiment(self, handle: SubmissionHandle) -> None:
@@ -148,20 +131,11 @@ class AsyncRemoteController(AsyncControllerAPI):
         async with httpx.AsyncClient(transport=self._transport) as client:
             resp = await client.request(method, url, json=json, headers=self._headers)
 
-            # TODO(2K): Proper transfer of server-side controller exceptions, e.g. by defining
-            # a common error format and deserializing it here.
-            # For now, we just raise generic exceptions based on the status code.
             if 400 <= resp.status_code < 500:
-                text = resp.text
-                if resp.status_code == 400:
-                    raise BadRequest(text)
-                if resp.status_code == 401:
-                    raise Unauthorized(text)
-                if resp.status_code == 404:
-                    raise NotFound(text)
-                raise APIError(f"{resp.status_code}: {text}")
+                raise APIError(f"{resp.status_code}: {resp.text}")
             elif 500 <= resp.status_code < 600:
-                raise ServerError(resp.text)
+                reraise_controller_exception(resp)
+                raise APIError(f"{resp.status_code}: {resp.text}")
 
         if resp.content and resp.headers.get("content-type", "").startswith(
             "application/json"

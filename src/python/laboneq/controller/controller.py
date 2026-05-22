@@ -11,12 +11,10 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable
 
-from numpy import typing as npt
-
 from laboneq import __version__
 from laboneq.controller.devices.async_support import _gather
 from laboneq.controller.devices.device_collection import DeviceCollection
-from laboneq.controller.devices.device_utils import NodeCollector, zhinst_core_version
+from laboneq.controller.devices.device_utils import zhinst_core_version
 from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
 from laboneq.controller.near_time_replacement import (
     NearTimeReplacements,
@@ -24,7 +22,6 @@ from laboneq.controller.near_time_replacement import (
 )
 from laboneq.controller.near_time_runner import NearTimeRunner
 from laboneq.controller.recipe_processor import (
-    RecipeData,
     get_execution_time,
     pre_process_compiled,
     validate_scheduled_experiment,
@@ -32,7 +29,6 @@ from laboneq.controller.recipe_processor import (
 from laboneq.controller.results import ResultsBuilder
 from laboneq.controller.runtime_context_impl import LegacySessionData
 from laboneq.controller.utilities.exception import LabOneQControllerException
-from laboneq.controller.utilities.sweep_params_tracker import SweepParamsTracker
 from laboneq.controller.versioning import (
     RECOMMENDED_MINIMUM_LABONE_VERSION,
     LabOneVersion,
@@ -40,14 +36,21 @@ from laboneq.controller.versioning import (
 )
 from laboneq.core.exceptions import AbortExecution
 from laboneq.core.utilities.async_helpers import AsyncWorker, EventLoopMixIn
-from laboneq.data.execution_payload import TargetSetup
-from laboneq.data.experiment_results import ExperimentResults
-from laboneq.data.recipe import NtStepKey
-from laboneq.data.scheduled_experiment import (
-    ScheduledExperiment,
-)
 
 if TYPE_CHECKING:
+    from numpy import typing as npt
+
+    from laboneq.controller.devices.device_utils import NodeCollector
+    from laboneq.controller.recipe_processor import (
+        RecipeData,
+    )
+    from laboneq.controller.utilities.sweep_params_tracker import SweepParamsTracker
+    from laboneq.data.execution_payload import TargetSetup
+    from laboneq.data.experiment_results import ExperimentResults
+    from laboneq.data.recipe import NtStepKey
+    from laboneq.data.scheduled_experiment import (
+        ScheduledExperiment,
+    )
     from laboneq.dsl.experiment.pulse import Pulse
 
 

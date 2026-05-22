@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from collections.abc import Callable, ItemsView, Iterator
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import (
@@ -30,28 +29,33 @@ from laboneq.controller.attribute_value_tracker import (
     DeviceAttribute,
 )
 from laboneq.controller.utilities.exception import LabOneQControllerException
+from laboneq.core.types.enums import PortMode as RecipePortMode
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.types.enums.awg_signal_type import AWGSignalType
 from laboneq.core.types.enums.wave_type import WaveType
-from laboneq.data.calibration import PortMode as RecipePortMode
-from laboneq.data.recipe import IO, Initialization, Recipe
-from laboneq.data.scheduled_experiment import (
-    ArtifactsCodegen,
-    CodegenWaveform,
-    ScheduledExperiment,
-    WeightInfo,
-)
+from laboneq.data.recipe import IO, Initialization
 from laboneq.executor.executor import (
     ExecutorBase,
     LoopingMode,
-    Statement,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, ItemsView, Iterator
+
     from laboneq.controller.devices.device_collection import DeviceCollection
     from laboneq.controller.devices.device_setup_dao import DeviceUID
     from laboneq.core.types.numpy_support import NumPyArray
+    from laboneq.data.recipe import Recipe
+    from laboneq.data.scheduled_experiment import (
+        ArtifactsCodegen,
+        CodegenWaveform,
+        ScheduledExperiment,
+        WeightInfo,
+    )
+    from laboneq.executor.executor import (
+        Statement,
+    )
 
 
 _logger = logging.getLogger(__name__)
@@ -1078,7 +1082,7 @@ def prepare_waves(
     if artifacts.wave_indices is None:
         return None
     wave_indices: dict[str, tuple[int, WaveType]] = cast(
-        dict[str, tuple[int, WaveType]],
+        "dict[str, tuple[int, WaveType]]",
         next(
             (i for i in artifacts.wave_indices if i["filename"] == wave_indices_ref),
             {},

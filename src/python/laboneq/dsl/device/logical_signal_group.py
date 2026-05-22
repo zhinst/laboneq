@@ -3,12 +3,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import attrs
 
 import laboneq.core.path as qct_path
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration.calibratable import Calibratable
-from laboneq.dsl.device.io_units import LogicalSignal
+
+if TYPE_CHECKING:
+    from laboneq.dsl.device.io_units import LogicalSignal
 
 
 @classformatter

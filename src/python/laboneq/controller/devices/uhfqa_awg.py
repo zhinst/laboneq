@@ -10,10 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from laboneq.controller.attribute_value_tracker import DeviceAttributesView
 from laboneq.controller.devices.async_support import (
-    AsyncSubscriber,
-    InstrumentConnection,
     ResponseWaiterAsync,
     _gather,
 )
@@ -21,13 +18,8 @@ from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import RawReadoutData
 from laboneq.controller.recipe_processor import (
-    AwgConfig,
     AwgKey,
-    DeviceRecipeData,
     HWModulation,
-    RecipeData,
-    RtExecutionInfo,
-    UHFQARecipeData,
     get_elf,
     get_execution_time,
     get_wave,
@@ -37,11 +29,23 @@ from laboneq.controller.recipe_processor import (
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import ArtifactsCodegen
 
 if TYPE_CHECKING:
+    from laboneq.controller.attribute_value_tracker import DeviceAttributesView
+    from laboneq.controller.devices.async_support import (
+        AsyncSubscriber,
+        InstrumentConnection,
+    )
+    from laboneq.controller.recipe_processor import (
+        AwgConfig,
+        DeviceRecipeData,
+        RecipeData,
+        RtExecutionInfo,
+        UHFQARecipeData,
+    )
     from laboneq.core.types.numpy_support import NumPyArray
+    from laboneq.data.recipe import NtStepKey
 
 _logger = logging.getLogger(__name__)
 

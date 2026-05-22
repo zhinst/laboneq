@@ -7,9 +7,7 @@ from typing import Any, Callable, Union
 
 import attrs
 
-from laboneq._utils import UIDReference
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
-from laboneq.dsl.parameter import Parameter
 
 from .operation import Operation
 
@@ -30,9 +28,4 @@ class Call(Operation):
             **kwargs (dict): Arguments of the function call.
         """
         self.func_name = func_name.__name__ if callable(func_name) else func_name
-        self.args = {}
-        for k, v in kwargs.items():
-            if isinstance(v, Parameter):
-                self.args[k] = UIDReference(v.uid)
-            else:
-                self.args[k] = v
+        self.args = kwargs

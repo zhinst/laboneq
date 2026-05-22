@@ -6,14 +6,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
 
 import numpy as np
-from numpy.typing import ArrayLike
 
-from laboneq.core.types.enums import ModulationType, PortMode
-from laboneq.core.types.units import Quantity
 from laboneq.data import EnumReprMixin
-from laboneq.data.parameter import Parameter
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
+
+    from laboneq.core.types.enums import ModulationType, PortMode
+    from laboneq.core.types.units import Quantity
+    from laboneq.dsl.parameter import Parameter
 
 
 @dataclass

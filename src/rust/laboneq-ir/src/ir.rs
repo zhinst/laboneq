@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 
 use crate::TinySamples;
-use laboneq_dsl::operation::PulseParameterValue;
+use laboneq_dsl::operation::ExternalOrValue;
 use laboneq_dsl::types::{
     AveragingMode, ComplexOrFloat, DeviceUid, HandleUid, Marker, ParameterUid, PrngSampleUid,
     PulseParameterUid, PulseUid, SectionUid, SignalUid, ValueOrParameter,
@@ -165,8 +165,8 @@ pub struct PlayPulse {
     pub phase: Option<ValueOrParameter<f64>>,
     pub increment_oscillator_phase: Option<ValueOrParameter<f64>>,
     pub set_oscillator_phase: Option<ValueOrParameter<f64>>,
-    pub parameters: HashMap<PulseParameterUid, PulseParameterValue>,
-    pub pulse_parameters: HashMap<PulseParameterUid, PulseParameterValue>,
+    pub parameters: HashMap<PulseParameterUid, ExternalOrValue>,
+    pub pulse_parameters: HashMap<PulseParameterUid, ExternalOrValue>,
     pub markers: Vec<Marker>,
 }
 
@@ -183,8 +183,8 @@ pub struct Acquire {
     pub handle: HandleUid,
     pub integration_length: TinySamples,
     pub kernels: Vec<PulseUid>,
-    pub parameters: Vec<HashMap<PulseParameterUid, PulseParameterValue>>,
-    pub pulse_parameters: Vec<HashMap<PulseParameterUid, PulseParameterValue>>,
+    pub parameters: Vec<HashMap<PulseParameterUid, ExternalOrValue>>,
+    pub pulse_parameters: Vec<HashMap<PulseParameterUid, ExternalOrValue>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

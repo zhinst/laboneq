@@ -138,6 +138,13 @@ where
         inner = inner << (shift - 1);
         Angle::from_raw(inner)
     }
+
+    pub fn fits_encoding(self, bits: usize) -> bool {
+        let inner = self.to_raw();
+        let shift = T::zero().count_zeros() as usize - bits;
+        let mask = (T::one() << shift) - T::one();
+        inner & mask == T::zero()
+    }
 }
 
 impl<T: Debug + PrimInt + Signed + 'static> Debug for Angle<T> {

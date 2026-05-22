@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from laboneq._rust import compiler as compiler_rs
-    from laboneq.compiler.common.iface_code_generator import ICodeGenerator
     from laboneq.compiler.common.iface_compiler_output import CombinedOutput
     from laboneq.compiler.common.iface_linker import ILinker
     from laboneq.data.recipe import Recipe
@@ -30,10 +30,6 @@ class CompilerHooks(ABC):
     @staticmethod
     @abstractmethod
     def linker() -> type[ILinker]: ...
-
-    @staticmethod
-    @abstractmethod
-    def code_generator() -> type[ICodeGenerator]: ...
 
     @staticmethod
     @abstractmethod
@@ -97,12 +93,6 @@ class CompilerHooksSeqC(CompilerHooks):
         from laboneq.compiler.seqc.linker import SeqCLinker
 
         return SeqCLinker
-
-    @staticmethod
-    def code_generator() -> type[ICodeGenerator]:
-        from laboneq.compiler.seqc.code_generator import CodeGenerator
-
-        return CodeGenerator
 
     @staticmethod
     def generate_recipe(args: GenerateRecipeArgs) -> Recipe:

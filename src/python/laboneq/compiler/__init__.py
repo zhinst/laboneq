@@ -3,5 +3,10 @@
 
 from laboneq.compiler.common.compiler_settings import CompilerSettings
 from laboneq.compiler.common.device_type import DeviceType
-from laboneq.compiler.seqc.code_generator import CodeGenerator
 from laboneq.compiler.workflow.compiler import Compiler
+
+__all__ = [
+    "Compiler",
+    "CompilerSettings",
+    "DeviceType",
+]

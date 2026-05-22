@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from copy import copy
 from functools import wraps
+from typing import TYPE_CHECKING
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import (
@@ -12,7 +13,6 @@ from laboneq.core.types.enums import (
     AveragingMode,
     RepetitionMode,
 )
-from laboneq.dsl import Parameter
 from laboneq.dsl.experiment.context import (
     Context,
     peek_context,
@@ -32,7 +32,10 @@ from laboneq.dsl.experiment.section import (
     Sweep,
 )
 from laboneq.dsl.experiment.uid_generator import GLOBAL_UID_GENERATOR
-from laboneq.dsl.prng import PRNGSample
+
+if TYPE_CHECKING:
+    from laboneq.dsl import Parameter
+    from laboneq.dsl.prng import PRNGSample
 
 
 class SectionContext(Context):

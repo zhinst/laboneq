@@ -10,23 +10,26 @@ import attrs
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import DSLVersion
-from laboneq.core.types.enums.section_timing_mode import SectionTimingMode
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
-from laboneq.dsl.calibration.calibration import Calibration
-from laboneq.dsl.device.io_units.logical_signal import LogicalSignalRef
 from laboneq.dsl.enums import (
     AcquisitionType,
     AveragingMode,
     ExecutionType,
     RepetitionMode,
-    SectionAlignment,
 )
-from laboneq.dsl.experiment.pulse import Pulse
 
 from .experiment_signal import ExperimentSignal
 from .section import AcquireLoopRt, Case, Match, Section, Sweep
 
 if TYPE_CHECKING:
+    from laboneq.core.types.enums.section_timing_mode import SectionTimingMode
+    from laboneq.dsl.calibration.calibration import Calibration
+    from laboneq.dsl.device.io_units.logical_signal import LogicalSignalRef
+    from laboneq.dsl.enums import (
+        SectionAlignment,
+    )
+    from laboneq.dsl.experiment.pulse import Pulse
+
     from .. import Parameter
 
 
@@ -429,6 +432,17 @@ class Experiment:
                 Dictionary with user pulse function parameters (re)binding.
             marker (dict):
                 Dictionary with markers to play. Example: `marker={"marker1": {"enable": True}}`
+
+        !!! note
+            The ``pulse_parameters`` values may consist of:
+
+                - `int`, `float`, `complex`, `str`, `bytes`, `bool`, `None` or `laboneq.dsl.Parameter`
+                - lists of the above
+                - dictionaries of the above with `str` keys
+
+            The lists and dictionaries may be nested and need not have homogeneous value types.
+
+            Other value types are not supported by the LabOne Q serializer.
 
         !!! note
             If markers are specified but `pulse=None`, a zero amplitude pulse as long as the end of the longest

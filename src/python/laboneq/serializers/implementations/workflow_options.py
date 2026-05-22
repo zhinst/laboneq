@@ -6,18 +6,22 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import attrs
 
 from laboneq import serializers
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.core import import_cls
 from laboneq.serializers.serializer_registry import serializer
-from laboneq.serializers.types import (
-    DeserializationOptions,
-    JsonSerializableType,
-    SerializationOptions,
-)
 from laboneq.workflow import TaskOptions, WorkflowOptions
+
+if TYPE_CHECKING:
+    from laboneq.serializers.types import (
+        DeserializationOptions,
+        JsonSerializableType,
+        SerializationOptions,
+    )
 
 
 @serializer(types=WorkflowOptions, public=True)

@@ -11,7 +11,6 @@ import attrs
 from laboneq.core.types.enums import ModulationType
 from laboneq.data import calibration
 from laboneq.dsl import calibration as legacy_calibration
-from laboneq.dsl import parameter as legacy_parameter
 from laboneq.implementation.legacy_adapters.utils import (
     LogicalSignalPhysicalChannelUID,
     raise_not_implemented,
@@ -28,28 +27,6 @@ def _change_type(source: Any, target: Any) -> Any:
     raise_not_implemented(source)
 
 
-def convert_maybe_parameter(obj: Any) -> Any:
-    if obj is None:
-        return None
-    if isinstance(obj, legacy_parameter.SweepParameter):
-        # local import to avoid circular dependency:
-        from laboneq.implementation.legacy_adapters.converters_experiment_description import (
-            convert_SweepParameter,
-        )
-
-        return convert_SweepParameter(obj)
-    if isinstance(obj, legacy_parameter.LinearSweepParameter):
-        # local import to avoid circular dependency:
-        from laboneq.implementation.legacy_adapters.converters_experiment_description import (
-            convert_LinearSweepParameter,
-        )
-
-        return convert_LinearSweepParameter(obj)
-    if isinstance(obj, (float, int)):
-        return obj
-    raise_not_implemented(obj)
-
-
 def convert_oscillator(
     obj: legacy_calibration.Oscillator | None,
 ) -> Optional[calibration.Oscillator]:
@@ -57,7 +34,7 @@ def convert_oscillator(
         return None
     return calibration.Oscillator(
         uid=obj.uid,
-        frequency=convert_maybe_parameter(obj.frequency),
+        frequency=obj.frequency,
         modulation_type=obj.modulation_type,
     )
 
@@ -70,13 +47,8 @@ def convert_mixer_calibration(
     if isinstance(obj, legacy_calibration.MixerCalibration):
         return calibration.MixerCalibration(
             uid=obj.uid,
-            voltage_offsets=[
-                convert_maybe_parameter(val) for val in obj.voltage_offsets or []
-            ],
-            correction_matrix=[
-                [convert_maybe_parameter(ij) for ij in row]
-                for row in obj.correction_matrix or []
-            ],
+            voltage_offsets=obj.voltage_offsets or [],
+            correction_matrix=obj.correction_matrix or [],
         )
     raise_not_implemented(obj)
 
@@ -123,20 +95,18 @@ def convert_amplifier_pump(
     return calibration.AmplifierPump(
         uid=obj.uid,
         pump_on=obj.pump_on,
-        pump_frequency=convert_maybe_parameter(obj.pump_frequency),
-        pump_power=convert_maybe_parameter(obj.pump_power),
+        pump_frequency=obj.pump_frequency,
+        pump_power=obj.pump_power,
         pump_filter_on=obj.pump_filter_on,
         cancellation_on=obj.cancellation_on,
-        cancellation_phase=convert_maybe_parameter(obj.cancellation_phase),
-        cancellation_attenuation=convert_maybe_parameter(obj.cancellation_attenuation),
+        cancellation_phase=obj.cancellation_phase,
+        cancellation_attenuation=obj.cancellation_attenuation,
         cancellation_source=obj.cancellation_source,
-        cancellation_source_frequency=convert_maybe_parameter(
-            obj.cancellation_source_frequency
-        ),
+        cancellation_source_frequency=obj.cancellation_source_frequency,
         alc_on=obj.alc_on,
         probe_on=obj.probe_on,
-        probe_frequency=convert_maybe_parameter(obj.probe_frequency),
-        probe_power=convert_maybe_parameter(obj.probe_power),
+        probe_frequency=obj.probe_frequency,
+        probe_power=obj.probe_power,
     )
 
 
@@ -167,27 +137,25 @@ def convert_calibration(
                         "all local oscillator calibration settings is set to "
                         "either `ModulationType.HARDWARE` or `ModulationType.AUTO`."
                     )
-                new.local_oscillator_frequency = convert_maybe_parameter(
-                    legacy_ls.local_oscillator.frequency
-                )
+                new.local_oscillator_frequency = legacy_ls.local_oscillator.frequency
             new.mixer_calibration = convert_mixer_calibration(
                 legacy_ls.mixer_calibration
             )
             new.precompensation = convert_precompensation(legacy_ls.precompensation)
-            new.port_delay = convert_maybe_parameter(legacy_ls.port_delay)
+            new.port_delay = legacy_ls.port_delay
             new.delay_signal = getattr(legacy_ls, "delay_signal", None)
             new.port_mode = legacy_ls.port_mode
-            new.voltage_offset = convert_maybe_parameter(legacy_ls.voltage_offset)
+            new.voltage_offset = legacy_ls.voltage_offset
             new.range = legacy_ls.range
             new.threshold = getattr(legacy_ls, "threshold", None)
-            new.amplitude = convert_maybe_parameter(legacy_ls.amplitude)
+            new.amplitude = legacy_ls.amplitude
             new.amplifier_pump = convert_amplifier_pump(legacy_ls.amplifier_pump)
             if legacy_ls.added_outputs is not None:
                 for router in legacy_ls.added_outputs:
                     routing = calibration.OutputRouting(
                         source_signal=router.source,
-                        amplitude=convert_maybe_parameter(router.amplitude_scaling),
-                        phase=convert_maybe_parameter(router.phase_shift),
+                        amplitude=router.amplitude_scaling,
+                        phase=router.phase_shift,
                     )
                     new.output_routing.append(routing)
             new.automute = getattr(legacy_ls, "automute", None)

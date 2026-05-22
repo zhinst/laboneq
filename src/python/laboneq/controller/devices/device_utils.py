@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from dataclasses import dataclass
 from importlib.metadata import version
 from typing import TYPE_CHECKING, Any
@@ -13,6 +13,8 @@ from laboneq.controller.devices.zi_emulator import EmulatorState
 from laboneq.controller.versioning import LabOneVersion
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from laboneq.controller.devices.device_setup_dao import DeviceSetupDAO
     from laboneq.controller.devices.device_zi import DeviceQualifier
 

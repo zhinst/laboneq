@@ -60,6 +60,18 @@ class OptionBuilder:
             pprint(self._base, console=console, expand_all=True, indent_guides=True)
             return buffer.getvalue()
 
+    def task_options(self, task_name: str) -> BaseOptions | None:
+        """Return the options for a specific task within this workflow.
+
+        Arguments:
+            task_name: Name of the task.
+
+        Returns:
+            The task options, or `None` if the task has no options
+            in this workflow.
+        """
+        return self._base._task_options.get(task_name)
+
     def _repr_pretty_(self, p, _cycle):  # noqa: ANN001, ANN202
         p.text(str(self))
 

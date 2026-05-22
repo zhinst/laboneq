@@ -625,6 +625,32 @@ mod tests {
     }
 
     #[test]
+    fn test_compress_generator_ignores_command_table_comments() {
+        // Two `executeTableEntry` calls referencing the same CT index emit the
+        // same instruction even when their cosmetic comments differ. The
+        // compressor must collapse a long run of them into a single repeat.
+        use crate::ir::compilation_job::DeviceKind;
+        use crate::sampled_event_handler::seqc_tracker::seqc_statements::SeqCVariant;
+        let mut scgen = SeqCGenerator::new(DeviceKind::HDAWG.traits(), false);
+        for i in 0..1000u32 {
+            let comment = if i.is_multiple_of(2) {
+                "amp+=0"
+            } else {
+                "amp+=-0"
+            };
+            scgen.add_command_table_execution(SeqCVariant::Integer(2), None, Some(comment));
+        }
+        let compressed = compress_generator(scgen);
+        // After compression the repeated CT executions must collapse to a
+        // single Repeat statement (plus possibly initialisation).
+        assert!(
+            compressed.statements().len() <= 2,
+            "expected compression to collapse 1000 statements, got {}",
+            compressed.statements().len()
+        );
+    }
+
+    #[test]
     fn test_compress_hashes_very_long_sequences() {
         // A previous implementation was O((length of repeat)^2) in memory needs, so 1e5 repeat length would be expensive.
         // This test doesn't check much functional behaviour, but would explode in memory if quadratic runtime would be reintroduced.

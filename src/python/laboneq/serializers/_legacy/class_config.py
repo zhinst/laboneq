@@ -9,10 +9,8 @@ from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
 from laboneq.dsl.calibration.oscillator import Oscillator
 from laboneq.dsl.calibration.precompensation import Precompensation
 from laboneq.dsl.device import Instrument, LogicalSignalGroup, Server
-from laboneq.dsl.device.physical_channel_group import (
-    PhysicalChannel,
-    PhysicalChannelGroup,
-)
+from laboneq.dsl.device.io_units.physical_channel import PhysicalChannel
+from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.experiment.pulse import Pulse
 from laboneq.dsl.experiment.section import Section
 from laboneq.dsl.parameter import Parameter
@@ -77,16 +75,14 @@ def classes_by_short_name() -> OrderedDict[str, type]:
         "laboneq.core.types.compiled_experiment",
         "laboneq.data.scheduled_experiment",
         "laboneq.data.recipe",
+        "laboneq.data.experiment_results",
         "laboneq.executor.executor",
         "laboneq.dsl.device.io_units.logical_signal",
         "laboneq.dsl.device.io_units.physical_channel",
         "laboneq.dsl.device.instruments",
         "laboneq.dsl.calibration.units",
     ]
-    schedule_modules = [
-        "laboneq.compiler.scheduler.scheduler",
-    ]
-    _, classes_by_short_name = module_classes(dsl_modules + schedule_modules)
+    _, classes_by_short_name = module_classes(dsl_modules)
     # TODO: remove this after migration to new data types is complete (?)
     _, classes_by_short_name_compilation_job = module_classes(
         ["laboneq.data.compilation_job"],

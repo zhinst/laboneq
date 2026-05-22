@@ -9,7 +9,7 @@ import attrs
 
 from laboneq._utils import id_generator
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import SectionAlignment, SectionTimingMode
+from laboneq.core.types.enums import SectionAlignment
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.core.validators import validating_allowed_values
 from laboneq.dsl.enums import (
@@ -18,7 +18,6 @@ from laboneq.dsl.enums import (
     ExecutionType,
     RepetitionMode,
 )
-from laboneq.dsl.experiment.pulse import Pulse
 from laboneq.dsl.parameter import Parameter
 
 from .acquire import Acquire
@@ -31,6 +30,9 @@ from .reset_oscillator_phase import ResetOscillatorPhase
 from .set_node import SetNode
 
 if TYPE_CHECKING:
+    from laboneq.core.types.enums import SectionTimingMode
+    from laboneq.dsl.experiment.pulse import Pulse
+
     from ..prng import PRNG, PRNGSample
 
 

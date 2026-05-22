@@ -9,7 +9,25 @@ from typing import TYPE_CHECKING
 from laboneq.controller.utilities.exception import LabOneQControllerException
 
 if TYPE_CHECKING:
+    import httpx
+
     from laboneq.controller.controller import ControllerSubmission
+
+
+class APIError(Exception):
+    pass
+
+
+def reraise_controller_exception(resp: httpx.Response) -> None:
+    """Reconstruct and raise LabOneQControllerException from a structured 500 body."""
+    try:
+        error = resp.json().get("error", {})
+        if error.get("code") == "CONTROLLER_ERROR":
+            raise LabOneQControllerException(error.get("message", resp.text))
+    except LabOneQControllerException:
+        raise
+    except Exception:
+        pass
 
 
 class SubmissionHandle:

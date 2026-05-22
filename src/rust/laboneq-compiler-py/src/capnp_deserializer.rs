@@ -26,13 +26,17 @@ use laboneq_capnp::pulse::v1::{
 };
 use laboneq_common::device_options::DeviceOptions;
 use laboneq_common::named_id::{NamedId, NamedIdStore};
-use laboneq_common::types::{AuxiliaryDeviceKind, ReferenceClock, SignalKind};
+use laboneq_common::types::{Literal, ReferenceClock};
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::device_setup::{AuxiliaryDevice, DeviceSignal, Instrument, InstrumentKind};
+use laboneq_dsl::device_setup::{Instrument, SetupDescription};
+use laboneq_dsl::experiment_signal::ExperimentSignal;
 use laboneq_dsl::operation::{
-    Acquire, AveragingLoop, Case, Delay, Match, Operation, PlayPulse, PrngLoop, PrngSetup,
-    PulseParameterValue, Reserve, ResetOscillatorPhase, Section, Sweep,
+    Acquire, AveragingLoop, Case, Delay, ExternalOrValue, Match, NearTimeCallback, Operation,
+    PlayPulse, PrngLoop, PrngSetup, Reserve, ResetOscillatorPhase, Section, SetNode, Sweep,
+    ValueEntry,
 };
+use laboneq_dsl::setup_description_qccs::{PhysicalChannel, SetupDescriptionQccs};
+use laboneq_dsl::setup_description_zqcs::{SetupDescriptionZqcs, ZqcsChannel};
 use laboneq_dsl::signal_calibration::{
     BounceCompensation, CorrectionMatrix, ExponentialCompensation, FirCompensation,
     HighPassCompensation, MixerCalibration, OutputRoute, PortMode, Precompensation,
@@ -49,8 +53,8 @@ use laboneq_dsl::types::{
 use laboneq_units::duration::seconds;
 use num_complex::Complex64;
 use numeric_array::NumericArray;
-use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyString};
+use pyo3::types::PyBytes;
+use pyo3::{IntoPyObjectExt, prelude::*};
 type ExternalParameterStore = HashMap<ExternalParameterUid, Py<PyAny>>;
 
 /// Result of deserializing a Cap'n Proto experiment message.
@@ -61,10 +65,9 @@ pub(crate) struct DeserializedExperiment {
     pub pulses: HashMap<PulseUid, PulseDef>,
     pub external_parameter_values: ExternalParameterStore,
 
-    // Device setup properties
-    pub instruments: Vec<Instrument>,
-    pub auxiliary_devices: Vec<AuxiliaryDevice>,
-    pub signals: Vec<DeviceSignal>,
+    pub experiment_signals: Vec<ExperimentSignal>,
+
+    pub setup_description: SetupDescription,
 }
 
 // === Pure helper functions ===
@@ -305,7 +308,9 @@ fn deserialize_explicit_sweep(
     }
 }
 
-fn deserialize_constant(reader: &common_capnp::constant::Reader<'_>) -> Result<NumericLiteral> {
+fn deserialize_constant_numeric(
+    reader: &common_capnp::constant::Reader<'_>,
+) -> Result<NumericLiteral> {
     use common_capnp::constant::Which;
     match reader.which().map_err(Error::new)? {
         Which::Real(v) => Ok(NumericLiteral::Float(v)),
@@ -324,6 +329,22 @@ fn deserialize_constant(reader: &common_capnp::constant::Reader<'_>) -> Result<N
     }
 }
 
+fn deserialize_constant(reader: &common_capnp::constant::Reader<'_>) -> Result<Literal> {
+    use common_capnp::constant::Which;
+    match reader.which().map_err(Error::new)? {
+        Which::Real(v) => Ok(v.into()),
+        Which::Integer(v) => Ok(v.into()),
+        Which::Complex(cv) => {
+            let cv = cv.map_err(Error::new)?;
+            Ok(Complex64::new(cv.get_real(), cv.get_imag()).into())
+        }
+        Which::StringValue(v) => Ok(text_to_str(v.map_err(Error::new)?)?.into()),
+        Which::PickledValue(_) | Which::RawBytesValue(_) => {
+            Err(Error::new("Bytes values not supported"))
+        }
+    }
+}
+
 fn deserialize_value_as_numeric(
     reader: &common_capnp::value::Reader<'_>,
 ) -> Result<Option<NumericLiteral>> {
@@ -332,7 +353,7 @@ fn deserialize_value_as_numeric(
         Which::None(()) => Ok(None),
         Which::Constant(constant) => {
             let constant = constant.map_err(Error::new)?;
-            Ok(Some(deserialize_constant(&constant)?))
+            Ok(Some(deserialize_constant_numeric(&constant)?))
         }
         Which::ParameterRef(_) => Err(Error::new(
             "Expected a constant value, got parameter reference",
@@ -342,12 +363,12 @@ fn deserialize_value_as_numeric(
 
 fn deserialize_acquisition_type(acq_type: operation_capnp::AcquisitionType) -> AcquisitionType {
     match acq_type {
-        operation_capnp::AcquisitionType::Integration
-        | operation_capnp::AcquisitionType::Unspecified => AcquisitionType::Integration,
+        operation_capnp::AcquisitionType::Integration => AcquisitionType::Integration,
         operation_capnp::AcquisitionType::Raw => AcquisitionType::Raw,
         operation_capnp::AcquisitionType::Discrimination => AcquisitionType::Discrimination,
         operation_capnp::AcquisitionType::SpectroscopyIq => AcquisitionType::Spectroscopy,
         operation_capnp::AcquisitionType::SpectroscopyPsd => AcquisitionType::SpectroscopyPsd,
+        operation_capnp::AcquisitionType::Unspecified => AcquisitionType::default(),
     }
 }
 
@@ -391,10 +412,9 @@ fn deserialize_acquire_loop(
 
     let averaging_mode = match reader.get_averaging_mode().map_err(Error::new)? {
         section_capnp::AveragingMode::Sequential => AveragingMode::Sequential,
-        section_capnp::AveragingMode::Cyclic | section_capnp::AveragingMode::Unspecified => {
-            AveragingMode::Cyclic
-        }
+        section_capnp::AveragingMode::Cyclic => AveragingMode::Cyclic,
         section_capnp::AveragingMode::SingleShot => AveragingMode::SingleShot,
+        section_capnp::AveragingMode::Unspecified => AveragingMode::default(),
     };
 
     let acquisition_type =
@@ -494,6 +514,8 @@ impl ChildSectionIndex {
 struct Deserializer<'py> {
     py: Python<'py>,
     id_store: NamedIdStore,
+
+    /// --- Experiment entities ---
     signal_ids: Vec<NamedId>,
     parameter_ids: Vec<NamedId>,
     pulse_ids: Vec<NamedId>,
@@ -502,13 +524,13 @@ struct Deserializer<'py> {
     external_parameter_values: ExternalParameterStore,
     parameters: HashMap<ParameterUid, SweepParameter>,
     pulses: HashMap<PulseUid, PulseDef>,
-    pulse_definition_params: HashMap<PulseUid, HashMap<PulseParameterUid, PulseParameterValue>>,
-    instruments: Vec<Instrument>,
-    auxiliary_devices: Vec<AuxiliaryDevice>,
-    signals: Vec<DeviceSignal>,
+    pulse_definition_params: HashMap<PulseUid, HashMap<PulseParameterUid, ExternalOrValue>>,
     oscillators: Vec<Oscillator>,
     // A map of driver -> derived parameters.
     driving_parameters: HashMap<ParameterUid, Vec<ParameterUid>>,
+
+    /// --- Signal mapping ---
+    experiment_signals: Vec<ExperimentSignal>,
 }
 
 impl<'py> Deserializer<'py> {
@@ -525,11 +547,9 @@ impl<'py> Deserializer<'py> {
             parameters: HashMap::new(),
             pulses: HashMap::new(),
             pulse_definition_params: HashMap::new(),
-            instruments: Vec::new(),
-            auxiliary_devices: Vec::new(),
-            signals: Vec::new(),
             oscillators: Vec::new(),
             driving_parameters: HashMap::new(),
+            experiment_signals: Vec::new(),
         }
     }
 
@@ -543,7 +563,7 @@ impl<'py> Deserializer<'py> {
         self.prepass_register_uids(experiment)?;
         self.deserialize_sweep_params(experiment)?;
         self.deserialize_pulses(experiment)?;
-        self.deserialize_device_setup(experiment)?;
+        let setup_description = self.deserialize_device_setup(experiment)?;
         let root = self.deserialize_root_sections(experiment)?;
 
         Ok(DeserializedExperiment {
@@ -552,9 +572,8 @@ impl<'py> Deserializer<'py> {
             parameters: self.parameters,
             pulses: self.pulses,
             external_parameter_values: self.external_parameter_values,
-            instruments: self.instruments,
-            auxiliary_devices: self.auxiliary_devices,
-            signals: self.signals,
+            experiment_signals: self.experiment_signals,
+            setup_description,
         })
     }
 
@@ -1032,8 +1051,12 @@ impl<'py> Deserializer<'py> {
         let mut direct_parameters = Vec::with_capacity(param_uids.len() as usize);
         for idx in param_uids.iter() {
             let param_uid = ParameterUid(self.resolve_parameter_index(idx)?);
-            parameters.push(param_uid);
-            direct_parameters.push(param_uid);
+            if !parameters.contains(&param_uid) {
+                parameters.push(param_uid);
+            }
+            if !direct_parameters.contains(&param_uid) {
+                direct_parameters.push(param_uid);
+            }
             // Also include all derived parameters driven by the explicitly listed parameters.
             if let Some(derived_params) = self.driving_parameters.get(&param_uid) {
                 for &derived in derived_params {
@@ -1190,8 +1213,14 @@ impl<'py> Deserializer<'py> {
                 let acquire = acquire.map_err(Error::new)?;
                 Operation::Acquire(self.deserialize_acquire_op(&acquire)?)
             }
-            Which::Call(_) => Operation::NearTimeCallback,
-            Which::SetNode(_) => Operation::SetNode,
+            Which::Call(call) => {
+                let call = call.map_err(Error::new)?;
+                Operation::NearTimeCallback(self.deserialize_call_op(call)?)
+            }
+            Which::SetNode(set_node) => {
+                let set_node = set_node.map_err(Error::new)?;
+                Operation::SetNode(self.deserialize_set_node_op(set_node)?)
+            }
             Which::ResetOscillatorPhase(reset) => {
                 let reset = reset.map_err(Error::new)?;
                 Operation::ResetOscillatorPhase(self.deserialize_reset_oscillator_phase(&reset)?)
@@ -1365,7 +1394,7 @@ impl<'py> Deserializer<'py> {
             common_capnp::value::Which::None(()) => None,
             common_capnp::value::Which::Constant(constant) => {
                 let constant = constant.map_err(Error::new)?;
-                let numeric = deserialize_constant(&constant)?;
+                let numeric = deserialize_constant_numeric(&constant)?;
                 let f: f64 = numeric.try_into().map_err(Error::new)?;
                 Some(seconds(f))
             }
@@ -1423,7 +1452,62 @@ impl<'py> Deserializer<'py> {
         Ok(ResetOscillatorPhase { signals })
     }
 
+    fn deserialize_call_op(
+        &mut self,
+        reader: operation_capnp::call_op::Reader<'_>,
+    ) -> Result<NearTimeCallback> {
+        let callback_id = text_to_str(reader.get_callback_id().map_err(Error::new)?)?;
+        let callback_id = self.id_store.get_or_insert(callback_id);
+
+        let arg_reader = reader.get_arguments().map_err(Error::new)?;
+        let mut args = Vec::with_capacity(arg_reader.len() as usize);
+        for arg in arg_reader.iter() {
+            let key = text_to_str(arg.get_key().map_err(Error::new)?)?;
+            let value = self.deserialize_value(&arg.get_value().map_err(Error::new)?)?;
+            let arg = ValueEntry {
+                key: self.id_store.get_or_insert(key),
+                value,
+            };
+            args.push(arg);
+        }
+        let callback = NearTimeCallback { callback_id, args };
+        Ok(callback)
+    }
+
+    fn deserialize_set_node_op(
+        &mut self,
+        reader: operation_capnp::set_node_op::Reader<'_>,
+    ) -> Result<SetNode> {
+        let path = text_to_str(reader.get_path().map_err(Error::new)?)?;
+        let path = self.id_store.get_or_insert(path);
+
+        let value = self.deserialize_value_value(&reader.get_value().map_err(Error::new)?)?;
+        if let Some(value) = value {
+            let set_node = SetNode { path, value };
+            return Ok(set_node);
+        }
+        Err(Error::new("SetNode value must be specified"))
+    }
+
     // === Value deserialization helpers ===
+
+    fn deserialize_value_value(
+        &self,
+        reader: &common_capnp::value::Reader<'_>,
+    ) -> Result<Option<ValueOrParameter<Literal>>> {
+        use common_capnp::value::Which;
+        match reader.which().map_err(Error::new)? {
+            Which::None(()) => Ok(None),
+            Which::Constant(constant) => {
+                let constant = constant.map_err(Error::new)?;
+                let value = deserialize_constant(&constant)?;
+                Ok(Some(ValueOrParameter::Value(value)))
+            }
+            Which::ParameterRef(idx) => Ok(Some(ValueOrParameter::Parameter(ParameterUid(
+                self.resolve_parameter_index(idx)?,
+            )))),
+        }
+    }
 
     fn deserialize_value_f64(
         &self,
@@ -1434,7 +1518,7 @@ impl<'py> Deserializer<'py> {
             Which::None(()) => Ok(None),
             Which::Constant(constant) => {
                 let constant = constant.map_err(Error::new)?;
-                let f: f64 = deserialize_constant(&constant)?
+                let f: f64 = deserialize_constant_numeric(&constant)?
                     .try_into()
                     .map_err(Error::new)?;
                 Ok(Some(ValueOrParameter::Value(f)))
@@ -1458,7 +1542,7 @@ impl<'py> Deserializer<'py> {
             Which::None(()) => Ok(None),
             Which::Constant(constant) => {
                 let constant = constant.map_err(Error::new)?;
-                let f: f64 = deserialize_constant(&constant)?
+                let f: f64 = deserialize_constant_numeric(&constant)?
                     .try_into()
                     .map_err(Error::new)?;
                 Ok(Some(ValueOrParameter::Value(seconds(f))))
@@ -1478,7 +1562,7 @@ impl<'py> Deserializer<'py> {
             Which::None(()) => Ok(None),
             Which::Constant(constant) => {
                 let constant = constant.map_err(Error::new)?;
-                let cf: ComplexOrFloat = deserialize_constant(&constant)?
+                let cf: ComplexOrFloat = deserialize_constant_numeric(&constant)?
                     .try_into()
                     .map_err(Error::new)?;
                 Ok(Some(ValueOrParameter::Value(cf)))
@@ -1494,44 +1578,45 @@ impl<'py> Deserializer<'py> {
     fn deserialize_pulse_parameters(
         &mut self,
         reader: &capnp::struct_list::Reader<'_, common_capnp::value_entry::Owned>,
-    ) -> Result<HashMap<PulseParameterUid, PulseParameterValue>> {
+    ) -> Result<HashMap<PulseParameterUid, ExternalOrValue>> {
         let mut result = HashMap::new();
         for entry in reader.iter() {
             let key = text_to_str(entry.get_key().map_err(Error::new)?)?;
             let key_id = PulseParameterUid(self.id_store.get_or_insert(key));
             let value_reader = entry.get_value().map_err(Error::new)?;
-            let value = self.deserialize_pulse_parameter_value(&value_reader)?;
+            let value = self.deserialize_value(&value_reader)?;
             result.insert(key_id, value);
         }
         Ok(result)
     }
 
-    fn deserialize_pulse_parameter_value(
+    fn deserialize_value(
         &mut self,
         reader: &common_capnp::value::Reader<'_>,
-    ) -> Result<PulseParameterValue> {
+    ) -> Result<ExternalOrValue> {
         use common_capnp::value::Which;
         match reader.which().map_err(Error::new)? {
-            Which::None(()) => Ok(PulseParameterValue::ValueOrParameter(
-                ValueOrParameter::Value(NumericLiteral::Float(0.0)),
-            )),
+            Which::None(()) => Ok(ExternalOrValue::ValueOrParameter(ValueOrParameter::Value(
+                NumericLiteral::Float(0.0),
+            ))),
             Which::Constant(constant) => {
                 let constant = constant.map_err(Error::new)?;
                 use common_capnp::constant::Which as ConstantWhich;
                 match constant.which().map_err(Error::new)? {
                     ConstantWhich::StringValue(value) => {
                         let value = text_to_str(value.map_err(Error::new)?)?;
-                        let py_value: Bound<'_, PyAny> = PyString::new(self.py, value).into_any();
+                        let py_value = value.into_bound_py_any(self.py)?;
                         let external_uid = intern_py_object_uid(&py_value)?;
                         self.external_parameter_values
                             .entry(external_uid)
                             .or_insert_with(|| py_value.clone().unbind());
-                        Ok(PulseParameterValue::ExternalParameter(external_uid))
+                        Ok(ExternalOrValue::ExternalParameter(external_uid))
                     }
                     // Pickling is strictly a fallback for arbitrary Python objects passed
                     // into custom functional pulse parameters (e.g., a SciPy interpolation
-                    // object). Because the Rust compiler does not execute these (they are
-                    // evaluated in Python during waveform sampling), they must be passed
+                    // object) or to a custom user callback function.
+                    // Because the Rust compiler does not execute these (they are
+                    // evaluated in Python during waveform sampling or passed as they are into Controller), they must be passed
                     // opaquely.
                     ConstantWhich::PickledValue(data) => {
                         let data = data.map_err(Error::new)?;
@@ -1548,7 +1633,7 @@ impl<'py> Deserializer<'py> {
                         self.external_parameter_values
                             .entry(external_uid)
                             .or_insert_with(|| py_value.clone().unbind());
-                        Ok(PulseParameterValue::ExternalParameter(external_uid))
+                        Ok(ExternalOrValue::ExternalParameter(external_uid))
                     }
                     ConstantWhich::RawBytesValue(data) => {
                         let data = data.map_err(Error::new)?;
@@ -1558,14 +1643,14 @@ impl<'py> Deserializer<'py> {
                         self.external_parameter_values
                             .entry(external_uid)
                             .or_insert_with(|| py_value.clone().unbind());
-                        Ok(PulseParameterValue::ExternalParameter(external_uid))
+                        Ok(ExternalOrValue::ExternalParameter(external_uid))
                     }
-                    _ => Ok(PulseParameterValue::ValueOrParameter(
-                        ValueOrParameter::Value(deserialize_constant(&constant)?),
-                    )),
+                    _ => Ok(ExternalOrValue::ValueOrParameter(ValueOrParameter::Value(
+                        deserialize_constant_numeric(&constant)?,
+                    ))),
                 }
             }
-            Which::ParameterRef(idx) => Ok(PulseParameterValue::ValueOrParameter(
+            Which::ParameterRef(idx) => Ok(ExternalOrValue::ValueOrParameter(
                 ValueOrParameter::Parameter(ParameterUid(self.resolve_parameter_index(idx)?)),
             )),
         }
@@ -1574,20 +1659,44 @@ impl<'py> Deserializer<'py> {
     fn deserialize_device_setup(
         &mut self,
         reader: &experiment_capnp::experiment::Reader<'_>,
-    ) -> Result<()> {
+    ) -> Result<SetupDescription> {
         let reader = reader.get_device_setup().map_err(Error::new)?;
-        reader
+        self.deserialize_oscillators(reader)?;
+
+        let mut experiment_signals = self.deserialize_experiment_signals(&reader)?;
+        let (setup_description, signal_map) = self.deserialize_setup_description(&reader)?;
+
+        for (exp_signal, setup_signal) in signal_map {
+            if let Some(calibration) = experiment_signals.remove(exp_signal.as_str()) {
+                let experiment_signal = ExperimentSignal {
+                    uid: self.id_store.get_or_insert(exp_signal).into(),
+                    calibration,
+                    maps_to: setup_signal,
+                };
+                self.experiment_signals.push(experiment_signal);
+            }
+        }
+        Ok(setup_description)
+    }
+
+    fn deserialize_setup_description(
+        &mut self,
+        reader: &device_setup_capnp::device_setup::Reader<'_>,
+    ) -> Result<(SetupDescription, Vec<(String, String)>)> {
+        let instruments: Vec<&str> = reader
             .get_instruments()
             .map_err(Error::new)?
             .iter()
-            .try_for_each(|instrument| {
-                self.deserialize_instrument(instrument)
-                    .map_err(|e| Error::new(format!("Failed to deserialize instrument: {e}")))
-            })?;
+            .map(|instrument| text_to_str(instrument.get_device_type().map_err(Error::new)?))
+            .collect::<Result<Vec<_>>>()?;
 
-        self.deserialize_oscillators(reader)?;
-        self.deserialize_signals(&reader)?;
-        Ok(())
+        let (setup, signal_map) = if instruments.contains(&"ZQCS") {
+            SetupDescriptionZqcsDeserializer::deserialize(reader, &mut self.id_store)?
+        } else {
+            SetupDescriptionQccsDeserializer::deserialize(reader, &mut self.id_store)?
+        };
+
+        Ok((setup, signal_map))
     }
 
     fn deserialize_oscillators(
@@ -1615,67 +1724,28 @@ impl<'py> Deserializer<'py> {
     }
 
     /// Deserialize signals from the device setup section
-    fn deserialize_signals(
+    fn deserialize_experiment_signals<'a>(
         &mut self,
-        reader: &device_setup_capnp::device_setup::Reader<'_>,
-    ) -> Result<()> {
+        reader: &device_setup_capnp::device_setup::Reader<'a>,
+    ) -> Result<HashMap<&'a str, SignalCalibration>> {
         let signals_reader = reader.get_signals().map_err(Error::new)?;
-        let mut signals = Vec::with_capacity(signals_reader.len() as usize);
+
+        let mut experiment_signals = HashMap::with_capacity(signals_reader.len() as usize);
 
         for signal in signals_reader.iter() {
-            let uid = text_to_str(signal.get_uid().map_err(Error::new)?)?;
-            let device_uid = signal.get_instrument_uid().map_err(Error::new)?;
-
-            // Ports
-            let ports: Vec<&str> = signal
-                .get_ports()
-                .map_err(Error::new)?
-                .iter()
-                .map(|p| text_to_str(p.map_err(Error::new)?))
-                .collect::<Result<Vec<_>>>()?;
-            // Ports are string integers, convert them to integers and store as channels
-            let ports = ports.iter().map(|p| p.to_string()).collect::<Vec<_>>();
-
-            // Signal kind
-            let kind = match signal
-                .get_channel_type()
-                .map_err(Error::new)?
-                .to_str()
-                .map_err(Error::new)?
-            {
-                "IQ" => SignalKind::Iq,
-                "INTEGRATION" => SignalKind::Integration,
-                "RF" => SignalKind::Rf,
-                other => {
-                    return Err(Error::new(format!(
-                        "Unknown channel type '{other}' for signal '{uid}'"
-                    )));
-                }
-            };
+            let signal_uid = text_to_str(signal.get_uid().map_err(Error::new)?)?;
 
             let calibration = self
                 .deserialize_signal_calibration(signal.get_calibration().map_err(Error::new)?)
                 .map_err(|e| {
                     Error::new(format!(
-                        "Failed to deserialize calibration for signal '{uid}': {e}"
+                        "Failed to deserialize calibration for signal '{signal_uid}': {e}"
                     ))
                 })?;
 
-            let signal_props = DeviceSignal {
-                uid: self.id_store.get_or_insert(uid).into(),
-                device_uid: self
-                    .id_store
-                    .get_or_insert(text_to_str(device_uid).map_err(Error::new)?)
-                    .into(),
-                ports,
-                kind,
-                calibration,
-            };
-
-            signals.push(signal_props);
+            experiment_signals.insert(signal_uid, calibration);
         }
-        self.signals = signals;
-        Ok(())
+        Ok(experiment_signals)
     }
 
     fn deserialize_signal_calibration(
@@ -1977,20 +2047,125 @@ impl<'py> Deserializer<'py> {
         };
         Ok(amplifier_pump)
     }
+}
+
+// === Entry point ===
+
+/// Deserializes a Cap'n Proto experiment message into Rust DSL types.
+///
+/// `py` is required because `SampledPulse` stores samples as a Python numpy array.
+pub(crate) fn deserialize_experiment(
+    py: Python<'_>,
+    bytes: &[u8],
+    packed: bool,
+) -> Result<DeserializedExperiment> {
+    let mut reader_options = capnp::message::ReaderOptions::new();
+    // Raise the traversal limit well above the default (~64 MB). Experiments can
+    // scale to 1,000,000+ sections, easily exceeding the default. The payload is
+    // produced internally, so there is no DOS risk.
+    reader_options.traversal_limit_in_words(Some(1024 * 1024 * 1024)); // ~8 GB
+    if packed {
+        let reader = capnp::serialize_packed::read_message(&mut &*bytes, reader_options)
+            .map_err(|e| Error::new(format!("Failed to read packed Cap'n Proto message: {e}")))?;
+        let experiment = reader
+            .get_root::<experiment_capnp::experiment::Reader<'_>>()
+            .map_err(Error::new)?;
+        Deserializer::new(py).deserialize(&experiment)
+    } else {
+        let reader = capnp::serialize::read_message_from_flat_slice(&mut &*bytes, reader_options)
+            .map_err(|e| Error::new(format!("Failed to read Cap'n Proto message: {e}")))?;
+        let experiment = reader
+            .get_root::<experiment_capnp::experiment::Reader<'_>>()
+            .map_err(Error::new)?;
+        Deserializer::new(py).deserialize(&experiment)
+    }
+}
+
+struct SetupDescriptionQccsDeserializer<'a> {
+    id_store: &'a mut NamedIdStore,
+
+    instruments: Vec<Instrument>,
+    physical_channels: Vec<PhysicalChannel>,
+
+    signal_map: Vec<(String, String)>,
+}
+
+impl SetupDescriptionQccsDeserializer<'_> {
+    fn deserialize(
+        reader: &device_setup_capnp::device_setup::Reader<'_>,
+        id_store: &mut NamedIdStore,
+    ) -> Result<(SetupDescription, Vec<(String, String)>)> {
+        let mut derializer = SetupDescriptionQccsDeserializer {
+            id_store,
+            instruments: Vec::new(),
+            physical_channels: Vec::new(),
+            signal_map: Vec::new(),
+        };
+
+        reader
+            .get_instruments()
+            .map_err(Error::new)?
+            .iter()
+            .try_for_each(|instrument| {
+                derializer
+                    .deserialize_instrument(instrument)
+                    .map_err(|e| Error::new(format!("Failed to deserialize instrument: {e}")))
+            })?;
+
+        derializer.deserialize_signals(reader)?;
+
+        let setup = SetupDescriptionQccs::new(derializer.instruments, derializer.physical_channels);
+        Ok((SetupDescription::Qccs(setup), derializer.signal_map))
+    }
+
+    /// Deserialize signals from the device setup section
+    fn deserialize_signals(
+        &mut self,
+        reader: &device_setup_capnp::device_setup::Reader<'_>,
+    ) -> Result<()> {
+        let signals_reader = reader.get_signals().map_err(Error::new)?;
+
+        self.physical_channels
+            .reserve(signals_reader.len() as usize);
+
+        for signal in signals_reader.iter() {
+            let channel_uid = text_to_str(signal.get_uid().map_err(Error::new)?)?;
+            let device_uid = text_to_str(signal.get_instrument_uid().map_err(Error::new)?)?;
+
+            let ports: Vec<&str> = signal
+                .get_ports()
+                .map_err(Error::new)?
+                .iter()
+                .map(|p| text_to_str(p.map_err(Error::new)?))
+                .collect::<Result<Vec<_>>>()?;
+            let ports = ports.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+
+            let channel_type = signal
+                .get_channel_type()
+                .map_err(Error::new)?
+                .to_str()
+                .map_err(Error::new)?
+                .parse()
+                .map_err(Error::new)?;
+
+            let physical_channel = PhysicalChannel {
+                uid: channel_uid.to_string(),
+                device_uid: self.id_store.get_or_insert(device_uid).into(),
+                ports,
+                channel_type,
+            };
+            self.physical_channels.push(physical_channel);
+            self.signal_map
+                .push((channel_uid.to_string(), channel_uid.to_string()));
+        }
+        Ok(())
+    }
 
     /// Deserialize an instrument entry from the device setup section
-    ///
-    /// NOTE: SHFQC split is already done at this point by the Python lib,
-    /// shall be moved here later when the split logic is implemented in Rust.
     fn deserialize_instrument(
         &mut self,
         instrument: device_setup_capnp::instrument::Reader<'_>,
     ) -> Result<()> {
-        enum InstrumentType {
-            DeviceKind(InstrumentKind),
-            AuxiliaryDeviceKind(AuxiliaryDeviceKind),
-        }
-
         fn deserialize_reference_clock_source(
             reference_clock_source: device_setup_capnp::ReferenceClock,
         ) -> Option<ReferenceClock> {
@@ -2025,71 +2200,107 @@ impl<'py> Deserializer<'py> {
                 .get_reference_clock_source()
                 .map_err(Error::new)?,
         );
-        let device_kind = match device_type.as_str() {
-            "SHFQA" => InstrumentType::DeviceKind(InstrumentKind::Shfqa),
-            "SHFSG" => InstrumentType::DeviceKind(InstrumentKind::Shfsg),
-            "SHFQC" => InstrumentType::DeviceKind(InstrumentKind::Shfqc),
-            "HDAWG" => InstrumentType::DeviceKind(InstrumentKind::Hdawg),
-            "UHFQA" => InstrumentType::DeviceKind(InstrumentKind::Uhfqa),
-            "ZQCS" => InstrumentType::DeviceKind(InstrumentKind::Zqcs),
-            "PQSC" => InstrumentType::AuxiliaryDeviceKind(AuxiliaryDeviceKind::Pqsc),
-            "QHUB" => InstrumentType::AuxiliaryDeviceKind(AuxiliaryDeviceKind::Qhub),
-            "SHFPPC" => InstrumentType::AuxiliaryDeviceKind(AuxiliaryDeviceKind::Shfppc),
-            device_type => return Err(Error::new(format!("Unknown device type: {device_type}"))),
-        };
 
         let physical_device_uid = self.instruments.len() as u16;
 
-        match device_kind {
-            InstrumentType::DeviceKind(kind) => {
-                let instrument = Instrument {
-                    uid: self.id_store.get_or_insert(uid).into(),
-                    kind,
-                    physical_device_uid: physical_device_uid.into(),
-                    options: DeviceOptions::new(options),
-                    reference_clock: reference_clock_source,
-                };
-                self.instruments.push(instrument);
-            }
-            // TODO: Move auxiliary device handling to QCCS backend.
-            InstrumentType::AuxiliaryDeviceKind(aux_device_kind) => {
-                let aux_device =
-                    AuxiliaryDevice::new(self.id_store.get_or_insert(uid).into(), aux_device_kind);
-                self.auxiliary_devices.push(aux_device);
-            }
+        let instrument = Instrument {
+            uid: self.id_store.get_or_insert(uid).into(),
+            kind: device_type
+                .parse()
+                .map_err(|_| Error::new(format!("Unknown device type: {device_type}")))?,
+            physical_device_uid: physical_device_uid.into(),
+            options: DeviceOptions::new(options),
+            reference_clock: reference_clock_source,
         };
+        self.instruments.push(instrument);
         Ok(())
     }
 }
 
-// === Entry point ===
+struct SetupDescriptionZqcsDeserializer {
+    channels: Vec<ZqcsChannel>,
+    signal_map: Vec<(String, String)>,
+}
 
-/// Deserializes a Cap'n Proto experiment message into Rust DSL types.
-///
-/// `py` is required because `SampledPulse` stores samples as a Python numpy array.
-pub(crate) fn deserialize_experiment(
-    py: Python<'_>,
-    bytes: &[u8],
-    packed: bool,
-) -> Result<DeserializedExperiment> {
-    let mut reader_options = capnp::message::ReaderOptions::new();
-    // Raise the traversal limit well above the default (~64 MB). Experiments can
-    // scale to 1,000,000+ sections, easily exceeding the default. The payload is
-    // produced internally, so there is no DOS risk.
-    reader_options.traversal_limit_in_words(Some(1024 * 1024 * 1024)); // ~8 GB
-    if packed {
-        let reader = capnp::serialize_packed::read_message(&mut &*bytes, reader_options)
-            .map_err(|e| Error::new(format!("Failed to read packed Cap'n Proto message: {e}")))?;
-        let experiment = reader
-            .get_root::<experiment_capnp::experiment::Reader<'_>>()
-            .map_err(Error::new)?;
-        Deserializer::new(py).deserialize(&experiment)
-    } else {
-        let reader = capnp::serialize::read_message_from_flat_slice(&mut &*bytes, reader_options)
-            .map_err(|e| Error::new(format!("Failed to read Cap'n Proto message: {e}")))?;
-        let experiment = reader
-            .get_root::<experiment_capnp::experiment::Reader<'_>>()
-            .map_err(Error::new)?;
-        Deserializer::new(py).deserialize(&experiment)
+impl SetupDescriptionZqcsDeserializer {
+    fn deserialize(
+        reader: &device_setup_capnp::device_setup::Reader<'_>,
+        id_store: &mut NamedIdStore,
+    ) -> Result<(SetupDescription, Vec<(String, String)>)> {
+        let mut derializer = SetupDescriptionZqcsDeserializer {
+            channels: Vec::new(),
+            signal_map: Vec::new(),
+        };
+
+        let device_uid = derializer.deserialize_instrument(reader)?;
+        derializer.deserialize_signals(reader)?;
+        let setup = SetupDescriptionZqcs::new(
+            vec![],
+            id_store.get_or_insert(device_uid).into(),
+            derializer.channels,
+        );
+        Ok((SetupDescription::Zqcs(setup), derializer.signal_map))
+    }
+
+    /// Deserialize signals from the device setup section
+    fn deserialize_signals(
+        &mut self,
+        reader: &device_setup_capnp::device_setup::Reader<'_>,
+    ) -> Result<()> {
+        let signals_reader = reader.get_signals().map_err(Error::new)?;
+
+        self.channels.reserve(signals_reader.len() as usize);
+
+        for signal in signals_reader.iter() {
+            let channel_uid = text_to_str(signal.get_uid().map_err(Error::new)?)?;
+
+            let geolocations: Vec<&str> = signal
+                .get_ports()
+                .map_err(Error::new)?
+                .iter()
+                .map(|p| text_to_str(p.map_err(Error::new)?))
+                .collect::<Result<Vec<_>>>()?;
+            let geolocation = geolocations
+                .first()
+                .ok_or_else(|| Error::new("Signal must have at least one geolocation"))?;
+
+            let channel_type = signal
+                .get_channel_type()
+                .map_err(Error::new)?
+                .to_str()
+                .map_err(Error::new)?
+                .parse()
+                .map_err(Error::new)?;
+
+            let physical_channel = ZqcsChannel {
+                geolocation: geolocation.to_string(),
+                channel_type,
+            };
+            self.signal_map
+                .push((channel_uid.to_string(), geolocation.to_string()));
+            self.channels.push(physical_channel);
+        }
+        Ok(())
+    }
+
+    /// Deserialize an instrument entry from the device setup section
+    fn deserialize_instrument<'a>(
+        &mut self,
+        reader: &device_setup_capnp::device_setup::Reader<'a>,
+    ) -> Result<&'a str> {
+        let instruments: Vec<&str> = reader
+            .get_instruments()
+            .map_err(Error::new)?
+            .iter()
+            .map(|instrument| text_to_str(instrument.get_uid().map_err(Error::new)?))
+            .collect::<Result<Vec<_>>>()?;
+
+        if instruments.len() != 1 {
+            return Err(Error::new(format!(
+                "Expected exactly one instrument for ZQCS setup, found {}",
+                instruments.len()
+            )));
+        }
+        Ok(instruments[0])
     }
 }

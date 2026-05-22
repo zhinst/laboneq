@@ -5,50 +5,47 @@
 
 use std::collections::HashMap;
 
+use pyo3::{IntoPyObjectExt, prelude::*, types::PyDict};
+
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_dsl::{
-    operation::PulseParameterValue,
-    types::{
-        ComplexOrFloat, ExternalParameterUid, NumericLiteral, PulseDef, PulseFunction, PulseKind,
-        PulseParameterUid, ValueOrParameter,
-    },
-};
-use pyo3::{
-    prelude::*,
-    types::{PyComplex, PyDict},
+use laboneq_common::types::Literal;
+use laboneq_dsl::operation::ExternalOrValue;
+use laboneq_dsl::types::{
+    AcquisitionType, AveragingMode, ComplexOrFloat, ExternalParameterUid, NumericLiteral, PulseDef,
+    PulseFunction, PulseKind, PulseParameterUid, ValueOrParameter,
 };
 
 use crate::py_object_interner::PyObjectInterner;
 
 /// Convert a [`NumericLiteral`] to a Python object.
-pub fn numeric_literal_to_py(py: Python, value: &NumericLiteral) -> PyResult<Py<PyAny>> {
+pub fn numeric_literal_to_py<'py>(
+    py: Python<'py>,
+    value: &NumericLiteral,
+) -> PyResult<Bound<'py, PyAny>> {
     match value {
-        NumericLiteral::Int(v) => Ok(v.into_pyobject(py)?.unbind().into()),
-        NumericLiteral::Float(v) => Ok(v.into_pyobject(py)?.unbind().into()),
-        NumericLiteral::Complex(v) => Ok(PyComplex::from_doubles(py, v.re, v.im)
-            .into_pyobject(py)?
-            .unbind()
-            .into()),
+        NumericLiteral::Int(v) => v.into_bound_py_any(py),
+        NumericLiteral::Float(v) => v.into_bound_py_any(py),
+        NumericLiteral::Complex(v) => v.into_bound_py_any(py),
     }
 }
 
 /// Convert a [`ComplexOrFloat`] to a Python object.
-pub fn complex_or_float_to_py(py: Python, value: &ComplexOrFloat) -> PyResult<Py<PyAny>> {
+pub fn complex_or_float_to_py<'py>(
+    py: Python<'py>,
+    value: &ComplexOrFloat,
+) -> PyResult<Bound<'py, PyAny>> {
     match value {
-        ComplexOrFloat::Float(v) => Ok(v.into_pyobject(py)?.unbind().into()),
-        ComplexOrFloat::Complex(v) => Ok(PyComplex::from_doubles(py, v.re, v.im)
-            .into_pyobject(py)?
-            .unbind()
-            .into()),
+        ComplexOrFloat::Float(v) => v.into_bound_py_any(py),
+        ComplexOrFloat::Complex(v) => v.into_bound_py_any(py),
     }
 }
 
 /// Convert a [`PulseDef`] to a Python object.
-pub fn pulse_def_to_py(
-    py: Python,
+pub fn pulse_def_to_py<'py>(
+    py: Python<'py>,
     id_store: &NamedIdStore,
     pulse_def: &PulseDef,
-) -> PyResult<Py<PyAny>> {
+) -> PyResult<Bound<'py, PyAny>> {
     let m = py.import("laboneq")?;
     let pulse_def_py_cls = m
         .getattr("data")
@@ -89,13 +86,12 @@ pub fn pulse_def_to_py(
             kwargs.set_item("length", length.value())?;
         }
     }
-    let pulse_def_py = pulse_def_py_cls.call((), Some(&kwargs))?;
-    Ok(pulse_def_py.into())
+    pulse_def_py_cls.call((), Some(&kwargs))
 }
 
 pub fn pulse_parameters_to_py_dict(
     py: Python,
-    parameters: &HashMap<PulseParameterUid, PulseParameterValue>,
+    parameters: &HashMap<PulseParameterUid, ExternalOrValue>,
     id_store: &NamedIdStore,
     py_objects: &PyObjectInterner<ExternalParameterUid>,
 ) -> PyResult<Py<PyDict>> {
@@ -103,11 +99,14 @@ pub fn pulse_parameters_to_py_dict(
     for (key, value) in parameters.iter() {
         let key_str = id_store.resolve(*key).unwrap();
         match value {
-            PulseParameterValue::ExternalParameter(uid) => {
+            ExternalOrValue::ExternalParameter(uid) => {
                 dict.set_item(key_str, py_objects.resolve(uid))?;
             }
-            PulseParameterValue::ValueOrParameter(value_or_param) => {
-                dict.set_item(key_str, value_or_parameter_to_py(py, value_or_param)?)?;
+            ExternalOrValue::ValueOrParameter(value_or_param) => {
+                dict.set_item(
+                    key_str,
+                    value_or_parameter_to_py(py, value_or_param, id_store)?,
+                )?;
             }
         }
     }
@@ -115,16 +114,45 @@ pub fn pulse_parameters_to_py_dict(
 }
 
 /// Convert a [`ValueOrParameter`] to a Python object.
-fn value_or_parameter_to_py(
-    py: Python,
+fn value_or_parameter_to_py<'py>(
+    py: Python<'py>,
     value: &ValueOrParameter<NumericLiteral>,
-) -> PyResult<Py<PyAny>> {
+    id_store: &NamedIdStore,
+) -> PyResult<Bound<'py, PyAny>> {
     match value {
         ValueOrParameter::Value(value) => numeric_literal_to_py(py, value),
         ValueOrParameter::Parameter(value) => {
-            let id = value.0.to_string();
-            Ok(id.into_pyobject(py)?.unbind().into())
+            let id = id_store.resolve(*value).unwrap();
+            Ok(id.into_bound_py_any(py)?)
         }
         ValueOrParameter::ResolvedParameter { value, .. } => numeric_literal_to_py(py, value),
+    }
+}
+
+pub fn value_to_py<'py>(py: Python<'py>, value: &Literal) -> PyResult<Bound<'py, PyAny>> {
+    match value {
+        Literal::Integer(v) => Ok(v.into_bound_py_any(py)?),
+        Literal::Real(v) => Ok(v.into_bound_py_any(py)?),
+        Literal::Complex(v) => Ok(v.into_bound_py_any(py)?),
+        Literal::Text(v) => Ok(v.into_bound_py_any(py)?),
+    }
+}
+
+pub fn averaging_mode_to_py(value: &AveragingMode) -> &'static str {
+    match value {
+        AveragingMode::Cyclic => "CYCLIC",
+        AveragingMode::Sequential => "SEQUENTIAL",
+        AveragingMode::SingleShot => "SINGLE_SHOT",
+    }
+}
+
+pub fn acquisition_type_to_py(value: &AcquisitionType) -> &'static str {
+    match value {
+        AcquisitionType::Raw => "RAW",
+        AcquisitionType::Integration => "INTEGRATION",
+        AcquisitionType::Discrimination => "DISCRIMINATION",
+        AcquisitionType::Spectroscopy => "SPECTROSCOPY",
+        AcquisitionType::SpectroscopyIq => "SPECTROSCOPY_IQ",
+        AcquisitionType::SpectroscopyPsd => "SPECTROSCOPY_PSD",
     }
 }

@@ -1,6 +1,10 @@
 # Copyright 2025 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from laboneq.dsl import LinearSweepParameter
 from laboneq.dsl.enums import (
     AcquisitionType,
@@ -11,13 +15,15 @@ from laboneq.dsl.experiment import (
     Experiment,
     ExperimentSignal,
 )
-from laboneq.dsl.quantum import QuantumElement
 
 from .pulses import (
     drive_ge_rabi,
     integration_kernel,
     readout_pulse,
 )
+
+if TYPE_CHECKING:
+    from laboneq.dsl.quantum import QuantumElement
 
 
 # Amplitude Rabi experiment including measurement

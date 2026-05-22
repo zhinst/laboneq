@@ -4,82 +4,54 @@
 
 from __future__ import annotations
 
-import logging
-import time
 from typing import TYPE_CHECKING, TypedDict
 
-from laboneq.compiler import CompilerSettings
-from laboneq.compiler.common.iface_code_generator import ICodeGenerator
 from laboneq.compiler.common.iface_compiler_output import (
     RTCompilerOutputContainer,
 )
-from laboneq.compiler.scheduler.parameter_store import ParameterStore
-from laboneq.compiler.scheduler.scheduler import Scheduler
-from laboneq.compiler.workflow.compiler_hooks import (
-    get_compiler_hooks,
-)
+from laboneq.compiler.workflow.compiler_hooks import get_compiler_hooks
 
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
 
-_logger = logging.getLogger(__name__)
+    from .parameter_store import ParameterStore
 
 
-class Schedule(TypedDict):
-    event_list: list[dict]
-    event_list_truncated: bool
-    section_info: dict[str, dict]
-    section_signals_with_children: dict[str, list[str]]
-    sampling_rates: list[tuple[list[str], float]]
+def compile_realtime(
+    experiment: compiler_rs.Experiment,
+    near_time_parameters: ParameterStore[str, float],
+    device_class: int,
+) -> RTCompilerOutputContainer:
+    compiler_module: compiler_rs = get_compiler_hooks(device_class).compiler_module()
+    result = compiler_module.compile_realtime(
+        experiment=experiment,
+        parameters={
+            k: v
+            for k, v in near_time_parameters.items()
+            if k not in ("__chunk_index", "__chunk_count")
+        },
+        chunking_info=None
+        if "__chunk_index" not in near_time_parameters
+        else (
+            near_time_parameters["__chunk_index"],
+            near_time_parameters["__chunk_count"],
+        ),
+    )
+    # Flush used `nt_parameters` so that they get registered
+    for used_parameter in result.used_parameters:
+        near_time_parameters.mark_used(used_parameter)
 
+    pulse_sheet_schedule = (
+        _prepare_pulse_sheet_schedule(result.pulse_sheet_schedule)
+        if result.pulse_sheet_schedule is not None
+        else None
+    )
 
-class RealtimeCompiler:
-    def __init__(
-        self,
-        experiment,
-        compiler_module: compiler_rs,
-        device_class: int,
-        settings: CompilerSettings | None = None,
-    ):
-        self._experiment = experiment
-        self._settings = settings if settings is not None else CompilerSettings()
-
-        self._code_generator: ICodeGenerator = get_compiler_hooks(
-            device_class
-        ).code_generator()
-        self._device_class = device_class
-        self._compiler_module: compiler_rs = compiler_module
-
-    def run(
-        self, near_time_parameters: ParameterStore[str, float]
-    ) -> RTCompilerOutputContainer:
-        time_start = time.perf_counter()
-        scheduler = Scheduler(compiler_module=self._compiler_module)
-        schedule_result, pulse_sheet_schedule = scheduler.run(
-            self._experiment, near_time_parameters
-        )
-        pulse_sheet_schedule = (
-            _prepare_pulse_sheet_schedule(pulse_sheet_schedule)
-            if pulse_sheet_schedule is not None
-            else None
-        )
-
-        time_delta = time.perf_counter() - time_start
-        _logger.info(f"Schedule completed. [{time_delta:.3f} s]")
-
-        time_start = time.perf_counter()
-        codegenerator = self._code_generator(schedule_result)
-        codegenerator.generate_code()
-        codegen_output = codegenerator.get_output()
-        compiler_output = RTCompilerOutputContainer(
-            device_class=self._device_class,
-            codegen_output=codegen_output,
-            schedule=pulse_sheet_schedule,
-        )
-        time_delta = time.perf_counter() - time_start
-        _logger.info(f"Code generation completed for all AWGs. [{time_delta:.3f} s]")
-
-        return compiler_output
+    return RTCompilerOutputContainer(
+        device_class=device_class,
+        codegen_output=result.code_gen_output,
+        schedule=pulse_sheet_schedule,
+    )
 
 
 def _prepare_pulse_sheet_schedule(schedule: compiler_rs.PulseSheetSchedule) -> Schedule:
@@ -90,3 +62,11 @@ def _prepare_pulse_sheet_schedule(schedule: compiler_rs.PulseSheetSchedule) -> S
         section_signals_with_children=schedule["section_signals_with_children"],
         sampling_rates=schedule["sampling_rates"],
     )
+
+
+class Schedule(TypedDict):
+    event_list: list[dict]
+    event_list_truncated: bool
+    section_info: dict[str, dict]
+    section_signals_with_children: dict[str, list[str]]
+    sampling_rates: list[tuple[list[str], float]]

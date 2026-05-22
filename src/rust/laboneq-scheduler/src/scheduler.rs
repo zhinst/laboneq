@@ -44,7 +44,7 @@ pub struct ScheduledExperiment {
 /// Schedule real time part of an Experiment
 ///
 /// The scheduler will schedule the real time portion of the experiment
-#[instrument(name = "laboneq.compiler.schedule-experiment", skip_all)]
+#[instrument(name = "laboneq.compiler.schedule", skip_all)]
 pub fn schedule_experiment<T: SignalInfo>(
     root: &ExperimentNode,
     mut context: ExperimentContext<T>,

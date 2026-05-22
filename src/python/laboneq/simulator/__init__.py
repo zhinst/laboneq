@@ -3,3 +3,5 @@
 
 from .seqc_parser import simulate
 from .wave_scroller import WaveScroller
+
+__all__ = ["WaveScroller", "simulate"]

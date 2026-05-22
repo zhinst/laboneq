@@ -10,7 +10,6 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
-from numpy.typing import ArrayLike
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.core.types.enums.wave_type import WaveType
@@ -21,13 +20,17 @@ from laboneq.core.utilities.pulse_sampler import (
 )
 from laboneq.data.scheduled_experiment import (
     ArtifactsCodegen,
-    CodegenWaveform,
-    CompilerArtifact,
-    PulseWaveformMap,
 )
 
 if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
+
     from laboneq.core.types.compiled_experiment import CompiledExperiment
+    from laboneq.data.scheduled_experiment import (
+        CodegenWaveform,
+        CompilerArtifact,
+        PulseWaveformMap,
+    )
     from laboneq.dsl.experiment.pulse import Pulse
 
 _logger = logging.getLogger(__name__)
@@ -189,7 +192,7 @@ def calc_wave_replacements(
     for sig_string, pwm in pm.waveforms.items():
         for awg_wave_map in artifacts.wave_indices:
             target_wave = cast(
-                tuple[int, WaveType] | None, awg_wave_map["value"].get(sig_string)
+                "tuple[int, WaveType] | None", awg_wave_map["value"].get(sig_string)
             )
             if target_wave is None or len(target_wave) != 2:
                 continue
@@ -241,7 +244,7 @@ def calc_wave_replacements(
                 )
             replacements.append(
                 WaveReplacement(
-                    awg_id=cast(str, awg_wave_map["filename"]),
+                    awg_id=cast("str", awg_wave_map["filename"]),
                     sig_string=sig_string,
                     replacement_type=replacement_type,
                     samples=samples,

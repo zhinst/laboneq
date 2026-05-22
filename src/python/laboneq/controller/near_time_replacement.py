@@ -8,24 +8,27 @@ from functools import singledispatch
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
-import numpy.typing as npt
 import zhinst.utils  # type: ignore[import-untyped]
 
 from laboneq.controller.devices.device_collection import DeviceCollection
 from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.recipe_processor import RecipeData, WaveformItem
 from laboneq.controller.utilities.exception import LabOneQControllerException
-from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.utilities.replace_phase_increment import calc_ct_replacement
 from laboneq.core.utilities.replace_pulse import ReplacementType, calc_wave_replacements
 from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import (
     ArtifactsCodegen,
-    CodegenWaveform,
-    CompilerArtifact,
 )
 
 if TYPE_CHECKING:
+    import numpy.typing as npt
+
+    from laboneq.core.types.enums.wave_type import WaveType
+    from laboneq.data.scheduled_experiment import (
+        CodegenWaveform,
+        CompilerArtifact,
+    )
     from laboneq.dsl.experiment.pulse import Pulse
 
 
@@ -159,7 +162,7 @@ def _process_pulse_replacements(
             acquisition_type = recipe_data.rt_execution_info.acquisition_type
             for repl in wave_replacements:
                 awg_indices = next(
-                    cast(dict[str, tuple[int, WaveType]], a["value"])
+                    cast("dict[str, tuple[int, WaveType]]", a["value"])
                     for a in artifacts.wave_indices
                     if a["filename"] == repl.awg_id
                 )

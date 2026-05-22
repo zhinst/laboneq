@@ -42,17 +42,22 @@ def laboneq_tracing(span_exporter: InMemorySpanExporter):
         raise ImportError(
             "OpenTelemetry SDK is required for `laboneq_tracing()`. Please install opentelemetry-sdk."
         )
-    from laboneq._rust.compiler import SpanBuffer
+    span_buffers = []
+    from laboneq.compiler.workflow.compiler_hooks import all_compiler_hooks
 
-    streamer = SpanBuffer()
+    for hook in all_compiler_hooks():
+        span_buffer = hook.compiler_module().SpanBuffer()
+        span_buffers.append(span_buffer)
+
     try:
         with _temporary_env_vars(
             LABONEQ_TRACING_ENABLE="1", LABONEQ_TRACING_IN_MEMORY_EXPORTER="1"
         ):
             yield
     finally:
-        for span in streamer.flush_spans():
-            span_exporter.export([_json_trace_to_span(orjson.loads(span))])
+        for span_buffer in span_buffers:
+            for span in span_buffer.flush_spans():
+                span_exporter.export([_json_trace_to_span(orjson.loads(span))])
 
 
 def _json_trace_to_span(span: dict) -> ReadableSpan:

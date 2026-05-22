@@ -84,6 +84,9 @@ path.links {
 .node[data-status="failed"] {
     --node-color: var(--status-failed);
 }
+.node[data-status="error"] {
+    --node-color: var(--status-error);
+}
 .node[data-status="deactivated"] {
     --node-color: var(--status-deactivated);
 }

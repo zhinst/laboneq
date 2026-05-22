@@ -12,20 +12,16 @@ from laboneq.data.setup_description import (
     ChannelMapEntry,
     DeviceType,
     Instrument,
-    IODirection,
     LogicalSignal,
     LogicalSignalGroup,
     PhysicalChannel,
-    Port,
     PortType,
     ReferenceClock,
     Server,
     Setup,
     SetupInternalConnection,
 )
-from laboneq.dsl import device as legacy_device
 from laboneq.dsl.device import instruments as legacy_instruments
-from laboneq.dsl.device import io_units as legacy_io_units
 from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
 from laboneq.implementation.legacy_adapters import calibration_converter, utils
 from laboneq.implementation.legacy_adapters.utils import (
@@ -35,6 +31,12 @@ from laboneq.implementation.legacy_adapters.utils import (
 from laboneq.implementation.utils import devices
 
 if TYPE_CHECKING:
+    from laboneq.data.setup_description import (
+        IODirection,
+        Port,
+    )
+    from laboneq.dsl import device as legacy_device
+    from laboneq.dsl.device import io_units as legacy_io_units
     from laboneq.dsl.device import logical_signal_group as legacy_lsg
     from laboneq.dsl.device import servers as legacy_servers
 

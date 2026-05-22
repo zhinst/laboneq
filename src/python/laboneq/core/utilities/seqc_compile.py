@@ -9,15 +9,18 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import zhinst.core
 from zhinst.core.errors import CoreError as LabOneCoreError
 
-from laboneq.compiler import CompilerSettings
 from laboneq.compiler.common.resource_usage import (
     ResourceLimitationErrorCollector,
 )
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
+
+if TYPE_CHECKING:
+    from laboneq.compiler import CompilerSettings
 
 _logger = logging.getLogger(__name__)
 

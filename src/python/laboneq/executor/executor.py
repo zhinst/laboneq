@@ -4,17 +4,17 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from enum import Enum, Flag, auto
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from laboneq._utils import UIDReference
 from laboneq.core.exceptions import LabOneQException
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine, Iterator
+
     from numpy.typing import ArrayLike
 
     from laboneq.core.types.enums.acquisition_type import AcquisitionType
@@ -25,6 +25,17 @@ if TYPE_CHECKING:
 class LoopingMode(Flag):
     NEAR_TIME_ONLY = auto()
     ONCE = auto()
+
+
+@dataclass
+class UIDReference:
+    """Reference to an object with an UID.
+
+    Args:
+        uid: UID of the referenced object.
+    """
+
+    uid: str
 
 
 LOOP_INDEX = "_loop_index"
@@ -144,7 +155,7 @@ class ExecSet(Statement):
 
 
 class ExecNeartimeCall(Statement):
-    def __init__(self, func_name: str, args: dict[str, Any]):
+    def __init__(self, func_name: str, args: dict[str, Any | UIDReference]):
         self.func_name = func_name
         self.args = args
 
@@ -329,7 +340,7 @@ class ExecRT(ForLoop):
         elif LoopingMode.ONCE in scope.root.looping_mode:
             sub_scope = scope.make_sub_scope()
             sub_scope.enter_real_time()
-            yield from super().run(sub_scope)
+            yield from self.body.run(sub_scope)
         else:
             # Disallow RT looping unless in ONCE mode to prevent accidental large loops in SW processing
             raise LabOneQException(f"Unknown looping mode '{scope.root.looping_mode}'")

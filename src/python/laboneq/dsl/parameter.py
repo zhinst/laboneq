@@ -6,7 +6,7 @@ from __future__ import annotations
 import attrs
 import numpy as np
 from numpy.lib.mixins import NDArrayOperatorsMixin
-from numpy.typing import ArrayLike
+from numpy.typing import ArrayLike  # noqa: TC002 - used at runtime validation
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
@@ -18,16 +18,6 @@ def parameter_id_generator():
     retval = f"par{parameter_id}"
     parameter_id += 1
     return retval
-
-
-def _compare_nested(a, b):
-    if isinstance(a, list) or isinstance(a, np.ndarray):
-        if not (isinstance(b, list) or isinstance(b, np.ndarray)):
-            return False
-        if not len(a) == len(b):
-            return False
-        return all(map(lambda x: _compare_nested(x[0], x[1]), zip(a, b)))
-    return a == b
 
 
 @classformatter
@@ -174,7 +164,7 @@ class SweepParameter(_ParameterArithmeticMixin, Parameter):
             self.uid == other.uid
             and self.axis_name == other.axis_name
             and self.driven_by == other.driven_by
-            and _compare_nested(self.values, other.values)
+            and np.array_equal(self.values, other.values)
         )
 
     def __len__(self) -> int:
@@ -238,7 +228,9 @@ class LinearSweepParameter(_ParameterArithmeticMixin, Parameter):
         return (
             self.uid == other.uid
             and self.axis_name == other.axis_name
-            and _compare_nested(self.values, other.values)
+            and self.start == other.start
+            and self.stop == other.stop
+            and self.count == other.count
         )
 
     def __attrs_post_init__(self):

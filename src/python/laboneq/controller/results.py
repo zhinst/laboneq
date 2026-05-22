@@ -4,17 +4,20 @@
 from __future__ import annotations
 
 from itertools import zip_longest
+from typing import TYPE_CHECKING
 
 import numpy as np
 
-from laboneq.core.types.numpy_support import NumPyArray
 from laboneq.data.experiment_results import AcquiredResult, ExperimentResults
-from laboneq.data.recipe import NtStepKey
-from laboneq.data.scheduled_experiment import (
-    HandleResultShape,
-    ResultSource,
-    ScheduledExperiment,
-)
+
+if TYPE_CHECKING:
+    from laboneq.core.types.numpy_support import NumPyArray
+    from laboneq.data.recipe import NtStepKey
+    from laboneq.data.scheduled_experiment import (
+        HandleResultShape,
+        ResultSource,
+        ScheduledExperiment,
+    )
 
 
 class ResultsBuilder:

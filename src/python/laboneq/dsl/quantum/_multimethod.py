@@ -1,11 +1,12 @@
 # Copyright 2025 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import contextlib
 import inspect
-from collections.abc import Callable
 from types import UnionType
-from typing import Union
+from typing import TYPE_CHECKING, Union
 
 from multimethod import (
     DispatchError,
@@ -17,6 +18,9 @@ from multimethod import (
 )
 
 from laboneq.dsl.quantum.quantum_element import QuantumElement
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def _type_signature_length(func: Callable) -> int:

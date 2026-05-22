@@ -41,7 +41,7 @@ from laboneq.data.scheduled_experiment import (
     ScheduledExperiment,
 )
 from laboneq.executor.executor import Statement
-from laboneq.serializers._legacy import Serializer
+from laboneq.serializers._legacy.serializer import Serializer
 
 from ._common import (
     _structure_arraylike,

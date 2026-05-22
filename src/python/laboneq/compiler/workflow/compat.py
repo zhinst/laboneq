@@ -8,114 +8,67 @@ from __future__ import annotations
 import logging
 import os
 import warnings
-from typing import TYPE_CHECKING, Any
-
-from laboneq.data.compilation_job import (
-    DeviceInfoType,
-    ExperimentInfo,
-    ParameterInfo,
-    SignalInfo,
-)
-from laboneq.implementation.utils.devices import parse_device_options
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
-    from laboneq.data.parameter import Parameter as DataParameter
+    from laboneq.data.compilation_job import (
+        ExperimentInfo,
+        SignalInfo,
+    )
     from laboneq.dsl.calibration import Oscillator
-    from laboneq.dsl.parameter import Parameter
 
 
-def _resolve_default_options(options: str, device_type: DeviceInfoType) -> list[str]:
-    dev_type, options = parse_device_options(options)
-    options = options or []
-    # TODO(2K): This is a workaround, as options string is still not
-    # enforced in the device setup.
-    if dev_type is not None:
-        return [dev_type, *options]
-    if device_type == DeviceInfoType.UHFQA:
-        dev_type = "UHFQA"
-    elif device_type == DeviceInfoType.HDAWG:
-        dev_type = "HDAWG8"
-    elif device_type == DeviceInfoType.SHFQC:
-        options = ["QC6CH"] if not options else options
-        return ["SHFQC", *options]
-    elif device_type == DeviceInfoType.SHFQA:
-        dev_type = "SHFQA2"
-    elif device_type == DeviceInfoType.SHFSG:
-        dev_type = "SHFSG8"
-    else:
-        return []
-    # TODO(2K): Add warning for missing options in the device setup
-    out = [dev_type, *options]
-    return out
-
-
-def build_rs_experiment(
+def serialize_capnp(
     experiment_info: ExperimentInfo,
     compiler_module: compiler_rs,
-    compiler_settings: dict | None = None,
-):
-    """Builds a Rust representation of the experiment."""
+) -> bytes:
+    """Serializes the experiment into a Cap'n Proto payload."""
     compiler_rs = compiler_module
     compiler_rs.init_logging(logging.getLogger("laboneq").getEffectiveLevel())
 
     # Builder the device setup capnp payload
     device_setup_capnp = compiler_rs.DeviceSetupBuilder()
-    setup_builder = DeviceSetupCompat(
-        device_setup_capnp, experiment_info.dsl_parameters
-    )
+    setup_builder = DeviceSetupCompat(device_setup_capnp)
 
     for device in experiment_info.devices:
         device_setup_capnp.add_instrument(
             uid=device.uid,
             device_type=device.device_type.name,
-            options=_resolve_default_options(device.options, device.device_type),
+            options=device.options.upper().split("/") if device.options else [],
             reference_clock_source=device.reference_clock_source.name
             if device.reference_clock_source is not None
             else None,
         )
 
     for signal_info in experiment_info.signals:
-        device_uid = signal_info.device.uid
-        ports = list(signal_info.channel_to_port.values())
+        device_uid = signal_info.device_uid
         device_setup_capnp.add_signal_with_calibration(
             uid=signal_info.uid,
-            ports=ports,
+            ports=signal_info.ports,
             instrument_uid=device_uid,
             channel_type=signal_info.type.name,
             # Calibration parameters
-            amplitude=setup_builder.maybe_parameter(signal_info.amplitude),
+            amplitude=signal_info.amplitude,
             oscillator=setup_builder.create_oscillator(signal_info.oscillator),
-            lo_frequency=setup_builder.maybe_parameter(signal_info.lo_frequency),
-            voltage_offset=setup_builder.maybe_parameter(signal_info.voltage_offset),
+            lo_frequency=signal_info.lo_frequency,
+            voltage_offset=signal_info.voltage_offset,
             amplifier_pump=compiler_rs.AmplifierPump(
                 device=signal_info.amplifier_pump.ppc_device.uid,
                 channel=signal_info.amplifier_pump.channel,
                 alc_on=signal_info.amplifier_pump.alc_on,
                 pump_on=signal_info.amplifier_pump.pump_on,
                 pump_filter_on=signal_info.amplifier_pump.pump_filter_on,
-                pump_frequency=setup_builder.maybe_parameter(
-                    signal_info.amplifier_pump.pump_frequency
-                ),
-                pump_power=setup_builder.maybe_parameter(
-                    signal_info.amplifier_pump.pump_power
-                ),
+                pump_frequency=signal_info.amplifier_pump.pump_frequency,
+                pump_power=signal_info.amplifier_pump.pump_power,
                 cancellation_on=signal_info.amplifier_pump.cancellation_on,
-                cancellation_phase=setup_builder.maybe_parameter(
-                    signal_info.amplifier_pump.cancellation_phase
-                ),
-                cancellation_attenuation=setup_builder.maybe_parameter(
-                    signal_info.amplifier_pump.cancellation_attenuation
-                ),
+                cancellation_phase=signal_info.amplifier_pump.cancellation_phase,
+                cancellation_attenuation=signal_info.amplifier_pump.cancellation_attenuation,
                 cancellation_source=signal_info.amplifier_pump.cancellation_source.name,
                 cancellation_source_frequency=signal_info.amplifier_pump.cancellation_source_frequency,
                 probe_on=signal_info.amplifier_pump.probe_on,
-                probe_frequency=setup_builder.maybe_parameter(
-                    signal_info.amplifier_pump.probe_frequency
-                ),
-                probe_power=setup_builder.maybe_parameter(
-                    signal_info.amplifier_pump.probe_power
-                ),
+                probe_frequency=signal_info.amplifier_pump.probe_frequency,
+                probe_power=signal_info.amplifier_pump.probe_power,
             )
             if signal_info.amplifier_pump is not None
             else None,
@@ -124,7 +77,7 @@ def build_rs_experiment(
             else None,
             automute=signal_info.automute,
             signal_delay=signal_info.delay_signal or 0.0,
-            port_delay=setup_builder.maybe_parameter(signal_info.port_delay),
+            port_delay=signal_info.port_delay,
             range=(signal_info.signal_range.value, signal_info.signal_range.unit)
             if signal_info.signal_range is not None
             else None,
@@ -132,21 +85,15 @@ def build_rs_experiment(
             added_outputs=[
                 device_setup_capnp.create_output_route(
                     source_signal=route.from_port,
-                    amplitude_scaling=setup_builder.maybe_parameter(route.amplitude),
-                    phase_shift=setup_builder.maybe_parameter(route.phase),
+                    amplitude_scaling=route.amplitude,
+                    phase_shift=route.phase,
                 )
                 for route in signal_info.output_routing or []
             ],
             mixer_calibration=(
                 device_setup_capnp.create_mixer_calibration(
-                    voltage_offsets=[
-                        setup_builder.maybe_parameter(offset)
-                        for offset in signal_info.mixer_calibration.voltage_offsets
-                    ],
-                    correction_matrix=[
-                        [setup_builder.maybe_parameter(element) for element in row]
-                        for row in signal_info.mixer_calibration.correction_matrix
-                    ],
+                    voltage_offsets=signal_info.mixer_calibration.voltage_offsets,
+                    correction_matrix=signal_info.mixer_calibration.correction_matrix,
                 )
             )
             if signal_info.mixer_calibration is not None
@@ -156,24 +103,23 @@ def build_rs_experiment(
             else [t],
         )
 
-    use_packed = os.environ.get("LABONEQ_CAPNP_PACKED", "0").lower() in (
+    return compiler_rs.serialize_experiment(
+        experiment_info.src,
+        device_setup=device_setup_capnp,
+        packed=use_packed_capnp(),
+    )
+
+
+def use_packed_capnp() -> bool:
+    """Determines whether to use packed Cap'n Proto serialization based on the environment variable."""
+    return os.environ.get("LABONEQ_CAPNP_PACKED", "0").lower() in (
         "1",
         "true",
         "yes",
     )
-    capnp_bytes = compiler_rs.serialize_experiment(
-        experiment_info.src,
-        device_setup=device_setup_capnp,
-        packed=use_packed,
-    )
-    return compiler_rs.build_experiment_capnp(
-        capnp_bytes,
-        packed=use_packed,
-        compiler_settings=_sanitize_compiler_settings(compiler_settings),
-    )
 
 
-def _sanitize_compiler_settings(settings: dict | None) -> dict:
+def sanitize_compiler_settings(settings: dict | None) -> dict:
     if settings is None:
         return {}
     settings = settings.copy()  # Create a copy to avoid mutating the original
@@ -287,14 +233,10 @@ def _build_precompensation(
 class DeviceSetupCompat:
     """Helper class to build the device setup payload for the Rust compiler."""
 
-    def __init__(
-        self, builder: compiler_rs.DeviceSetupBuilder, dsl_parameters: list[Parameter]
-    ):
+    def __init__(self, builder: compiler_rs.DeviceSetupBuilder):
         self.builder = builder
-        self._dsl_parameters = {param.uid: param for param in dsl_parameters}
 
         self._oscillators: dict[int, compiler_rs.OscillatorRef] = {}
-        self._resolved_parameters: dict[int, compiler_rs.SweepParameter] = {}
 
     def create_oscillator(
         self, oscillator: Oscillator | None
@@ -312,48 +254,10 @@ class DeviceSetupCompat:
             if osc_id not in self._oscillators:
                 self._oscillators[osc_id] = self.builder.create_oscillator(
                     uid=oscillator.uid,
-                    frequency=self.maybe_parameter(oscillator.frequency),
+                    frequency=oscillator.frequency,
                     modulation=oscillator.modulation_type.name.upper()
                     if oscillator.modulation_type
                     else "AUTO",
                 )
             return self._oscillators[osc_id]
         return None
-
-    def maybe_parameter(self, value: Any) -> compiler_rs.SweepParameter | Any:
-        """Helper function to convert a parameter info or data parameter to a sweep parameter if it's a sweep, otherwise return the value as is."""
-        from laboneq.data.parameter import Parameter as DataParameter
-
-        if isinstance(
-            value,
-            (ParameterInfo, DataParameter),
-        ):
-            return _param_to_dsl(self._dsl_parameters[value.uid])
-        return value
-
-
-def _param_to_dsl(param: DataParameter | Parameter) -> Parameter:
-    """Ensure the given parameter is converted to a DSL parameter if it's a data parameter, otherwise return as is."""
-    # TODO: Carry the original DSL parameters through the compilation job to avoid re-creating them here.
-    from laboneq.data.parameter import (
-        LinearSweepParameter as DataLinearSweepParameter,
-    )
-    from laboneq.data.parameter import SweepParameter as DataSweepParameter
-    from laboneq.dsl.parameter import LinearSweepParameter, SweepParameter
-
-    if isinstance(param, DataSweepParameter):
-        return SweepParameter(
-            uid=param.uid,
-            values=param.values,
-            axis_name=param.axis_name,
-            driven_by=[_param_to_dsl(p) for p in param.driven_by or []],
-        )
-    elif isinstance(param, DataLinearSweepParameter):
-        return LinearSweepParameter(
-            uid=param.uid,
-            start=param.start,
-            stop=param.stop,
-            count=param.count,
-            axis_name=param.axis_name,
-        )
-    return param

@@ -7,14 +7,16 @@ use std::collections::HashSet;
 
 use indexmap::IndexMap;
 
+use laboneq_common::device_options::DeviceOptions;
 use laboneq_common::types::AuxiliaryDeviceKind;
 use laboneq_common::types::ReferenceClock;
 use laboneq_common::types::SignalKind;
+use laboneq_compiler_py::compiler_backend::DeviceSignal;
 use laboneq_compiler_py::compiler_backend::ExperimentView;
 use laboneq_compiler_py::compiler_backend::PreprocessOutput;
-use laboneq_dsl::device_setup::AuxiliaryDevice;
-use laboneq_dsl::device_setup::DeviceSignal;
 use laboneq_dsl::device_setup::InstrumentKind;
+use laboneq_dsl::setup_description_qccs::AuxiliaryDevice;
+
 use laboneq_dsl::signal_calibration::SignalCalibration;
 use laboneq_units::duration::Duration;
 use laboneq_units::duration::Second;
@@ -31,22 +33,25 @@ use laboneq_error::{bail, laboneq_error};
 use laboneq_ir::system::AwgDevice;
 
 use crate::Result;
+use crate::experiment_view::ExperimentSignal;
 use crate::experiment_view::ExperimentViewWrapper;
 use crate::ports::parse_port;
 use crate::setup_processor::create_awg_devices;
 
 pub struct QccsBackendPreprocessedData {
-    awg_devices: Vec<AwgDevice>,
+    auxiliary_devices: Vec<AuxiliaryDevice>,
     signals: Vec<BackendSignal>,
     signal_indices: HashMap<SignalUid, usize>,
     lead_delays: HashMap<DeviceUid, Duration<Second>>,
+    routed_output_channel_map: HashMap<String, u8>,
 }
 
 impl QccsBackendPreprocessedData {
     fn new(
         signals: Vec<BackendSignal>,
-        awg_devices: Vec<AwgDevice>,
+        auxiliary_devices: Vec<AuxiliaryDevice>,
         lead_delays: HashMap<DeviceUid, Duration<Second>>,
+        routed_output_channel_map: HashMap<String, u8>,
     ) -> Self {
         let signal_indices = signals
             .iter()
@@ -54,10 +59,11 @@ impl QccsBackendPreprocessedData {
             .map(|(i, s)| (s.uid, i))
             .collect::<HashMap<_, _>>();
         QccsBackendPreprocessedData {
-            awg_devices,
             signals,
+            auxiliary_devices,
             signal_indices,
             lead_delays,
+            routed_output_channel_map,
         }
     }
 
@@ -65,6 +71,18 @@ impl QccsBackendPreprocessedData {
         self.signal_indices
             .get(&signal_uid)
             .map(|&index| &self.signals[index])
+    }
+
+    pub(crate) fn auxiliary_devices(&self) -> &[AuxiliaryDevice] {
+        &self.auxiliary_devices
+    }
+
+    pub(crate) fn signals(&self) -> impl Iterator<Item = &BackendSignal> {
+        self.signals.iter()
+    }
+
+    pub(crate) fn routed_output_channel_map(&self) -> &HashMap<String, u8> {
+        &self.routed_output_channel_map
     }
 }
 
@@ -98,105 +116,54 @@ impl PreprocessedBackendData for QccsBackendPreprocessedData {
             .unwrap_or_else(|| seconds(0.0))
     }
 
-    fn awg_devices(&self) -> &[AwgDevice] {
-        &self.awg_devices
-    }
-
     fn as_any(&self) -> &dyn Any {
         self
-    }
-}
-
-#[derive(Debug, Default)]
-struct PreProcessedSetup<'a> {
-    signals: IndexMap<SignalUid, DeviceSignal>,
-
-    awg_devices: IndexMap<DeviceUid, AwgDevice>,
-    auxiliary_devices: &'a [AuxiliaryDevice],
-}
-
-impl<'a> PreProcessedSetup<'a> {
-    fn new(signals: Vec<DeviceSignal>, auxiliary_devices: &'a [AuxiliaryDevice]) -> Self {
-        let signals = signals
-            .into_iter()
-            .map(|s| (s.uid, s))
-            .collect::<IndexMap<_, _>>();
-        PreProcessedSetup {
-            signals,
-            awg_devices: IndexMap::new(),
-            auxiliary_devices,
-        }
-    }
-
-    fn get_device(&self, device_uid: DeviceUid) -> Result<&AwgDevice> {
-        self.awg_devices
-            .get(&device_uid)
-            .ok_or_else(|| laboneq_error!("Device with UID {} not found in setup", device_uid.0))
-    }
-
-    fn add_devices(&mut self, device: impl Iterator<Item = AwgDevice>) {
-        for device in device {
-            self.awg_devices.insert(device.uid(), device);
-        }
-    }
-
-    fn add_signal(&mut self, signal: DeviceSignal) {
-        self.signals.insert(signal.uid, signal);
-    }
-
-    fn signals(&self) -> impl Iterator<Item = &DeviceSignal> {
-        self.signals.values()
-    }
-
-    fn devices_in_use(&self) -> Result<Vec<&AwgDevice>> {
-        self.signals
-            .values()
-            .map(|s| self.get_device(s.device_uid))
-            .collect()
     }
 }
 
 pub(crate) fn preprocess_experiment(
     experiment: ExperimentView,
 ) -> CompilerBackendResult<PreprocessOutput<QccsBackendPreprocessedData>> {
-    let mut experiment = ExperimentViewWrapper::from_experiment_view(experiment);
+    let mut experiment = ExperimentViewWrapper::from_experiment_view(experiment)?;
+    fill_missing_device_options(&mut experiment);
     validate_setup(&experiment)?;
+    let routed_output_channel_map = resolve_output_routing_map(&experiment)?;
 
-    // Add triggering signal for small UHFQA+HDAWG setups without sync devices to enable synchronization.
     let hdawg_triggering_signal = create_uhfqa_hdawg_triggering_signal(&mut experiment);
-    // Create AWG devices and reassign signals to the created AWG devices.
     let (awg_devices, reassigned_signals) = create_awg_devices(&mut experiment)?;
 
-    let mut preprocessed_setup =
-        PreProcessedSetup::new(experiment.signals, experiment.auxiliary_devices);
-    if let Some(hdawg_triggering_signal) = hdawg_triggering_signal {
-        preprocessed_setup.add_signal(hdawg_triggering_signal);
+    for reassigned in reassigned_signals {
+        experiment
+            .get_signal_mut(reassigned.signal)
+            .unwrap()
+            .device_uid = reassigned.to_device_uid;
+    }
+    // Add triggering signal to the signal list so it is processed uniformly below.
+    if let Some(trigger) = hdawg_triggering_signal {
+        experiment.signals.push(trigger);
     }
 
-    reassigned_signals
-        .into_iter()
-        .for_each(|reassigned_signal| {
-            let device_signal = preprocessed_setup
-                .signals
-                .get_mut(&reassigned_signal.signal)
-                .unwrap();
-            device_signal.device_uid = reassigned_signal.to_device_uid;
-        });
-    preprocessed_setup.add_devices(awg_devices.into_iter());
+    let awg_device_map: IndexMap<DeviceUid, AwgDevice> =
+        awg_devices.into_iter().map(|d| (d.uid(), d)).collect();
 
-    // Calculate lead delays for all devices in use.
     let lead_delays = calculate_lead_delay(
-        preprocessed_setup.devices_in_use()?,
-        preprocessed_setup.auxiliary_devices,
+        &experiment
+            .signals
+            .iter()
+            .filter_map(|s| awg_device_map.get(&s.device_uid))
+            .collect::<Vec<_>>(),
+        &experiment.auxiliary_devices,
     );
 
-    // Process signals
-    let mut signals = Vec::with_capacity(preprocessed_setup.signals.len());
-    let mut awg_cores: HashMap<(Vec<u16>, DeviceUid), AwgKey> = HashMap::new();
-    for signal in preprocessed_setup.signals() {
-        let device = preprocessed_setup.get_device(signal.device_uid)?;
+    let mut backend_signals = Vec::with_capacity(experiment.signals.len());
+    let mut device_signals = Vec::with_capacity(experiment.signals.len());
+    let mut awg_cores: HashMap<(u16, DeviceUid), AwgKey> = HashMap::new();
 
-        // Extract the channel numbers from the signal's ports and sort them
+    for signal in &experiment.signals {
+        let device = awg_device_map.get(&signal.device_uid).ok_or_else(|| {
+            laboneq_error!("Device with UID {} not found in setup", signal.device_uid.0)
+        })?;
+
         let mut channels: SmallVec<[u16; 4]> = signal
             .ports
             .iter()
@@ -210,21 +177,20 @@ pub(crate) fn preprocess_experiment(
         }
         channels.sort();
 
-        // Evaluate the AWG index
-        let awg_channels = channels
+        let awg_cores_used: HashSet<u16> = channels
             .iter()
             .map(|ch| eval_awg_number(*ch, device))
-            .collect::<HashSet<u16>>();
-        let awg_index = if let Some(index) = awg_channels.iter().next() {
-            *index
-        } else {
+            .collect();
+        if awg_cores_used.len() > 1 {
             bail!(
-                "Signal with UID {} has inconsistent ports, the ports must be neighboring channels e.g. '0' and '1'",
+                "Signal with UID {} has ports spanning multiple AWG cores",
                 signal.uid.0
             );
-        };
+        }
+        // safe: channels is non-empty so awg_cores_used has exactly one element
+        let awg_index = awg_cores_used.into_iter().next().unwrap();
 
-        let awg_id = (awg_channels.into_iter().collect(), signal.device_uid);
+        let awg_id = (awg_index, signal.device_uid);
         let awg_key = if let Some(awg_key) = awg_cores.get(&awg_id) {
             *awg_key
         } else {
@@ -233,21 +199,31 @@ pub(crate) fn preprocess_experiment(
             new_key
         };
 
-        signals.push(BackendSignal {
+        backend_signals.push(BackendSignal {
             uid: signal.uid,
             device_uid: signal.device_uid,
             channels,
             awg_key,
             awg_index,
         });
+        device_signals.push(DeviceSignal {
+            uid: signal.uid,
+            device_uid: signal.device_uid,
+            ports: signal.ports.clone(),
+            kind: signal.signal_type.clone(),
+            calibration: signal.calibration.clone(),
+        });
     }
 
-    let awg_devices = preprocessed_setup.awg_devices.into_values().collect();
-    let device_signals = preprocessed_setup.signals;
-
     Ok(PreprocessOutput::new(
-        QccsBackendPreprocessedData::new(signals, awg_devices, lead_delays),
-        device_signals.into_values().collect(),
+        QccsBackendPreprocessedData::new(
+            backend_signals,
+            experiment.auxiliary_devices,
+            lead_delays,
+            routed_output_channel_map,
+        ),
+        device_signals,
+        awg_device_map.into_values().collect(),
     ))
 }
 
@@ -265,13 +241,13 @@ fn eval_awg_number(channel: u16, device: &AwgDevice) -> u16 {
 /// The signal is only added if there is no existing signal connected to HDAWG channels 0/1 to avoid conflicts with user-defined signals.
 fn create_uhfqa_hdawg_triggering_signal(
     experiment: &mut ExperimentViewWrapper,
-) -> Option<DeviceSignal> {
-    if contains_sync_devices(experiment.auxiliary_devices) {
+) -> Option<ExperimentSignal> {
+    if contains_sync_devices(&experiment.auxiliary_devices) {
         return None;
     }
     let all_devices = experiment
         .instruments
-        .iter()
+        .values()
         .map(|d| d.kind)
         .collect::<HashSet<_>>();
     let only_hdawg_and_uhfqa = all_devices.contains(&InstrumentKind::Hdawg)
@@ -283,37 +259,35 @@ fn create_uhfqa_hdawg_triggering_signal(
         return None;
     }
 
-    let first_hdawg = experiment
+    let hdawg = experiment
         .instruments
-        .iter()
+        .values()
         .find(|d| d.kind == InstrumentKind::Hdawg)
         .unwrap();
-    let mut triggering_signal = None;
 
     let has_channel_0_on_hdawg = experiment.signals.iter().any(|s| {
-        s.device_uid == first_hdawg.uid
-            && s.ports.iter().any(|p| p == "SIGOUTS/0" || p == "SIGOUTS/1") // TODO: Proper channel - port converter
+        s.device_uid == hdawg.uid && s.ports.iter().any(|p| p == "SIGOUTS/0" || p == "SIGOUTS/1") // TODO: Proper channel - port converter
     });
 
-    if !has_channel_0_on_hdawg {
-        triggering_signal = Some(DeviceSignal {
-            uid: experiment
-                .id_store
-                .get_or_insert("__small_system_trigger__")
-                .into(),
-            device_uid: first_hdawg.uid,
-            ports: vec!["SIGOUTS/0".to_string(), "SIGOUTS/1".to_string()], // TODO: Proper channel - port converter
-            kind: SignalKind::Iq,
-            calibration: SignalCalibration::default(),
-        });
+    if has_channel_0_on_hdawg {
+        return None;
     }
-    triggering_signal
+    Some(ExperimentSignal {
+        uid: experiment
+            .id_store
+            .get_or_insert("__small_system_trigger__")
+            .into(),
+        device_uid: hdawg.uid,
+        ports: vec!["SIGOUTS/0".to_string(), "SIGOUTS/1".to_string()], // TODO: Proper channel - port converter
+        signal_type: SignalKind::Iq,
+        calibration: SignalCalibration::default(),
+    })
 }
 
 fn validate_setup(experiment: &ExperimentViewWrapper) -> Result<()> {
     let all_devices = experiment
         .instruments
-        .iter()
+        .values()
         .map(|dev| dev.kind)
         .collect::<HashSet<_>>();
 
@@ -321,7 +295,7 @@ fn validate_setup(experiment: &ExperimentViewWrapper) -> Result<()> {
         bail!("ZQCS devices are not supported in the QCCS backend");
     }
 
-    let has_sync_devices = contains_sync_devices(experiment.auxiliary_devices);
+    let has_sync_devices = contains_sync_devices(&experiment.auxiliary_devices);
     if !has_sync_devices
         && all_devices.contains(&InstrumentKind::Hdawg)
         && all_devices.contains(&InstrumentKind::Uhfqa)
@@ -329,7 +303,7 @@ fn validate_setup(experiment: &ExperimentViewWrapper) -> Result<()> {
         // Check that no internal reference clock is used for UHFQA+HDAWG.
         // TODO: Shall we move this to the Controller? This is the only place where
         // the reference clock is accessed.
-        for device in &experiment.instruments {
+        for device in experiment.instruments.values() {
             if device.kind == InstrumentKind::Hdawg
                 && let Some(ReferenceClock::Internal) = device.reference_clock
             {
@@ -401,7 +375,7 @@ fn contains_sync_devices(devices: &[AuxiliaryDevice]) -> bool {
 
 /// Calculate lead delays for all devices in use based on the device types and setup configuration.
 fn calculate_lead_delay(
-    devices_in_use: Vec<&AwgDevice>,
+    devices_in_use: &[&AwgDevice],
     auxiliary_devices: &[AuxiliaryDevice],
 ) -> HashMap<DeviceUid, Duration<Second>> {
     use laboneq_common::device_traits::{
@@ -435,9 +409,44 @@ fn calculate_lead_delay(
                 DeviceKind::Uhfqa => DEFAULT_UHFQA_LEAD_PQSC,
                 DeviceKind::Shfqa => DEFAULT_SHFQA_LEAD_PQSC,
                 DeviceKind::Shfsg => DEFAULT_SHFSG_LEAD_PQSC,
-                _ => panic!("Unsupported device kind for lead delay evaluation"),
+                k => panic!("Unsupported device kind for lead delay evaluation: {k:?}"),
             };
             (device.uid(), lead_delay)
         })
         .collect()
+}
+
+/// Fill missing device options in the device setup.
+///
+/// This is a compatibility layer when users have omitted the device options in the device setup.
+///
+/// TODO: Enforce the options in the device setup and remove this compatibility layer in the future.
+fn fill_missing_device_options(experiment_view: &mut ExperimentViewWrapper) {
+    // TODO(2K): Add warning for missing options in the device setup
+    for instrument in experiment_view.instruments.values_mut() {
+        if instrument.options.is_empty() {
+            let defaults: &[&'static str] = match instrument.kind {
+                InstrumentKind::Uhfqa => &["UHFQA"],
+                InstrumentKind::Hdawg => &["HDAWG8"],
+                InstrumentKind::Shfqc => &["SHFQC", "QC6CH"],
+                InstrumentKind::Shfqa => &["SHFQA2"],
+                InstrumentKind::Shfsg => &["SHFSG8"],
+                _ => continue,
+            };
+            instrument.options =
+                DeviceOptions::new(defaults.iter().map(|s| s.to_string()).collect());
+        }
+    }
+}
+
+/// Resolve the source channels for all output signals based on the assigned ports.
+fn resolve_output_routing_map(experiment: &ExperimentViewWrapper) -> Result<HashMap<String, u8>> {
+    let mut routed_output_channel_map = HashMap::new();
+    for signal in &experiment.signals {
+        for output in signal.calibration.added_outputs.iter() {
+            let port = parse_port(&output.source_channel, DeviceKind::Shfsg)?;
+            routed_output_channel_map.insert(output.source_channel.clone(), port.channel);
+        }
+    }
+    Ok(routed_output_channel_map)
 }

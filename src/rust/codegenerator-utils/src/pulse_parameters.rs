@@ -4,34 +4,21 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-use laboneq_dsl::operation::PulseParameterValue;
-use laboneq_dsl::types::{NumericLiteral, PulseParameterUid, ValueOrParameter};
+use laboneq_dsl::operation::ExternalOrValue;
+use laboneq_dsl::types::{PulseParameterUid, ValueOrParameter};
 
 pub type PulseParametersId = u64;
 
-pub fn hash_numeric_literal(literal: &NumericLiteral) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    match literal {
-        NumericLiteral::Int(i) => i.hash(&mut hasher),
-        NumericLiteral::Float(f) => laboneq_common::utils::normalize_f64(*f).hash(&mut hasher),
-        NumericLiteral::Complex(c) => {
-            laboneq_common::utils::normalize_f64(c.re).hash(&mut hasher);
-            laboneq_common::utils::normalize_f64(c.im).hash(&mut hasher);
-        }
-    }
-    hasher.finish()
-}
-
-pub fn hash_pulse_parameter_value(value: &PulseParameterValue) -> u64 {
+pub fn hash_pulse_parameter_value(value: &ExternalOrValue) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     match value {
-        PulseParameterValue::ExternalParameter(v) => v.hash(&mut hasher),
-        PulseParameterValue::ValueOrParameter(c) => match c {
+        ExternalOrValue::ExternalParameter(v) => v.hash(&mut hasher),
+        ExternalOrValue::ValueOrParameter(c) => match c {
             ValueOrParameter::Value(v) => {
-                hash_numeric_literal(v).hash(&mut hasher);
+                v.hash(&mut hasher);
             }
             ValueOrParameter::ResolvedParameter { value, .. } => {
-                hash_numeric_literal(value).hash(&mut hasher);
+                value.hash(&mut hasher);
             }
             ValueOrParameter::Parameter(uid) => uid.hash(&mut hasher),
         },
@@ -40,7 +27,7 @@ pub fn hash_pulse_parameter_value(value: &PulseParameterValue) -> u64 {
 }
 
 pub fn hash_hashmap_with_pulse_parameter_values(
-    map: &HashMap<PulseParameterUid, PulseParameterValue>,
+    map: &HashMap<PulseParameterUid, ExternalOrValue>,
 ) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
 
@@ -58,9 +45,9 @@ pub fn hash_hashmap_with_pulse_parameter_values(
 
 pub struct PulseParameters {
     pub id: PulseParametersId,
-    pub pulse_parameters: HashMap<PulseParameterUid, PulseParameterValue>,
-    pub play_parameters: HashMap<PulseParameterUid, PulseParameterValue>,
-    pub parameters: HashMap<PulseParameterUid, PulseParameterValue>,
+    pub pulse_parameters: HashMap<PulseParameterUid, ExternalOrValue>,
+    pub play_parameters: HashMap<PulseParameterUid, ExternalOrValue>,
+    pub parameters: HashMap<PulseParameterUid, ExternalOrValue>,
 }
 
 /// Deduplicated for `PulseParameters` instances.
@@ -81,8 +68,8 @@ impl PulseParameterDeduplicator {
 
     pub fn intern(
         &mut self,
-        pulse_parameters: &HashMap<PulseParameterUid, PulseParameterValue>,
-        play_parameters: &HashMap<PulseParameterUid, PulseParameterValue>,
+        pulse_parameters: &HashMap<PulseParameterUid, ExternalOrValue>,
+        play_parameters: &HashMap<PulseParameterUid, ExternalOrValue>,
     ) -> PulseParametersId {
         // Merge pulse_parameters and play_parameters, where play_parameters override pulse_parameters
         let mut merged = pulse_parameters.clone();

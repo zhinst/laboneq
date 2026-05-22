@@ -29,7 +29,7 @@ mod triggers;
 
 pub use generator::generate_code;
 // Public for Python layer, not intended for external use
-pub use ir_adapter::{CodegenIr, ir_to_codegen_ir};
+pub use ir_adapter::{CodegenIr, HardwareSetup, SignalChannelProperties, ir_to_codegen_ir};
 
 // Re-export for easier access
 pub use crate::sampled_event_handler::FeedbackRegister;

@@ -27,17 +27,19 @@ from laboneq.controller.devices.device_utils import (
 )
 from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
 from laboneq.controller.devices.node_control import (
-    NodeControlBase,
     NodeControlKind,
     filter_states,
 )
-from laboneq.controller.devices.zi_emulator import EmulatorState
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.for_each import for_each
-from laboneq.controller.versioning import SetupCaps
 from laboneq.implementation.utils.devices import target_setup_fingerprint
 
 if TYPE_CHECKING:
+    from laboneq.controller.devices.node_control import (
+        NodeControlBase,
+    )
+    from laboneq.controller.devices.zi_emulator import EmulatorState
+    from laboneq.controller.versioning import SetupCaps
     from laboneq.data.execution_payload import TargetSetup
 
 
@@ -172,7 +174,7 @@ class DeviceCollection:
         if reset_devices:
             await self._configure_async(
                 [device for _, device in self.all if not device.is_secondary],
-                lambda d: cast(DeviceBase, d).load_factory_preset_control_nodes(),
+                lambda d: cast("DeviceBase", d).load_factory_preset_control_nodes(),
                 "Reset to factory defaults",
             )
             # TODO(2K): Error check
@@ -185,7 +187,7 @@ class DeviceCollection:
             # Switch QHUB to the external clock as usual
             await self._configure_async(
                 leaders,
-                lambda d: cast(DeviceBase, d).clock_source_control_nodes(),
+                lambda d: cast("DeviceBase", d).clock_source_control_nodes(),
                 "QHUB: Reference clock switching",
             )
             # Check if zsync link is already established
@@ -239,16 +241,16 @@ class DeviceCollection:
 
         configs = {
             "Configure runtime checks": lambda d: cast(
-                DeviceBase, d
+                "DeviceBase", d
             ).runtime_check_control_nodes(),
             "Reference clock switching": lambda d: cast(
-                DeviceBase, d
+                "DeviceBase", d
             ).clock_source_control_nodes(),
             "System frequency switching": lambda d: cast(
-                DeviceBase, d
+                "DeviceBase", d
             ).system_freq_control_nodes(),
             "Setting RF channel offsets": lambda d: cast(
-                DeviceBase, d
+                "DeviceBase", d
             ).rf_offset_control_nodes(),
         }
 

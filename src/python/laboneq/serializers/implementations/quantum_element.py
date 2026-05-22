@@ -3,17 +3,21 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import attrs
 
 from laboneq.dsl.quantum import QuantumElement, QuantumParameters
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.core import from_dict, import_cls, to_dict
 from laboneq.serializers.serializer_registry import serializer
-from laboneq.serializers.types import (
-    DeserializationOptions,
-    JsonSerializableType,
-    SerializationOptions,
-)
+
+if TYPE_CHECKING:
+    from laboneq.serializers.types import (
+        DeserializationOptions,
+        JsonSerializableType,
+        SerializationOptions,
+    )
 
 
 @serializer(types=[QuantumParameters], public=True)

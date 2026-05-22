@@ -9,19 +9,12 @@ from typing import TYPE_CHECKING
 from zhinst.core import __version__ as zhinst_version
 
 from laboneq._version import get_version
-from laboneq.compiler.common.integration_times import IntegrationTimes
-from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC, NeartimeStep
-from laboneq.compiler.seqc.types import SignalDelays
 from laboneq.compiler.workflow.precompensation_helpers import (
     verify_precompensation_parameters,
 )
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.awg_signal_type import AWGSignalType
-from laboneq.data.awg_info import AwgKey
 from laboneq.data.calibration import CancellationSource
-from laboneq.data.compilation_job import (
-    ParameterInfo,
-)
 from laboneq.data.recipe import (
     AWG,
     IO,
@@ -39,6 +32,10 @@ from laboneq.data.recipe import (
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
     from laboneq._rust.codegenerator import ChannelProperties, FeedbackRegisterConfig
+    from laboneq.compiler.common.integration_times import IntegrationTimes
+    from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC, NeartimeStep
+    from laboneq.compiler.seqc.types import SignalDelays
+    from laboneq.data.awg_info import AwgKey
 
 
 _logger = logging.getLogger(__name__)
@@ -112,7 +109,7 @@ class RecipeGenerator:
         device_id,
         channel,
         output_routers: list[RoutedOutput],
-        offset: float | ParameterInfo = 0.0,
+        offset: float | str = 0.0,
         gains: Gains | None = None,
         precompensation=None,
         modulation=False,

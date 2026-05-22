@@ -4,18 +4,22 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import List, Mapping, Tuple, Union
+from typing import TYPE_CHECKING, List, Mapping, Tuple, Union
 
 from laboneq.core.path import LogicalSignalGroups_Path_Abs
 from laboneq.data.path import Separator
 from laboneq.data.setup_description import (
     DeviceType,
-    Instrument,
     LogicalSignal,
-    PhysicalChannel,
-    Setup,
 )
 from laboneq.data.utils.calibration_helper import CalibrationHelper
+
+if TYPE_CHECKING:
+    from laboneq.data.setup_description import (
+        Instrument,
+        PhysicalChannel,
+        Setup,
+    )
 
 
 def split_path(path: str) -> Tuple[str, str]:

@@ -25,33 +25,12 @@ class ExperimentStatus(str, Enum):
 
 
 class ErrorCode(str, Enum):
-    """Machine-readable, stable error identifiers.
-
-    These codes are part of the public API contract and must remain
-    backwards-compatible once introduced.
-    """
+    """Machine-readable error identifiers used in all error responses."""
 
     CONTROLLER_ERROR = "CONTROLLER_ERROR"
-
-    # --- Experiment submission ---
     INVALID_EXPERIMENT_UUID = "INVALID_EXPERIMENT_UUID"
-    EXPERIMENT_ALREADY_EXISTS = "EXPERIMENT_ALREADY_EXISTS"
     INVALID_EXPERIMENT_PAYLOAD = "INVALID_EXPERIMENT_PAYLOAD"
-    SETUP_HASH_MISMATCH = "SETUP_HASH_MISMATCH"
     VERSION_MISMATCH = "VERSION_MISMATCH"
-    CALLBACK_NOT_REGISTERED = "CALLBACK_NOT_REGISTERED"
-
-    # --- Experiment inspection / cancellation ---
-    EXPERIMENT_NOT_FOUND = "EXPERIMENT_NOT_FOUND"
-
-    # --- Availability ---
-    QUEUE_FULL = "QUEUE_FULL"
-    SERVICE_NOT_READY = "SERVICE_NOT_READY"
-
-    # --- Admin ---
-    ADMIN_ACCESS_DENIED = "ADMIN_ACCESS_DENIED"
-
-    # --- Catch-all ---
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -159,10 +138,6 @@ class ExperimentResponse(BaseModel):
             "Serialized ExperimentResults once completed; None while running or "
             "when failed before producing any output."
         ),
-    )
-    error: str | None = Field(
-        default=None,
-        description="Error message when status is FAILED or CANCELED",
     )
 
 

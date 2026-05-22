@@ -1,11 +1,16 @@
 # Copyright 2024 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from __future__ import annotations
 
-from laboneq.dsl.calibration import Calibration
-from laboneq.dsl.experiment.section import Section
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
 from laboneq.openqasm3.openqasm_error import OpenQasmException
+
+if TYPE_CHECKING:
+    from laboneq.dsl.calibration import Calibration
+    from laboneq.dsl.experiment.section import Section
 
 
 class MeasurementResult:

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 from typing import Iterator
 
+from laboneq.core.types.enums.io_direction import IODirection
+from laboneq.core.types.enums.physical_channel_type import PhysicalChannelType
 from laboneq.data.execution_payload import (
     VIRTUAL_SHFSG_UID_SUFFIX,
     TargetChannelCalibration,
@@ -17,8 +19,6 @@ from laboneq.data.execution_payload import (
 from laboneq.data.setup_description import (
     DeviceType,
     Instrument,
-    IODirection,
-    PhysicalChannelType,
     Server,
     Setup,
 )

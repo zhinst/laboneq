@@ -12,15 +12,16 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import logging
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from laboneq.controller.api.async_local_controller import AsyncLocalController
-from laboneq.controller.api.controller_api import SubmissionHandle, SubmissionStatus
+from laboneq.controller.api.commons import SubmissionHandle
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import ModuleType
 
+    from laboneq.controller.api.controller_api import SubmissionStatus
     from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.dsl.device import DeviceSetup
     from laboneq.dsl.result.results import Results
@@ -29,32 +30,6 @@ logger = logging.getLogger(__name__)
 
 # Sentinel for "no fingerprint available" (device setup has no system_description).
 _NO_FINGERPRINT = None
-
-
-# ---------------------------------------------------------------------------
-# Custom exceptions — mapped to specific HTTP status codes in routes.py
-# ---------------------------------------------------------------------------
-
-
-class ExperimentAlreadyExistsError(Exception):
-    """UUID conflict — experiment with this ID is already known.
-
-    Maps to HTTP 400 Bad Request.
-    """
-
-
-class FingerprintMismatchError(Exception):
-    """Experiment's device fingerprint doesn't match the server's device setup.
-
-    Maps to HTTP 400 Bad Request.
-    """
-
-
-class MissingCallbacksError(Exception):
-    """Experiment requires callbacks not registered on the server.
-
-    Maps to HTTP 400 Bad Request.
-    """
 
 
 def load_callbacks_from_module(module_path: str) -> dict[str, Callable[..., Any]]:

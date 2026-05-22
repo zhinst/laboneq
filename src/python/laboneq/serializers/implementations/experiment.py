@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from laboneq.core.types.enums.dsl_version import DSLVersion
 from laboneq.dsl.experiment.experiment import Experiment
 from laboneq.serializers._cache import create_caches
-from laboneq.serializers._legacy import LabOneQClassicSerializer
+from laboneq.serializers._legacy.classic import LabOneQClassicSerializer
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.implementations._models._calibration import (
     remove_high_pass_clearing,
@@ -16,14 +17,17 @@ from laboneq.serializers.implementations._models._calibration import (
 from laboneq.serializers.implementations._models._experiment import (
     AllSectionModel,
     ExperimentSignalModel,
+    _convert_pulse_parameter_model_v4_to_v5,
     make_converter,
 )
 from laboneq.serializers.serializer_registry import serializer
-from laboneq.serializers.types import (
-    DeserializationOptions,
-    JsonSerializableType,
-    SerializationOptions,
-)
+
+if TYPE_CHECKING:
+    from laboneq.serializers.types import (
+        DeserializationOptions,
+        JsonSerializableType,
+        SerializationOptions,
+    )
 
 _logger = logging.getLogger(__name__)
 _converter = make_converter()
@@ -32,7 +36,7 @@ _converter = make_converter()
 @serializer(types=Experiment, public=True)
 class ExperimentSerializer(VersionedClassSerializer[Experiment]):
     SERIALIZER_ID = "laboneq.serializers.implementations.ExperimentSerializer"
-    VERSION = 4
+    VERSION = 5
 
     @classmethod
     def to_dict(
@@ -60,7 +64,7 @@ class ExperimentSerializer(VersionedClassSerializer[Experiment]):
         }
 
     @classmethod
-    def from_dict_v4(
+    def from_dict_v5(
         cls,
         serialized_data: JsonSerializableType,
         options: DeserializationOptions | None = None,
@@ -82,6 +86,37 @@ class ExperimentSerializer(VersionedClassSerializer[Experiment]):
             epsilon=serialized_data["epsilon"],
             sections=sections,
         )
+
+    @classmethod
+    def _replace_pulse_parameters_v4(cls, section_data: list):
+        """Convert pulse parameters from v4 to v5."""
+        for section in section_data:
+            if isinstance(
+                section_pulse_parameters := section.get("pulse_parameters"), dict
+            ):
+                section["pulse_parameters"] = _convert_pulse_parameter_model_v4_to_v5(
+                    section_pulse_parameters
+                )
+            if isinstance(pulse := section.get("pulse"), dict) and (
+                (pulse_parameters := pulse.get("pulse_parameters")) is not None
+            ):
+                # pulse sections that are stored as references don't contain
+                # the 'pulse_parameters' key
+                section["pulse"]["pulse_parameters"] = (
+                    _convert_pulse_parameter_model_v4_to_v5(pulse_parameters)
+                )
+            if isinstance(children := section.get("children"), list):
+                cls._replace_pulse_parameters_v4(children)
+
+    @classmethod
+    def from_dict_v4(
+        cls,
+        serialized_data: JsonSerializableType,
+        options: DeserializationOptions | None = None,
+    ):
+        se = serialized_data["__data__"]
+        cls._replace_pulse_parameters_v4(se["sections"])
+        return cls.from_dict_v5(serialized_data, options)
 
     @classmethod
     def _add_auto_chunking_v3(cls, section_data: list):

@@ -174,6 +174,12 @@ body {
         transform 0.1s ease;
 }
 
+.controls-button:disabled {
+    background-color: var(--medium-gray);
+    cursor: not-allowed;
+    transform: none;
+}
+
 svg.btn-icon {
     width: 1.25rem;
     height: 1.25rem;

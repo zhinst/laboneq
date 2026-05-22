@@ -71,7 +71,7 @@ class QuantumPlatform:
         self.qpu = qpu
 
     def __repr__(self) -> str:
-        quantum_elements = ", ".join(q.uid for q in self.qpu.quantum_elements)
+        quantum_elements = ", ".join(self.qpu.quantum_element_uids)
         groups = ", ".join(
             f"{key}: [{', '.join(q.uid for q in value)}]"
             for key, value in self.qpu.groups._groups.items()
@@ -208,7 +208,7 @@ class QPU:
                 f" | dict."
             )
 
-        quantum_elements_uid_list = [q.uid for q in self.quantum_elements]
+        quantum_elements_uid_list = self.quantum_element_uids
         if len(quantum_elements_uid_list) != len(set(quantum_elements_uid_list)):
             raise ValueError("There are multiple quantum elements with the same UID.")
         self._quantum_element_map: dict[str, QuantumElement] = {
@@ -245,7 +245,7 @@ class QPU:
         self.topology: QPUTopology = QPUTopology(self.quantum_elements)
 
     def __repr__(self) -> str:
-        quantum_elements = ", ".join(q.uid for q in self.quantum_elements)
+        quantum_elements = ", ".join(self.quantum_element_uids)
         groups = ", ".join(
             f"{key}: [{', '.join(q.uid for q in value)}]"
             for key, value in self.groups._groups.items()
@@ -330,13 +330,18 @@ class QPU:
         else:
             quantum_operations = type(self.quantum_operations).__name__
 
-        yield "quantum_elements", [q.uid for q in self.quantum_elements]
+        yield "quantum_elements", self.quantum_element_uids
         yield (
             "groups",
             {key: [q.uid for q in value] for key, value in self.groups._groups.items()},
         )
         yield "quantum_operations", quantum_operations
         yield "topology", self.topology
+
+    @property
+    def quantum_element_uids(self) -> list[str]:
+        """Return the list of quantum element UIDs."""
+        return [q.uid for q in self.quantum_elements]
 
     def copy_quantum_elements(self) -> QuantumElements:
         """Return new quantum elements that are a copy of the original quantum elements."""

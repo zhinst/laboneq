@@ -3,6 +3,9 @@
 
 use std::fmt::Display;
 
+mod literal;
+pub use literal::*;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct PhysicalDeviceUid(pub u16);
 

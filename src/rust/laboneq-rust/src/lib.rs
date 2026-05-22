@@ -26,7 +26,7 @@ fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let compiler = laboneq_compiler_py::create_py_module(m.py(), "compiler")
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("{}", e)))?;
     compiler.add_function(wrap_pyfunction!(
-        compiler::build_experiment_capnp_py,
+        compiler::compile_experiment_py,
         &compiler
     )?)?;
     modules.set_item("laboneq._rust.compiler", &compiler)?;

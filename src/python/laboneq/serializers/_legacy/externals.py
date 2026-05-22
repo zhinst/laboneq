@@ -5,13 +5,19 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from laboneq._optional_deps import (
     HAS_XARRAY,
-    Xarray,
-    XarrayDataArray,
-    XarrayDataset,
     import_optional,
 )
+
+if TYPE_CHECKING:
+    from laboneq._optional_deps import (
+        Xarray,
+        XarrayDataArray,
+        XarrayDataset,
+    )
 
 
 class XarrayDataArrayDeserializer:

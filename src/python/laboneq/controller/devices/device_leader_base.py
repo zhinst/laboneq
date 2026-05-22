@@ -6,19 +6,24 @@ from __future__ import annotations
 import logging
 import time
 from enum import IntEnum
+from typing import TYPE_CHECKING
 
 from laboneq.controller.devices.async_support import ResponseWaiterAsync, _sleep
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.devices.node_control import (
     Condition,
-    NodeControlBase,
     Response,
     Setting,
 )
-from laboneq.controller.recipe_processor import RecipeData
 from laboneq.controller.utilities.exception import LabOneQControllerException
-from laboneq.data.recipe import NtStepKey
+
+if TYPE_CHECKING:
+    from laboneq.controller.devices.node_control import (
+        NodeControlBase,
+    )
+    from laboneq.controller.recipe_processor import RecipeData
+    from laboneq.data.recipe import NtStepKey
 
 _logger = logging.getLogger(__name__)
 

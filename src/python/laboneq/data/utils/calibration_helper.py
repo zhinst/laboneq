@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
-from laboneq.data.calibration import Calibration, SignalCalibration
+from typing import TYPE_CHECKING
+
 from laboneq.data.path import Separator
-from laboneq.data.setup_description import LogicalSignal
+
+if TYPE_CHECKING:
+    from laboneq.data.calibration import Calibration, SignalCalibration
+    from laboneq.data.setup_description import LogicalSignal
 
 
 class CalibrationHelper:

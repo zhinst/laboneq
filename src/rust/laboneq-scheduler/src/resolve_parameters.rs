@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use anyhow::Context;
-use laboneq_dsl::operation::PulseParameterValue;
+use laboneq_dsl::operation::ExternalOrValue;
 use laboneq_dsl::types::{ParameterUid, SweepParameter, ValueOrParameter};
 use laboneq_units::tinysample::seconds_to_tinysamples;
 
@@ -142,11 +142,11 @@ fn resolve_parameter_fields(node: &mut ScheduledNode, resolver: &ParameterResolv
         IrKind::Acquire(obj) => {
             for p in &mut obj.pulse_parameters {
                 for value in p.values_mut() {
-                    if let PulseParameterValue::ValueOrParameter(ValueOrParameter::Parameter(
+                    if let ExternalOrValue::ValueOrParameter(ValueOrParameter::Parameter(
                         param_uid,
                     )) = value
                     {
-                        *value = PulseParameterValue::ValueOrParameter(ValueOrParameter::Value(
+                        *value = ExternalOrValue::ValueOrParameter(ValueOrParameter::Value(
                             resolver.get_value(param_uid)?,
                         ));
                     }
@@ -154,11 +154,11 @@ fn resolve_parameter_fields(node: &mut ScheduledNode, resolver: &ParameterResolv
             }
             for p in &mut obj.parameters {
                 for value in p.values_mut() {
-                    if let PulseParameterValue::ValueOrParameter(ValueOrParameter::Parameter(
+                    if let ExternalOrValue::ValueOrParameter(ValueOrParameter::Parameter(
                         param_uid,
                     )) = value
                     {
-                        *value = PulseParameterValue::ValueOrParameter(ValueOrParameter::Value(
+                        *value = ExternalOrValue::ValueOrParameter(ValueOrParameter::Value(
                             resolver.get_value(param_uid)?,
                         ));
                     }
@@ -226,21 +226,19 @@ fn resolve_parameter_fields(node: &mut ScheduledNode, resolver: &ParameterResolv
                 );
             }
             for value in obj.pulse_parameters.values_mut() {
-                if let PulseParameterValue::ValueOrParameter(ValueOrParameter::Parameter(
-                    param_uid,
-                )) = value
+                if let ExternalOrValue::ValueOrParameter(ValueOrParameter::Parameter(param_uid)) =
+                    value
                 {
-                    *value = PulseParameterValue::ValueOrParameter(ValueOrParameter::Value(
+                    *value = ExternalOrValue::ValueOrParameter(ValueOrParameter::Value(
                         resolver.get_value(param_uid)?,
                     ));
                 }
             }
             for value in obj.parameters.values_mut() {
-                if let PulseParameterValue::ValueOrParameter(ValueOrParameter::Parameter(
-                    param_uid,
-                )) = value
+                if let ExternalOrValue::ValueOrParameter(ValueOrParameter::Parameter(param_uid)) =
+                    value
                 {
-                    *value = PulseParameterValue::ValueOrParameter(ValueOrParameter::Value(
+                    *value = ExternalOrValue::ValueOrParameter(ValueOrParameter::Value(
                         resolver.get_value(param_uid)?,
                     ));
                 }

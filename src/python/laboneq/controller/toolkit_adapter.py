@@ -4,12 +4,17 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
-import zhinst.core
 from zhinst.toolkit import Session as TKSession
-from zhinst.toolkit.driver.devices import DeviceType
 
-from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
+from laboneq.controller.devices.device_zi import DeviceBase
+
+if TYPE_CHECKING:
+    import zhinst.core
+    from zhinst.toolkit.driver.devices import DeviceType
+
+    from laboneq.controller.devices.device_zi import DeviceZI
 
 
 class ToolkitDevices(Mapping):

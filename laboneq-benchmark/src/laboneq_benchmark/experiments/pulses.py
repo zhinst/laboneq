@@ -3,8 +3,14 @@
 
 """Various pulse definitions for quantum experiments."""
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from laboneq.dsl.experiment import pulse_library
-from laboneq.dsl.quantum import QuantumElement
+
+if TYPE_CHECKING:
+    from laboneq.dsl.quantum import QuantumElement
 
 
 def drive_ge_rabi(qubit: QuantumElement):

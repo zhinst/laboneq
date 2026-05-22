@@ -7,17 +7,17 @@ import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.validators import dicts_equal
-from laboneq.data.scheduled_experiment import (
-    CodegenWaveform,
-    ScheduledExperiment,
-)
 
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
 
+    from laboneq.core.types.enums.wave_type import WaveType
     from laboneq.data.recipe import Recipe
+    from laboneq.data.scheduled_experiment import (
+        CodegenWaveform,
+        ScheduledExperiment,
+    )
     from laboneq.dsl.device.device_setup import DeviceSetup
     from laboneq.dsl.experiment import Experiment
     from laboneq.dsl.experiment.pulse import Pulse

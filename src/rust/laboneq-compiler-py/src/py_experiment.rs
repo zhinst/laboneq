@@ -1,15 +1,18 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_common::named_id::resolve_ids;
-use laboneq_dsl::types::{OscillatorKind, ValueOrParameter};
 use pyo3::prelude::*;
 use std::sync::Arc;
+
+use laboneq_common::named_id::resolve_ids;
+use laboneq_dsl::types::{OscillatorKind, ValueOrParameter};
+use laboneq_py_utils::py_export::{acquisition_type_to_py, averaging_mode_to_py};
 
 use laboneq_common::compiler_settings::CompilerSettings;
 use laboneq_ir::system::DeviceSetup;
 
-use crate::compiler_backend::PreprocessedBackendData;
+use crate::Error;
+use crate::compiler_backend::{DynCompilerBackend, PreprocessedBackendData};
 use crate::error::create_error_message;
 use crate::experiment::Experiment;
 use crate::experiment_context::ExperimentContext;
@@ -21,8 +24,6 @@ use crate::py_signal::{
 use crate::result_shape::ResultShapes;
 use crate::setup_processor::DelayRegistry;
 
-use crate::Error;
-
 #[pyclass(name = "Experiment", frozen)]
 pub struct ExperimentPy {
     pub(crate) inner: Experiment,
@@ -33,6 +34,7 @@ pub struct ExperimentPy {
     /// Delay compensation for signals on devices.
     pub(crate) delay_compensation: DelayRegistry,
     pub(crate) compiler_settings: CompilerSettings,
+    pub(crate) backend: Arc<dyn DynCompilerBackend>,
     pub(crate) backend_data: Arc<dyn PreprocessedBackendData + Send + Sync>,
     pub(crate) result_shapes: ResultShapes,
 }
@@ -214,4 +216,33 @@ impl ExperimentPy {
         }
         None
     }
+
+    fn rt_loop_properties<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, RtLoopPropertiesPy>> {
+        let rt_properties = self.context.rt_properties();
+
+        let out = RtLoopPropertiesPy {
+            uid: self
+                .inner
+                .id_store
+                .resolve(rt_properties.uid)
+                .unwrap()
+                .to_string(),
+            acquisition_type: acquisition_type_to_py(&rt_properties.acquisition_type).to_string(),
+            averaging_mode: averaging_mode_to_py(&rt_properties.averaging_mode).to_string(),
+            count: rt_properties.count.get(),
+        };
+        out.into_pyobject(py)
+    }
+}
+
+#[pyclass(name = "RtLoopProperties", frozen)]
+struct RtLoopPropertiesPy {
+    #[pyo3(get)]
+    uid: String,
+    #[pyo3(get)]
+    acquisition_type: String,
+    #[pyo3(get)]
+    averaging_mode: String,
+    #[pyo3(get)]
+    count: u32,
 }

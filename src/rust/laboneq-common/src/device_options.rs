@@ -23,7 +23,7 @@ impl DeviceOptions {
     pub fn new(mut options: Vec<String>) -> Self {
         Self::normalize_options(&mut options);
         DeviceOptions {
-            options: Arc::new(options.into_iter().collect()),
+            options: options.into(),
         }
     }
 

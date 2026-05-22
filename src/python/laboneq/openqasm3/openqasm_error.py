@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
-from openqasm3.ast import Span
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from openqasm3.ast import Span
 
 
 class OpenQasmException(Exception):

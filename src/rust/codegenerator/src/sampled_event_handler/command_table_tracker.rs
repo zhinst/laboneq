@@ -11,6 +11,7 @@ use crate::ir::{
     compilation_job::{AwgKind, DeviceKind},
 };
 use crate::sampled_event_handler::awg_events::PulseSource;
+use crate::utils::normalize_phase_symmetric;
 use laboneq_error::bail;
 use serde_json::{Map, Value, json};
 
@@ -320,8 +321,13 @@ impl CommandTableTracker {
             do_incr = true;
         }
         if let Some(mut ct_phase) = ct_phase {
-            ct_phase *= 180.0 / std::f64::consts::PI;
-            ct_phase %= 360.0;
+            // Normalize to (-π, π]
+            let ct_phase_q;
+            (ct_phase, ct_phase_q) = (
+                normalize_phase_symmetric(ct_phase) * 180.0 / std::f64::consts::PI,
+                normalize_phase_symmetric(ct_phase + std::f64::consts::FRAC_PI_2) * 180.0
+                    / std::f64::consts::PI,
+            );
             if matches!(self.device_type, DeviceKind::HDAWG) {
                 if do_incr {
                     json.insert(
@@ -333,10 +339,10 @@ impl CommandTableTracker {
                         json!({"value": ct_phase, "increment": true}),
                     );
                 } else if matches!(self.signal_kind, AwgKind::SINGLE | AwgKind::DOUBLE) {
-                    json.insert("phase0".into(), json!({"value": (ct_phase + 90.0) % 360.0}));
-                    json.insert("phase1".into(), json!({"value": (ct_phase + 90.0) % 360.0}));
+                    json.insert("phase0".into(), json!({"value": ct_phase_q}));
+                    json.insert("phase1".into(), json!({"value": ct_phase_q}));
                 } else {
-                    json.insert("phase0".into(), json!({"value": (ct_phase + 90.0) % 360.0}));
+                    json.insert("phase0".into(), json!({"value": ct_phase_q}));
                     json.insert("phase1".into(), json!({"value": ct_phase}));
                 }
             } else if matches!(self.device_type, DeviceKind::SHFSG) {

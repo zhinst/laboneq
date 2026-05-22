@@ -3,16 +3,18 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING
 
 import attrs
 
-from laboneq.core.types.enums import PhysicalChannelType
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import Calibratable, SignalCalibration
 from laboneq.dsl.calibration.physical_channel_calibration import (
     PhysicalChannelCalibration,
 )
+
+if TYPE_CHECKING:
+    from laboneq.core.types.enums import PhysicalChannelType
 
 PHYSICAL_CHANNEL_CALIBRATION_FIELDS = tuple(
     attrs.fields_dict(PhysicalChannelCalibration).keys()
@@ -50,7 +52,7 @@ class PhysicalChannel(Calibratable):
     name: str | None = None
 
     #: The type of the channel.
-    type: Optional[PhysicalChannelType] = None
+    type: PhysicalChannelType | None = None
 
     #: Logical path to the channel. Typically of the form
     # ``/<device uid>/<channel name>``.

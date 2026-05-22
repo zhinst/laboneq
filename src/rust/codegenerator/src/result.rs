@@ -5,10 +5,11 @@ use std::num::NonZero;
 use std::{collections::HashMap, sync::Arc};
 
 use indexmap::IndexMap;
-use laboneq_dsl::device_setup::AuxiliaryDevice;
+use laboneq_dsl::setup_description_qccs::AuxiliaryDevice;
 use laboneq_dsl::signal_calibration::PortMode;
 use laboneq_dsl::types::DeviceUid as DeviceUidCommon;
 use laboneq_dsl::types::{ParameterUid, PumpCancellationSource, Quantity};
+
 use laboneq_units::duration::{Duration, Second};
 
 pub use crate::handle_feedback_registers::Acquisition;

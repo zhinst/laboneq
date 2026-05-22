@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import attrs
 
@@ -14,7 +14,10 @@ from laboneq.dsl.calibration.signal_calibration import (
     SignalCalibration,
 )
 
-from .io_units import LogicalSignal, PhysicalChannel
+from .io_units import LogicalSignal
+
+if TYPE_CHECKING:
+    from .io_units import PhysicalChannel
 
 _T = TypeVar("_T")
 

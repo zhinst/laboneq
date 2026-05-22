@@ -3,24 +3,29 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 import attrs
 import numpy as np
-from numpy.typing import NDArray
 
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.dsl.parameter import SweepParameter
 from laboneq.simple import (
-    AveragingMode,
     Calibration,
     Experiment,
-    ModulationType,
     Oscillator,
     SectionAlignment,
     SignalCalibration,
 )
-from laboneq.simple import pulse_library as pl
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
+
+    from laboneq.core.types.enums.acquisition_type import AcquisitionType
+    from laboneq.simple import (
+        AveragingMode,
+        ModulationType,
+    )
+    from laboneq.simple import pulse_library as pl
 
 
 def create_qubit_spectroscopy(settings: QubitSpectroscopySettings):

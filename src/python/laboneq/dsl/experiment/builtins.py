@@ -16,15 +16,11 @@ from laboneq.core.types.enums import (
     RepetitionMode,
     SectionAlignment,
 )
-from laboneq.core.types.enums.section_timing_mode import SectionTimingMode
-from laboneq.dsl import Parameter
 from laboneq.dsl.calibration import Calibration
-from laboneq.dsl.device.io_units import LogicalSignal
 from laboneq.dsl.experiment.experiment_context import (
     ExperimentContextManager,
     current_experiment_context,
 )
-from laboneq.dsl.experiment.pulse import Pulse
 from laboneq.dsl.experiment.section_context import (
     AcquireLoopRtSectionContextManager,
     CaseSectionContextManager,
@@ -43,6 +39,9 @@ from laboneq.dsl.experiment.uid_generator import (
 if typing.TYPE_CHECKING:
     from typing import Callable
 
+    from laboneq.core.types.enums.section_timing_mode import SectionTimingMode
+    from laboneq.dsl import Parameter
+    from laboneq.dsl.device.io_units import LogicalSignal
     from laboneq.dsl.enums import ExecutionType
     from laboneq.dsl.experiment import (
         Experiment,
@@ -51,6 +50,7 @@ if typing.TYPE_CHECKING:
         PlayPulse,
         Section,
     )
+    from laboneq.dsl.experiment.pulse import Pulse
     from laboneq.dsl.prng import PRNG, PRNGSample
 
 __all__ = [

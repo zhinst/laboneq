@@ -9,17 +9,21 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ItemsView, Iterator
 
-from laboneq.controller.versioning import SetupCaps
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
 from laboneq.data.execution_payload import (
-    TargetChannelCalibration,
     TargetChannelType,
     TargetDeviceType,
 )
 from laboneq.implementation.utils.devices import parse_device_options
 
 if TYPE_CHECKING:
-    from laboneq.data.execution_payload import TargetDevice, TargetServer, TargetSetup
+    from laboneq.controller.versioning import SetupCaps
+    from laboneq.data.execution_payload import (
+        TargetChannelCalibration,
+        TargetDevice,
+        TargetServer,
+        TargetSetup,
+    )
 
 _logger = logging.getLogger(__name__)
 

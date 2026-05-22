@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::operation::Operation;
-use laboneq_dsl::types::{AcquisitionType, HandleUid, PulseDef, PulseLength, PulseUid, SignalUid};
+use laboneq_dsl::operation::{AveragingLoop, Operation};
+use laboneq_dsl::types::{
+    AcquisitionType, AveragingMode, HandleUid, PulseDef, PulseLength, PulseUid, SectionUid,
+    SignalUid,
+};
 use laboneq_units::duration::{Duration, Second, seconds};
 
 use crate::error::{Error, Result};
@@ -18,7 +22,7 @@ use crate::experiment::Experiment;
 pub(crate) struct ExperimentContext {
     /// Map from acquisition handle UIDs to signal UIDs
     handle_to_signal: HashMap<HandleUid, SignalUid>,
-    acquisition_type: AcquisitionType,
+    rt_properties: RealTimeLoopProperties,
     maximum_acquisition_lengths: HashMap<SignalUid, (Duration<Second>, usize)>,
 }
 
@@ -35,8 +39,19 @@ impl ExperimentContext {
     }
 
     pub(crate) fn acquisition_type(&self) -> &AcquisitionType {
-        &self.acquisition_type
+        &self.rt_properties.acquisition_type
     }
+
+    pub(crate) fn rt_properties(&self) -> &RealTimeLoopProperties {
+        &self.rt_properties
+    }
+}
+
+pub(crate) struct RealTimeLoopProperties {
+    pub uid: SectionUid,
+    pub acquisition_type: AcquisitionType,
+    pub averaging_mode: AveragingMode,
+    pub count: NonZeroU32,
 }
 
 /// Create an [`ExperimentContext`] from an [`Experiment`].
@@ -45,7 +60,7 @@ pub(crate) fn experiment_context_from_experiment(
 ) -> Result<ExperimentContext> {
     let mut context = ExperimentContextCollector::new(&experiment.pulses);
     context.visit_node(&experiment.root)?;
-    Ok(context.into_context())
+    context.into_context()
 }
 
 struct ExperimentContextCollector<'a> {
@@ -53,7 +68,7 @@ struct ExperimentContextCollector<'a> {
 
     /// Map from acquisition handle UIDs to signal UIDs
     handle_to_signal: HashMap<HandleUid, SignalUid>,
-    acquisition_type: Option<AcquisitionType>,
+    rt_properties: Option<RealTimeLoopProperties>,
     maximum_acquisition_lengths: HashMap<SignalUid, (Duration<Second>, usize)>,
 }
 
@@ -62,20 +77,19 @@ impl<'a> ExperimentContextCollector<'a> {
         Self {
             pulses,
             handle_to_signal: HashMap::new(),
-            acquisition_type: None,
+            rt_properties: None,
             maximum_acquisition_lengths: HashMap::new(),
         }
     }
 
-    fn into_context(self) -> ExperimentContext {
-        const DEFAULT_ACQUISITION_TYPE: AcquisitionType = AcquisitionType::Integration;
-        let acquisition_type = self.acquisition_type.unwrap_or(DEFAULT_ACQUISITION_TYPE);
-
-        ExperimentContext {
+    fn into_context(self) -> Result<ExperimentContext> {
+        Ok(ExperimentContext {
             handle_to_signal: self.handle_to_signal,
-            acquisition_type,
+            rt_properties: self.rt_properties.ok_or_else(|| {
+                Error::new("Experiment must have exactly one real time acquisition loop")
+            })?,
             maximum_acquisition_lengths: self.maximum_acquisition_lengths,
-        }
+        })
     }
 
     fn visit_node(&mut self, node: &ExperimentNode) -> Result<()> {
@@ -84,7 +98,7 @@ impl<'a> ExperimentContextCollector<'a> {
                 self.visit_acquire(obj)?;
             }
             Operation::AveragingLoop(obj) => {
-                self.set_acquisition_type(obj.acquisition_type)?;
+                self.set_rt_properties(obj)?;
                 for child in &node.children {
                     self.visit_node(child)?;
                 }
@@ -125,13 +139,19 @@ impl<'a> ExperimentContextCollector<'a> {
         Ok(())
     }
 
-    fn set_acquisition_type(&mut self, acquisition_type: AcquisitionType) -> Result<()> {
-        if self.acquisition_type.is_some() && self.acquisition_type != Some(acquisition_type) {
+    fn set_rt_properties(&mut self, op: &AveragingLoop) -> Result<()> {
+        if self.rt_properties.is_some() {
             return Err(Error::new(
                 "Experiment must not contain multiple real-time averaging loops",
             ));
         }
-        self.acquisition_type = Some(acquisition_type);
+        let rt_properties = RealTimeLoopProperties {
+            uid: op.uid,
+            acquisition_type: op.acquisition_type,
+            averaging_mode: op.averaging_mode,
+            count: op.count,
+        };
+        self.rt_properties = Some(rt_properties);
         Ok(())
     }
 

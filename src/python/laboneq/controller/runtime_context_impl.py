@@ -8,13 +8,13 @@ import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from numpy import typing as npt
-
 from laboneq.controller.runtime_context import RuntimeContext
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.exceptions import AbortExecution
 
 if TYPE_CHECKING:
+    from numpy import typing as npt
+
     from laboneq.controller.controller import Controller
     from laboneq.controller.recipe_processor import RecipeData
     from laboneq.controller.toolkit_adapter import ToolkitDevices

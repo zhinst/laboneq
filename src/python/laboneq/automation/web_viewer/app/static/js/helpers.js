@@ -106,3 +106,5 @@ export function hideToast() {
     el.classList.remove("fading");
     el.style.display = "none";
 }
+
+document.querySelector(".toast-close")?.addEventListener("click", hideToast);

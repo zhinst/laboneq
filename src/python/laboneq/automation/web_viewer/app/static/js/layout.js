@@ -58,6 +58,19 @@ export function setupControls({ onModeChange }) {
     if (btnResetAuto) btnResetAuto.addEventListener("click", resetAndClear);
 }
 
+export function updateButtonStates(status) {
+    const btnRunAuto = document.getElementById("btnRunAuto");
+    const btnResetAuto = document.getElementById("btnResetAuto");
+    const btnRunElement = document.getElementById("btnRunElement");
+
+    const isRunning = status === "running";
+    const isError = status === "error";
+
+    if (btnRunAuto) btnRunAuto.disabled = isRunning || isError;
+    if (btnResetAuto) btnResetAuto.disabled = isRunning;
+    if (btnRunElement) btnRunElement.disabled = isRunning || isError;
+}
+
 function resetAndClear() {
     auto.resetAutomation();
     clearHighlight();

@@ -5,18 +5,23 @@ from __future__ import annotations
 
 import math
 from enum import Flag
-from typing import List, Optional, Set
+from typing import TYPE_CHECKING, List, Optional, Set
 
 import numpy as np
-from numpy.typing import ArrayLike
 
-from laboneq.dsl.device.io_units.physical_channel import PhysicalChannelType
+from laboneq.core.types.enums import PhysicalChannelType
 from laboneq.simulator.seqc_parser import (
-    CommandTableEntryInfo,
     Operation,
     SeqCEvent,
-    SeqCSimulation,
 )
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
+
+    from laboneq.simulator.seqc_parser import (
+        CommandTableEntryInfo,
+        SeqCSimulation,
+    )
 
 
 def _overlaps(a_start: int, a_length: int, b_start: int, b_length: int):

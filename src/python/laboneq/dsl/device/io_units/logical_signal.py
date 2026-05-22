@@ -3,22 +3,24 @@
 
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 import attrs
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
-from laboneq.core.types.enums import IODirection
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
-from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.calibration.calibratable import Calibratable
 from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
 from laboneq.dsl.calibration.signal_calibration import (
     SignalCalibration,
 )
-from laboneq.dsl.device.io_units.physical_channel import (
-    PhysicalChannel,
-)
+
+if TYPE_CHECKING:
+    from laboneq.core.types.enums import IODirection
+    from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
+    from laboneq.dsl.device.io_units.physical_channel import (
+        PhysicalChannel,
+    )
 
 
 @classformatter

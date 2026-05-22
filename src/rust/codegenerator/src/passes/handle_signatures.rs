@@ -396,6 +396,16 @@ fn transform_waveforms(node: &mut IrNode, ctx: &mut PassContext) {
             }
             ctx.in_branch = false;
         }
+        NodeKind::FrameChange(frame_change) => {
+            // Quantize phases to resolution of command table
+            if ctx.phase_resolution_range >= 1 {
+                assert!(
+                    ctx.use_ct_phase,
+                    "cannot increment oscillator phase w/o command table"
+                );
+                frame_change.phase = quantize_phase_ct(frame_change.phase);
+            }
+        }
         _ => {
             for child in node.iter_children_mut() {
                 transform_waveforms(child, ctx);
@@ -870,6 +880,82 @@ mod tests {
             )];
             let _ = handle_signature_phases(&mut pulses1, true, phase_resolution_range);
             assert_eq!(pulses1[0].phase.to_bits(), 0.0f64.to_bits());
+        }
+    }
+
+    mod test_transform_waveforms_frame_change {
+        use super::*;
+        use crate::ir::FrameChange;
+        use crate::ir::compilation_job as cjob;
+
+        fn make_signal() -> Arc<cjob::Signal> {
+            Arc::new(cjob::Signal {
+                uid: 0.into(),
+                kind: cjob::SignalKind::IQ,
+                channels: vec![0],
+                signal_delay: 0,
+                start_delay: 0,
+                oscillator: None,
+                automute: false,
+            })
+        }
+
+        fn make_frame_change_node(phase: f64) -> IrNode {
+            IrNode::new(
+                NodeKind::FrameChange(FrameChange {
+                    length: 0,
+                    phase,
+                    parameter: None,
+                    signal: make_signal(),
+                }),
+                0,
+            )
+        }
+
+        fn make_ctx(
+            amplitude_register_values: &mut AmplitudeRegisterValues,
+            phase_resolution_range: u64,
+        ) -> PassContext<'_> {
+            PassContext {
+                use_command_table: true,
+                use_amplitude_increment: false,
+                amplitude_resolution_range: 0,
+                amplitude_register_values,
+                phase_resolution_range,
+                use_ct_phase: true,
+                in_branch: false,
+                sum_per_channel: false,
+            }
+        }
+
+        /// A standalone frame change (no waveform played) must still have its
+        /// phase quantized to the command-table phase resolution.
+        #[test]
+        fn test_frame_change_phase_quantized() {
+            let phase = 1.234_567_891_234;
+            let mut node = make_frame_change_node(phase);
+            let mut amp_regs = AmplitudeRegisterValues::new(1);
+            let mut ctx = make_ctx(&mut amp_regs, 1 << 24);
+            transform_waveforms(&mut node, &mut ctx);
+            let NodeKind::FrameChange(fc) = node.data() else {
+                panic!("expected FrameChange node");
+            };
+            assert_eq!(fc.phase, quantize_phase_ct(phase));
+            assert_ne!(fc.phase, phase);
+        }
+
+        /// When phase quantization is disabled, the frame change phase passes through.
+        #[test]
+        fn test_frame_change_phase_unchanged_without_quantization() {
+            let phase = 1.234_567_891_234;
+            let mut node = make_frame_change_node(phase);
+            let mut amp_regs = AmplitudeRegisterValues::new(1);
+            let mut ctx = make_ctx(&mut amp_regs, 0);
+            transform_waveforms(&mut node, &mut ctx);
+            let NodeKind::FrameChange(fc) = node.data() else {
+                panic!("expected FrameChange node");
+            };
+            assert_eq!(fc.phase, phase);
         }
     }
 }

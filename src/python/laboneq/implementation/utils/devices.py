@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import json
-from typing import List
+from typing import TYPE_CHECKING, List
 
-from laboneq.data.execution_payload import TargetSetup
-from laboneq.data.setup_description import Port, PortType, Setup
+from laboneq.data.setup_description import Port, PortType
 from laboneq.implementation.payload_builder.target_setup_generator import (
     TargetSetupGenerator,
 )
+
+if TYPE_CHECKING:
+    from laboneq.data.execution_payload import TargetSetup
+    from laboneq.data.setup_description import Setup
 
 
 def hdawg_ports() -> List[Port]:

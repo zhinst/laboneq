@@ -1,10 +1,14 @@
 # Copyright 2025 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import TypedDict
+from typing import Literal, TypedDict
 
-from laboneq.compiler.common.iface_compiler_output import CombinedOutput
+from laboneq.compiler.common.iface_compiler_output import (
+    CombinedOutput,
+    RTCompilerOutput,
+)
 from laboneq.core.types.numpy_support import NumPyArray
+from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.dsl.experiment import Experiment as DslExperiment
 from laboneq.dsl.parameter import Parameter
 
@@ -34,6 +38,22 @@ class Experiment:
     def get_result_shapes(
         self, combined_output: CombinedOutput
     ) -> list[HandleResultShape]: ...
+    def rt_loop_properties(self) -> RtLoopProperties: ...
+
+class RtLoopProperties:
+    """Properties of the real-time loop."""
+
+    uid: str
+    acquisition_type: Literal[
+        "INTEGRATION",
+        "RAW",
+        "DISCRIMINATION",
+        "SPECTROSCOPY_IQ",
+        "SPECTROSCOPY_PSD",
+        "SPECTROSCOPY",
+    ]
+    averaging_mode: Literal["CYCLIC", "SEQUENTIAL", "SINGLE_SHOT"]
+    count: int
 
 class HandleResultShape:
     handle: str
@@ -150,15 +170,12 @@ def serialize_experiment(
 ) -> bytes:
     """Serialize an experiment to Cap'n Proto bytes."""
 
-def build_experiment_capnp(
+def compile_experiment(
     capnp_data: bytes,
     packed: bool = False,
     compiler_settings: dict | None = None,
-) -> Experiment:
+) -> ScheduledExperiment:
     """Build a scheduled experiment from Cap'n Proto bytes."""
-
-class ExperimentIr:
-    """A representation of the experiment IR."""
 
 class PulseSheetSchedule(TypedDict):
     """A representation of the pulse sheet schedule for the Pulse Sheet Viewer.
@@ -177,25 +194,25 @@ class PulseSheetSchedule(TypedDict):
     section_signals_with_children: dict
     sampling_rates: dict
 
-class ScheduleResult:
-    """Result of an experiment scheduling.
+class RealTimeCompilerOutput:
+    """Result of a real-time compilation.
 
     Attributes:
+        code_gen_output: Code generation output.
         used_parameters: Used near-time parameters in the experiment.
-        experiment_ir: Experiment IR.
         pulse_sheet_schedule: Optional pulse sheet schedule (event list + metadata) for the Pulse Sheet Viewer.
     """
 
-    experiment_ir: ExperimentIr
+    code_gen_output: RTCompilerOutput
     used_parameters: set[str]
     pulse_sheet_schedule: PulseSheetSchedule | None
 
-def schedule_experiment(
+def compile_realtime(
     experiment: Experiment,
     parameters: dict[str, float],
     chunking_info: tuple[int, int] | None,
-) -> ScheduleResult:
-    """Schedule an experiment.
+) -> RealTimeCompilerOutput:
+    """Compile real-time experiment.
 
     Args:
         experiment: Experiment information.
@@ -203,7 +220,7 @@ def schedule_experiment(
         chunking_info: Tuple of (current chunk index, total chunk count) or None.
 
     Returns:
-        Scheduled experiment.
+        Compiled real-time experiment.
     """
 
 class SpanBuffer:

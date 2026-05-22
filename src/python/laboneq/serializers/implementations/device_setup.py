@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from laboneq.dsl.device.device_setup import DeviceSetup
-from laboneq.serializers._legacy import LabOneQClassicSerializer
+from laboneq.serializers._legacy.classic import LabOneQClassicSerializer
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.implementations._models._calibration import (
     remove_high_pass_clearing,
@@ -22,11 +22,13 @@ from laboneq.serializers.implementations._models._device_setup import (
 )
 from laboneq.serializers.implementations.quantum_element import QuantumElementSerializer
 from laboneq.serializers.serializer_registry import serializer
-from laboneq.serializers.types import (
-    DeserializationOptions,
-    JsonSerializableType,
-    SerializationOptions,
-)
+
+if TYPE_CHECKING:
+    from laboneq.serializers.types import (
+        DeserializationOptions,
+        JsonSerializableType,
+        SerializationOptions,
+    )
 
 _logger = logging.getLogger(__name__)
 _converter = make_converter()

@@ -7,7 +7,7 @@ import typing
 from collections.abc import Iterable
 from enum import Enum
 from types import ModuleType
-from typing import Type, TypeVar
+from typing import ClassVar, Type, TypeVar
 
 import attrs
 import numpy
@@ -37,6 +37,19 @@ from laboneq.serializers.implementations.numpy_array import NumpyArraySerializer
 # ]
 # But we will be more practical and use the following:
 ArrayLike_Model = numpy.ndarray | list[bool | int | float | str | bytes]
+
+# The common structure and unstructure functions below are registered
+# as default converters for the corresponding types by `make_laboneq_converter`.
+# They prioritize simple, compact serialization formats and are an excellent
+# solution when the type of a field is known, e.g. `param: str`.
+#
+# However, the serialized values do not always allow the original type to be
+# uniquely distinguished. For example, `bytes` are serialized as `b64` encoded strings,
+# so unstructuring a value with type `str | bytes` would succeed, but structuring would
+# treat the bytes as a `str` and not `b64` decode it.
+#
+# In these ambiguous cases, the more structured common models below should be used
+# instead of these simple defaults.
 
 
 def _structure_arraylike(obj, _):
@@ -83,6 +96,44 @@ def _unstructure_set(obj: set[str]) -> list[str]:
 def _structure_set(obj: list[str], _: Type) -> set[str]:
     """Convert list back to set."""
     return set(obj)
+
+
+# Common models
+#
+# These provide more structured models for common Python types
+# for use in situations where using the simpler structure and
+# unstructure functions above would result in an ambiguous
+# unstructured value.
+#
+# Each model returns a dictionary with a key `data` that contains
+# the unstructured value. The `unstructure_union_generic_type`
+# method adds the type name in a key named `_type`.
+
+
+@attrs.define
+class BytesModel:
+    _target_class: ClassVar[Type] = bytes
+
+    @classmethod
+    def _unstructure(cls, obj):
+        return {"data": _unstructure_bytes(obj)}
+
+    @classmethod
+    def _structure(cls, obj, _):
+        return _structure_bytes(obj["data"], _)
+
+
+@attrs.define
+class ComplexModel:
+    _target_class: ClassVar[Type] = complex
+
+    @classmethod
+    def _unstructure(cls, obj):
+        return {"data": _unstructure_complex_or_np_numbers(obj)}
+
+    @classmethod
+    def _structure(cls, obj, _):
+        return _structure_complex_or_np_numbers(obj["data"], _)
 
 
 # Supporting functions for serialization

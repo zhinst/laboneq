@@ -5,20 +5,24 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 import attrs
 
 from laboneq.simple import (
-    AcquisitionType,
-    AveragingMode,
     Calibration,
     Experiment,
-    ModulationType,
     Oscillator,
     SignalCalibration,
 )
-from laboneq.simple import pulse_library as pl
+
+if TYPE_CHECKING:
+    from laboneq.simple import (
+        AcquisitionType,
+        AveragingMode,
+        ModulationType,
+    )
+    from laboneq.simple import pulse_library as pl
 
 
 def create_single_shot(settings: SingleShotExperimentSettings):

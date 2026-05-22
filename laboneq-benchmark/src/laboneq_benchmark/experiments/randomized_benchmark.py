@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 # additional imports needed for Clifford gate calculation
@@ -11,7 +13,7 @@ from laboneq.contrib.example_helpers.randomized_benchmarking_helper import (
     generate_play_rb_pulses,
     make_pauli_gate_map,
 )
-from laboneq.dsl import LinearSweepParameter, SweepParameter
+from laboneq.dsl import SweepParameter
 from laboneq.dsl.enums import (
     AcquisitionType,
     AveragingMode,
@@ -22,12 +24,15 @@ from laboneq.dsl.experiment import (
     ExperimentSignal,
     pulse_library,
 )
-from laboneq.dsl.quantum import QuantumElement
 
 from .pulses import (
     integration_kernel,
     readout_pulse,
 )
+
+if TYPE_CHECKING:
+    from laboneq.dsl import LinearSweepParameter
+    from laboneq.dsl.quantum import QuantumElement
 
 # Adjust Pulse Parameters for Clifford Gates
 

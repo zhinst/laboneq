@@ -1,21 +1,21 @@
 # Copyright 2026 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import copy
 import threading
 import warnings
 from pathlib import Path
-from typing import Any, ClassVar, Iterator, Literal, final
+from typing import TYPE_CHECKING, Any, ClassVar, Iterator, Literal, final
 
 import attrs
 import matplotlib.pyplot as plt
 import networkx as nx
-from matplotlib.axes._axes import Axes
 from matplotlib.patches import Patch
 
-from laboneq.automation.layer import AutomationLayer, RootLayer
-from laboneq.automation.logic import AutomationLogic
-from laboneq.automation.node import AutomationNode, RootNode
+from laboneq.automation.layer import RootLayer
+from laboneq.automation.node import RootNode
 from laboneq.automation.serialization import (
     load_automation_parameters_from_file,
     save_automation_parameters_to_file,
@@ -26,6 +26,13 @@ from laboneq.automation.utils.plot_utils import hierarchical_layout
 from laboneq.core.utilities.add_exception_note import add_note
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.workflow.timestamps import local_timestamp
+
+if TYPE_CHECKING:
+    from matplotlib.axes._axes import Axes
+
+    from laboneq.automation.layer import AutomationLayer
+    from laboneq.automation.logic import AutomationLogic
+    from laboneq.automation.node import AutomationNode
 
 
 @classformatter
@@ -100,6 +107,47 @@ class Automation:
             err = KeyError(elem_id)
             add_note(err, f"Element {elem_id!r} is not in the automation framework.")
             raise err
+
+    @property
+    def status(self) -> Status:
+        """Get the automation status from its layer statuses.
+
+        The automation status is derived from the statuses of its layers.
+
+        Aggregation rules in precedence order:
+            `EMTPY`:
+                No layers have been added yet.
+            `ERROR`:
+                An error has occured in the execution of a layer.
+            `RUNNING`:
+                The automation has any running layers/nodes.
+            `READY`:
+                All layers are `READY`.
+            `PASSED` / `FAILED`:
+                All layers share that status.
+
+        Returns:
+            `AutomationStatus` enumerator.
+        """
+        layer_statuses = [layer.status for layer in self.layers(include_root=False)]
+
+        if not layer_statuses:
+            return Status.EMPTY
+        elif any(status == Status.ERROR for status in layer_statuses):
+            return Status.ERROR
+        elif any(status == Status.RUNNING for status in layer_statuses):
+            return Status.RUNNING
+        elif (
+            all(status == Status.READY for status in layer_statuses)
+            or not layer_statuses
+        ):
+            return Status.READY
+        elif all(status == Status.PASSED for status in layer_statuses):
+            return Status.PASSED
+        elif all(status == Status.FAILED for status in layer_statuses):
+            return Status.FAILED
+        else:
+            return Status.FAILED
 
     def nodes(
         self, layer_key: str | None = None, *, include_root: bool = False
@@ -251,7 +299,7 @@ class Automation:
                 has no common node keys.
         """
         # Check if layer key is already in graph
-        if layer.key in list(self.layer_keys(include_root=True)):
+        if layer.key in self._layer_lookup:
             raise ValueError(
                 f"The layer key `{layer.key}` already exists in the automation "
                 f"framework."
@@ -309,7 +357,7 @@ class Automation:
         Arguments:
             layer: The layer to add.
         """
-        subset = len(self._layer_lookup.keys())
+        subset = len(self._layer_lookup)
 
         ### Layers
 
@@ -341,9 +389,12 @@ class Automation:
                         continue
                     visited.add(curr_layer_key)
 
-                    prev_layer = self.get_layer(curr_layer_key)
+                    prev_layer = self._layer_lookup[curr_layer_key]
+                    prev_layer_nodes = prev_layer.nodes
 
-                    for prev_node in prev_layer.nodes.values():
+                    has_root = self.ROOT_NODE.key in prev_layer_nodes
+
+                    for prev_node in prev_layer_nodes.values():
                         if (
                             prev_node.key == node_key
                             or (
@@ -357,7 +408,7 @@ class Automation:
                         ):
                             self._node_graph.add_edge(prev_node.id, node.id)
                             chain_found = True
-                        elif prev_layer.nodes.get(self.ROOT_NODE.key) is not None:
+                        elif has_root:
                             break
                     if not chain_found:
                         to_search.extend(prev_layer.depends_on)
@@ -577,6 +628,10 @@ class Automation:
             new_layer_key: The key of the next layer to be executed.
             new_params: The dictionary of new automation parameters.
         """
+        if self.status == Status.ERROR:
+            raise RuntimeError(
+                "Unable re-run automation with errors. Please reset the automation."
+            )
         layer = self.get_layer(layer_key)
 
         # Set override node keys and parameters
@@ -664,16 +719,12 @@ class Automation:
             layer._node_keys_select = None
 
         for node in self.nodes():
-            if node.status in [
-                Status.PASSED,
-                Status.FAILED,
-                Status.DEACTIVATED,
-                Status.RUNNING,
-            ]:
+            if node.status not in [Status.EMPTY, Status.ROOT]:
                 node.status = Status.READY
             node.fail_count = 0
             node.pass_count = 0
             node.timestamp = None
+            node.error = None
 
     def load_parameters(self, auto_params: str | Path | dict | None):
         """Load automation parameters.

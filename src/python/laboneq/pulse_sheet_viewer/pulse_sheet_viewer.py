@@ -11,15 +11,18 @@ import socketserver
 import textwrap
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import flask.cli
 import numpy as np
 from flask import Flask, request
 
 import laboneq.core.path as qct_path
-from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.core.utilities.compile_experiment import compile_experiment
 from laboneq.simulator.output_simulator import OutputSimulator
+
+if TYPE_CHECKING:
+    from laboneq.core.types.compiled_experiment import CompiledExperiment
 
 _logger = logging.getLogger(__name__)
 

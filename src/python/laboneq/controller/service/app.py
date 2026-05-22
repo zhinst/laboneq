@@ -20,7 +20,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, FastAPI, Request, Response, status
+from fastapi import APIRouter, FastAPI, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -34,10 +34,13 @@ from laboneq.controller.service.models import (
     ReadyzResponse,
 )
 from laboneq.controller.service.routes import ServiceError, router
-from laboneq.dsl.device import DeviceSetup
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
+
+    from fastapi import Request, Response
+
+    from laboneq.dsl.device import DeviceSetup
 
 logger = logging.getLogger(__name__)
 

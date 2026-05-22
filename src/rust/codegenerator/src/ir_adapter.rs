@@ -6,15 +6,13 @@ use std::num::NonZero;
 use std::sync::Arc;
 
 use laboneq_common::types::{AuxiliaryDeviceKind, AwgKey as AwgKeyCommon};
-use laboneq_dsl::device_setup::AuxiliaryDevice;
+use laboneq_dsl::setup_description_qccs::AuxiliaryDevice;
 use laboneq_dsl::types::AveragingMode;
-use laboneq_error::bail;
-use laboneq_qccs_backend::QccsBackendPreprocessedData;
+use laboneq_error::{bail, laboneq_error};
 use num_complex::Complex;
 
 use codegenerator_utils::pulse_parameters::PulseParameterDeduplicator;
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_common::types::DeviceKind as DeviceKindCommon;
 use laboneq_common::types::SignalKind as SignalKindCommon;
 use laboneq_dsl::types::{
     AcquisitionType as AcquisitionTypeCommon, ComplexOrFloat, DeviceUid, MarkerSelector,
@@ -56,15 +54,32 @@ pub struct CodegenIr {
     pub(crate) auxiliary_devices: Vec<AuxiliaryDevice>,
 }
 
+pub struct HardwareSetup {
+    pub signals: Vec<SignalChannelProperties>,
+    pub auxiliary_devices: Vec<AuxiliaryDevice>,
+}
+
+pub struct SignalChannelProperties {
+    pub signal_uid: SignalUid,
+    pub awg_key: AwgKeyCommon,
+    pub awg_index: u16,
+    pub channels: Vec<u8>,
+    pub routed_output_channel_map: HashMap<String, u8>,
+}
+
 /// Lower a IR into a codegenerator IR.
-///
-/// TODO: Move the converter to the compiler backend to remove dependency to the backend here.
 pub fn ir_to_codegen_ir(
     experiment: &ExperimentIr,
-    backend_data: &QccsBackendPreprocessedData,
+    hardware_setup: &HardwareSetup,
 ) -> Result<CodegenIr> {
     let ir_signals = experiment.device_setup.signals().collect::<Vec<_>>();
     let id_store = &experiment.id_store;
+
+    let additional_signal_map = hardware_setup
+        .signals
+        .iter()
+        .map(|info| (info.signal_uid, info))
+        .collect::<HashMap<_, _>>();
 
     validate_unique_oscillators(&ir_signals)?;
 
@@ -73,27 +88,23 @@ pub fn ir_to_codegen_ir(
             .device_setup
             .awg_devices()
             .filter_map(|device| device.kind().try_into().ok()),
-        experiment
-            .device_setup
-            .auxiliary_devices()
-            .map(|x| x.kind()),
+        hardware_setup
+            .auxiliary_devices
+            .iter()
+            .map(|aux| aux.kind()),
     );
 
     let mut awg_core_builders: HashMap<AwgKeyCommon, AwgCoreBuilder> = HashMap::new();
     for signal in ir_signals {
-        let additional_info = backend_data
-            .get_signal(signal.uid)
-            .expect("Expected additional signal info for all signals");
+        let additional_info = additional_signal_map.get(&signal.uid).ok_or_else(|| {
+            laboneq_error!(
+                "Expected to find additional signal info for signal with UID '{}'",
+                signal.uid.0
+            )
+        })?;
 
-        let awg_signal = signal_to_codegen_signal(
-            signal,
-            id_store,
-            additional_info
-                .channels
-                .iter()
-                .map(|ch| (*ch).try_into().expect("Failed to convert channel number"))
-                .collect(),
-        );
+        let awg_signal =
+            signal_to_codegen_signal(signal, id_store, additional_info.channels.clone());
 
         if let Some(awg_core) = awg_core_builders.get_mut(&additional_info.awg_key) {
             awg_core.add_signal(awg_signal.into());
@@ -159,6 +170,15 @@ pub fn ir_to_codegen_ir(
     let device_properties = create_device_properties(experiment, id_store);
 
     let codegen_ir = transform_ir(&mut lowerer, &experiment.root, tiny_samples(0))?;
+    let routed_output_channel_map = additional_signal_map
+        .values()
+        .flat_map(|info| {
+            info.routed_output_channel_map
+                .iter()
+                .map(|(source_channel, channel)| (source_channel.clone(), *channel))
+        })
+        .collect();
+
     let result = CodegenIr {
         root: codegen_ir,
         pulse_parameters: lowerer.pulse_parameter_deduplicator,
@@ -169,14 +189,10 @@ pub fn ir_to_codegen_ir(
         initial_signal_properties: experiment
             .device_setup
             .signals()
-            .map(create_initial_signal_properties)
+            .map(|signal| create_initial_signal_properties(signal, &routed_output_channel_map))
             .collect::<Result<Vec<_>>>()?,
         awg_devices: device_properties,
-        auxiliary_devices: experiment
-            .device_setup
-            .auxiliary_devices()
-            .cloned()
-            .collect(),
+        auxiliary_devices: hardware_setup.auxiliary_devices.clone(),
     };
     Ok(result)
 }
@@ -233,9 +249,10 @@ fn validate_unique_oscillators(signals: &[&SignalCommon]) -> Result<()> {
     Ok(())
 }
 
-fn create_initial_signal_properties(signal: &SignalCommon) -> Result<InitialSignalProperties> {
-    use laboneq_qccs_backend::ports::parse_port;
-
+fn create_initial_signal_properties(
+    signal: &SignalCommon,
+    routed_output_channel_map: &HashMap<String, u8>,
+) -> Result<InitialSignalProperties> {
     Ok(InitialSignalProperties {
         uid: signal.uid,
         amplitude: signal.amplitude.map(value_or_parameter_to_fixed),
@@ -273,8 +290,15 @@ fn create_initial_signal_properties(signal: &SignalCommon) -> Result<InitialSign
             .iter()
             .map(|output| {
                 Ok(RoutedOutput {
-                    source_channel: parse_port(&output.source_channel, DeviceKindCommon::Shfsg)?
-                        .channel,
+                    source_channel: routed_output_channel_map
+                        .get(&output.source_channel)
+                        .copied()
+                        .ok_or_else(|| {
+                            laboneq_error!(
+                                "Expected to find routed output channel for source channel '{}'",
+                                output.source_channel
+                            )
+                        })?,
                     amplitude_scaling: output.amplitude_scaling.map(value_or_parameter_to_fixed),
                     phase_shift: output.phase_shift.map(value_or_parameter_to_fixed),
                 })

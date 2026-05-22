@@ -7,19 +7,21 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from laboneq.dsl.result.results import AcquiredResult, Results
-from laboneq.serializers._legacy import LabOneQClassicSerializer
+from laboneq.dsl.result.acquired_result import AcquiredResult
+from laboneq.dsl.result.results import Results
+from laboneq.serializers._legacy.classic import LabOneQClassicSerializer
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.core import from_dict, to_dict
 from laboneq.serializers.serializer_registry import serializer
-from laboneq.serializers.types import (
-    DeserializationOptions,
-    JsonSerializableType,
-    SerializationOptions,
-)
 
 if TYPE_CHECKING:
     from numpy import typing as npt
+
+    from laboneq.serializers.types import (
+        DeserializationOptions,
+        JsonSerializableType,
+        SerializationOptions,
+    )
 
 
 def _acquired_axis_to_ndarrays(

@@ -1,14 +1,14 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::Operation;
 use laboneq_dsl::types::{ParameterUid, SweepParameter};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// Information about chunking of experiment.
 #[derive(Debug, Clone, PartialEq)]
@@ -46,7 +46,8 @@ pub(crate) fn chunk_experiment(
     parameters: &mut HashMap<ParameterUid, SweepParameter>,
     chunking_info: &ChunkingInfo,
 ) -> Result<()> {
-    let _ = chunk_experiment_impl(ir, parameters, chunking_info)?;
+    let mut chunk_bound_parameters = HashSet::new();
+    chunk_experiment_impl(ir, parameters, chunking_info, &mut chunk_bound_parameters)?;
     Ok(())
 }
 
@@ -54,35 +55,42 @@ fn chunk_experiment_impl(
     ir: &mut ExperimentNode,
     parameters: &mut HashMap<ParameterUid, SweepParameter>,
     chunking_info: &ChunkingInfo,
-) -> Result<bool> {
-    match &mut ir.kind {
-        Operation::Sweep(obj) => {
-            if !obj.is_chunked() {
-                for child in ir.children.iter_mut() {
-                    chunk_experiment_impl(child.make_mut(), parameters, chunking_info)?;
-                }
-                return Ok(false);
+    chunk_bound_parameters: &mut HashSet<ParameterUid>,
+) -> Result<()> {
+    if let Operation::Sweep(obj) = &mut ir.kind {
+        for param in obj.parameters.iter() {
+            // TODO: Currently parameters used in a chunked sweep cannot be used in any other sweeps
+            if chunk_bound_parameters.contains(param) {
+                let msg = format!(
+                    "Parameters used in a chunked sweep cannot be used in multiple sweeps: '{}'",
+                    param.0
+                );
+                return Err(Error::new(msg));
             }
+            chunk_bound_parameters.insert(*param);
+        }
+
+        if obj.is_chunked() {
             for param in obj.parameters.iter() {
                 let old_param = parameters.get(param).unwrap();
                 let new_param = old_param.slice(chunking_info.current_chunk_range(obj.count));
-                parameters.insert(old_param.uid, new_param);
+                parameters.insert(*param, new_param);
+                chunk_bound_parameters.insert(*param);
             }
             obj.count = chunking_info.chunk_size(obj.count);
             obj.chunk_count = 1.try_into().unwrap();
             obj.auto_chunking = false;
-            Ok(true)
-        }
-        _ => {
-            for child in ir.children.iter_mut() {
-                if chunk_experiment_impl(child.make_mut(), parameters, chunking_info)? {
-                    // Chunked sweep found, early return
-                    return Ok(true);
-                }
-            }
-            Ok(false)
         }
     }
+    for child in ir.children.iter_mut() {
+        chunk_experiment_impl(
+            child.make_mut(),
+            parameters,
+            chunking_info,
+            chunk_bound_parameters,
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

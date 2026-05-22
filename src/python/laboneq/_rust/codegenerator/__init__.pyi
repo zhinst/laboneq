@@ -8,7 +8,6 @@ from typing import Literal
 
 import numpy.typing as npt
 
-from laboneq._rust.compiler import ExperimentIr
 from laboneq.compiler.seqc.waveform_sampler import SampledWaveformSignature
 from laboneq.data.compilation_job import PulseDef
 
@@ -225,12 +224,3 @@ class SeqCGenOutput:
     measurements: list[Measurement]
     ppc_settings: list[PpcSettings]
     device_properties: list[DeviceProperties]
-
-def generate_code(
-    ir_experiment: ExperimentIr,
-) -> SeqCGenOutput:
-    """Generate SeqC code for given AWGs.
-
-    Arguments:
-        ir_experiment: The Rust lib experiment IR.
-    """

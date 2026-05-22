@@ -4,35 +4,39 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
-from laboneq.controller.attribute_value_tracker import (
-    DeviceAttribute,
-    DeviceAttributesView,
-)
 from laboneq.controller.devices.core_base import CoreBase, SHFChannelBase
 from laboneq.controller.devices.device_shf_base import (
     OPT_OUTPUT_ROUTER_ADDER,
     DeviceSHFBase,
 )
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.node_control import NodeControlBase, Setting
+from laboneq.controller.devices.node_control import Setting
 from laboneq.controller.devices.sgchannel import SGChannel, SHFSGMixIn
-from laboneq.controller.recipe_processor import (
-    AwgType,
-    DeviceRecipeData,
-    RecipeData,
-    RtExecutionInfo,
-    WaveformItem,
-)
 from laboneq.controller.utilities.for_each import for_each
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.data.recipe import (
-    Initialization,
-    NtStepKey,
-)
-from laboneq.data.scheduled_experiment import ScheduledExperiment
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from laboneq.controller.attribute_value_tracker import (
+        DeviceAttribute,
+        DeviceAttributesView,
+    )
+    from laboneq.controller.devices.node_control import NodeControlBase
+    from laboneq.controller.recipe_processor import (
+        AwgType,
+        DeviceRecipeData,
+        RecipeData,
+        RtExecutionInfo,
+        WaveformItem,
+    )
+    from laboneq.core.types.enums.acquisition_type import AcquisitionType
+    from laboneq.data.recipe import (
+        Initialization,
+        NtStepKey,
+    )
+    from laboneq.data.scheduled_experiment import ScheduledExperiment
 
 _logger = logging.getLogger(__name__)
 

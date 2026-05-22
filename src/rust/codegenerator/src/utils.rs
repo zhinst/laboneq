@@ -1,7 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use core::f64;
+use core::f64::consts;
 // re-export for convenience
 pub(crate) use laboneq_common::utils::normalize_f64;
 
@@ -35,18 +35,21 @@ fn normalize_zero(value: f64) -> f64 {
     if value == 0.0 { 0.0 } else { value }
 }
 
+/// Normalize a phase value (radians) into the range [0, 2π).
 pub fn normalize_phase(value: f64) -> f64 {
     if value.is_nan() || value == 0.0 {
         return 0.0;
     }
-    let out = match value < 0.0 {
-        true => {
-            value + ((-value / 2.0 / f64::consts::PI) as i64 + 1) as f64 * 2.0 * f64::consts::PI
-        }
-        false => value,
-    };
-    let value = out % (2.0 * f64::consts::PI);
-    normalize_zero(value)
+    normalize_zero(value.rem_euclid(2. * consts::PI))
+}
+
+/// Normalize a phase value (radians) into the symmetric range (-π, π].
+pub fn normalize_phase_symmetric(value: f64) -> f64 {
+    let mut value = normalize_phase(value);
+    if value > consts::PI {
+        value -= 2. * consts::PI;
+    }
+    value
 }
 
 /// Sanitize a string for use as a variable name for SeqC code.
@@ -82,8 +85,6 @@ pub fn string_sanitize(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use core::f64;
-
     use super::*;
 
     #[test]
@@ -115,8 +116,17 @@ mod tests {
     fn test_normalize_phase() {
         assert_eq!(normalize_phase(0.0), 0.0);
         assert_eq!(normalize_phase(-0.0).to_bits(), 0.0_f64.to_bits());
-        assert_eq!(normalize_phase(f64::consts::PI), f64::consts::PI);
+        assert_eq!(normalize_phase(consts::PI), consts::PI);
         assert_eq!(normalize_phase(f64::NAN), 0.0);
+
+        assert_eq!(normalize_phase_symmetric(0.0), 0.0);
+        assert_eq!(normalize_phase_symmetric(-0.0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(normalize_phase_symmetric(consts::PI), consts::PI);
+        assert_eq!(
+            normalize_phase_symmetric(-consts::FRAC_PI_2),
+            -consts::FRAC_PI_2
+        );
+        assert_eq!(normalize_phase_symmetric(f64::NAN), 0.0);
     }
 
     #[test]

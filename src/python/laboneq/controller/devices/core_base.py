@@ -4,15 +4,16 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-from laboneq.controller.attribute_value_tracker import DeviceAttributesView
-from laboneq.controller.devices.async_support import (
-    AsyncSubscriber,
-    InstrumentConnection,
-)
-from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
-from laboneq.data.recipe import NtStepKey
+if TYPE_CHECKING:
+    from laboneq.controller.attribute_value_tracker import DeviceAttributesView
+    from laboneq.controller.devices.async_support import (
+        AsyncSubscriber,
+        InstrumentConnection,
+    )
+    from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
+    from laboneq.data.recipe import NtStepKey
 
 
 class CoreBase(ABC):

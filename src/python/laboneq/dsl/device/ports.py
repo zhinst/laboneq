@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
-from typing import List
+from typing import TYPE_CHECKING, List
 
 import attrs
 
-from laboneq.core.types.enums import IODirection, IOSignalType
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
+
+if TYPE_CHECKING:
+    from laboneq.core.types.enums import IODirection, IOSignalType
 
 
 @classformatter

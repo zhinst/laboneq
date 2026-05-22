@@ -1,13 +1,21 @@
 # Copyright 2024 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from laboneq.controller.devices.device_leader_base import DeviceLeaderBase
 from laboneq.controller.devices.node_control import (
     Command,
-    NodeControlBase,
     Response,
     WaitCondition,
 )
+
+if TYPE_CHECKING:
+    from laboneq.controller.devices.node_control import (
+        NodeControlBase,
+    )
 
 
 class DevicePQSC(DeviceLeaderBase):

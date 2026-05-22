@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 from functools import partial
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 import attrs
 import numpy as np
@@ -15,13 +15,17 @@ from laboneq.simple import (
     Calibration,
     Experiment,
     Oscillator,
-    RuntimeContext,
     SectionAlignment,
-    Session,
     SignalCalibration,
     SweepParameter,
 )
 from laboneq.simple import pulse_library as pl
+
+if TYPE_CHECKING:
+    from laboneq.simple import (
+        RuntimeContext,
+        Session,
+    )
 
 
 def create_clops(settings: CLOPSExperimentSettings, session: Session) -> Experiment:

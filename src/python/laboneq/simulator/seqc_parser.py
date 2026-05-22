@@ -15,7 +15,6 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Mapping, Sequence, cast
 
 import numpy as np
-from numpy import typing as npt
 from pycparser.c_ast import (
     ID,
     Assignment,
@@ -27,7 +26,6 @@ from pycparser.c_ast import (
     FuncCall,
     FuncDef,
     If,
-    Node,
     UnaryOp,
 )
 from pycparser.c_parser import CParser
@@ -35,11 +33,16 @@ from pycparser.c_parser import CParser
 from laboneq.compiler.common.compiler_settings import EXECUTETABLEENTRY_LATENCY
 from laboneq.core.types.enums.wave_type import WaveType
 from laboneq.core.utilities.prng import PRNG
-from laboneq.data.recipe import Recipe, RoutedOutput
 from laboneq.data.scheduled_experiment import ArtifactsCodegen
 
 if TYPE_CHECKING:
+    from numpy import typing as npt
+    from pycparser.c_ast import (
+        Node,
+    )
+
     from laboneq.core.types.compiled_experiment import CompiledExperiment
+    from laboneq.data.recipe import Recipe, RoutedOutput
 
 
 def precompensation_is_nonzero(precompensation):
@@ -746,14 +749,14 @@ class SimpleRuntime:
         if "waveform" not in ct_entry:
             return None, None
         assert "index" in ct_entry["waveform"]
-        wave_index = cast(int, ct_entry["waveform"]["index"])
+        wave_index = cast("int", ct_entry["waveform"]["index"])
         known_wave = WaveRefInfo(assigned_index=wave_index)
 
         wave = self.descriptor.wave_index[wave_index]
-        wave_type = cast(WaveType, wave["type"])
+        wave_type = cast("WaveType", wave["type"])
         if wave_type == WaveType.IQ:
             wave_names = [
-                cast(str, wave["wave_name"]) + suffix + ".wave"
+                cast("str", wave["wave_name"]) + suffix + ".wave"
                 for suffix in ("_i", "_q")
             ]
         elif wave_type in [WaveType.SINGLE, WaveType.DOUBLE]:
@@ -1133,7 +1136,7 @@ def analyze_recipe(
     seq_c_wave_indices = {}
     for wave_index in wave_indices or []:
         wave_seq_c_filename = wave_index["filename"]
-        values = cast(dict[int, tuple[str, WaveType]], wave_index["value"])
+        values = cast("dict[int, tuple[str, WaveType]]", wave_index["value"])
         if len(values) > 0:
             seq_c_wave_indices[wave_seq_c_filename] = {}
             for wave_name, index_value in values.items():

@@ -11,13 +11,16 @@ provides missing module error handling.
 from __future__ import annotations
 
 import importlib
-from types import ModuleType
+from typing import TYPE_CHECKING
 
 from typing_extensions import TypeAlias
 
-try:
+if TYPE_CHECKING:
+    from types import ModuleType
+
     import xarray as xr
 
+try:
     HAS_XARRAY = True
 except ModuleNotFoundError:
     HAS_XARRAY = False

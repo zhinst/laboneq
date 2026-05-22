@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any, Callable, Union
 
 import openqasm3.visitor
 from openpulse import ast
-from openqasm3.ast import QASMNode
 
 from laboneq._utils import id_generator
 from laboneq.dsl import LinearSweepParameter, Parameter, SweepParameter, quantum
@@ -22,8 +21,6 @@ from laboneq.dsl.enums import (
     SectionAlignment,
 )
 from laboneq.dsl.experiment import Section, Sweep
-from laboneq.dsl.quantum.quantum_element import QuantumElement
-from laboneq.dsl.quantum.quantum_operations import QuantumOperations
 from laboneq.openqasm3 import namespace
 from laboneq.openqasm3.expression import eval_expression, eval_lvalue
 from laboneq.openqasm3.namespace import (
@@ -42,7 +39,11 @@ from laboneq.openqasm3.results import (
 )
 
 if TYPE_CHECKING:
+    from openqasm3.ast import QASMNode
+
     from laboneq.dsl.experiment.pulse import Pulse
+    from laboneq.dsl.quantum.quantum_element import QuantumElement
+    from laboneq.dsl.quantum.quantum_operations import QuantumOperations
 
 
 class _DefaultOperations(quantum.QuantumOperations):

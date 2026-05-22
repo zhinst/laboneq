@@ -28,6 +28,7 @@ pub(super) fn validate_experiment_signals<'a>(
             continue;
         }
         validate_freq_sweep_on_acquire_line(signal, avg_loop)?;
+        check_oscillator_frequency(signal, ctx)?;
         check_lo_frequency(signal, ctx)?;
         if signal.automute() {
             check_automute_requirements(signal)?;
@@ -105,6 +106,46 @@ fn check_automute_requirements(signal: &SignalView) -> Result<()> {
         return Err(Error::new(
             "Automute can only be applied to output channels.",
         ));
+    }
+    Ok(())
+}
+
+fn check_oscillator_frequency(signal: &SignalView, ctx: &ExperimentContext) -> Result<()> {
+    const MAX_SHF_IF_FREQUENCY: f64 = 1e9;
+    if !matches!(signal.device_kind(), DeviceKind::Shfqa | DeviceKind::Shfsg) {
+        return Ok(());
+    }
+    let Some(osc) = signal.oscillator() else {
+        return Ok(());
+    };
+
+    match &osc.frequency {
+        ValueOrParameter::Value(freq) | ValueOrParameter::ResolvedParameter { value: freq, .. } => {
+            if freq.abs() >= MAX_SHF_IF_FREQUENCY {
+                return Err(Error::new(format!(
+                    "Signal '{}': oscillator frequency {:.4} GHz \
+                     exceeds the Nyquist limit.",
+                    signal.uid().0,
+                    freq / 1e9,
+                )));
+            }
+        }
+        ValueOrParameter::Parameter(param_uid) => {
+            if let Some(param) = ctx.parameters.get(param_uid)
+                && let NumericArray::Float64(ref vals) = *param.values
+            {
+                for v in vals {
+                    if v.abs() >= MAX_SHF_IF_FREQUENCY {
+                        return Err(Error::new(format!(
+                            "Signal '{}': oscillator frequency sweep contains \
+                             a value ({:.4} GHz) that exceeds the Nyquist limit.",
+                            signal.uid().0,
+                            v / 1e9,
+                        )));
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }

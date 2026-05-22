@@ -22,6 +22,7 @@ import {
     highlightLayer,
     clearHighlight,
     attachZoom,
+    updateButtonStates,
 } from "./layout.js";
 
 let svg, g;
@@ -244,6 +245,7 @@ async function refreshData({ force = false } = {}) {
     if (!graphData) return;
     if (!force && cachedGraphData.version === graphData.version) return;
     cachedGraphData = graphData;
+    updateButtonStates(graphData.automation_data.status);
     renderGraph(graphData, currentMode);
     refreshNodeInfoLegend(currentMode, cachedGraphData?.has_log_path);
 }

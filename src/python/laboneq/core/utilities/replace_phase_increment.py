@@ -10,7 +10,6 @@ from typing import Any
 import numpy as np
 
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types import CompiledExperiment
 from laboneq.data.scheduled_experiment import (
     COMPLEX_USAGE,
     ArtifactsCodegen,
@@ -18,8 +17,9 @@ from laboneq.data.scheduled_experiment import (
 )
 
 if typing.TYPE_CHECKING:
-    from laboneq.data.parameter import Parameter
+    from laboneq.core.types import CompiledExperiment
     from laboneq.data.scheduled_experiment import ScheduledExperiment
+    from laboneq.dsl.parameter import Parameter
 
 
 def calc_ct_replacement(

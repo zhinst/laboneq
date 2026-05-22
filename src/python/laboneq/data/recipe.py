@@ -5,11 +5,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from typing_extensions import TypeAlias
 
-from laboneq.core.types.enums.awg_signal_type import AWGSignalType
+if TYPE_CHECKING:
+    from laboneq.core.types.enums.awg_signal_type import AWGSignalType
 
 ParameterUID: TypeAlias = str
 

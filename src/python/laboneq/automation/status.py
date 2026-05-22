@@ -12,6 +12,7 @@ class AutomationStatus(Enum):
     FAILED = "failed"
     DEACTIVATED = "deactivated"
     EMPTY = "empty"
+    ERROR = "error"
 
     def __str__(self):
         return self.value

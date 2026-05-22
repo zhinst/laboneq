@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
 
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
 from laboneq.data.compilation_job import (
@@ -13,11 +13,14 @@ from laboneq.data.compilation_job import (
 )
 from laboneq.data.setup_description import (
     DeviceType,
-    Instrument,
-    LogicalSignal,
-    PortType,
-    Setup,
 )
+
+if TYPE_CHECKING:
+    from laboneq.data.setup_description import (
+        Instrument,
+        LogicalSignal,
+        Setup,
+    )
 
 
 def _ref_clk_from_ds(
@@ -40,16 +43,13 @@ def _build_device_info(device: Instrument) -> DeviceInfo:
 
 
 class DeviceInfoBuilder:
-    """Make `DeviceInfo` for each instrument defined in `Setup`.
-
-    Splits SHFQC into individual SHFQA and SHFSG devices.
-    """
+    """Make `DeviceInfo` for each instrument defined in `Setup`."""
 
     def __init__(self, setup: Setup):
         self._setup = setup
         self._device_mapping: dict[str, DeviceInfo] = {}
         self._device_by_ls: dict[LogicalSignal, DeviceInfo] = {}
-        self._build_devices_and_connections()
+        self._build_devices()
 
     @property
     def device_mapping(self) -> Mapping[str, DeviceInfo]:
@@ -58,8 +58,7 @@ class DeviceInfoBuilder:
     def device_by_ls(self, ls: LogicalSignal) -> DeviceInfo:
         return self._device_by_ls[ls]
 
-    def _build_devices_and_connections(self):
-        """Build devices and assign leader - follower relationships."""
+    def _build_devices(self):
         for device in self._setup.instruments:
             if device.device_type == DeviceType.UNMANAGED:
                 continue
@@ -69,9 +68,3 @@ class DeviceInfoBuilder:
                 self._device_by_ls[conn.logical_signal] = self._device_mapping[
                     device.uid
                 ]
-
-        for iconn in self._setup.setup_internal_connections:
-            if iconn.from_port is not None and iconn.from_port.type == PortType.RF:
-                continue
-            leader = self._device_mapping[iconn.from_instrument.uid]
-            leader.followers.append(iconn.to_instrument.uid)

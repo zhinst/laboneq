@@ -3,13 +3,13 @@
 
 from typing import Callable
 
+import laboneq.compiler.scheduler.scheduler
 import wrapt
 from opentelemetry import trace
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
 
 import laboneq.compiler
-import laboneq.compiler.scheduler.scheduler
 import laboneq.compiler.seqc.code_generator
 import laboneq.controller.controller
 import laboneq.dsl.session

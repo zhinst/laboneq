@@ -10,11 +10,9 @@ from laboneq.core import path as qct_path
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.calibration import Calibration
-from laboneq.dsl.calibration.signal_calibration import SignalCalibration
 from laboneq.dsl.device import _device_setup_modifier as setup_modifier
 from laboneq.dsl.device._calibration_mediator import CalibrationMediator
 from laboneq.dsl.device._device_setup_modifier import DeviceSetupInternalException
-from laboneq.dsl.device.connection import InternalConnection, SignalConnection
 from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.device.servers import DataServer
@@ -23,7 +21,9 @@ from ._device_setup_generator import _DeviceSetupGenerator
 
 if TYPE_CHECKING:
     from laboneq.dsl import quantum
+    from laboneq.dsl.calibration.signal_calibration import SignalCalibration
     from laboneq.dsl.device import SystemDescription
+    from laboneq.dsl.device.connection import InternalConnection, SignalConnection
     from laboneq.dsl.device.logical_signal_group import LogicalSignal
 
     from ._device_setup_generator import (

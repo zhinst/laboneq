@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from laboneq.compiler import CompilerSettings
+if TYPE_CHECKING:
+    from laboneq.compiler import CompilerSettings
 
 _logger = logging.getLogger(__name__)
 

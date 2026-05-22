@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import warnings
-from typing import Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Generic, TypeVar, cast
 
 from laboneq._version import get_version
 from laboneq.serializers._legacy.class_config import (
@@ -16,12 +16,14 @@ from laboneq.serializers._legacy.simple_serialization import (
     serialize_to_dict_with_ref,
 )
 from laboneq.serializers.base import UnwrappedData, VersionedClassSerializer
-from laboneq.serializers.types import (
-    ClassSerializer,
-    DeserializationOptions,
-    JsonSerializableType,
-    SerializationOptions,
-)
+
+if TYPE_CHECKING:
+    from laboneq.serializers.types import (
+        ClassSerializer,
+        DeserializationOptions,
+        JsonSerializableType,
+        SerializationOptions,
+    )
 
 T = TypeVar("T")
 
@@ -45,7 +47,7 @@ class LabOneQClassicSerializer(Generic[T], VersionedClassSerializer[T]):
                 emit_enum_types=True,
                 omit_none_fields=omit_none_fields,
             ) | {"__version": get_version()}
-        return cls._wrap(cast(JsonSerializableType, serialized))
+        return cls._wrap(cast("JsonSerializableType", serialized))
 
     @classmethod
     def _wrap(

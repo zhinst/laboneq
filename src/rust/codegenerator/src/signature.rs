@@ -433,11 +433,13 @@ pub fn quantize_phase_pulse(value: f64, phase_resolution_range: u64) -> f64 {
 /// Quantize the command table phase.
 ///
 /// For the phase specified by registers on the device (e.g. command table)
-/// we quantize to a fixed precision of 24 bits. This
+/// we quantize to a fixed precision of 23 bits. This
 /// serves to avoid rounding errors leading to multiple command table entries
 pub fn quantize_phase_ct(value: f64) -> f64 {
-    static PHASE_RESOLUTION_CT: f64 = (1 << 24) as f64 / (2.0 * PI);
+    static PHASE_RESOLUTION_CT: f64 = (1 << 23) as f64 / (2.0 * PI);
+
     let phase = (value * PHASE_RESOLUTION_CT).round() / PHASE_RESOLUTION_CT;
+
     normalize_phase(phase)
 }
 

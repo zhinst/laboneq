@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 import laboneq.core.path as qct_path
 from laboneq.core.exceptions import LabOneQException
+from laboneq.core.types.enums import PhysicalChannelType
 from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.dsl.device._calibration_mediator import CalibrationMediator
 from laboneq.dsl.device.connection import (
@@ -27,7 +28,6 @@ from laboneq.dsl.device.connection import (
     InternalConnection,
     SignalConnection,
 )
-from laboneq.dsl.device.instrument import Instrument
 from laboneq.dsl.device.instruments import (
     HDAWG,
     PQSC,
@@ -40,16 +40,17 @@ from laboneq.dsl.device.instruments import (
     ZQCS,
 )
 from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
+from laboneq.dsl.device.io_units import LogicalSignal
 from laboneq.dsl.device.io_units.physical_channel import (
     PhysicalChannel,
-    PhysicalChannelType,
 )
-from laboneq.dsl.device.logical_signal_group import LogicalSignal, LogicalSignalGroup
+from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.enums import IOSignalType
 
 if TYPE_CHECKING:
     from laboneq.dsl.device.device_setup import DeviceSetup
+    from laboneq.dsl.device.instrument import Instrument
 
 
 class DeviceSetupInternalException(LabOneQException):

@@ -30,7 +30,8 @@ __all__ = [  # noqa: RUF022
     "WorkflowNamespaceSerializer",
 ]
 
-from . import _models
+# Required to register the system description serializer.
+from ._models import _system_description_qccs  # noqa: F401
 from .calibration import CalibrationSerializer
 from .compiled_experiment import (
     CompiledExperimentSerializer,

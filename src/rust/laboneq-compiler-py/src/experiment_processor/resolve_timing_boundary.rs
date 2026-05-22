@@ -1,13 +1,14 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_dsl::{ExperimentNode, operation::Operation};
+use laboneq_dsl::ExperimentNode;
+use laboneq_dsl::operation::Operation;
 
 use crate::error::{Error, Result};
 
-/// Resolve real-time and near-time boundaries in the IR tree.
+/// Resolve real-time boundary in the experiment tree.
 ///
-/// This function ensures that real-time averaging loop ([`IrVariant::AveragingLoop`]) is enclosed within a [`IrVariant::RealTimeSection`].
+/// This function ensures that real-time averaging loop ([`Operation::AveragingLoop`]) is enclosed within a [`Operation::RealTimeBoundary`].
 /// It also checks that there is exactly one real-time averaging loop in the entire experiment.
 ///
 /// # Returns
@@ -16,32 +17,35 @@ use crate::error::{Error, Result};
 /// * `Err(Error)` if there are zero or multiple real-time averaging loops.
 pub(super) fn resolve_timing_boundary(node: &mut ExperimentNode) -> Result<()> {
     let averaging_loop_count = resolve_timing_boundary_impl(node)?;
-    if averaging_loop_count != 1 {
-        Err(Error::new(format!(
-            "Experiment must have exactly one real time acquisition loop. Found {averaging_loop_count}."
-        )))
-    } else {
-        Ok(())
+    if averaging_loop_count == 1 {
+        // If there is exactly one averaging loop, we are good.
+        return Ok(());
     }
+    Err(Error::new(format!(
+        "Experiment must have exactly one real time acquisition loop. Found {averaging_loop_count}."
+    )))
 }
 
 fn resolve_timing_boundary_impl(node: &mut ExperimentNode) -> Result<usize> {
     let mut averaging_loop_count = 0;
-    let mut averaging_loops_indexes = vec![];
-    for (i, child) in node.children.iter_mut().enumerate() {
-        if matches!(child.kind, Operation::AveragingLoop(_)) {
-            averaging_loops_indexes.push(i);
+    let mut i = 0;
+
+    while i < node.children.len() {
+        averaging_loop_count += resolve_timing_boundary_impl(node.children[i].make_mut())?;
+        if matches!(node.children[i].kind, Operation::AveragingLoop(_)) {
+            // Wrap the averaging loop inside a real-time boundary.
+            let children_count = node.children.len();
+            let averaging_loop = node.children.swap_remove(i);
+            let mut rt_node = ExperimentNode::new(Operation::RealTimeBoundary);
+            rt_node.children.push(averaging_loop);
+            validate_real_time_boundary_nodes(&rt_node)?;
+            node.children.push(rt_node.into());
+            node.children.swap(i, children_count - 1);
+            averaging_loop_count += 1;
         }
-        averaging_loop_count += resolve_timing_boundary_impl(child.make_mut())?;
+        i += 1;
     }
-    for averaging_loop in &averaging_loops_indexes {
-        let mut new_node = ExperimentNode::new(Operation::RealTimeBoundary);
-        let children = node.children.remove(*averaging_loop);
-        new_node.children.push(children);
-        validate_real_time_boundary_nodes(&new_node)?;
-        node.children.push(new_node.into());
-    }
-    Ok(averaging_loop_count + averaging_loops_indexes.len())
+    Ok(averaging_loop_count)
 }
 
 /// Validate that all nodes under a real-time boundary are compatible with real-time execution.
@@ -60,17 +64,16 @@ mod tests {
     use std::num::NonZeroU32;
 
     use super::*;
-    use laboneq_common::named_id::NamedIdStore;
+    use laboneq_common::named_id::NamedId;
     use laboneq_dsl::node_structure;
-    use laboneq_dsl::operation::AveragingLoop;
+    use laboneq_dsl::operation::{AveragingLoop, NearTimeCallback};
     use laboneq_dsl::types::{
         AcquisitionType, AveragingMode, RepetitionMode, SectionAlignment, SectionTimingMode,
-        SectionUid,
     };
 
-    fn make_acquire_rt(store: &mut NamedIdStore) -> AveragingLoop {
+    fn make_acquire_rt() -> AveragingLoop {
         AveragingLoop {
-            uid: SectionUid(store.get_or_insert("shots")),
+            uid: 1.into(),
             acquisition_type: AcquisitionType::Spectroscopy,
             count: NonZeroU32::new(1).unwrap(),
             averaging_mode: AveragingMode::Cyclic,
@@ -81,34 +84,55 @@ mod tests {
         }
     }
 
+    fn near_time_callback(uid: u32) -> Operation {
+        Operation::NearTimeCallback(NearTimeCallback {
+            callback_id: NamedId::debug_id(uid),
+            args: vec![],
+        })
+    }
+
     #[test]
     fn test_resolve_timing_boundary() {
-        let mut store = NamedIdStore::new();
-
         let mut tree = node_structure!(
             Operation::Root,
-            [(Operation::AveragingLoop(make_acquire_rt(&mut store)), []),]
+            [
+                (near_time_callback(1), []),
+                (near_time_callback(2), []),
+                (Operation::AveragingLoop(make_acquire_rt()), []),
+                (near_time_callback(3), []),
+                (near_time_callback(4), []),
+                (near_time_callback(5), []),
+                (near_time_callback(6), []),
+            ]
         );
+
         resolve_timing_boundary(&mut tree).unwrap();
+
         let tree_expected = node_structure!(
             Operation::Root,
-            [(
-                Operation::RealTimeBoundary,
-                [(Operation::AveragingLoop(make_acquire_rt(&mut store)), [])]
-            ),]
+            [
+                (near_time_callback(1), []),
+                (near_time_callback(2), []),
+                (
+                    Operation::RealTimeBoundary,
+                    [(Operation::AveragingLoop(make_acquire_rt()), [])]
+                ),
+                (near_time_callback(3), []),
+                (near_time_callback(4), []),
+                (near_time_callback(5), []),
+                (near_time_callback(6), []),
+            ]
         );
         assert_eq!(tree, tree_expected);
     }
 
     #[test]
     fn test_multiple_averaging_loops() {
-        let mut store = NamedIdStore::new();
-
         let mut tree = node_structure!(
             Operation::Root,
             [(
-                Operation::AveragingLoop(make_acquire_rt(&mut store)),
-                [(Operation::AveragingLoop(make_acquire_rt(&mut store)), [])]
+                Operation::AveragingLoop(make_acquire_rt()),
+                [(Operation::AveragingLoop(make_acquire_rt()), [])]
             ),]
         );
         let err_msg = format!("Found {}.", 2);

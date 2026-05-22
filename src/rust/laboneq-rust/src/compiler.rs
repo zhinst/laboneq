@@ -3,18 +3,18 @@
 
 use pyo3::{prelude::*, types::PyDict};
 
-use laboneq_compiler_py::{build_experiment_with_backend_capnp_py, py_experiment::ExperimentPy};
+use laboneq_compiler_py::compile_experiment;
 use laboneq_qccs_backend::QccsBackend;
 
 /// Build an experiment from Cap'n Proto bytes plus device/signal configuration.
-#[pyfunction(name = "build_experiment_capnp", signature = (capnp_data, packed=false, compiler_settings=None))]
-pub(crate) fn build_experiment_capnp_py(
-    py: Python<'_>,
+#[pyfunction(name = "compile_experiment", signature = (capnp_data, packed=false, compiler_settings=None))]
+pub(crate) fn compile_experiment_py<'py>(
+    py: Python<'py>,
     capnp_data: &[u8],
     packed: bool,
     compiler_settings: Option<Bound<'_, PyDict>>,
-) -> PyResult<ExperimentPy> {
-    let exp_py = build_experiment_with_backend_capnp_py(
+) -> PyResult<Bound<'py, PyAny>> {
+    let exp_py = compile_experiment(
         py,
         capnp_data,
         packed,

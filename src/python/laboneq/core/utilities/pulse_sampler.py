@@ -4,13 +4,15 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Literal
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 import numpy as np
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.mixer_type import MixerType
-from laboneq.data.compilation_job import PulseDef
+
+if TYPE_CHECKING:
+    from laboneq.data.compilation_job import PulseDef
 
 _logger = logging.getLogger(__name__)
 

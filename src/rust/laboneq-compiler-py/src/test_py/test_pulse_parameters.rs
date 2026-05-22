@@ -1,17 +1,15 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_dsl::{
-    ExperimentNode,
-    operation::{Operation, PulseParameterValue},
-    types::{NumericLiteral, ValueOrParameter},
-};
 use pyo3::ffi::c_str;
+use pyo3::prelude::*;
+
+use laboneq_dsl::ExperimentNode;
+use laboneq_dsl::operation::{ExternalOrValue, Operation};
+use laboneq_dsl::types::{NumericLiteral, ValueOrParameter};
 
 use super::load_module;
 use crate::capnp_deserializer::deserialize_experiment;
-use pyo3::prelude::*;
-
 use crate::include_py_file;
 
 fn visit_node(node: &ExperimentNode, f: &mut impl FnMut(&ExperimentNode)) {
@@ -47,7 +45,7 @@ fn test_pulse_parameters_handling() {
                     let param_name = id_store.resolve(*param_uid).unwrap();
                     match param_name {
                         "sigma" => {
-                            if let PulseParameterValue::ValueOrParameter(value_or_param) = &param {
+                            if let ExternalOrValue::ValueOrParameter(value_or_param) = &param {
                                 assert_eq!(
                                     *value_or_param,
                                     ValueOrParameter::Parameter(parameter.uid)
@@ -56,7 +54,7 @@ fn test_pulse_parameters_handling() {
                             }
                         }
                         "beta" => {
-                            if let PulseParameterValue::ValueOrParameter(value_or_param) = &param {
+                            if let ExternalOrValue::ValueOrParameter(value_or_param) = &param {
                                 assert_eq!(
                                     *value_or_param,
                                     ValueOrParameter::Value(NumericLiteral::Float(0.5))

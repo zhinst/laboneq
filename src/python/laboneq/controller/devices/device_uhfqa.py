@@ -5,17 +5,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Iterable
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 import numpy as np
 
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
-    DeviceAttributesView,
 )
 from laboneq.controller.devices.async_support import _gather
-from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import (
     DeviceBase,
@@ -24,20 +21,32 @@ from laboneq.controller.devices.device_zi import (
 )
 from laboneq.controller.devices.node_control import (
     Command,
-    NodeControlBase,
     Response,
     Setting,
 )
 from laboneq.controller.devices.uhfqa_awg import UHFQAAwg, _check_result
 from laboneq.controller.recipe_processor import (
-    RecipeData,
-    RtExecutionInfo,
     get_initialization_by_device_uid,
 )
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.data.recipe import IO
-from laboneq.data.scheduled_experiment import ScheduledExperiment
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from laboneq.controller.attribute_value_tracker import (
+        DeviceAttributesView,
+    )
+    from laboneq.controller.devices.core_base import CoreBase
+    from laboneq.controller.devices.node_control import (
+        NodeControlBase,
+    )
+    from laboneq.controller.recipe_processor import (
+        RecipeData,
+        RtExecutionInfo,
+    )
+    from laboneq.data.recipe import IO
+    from laboneq.data.scheduled_experiment import ScheduledExperiment
 
 _logger = logging.getLogger(__name__)
 

@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import warnings
+from typing import TYPE_CHECKING
 
 from laboneq._version import get_version
 from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.data.scheduled_experiment import ScheduledExperiment
-from laboneq.serializers._legacy import LabOneQClassicSerializer
+from laboneq.serializers._legacy.classic import LabOneQClassicSerializer
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.core import from_dict, to_dict
 from laboneq.serializers.implementations._models._compiled_experiment import (
@@ -16,11 +17,13 @@ from laboneq.serializers.implementations._models._compiled_experiment import (
     make_converter,
 )
 from laboneq.serializers.serializer_registry import serializer
-from laboneq.serializers.types import (
-    DeserializationOptions,
-    JsonSerializableType,
-    SerializationOptions,
-)
+
+if TYPE_CHECKING:
+    from laboneq.serializers.types import (
+        DeserializationOptions,
+        JsonSerializableType,
+        SerializationOptions,
+    )
 
 _converter = make_converter()
 

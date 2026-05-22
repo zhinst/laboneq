@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from inspect import isawaitable
 from typing import TYPE_CHECKING, Any
@@ -14,14 +13,16 @@ from laboneq.controller.toolkit_adapter import ToolkitDevices
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.sweep_params_tracker import SweepParamsTracker
 from laboneq.core.exceptions import AbortExecution
-from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.data.recipe import NtStepKey
 from laboneq.executor.executor import AsyncExecutorBase, LoopingMode
 
 if TYPE_CHECKING:
+    import asyncio
+
     from laboneq.controller.controller import Controller, ExecutionContext
     from laboneq.controller.runtime_context_impl import LegacySessionData
+    from laboneq.core.types.enums.acquisition_type import AcquisitionType
+    from laboneq.core.types.enums.averaging_mode import AveragingMode
     from laboneq.core.types.numpy_support import NumPyArray
 
 _logger = logging.getLogger(__name__)

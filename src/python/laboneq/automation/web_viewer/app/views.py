@@ -1,40 +1,51 @@
 # Copyright 2026 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""Flask routes to the pages of the web viewer."""
+"""Flask blueprint of the web viewer pages."""
 
 import re
 from importlib.metadata import version
 from pathlib import Path
 
-from flask import Response, abort, jsonify, render_template, request, send_file
-
-from laboneq.automation.web_viewer.app.flask_app import (
-    app,
-    get_automation_instance,
-    get_log_path,
+from flask import (
+    Blueprint,
+    Response,
+    abort,
+    current_app,
+    jsonify,
+    render_template,
+    request,
+    send_file,
 )
+
 from laboneq.automation.web_viewer.app.utils import export_graph_to_json
 
 _SAFE_COMPONENT_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
+bp = Blueprint("viewer", __name__)
 
-@app.route("/graph")
+
+@bp.route("/graph")
 def get_graph() -> tuple[Response, int] | Response:
     """Return the automation graph as JSON."""
-    automation = app.config.get("AUTOMATION_INSTANCE")
+    automation = current_app.config.get("AUTOMATION_INSTANCE")
+    log_path = current_app.config.get("LOG_PATH")
     if automation is None:
         return jsonify({"error": "No automation instance available"}), 500
 
-    graph_data = export_graph_to_json(automation)
-    graph_data["has_log_path"] = get_log_path() is not None
+    graph_data = {}
+    try:
+        graph_data = export_graph_to_json(automation)
+    except RuntimeError:
+        raise
+    graph_data["has_log_path"] = log_path is not None
     return jsonify(graph_data)
 
 
-@app.route("/")
+@bp.route("/")
 def index() -> str:
     """Serve the main HTML page."""
-    automation = app.config.get("AUTOMATION_INSTANCE")
+    automation = current_app.config.get("AUTOMATION_INSTANCE")
     name = "Automation Graph" if automation is None else automation.name
     return render_template(
         "index.html",
@@ -43,10 +54,10 @@ def index() -> str:
     )
 
 
-@app.route("/reset", methods=["POST"])
+@bp.route("/reset", methods=["POST"])
 def reset_automation() -> tuple[Response, int]:
     """Reset the automation in a background thread."""
-    automation = get_automation_instance()
+    automation = current_app.config.get("AUTOMATION_INSTANCE")
 
     if automation is None:
         return jsonify({"error": "No automation instance available"}), 500
@@ -55,10 +66,10 @@ def reset_automation() -> tuple[Response, int]:
     return jsonify({"status": "reset"}), 202
 
 
-@app.route("/run", methods=["POST"])
+@bp.route("/run", methods=["POST"])
 def run_automation() -> tuple[Response, int]:
     """Run the automation in a background thread."""
-    automation = app.config.get("AUTOMATION_INSTANCE")
+    automation = current_app.config.get("AUTOMATION_INSTANCE")
     layer_key = request.args.get("layer_key", None)
     node_id = request.args.get("node_id", None)
 
@@ -77,7 +88,7 @@ def run_automation() -> tuple[Response, int]:
     return jsonify({"status": "started"}), 202
 
 
-@app.route("/node-image")
+@bp.route("/node-image")
 def node_image() -> Response:
     """Return the result PNG for a given layer and element."""
     layer_key = request.args.get("layer", "")
@@ -101,17 +112,24 @@ def _glob_plot_from_dir(run_dir: Path, qe: str) -> Path | None:
     matches = [
         p for p in run_dir.glob(f"**/*{qe}.png") if not p.name.startswith("Raw-data")
     ]
+    # For qubit-pair nodes (e.g. "q0-q1"), analysis workflows may name files
+    # with only the target qubit UID (e.g. "q1"). Fall back to the last element.
+    if not matches and "-" in qe:
+        last = qe.split("-")[-1]
+        matches = [
+            p
+            for p in run_dir.glob(f"**/*{last}.png")
+            if not p.name.startswith("Raw-data")
+        ]
     if matches:
         return max(matches, key=lambda p: p.stat().st_mtime)
-    else:
-        return None
+    return None
 
 
 def _layer_results_dir(layer_key: str) -> Path | None:
     """Resolve the directory in which the layer results were saved."""
-    log_path = get_log_path()
-
-    automation = get_automation_instance()
+    automation = current_app.config.get("AUTOMATION_INSTANCE")
+    log_path = current_app.config.get("LOG_PATH")
     if log_path is None or automation is None:
         return None
     else:

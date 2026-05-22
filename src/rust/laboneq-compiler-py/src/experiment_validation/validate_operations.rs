@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::operation::{Acquire, Operation, PlayPulse};
+use laboneq_dsl::operation::{Acquire, AveragingLoop, Operation, PlayPulse};
 use laboneq_dsl::types::{
-    ComplexOrFloat, MarkerSelector, PulseFunction, PulseKind, SectionUid, Trigger, ValueOrParameter,
+    AcquisitionType, AveragingMode, ComplexOrFloat, MarkerSelector, PulseFunction, PulseKind,
+    SectionUid, Trigger, ValueOrParameter,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -85,6 +86,7 @@ fn visit_node<'a>(
         }
         Operation::AveragingLoop(op) => {
             validate_experiment_signals(op, ctx, ctx_validator, ctx_params)?;
+            validate_averaging_loop(op)?;
         }
         Operation::Section(op) => {
             digest_awg_triggers(op, ctx, ctx_params);
@@ -443,6 +445,18 @@ fn validate_triggers(triggers: &[Trigger], ctx: &ExperimentContext) -> Result<()
             );
             return Err(Error::new(&err_msg));
         }
+    }
+    Ok(())
+}
+
+fn validate_averaging_loop(op: &AveragingLoop) -> Result<()> {
+    if matches!(op.acquisition_type, AcquisitionType::Raw)
+        && matches!(op.averaging_mode, AveragingMode::Sequential)
+        && op.count.get() > 1
+    {
+        return Err(Error::new(
+            "Sequential averaging is not supported for raw acquisitions.",
+        ));
     }
     Ok(())
 }

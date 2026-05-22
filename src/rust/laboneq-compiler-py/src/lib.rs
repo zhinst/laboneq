@@ -5,21 +5,17 @@
 
 pub mod error;
 
-use laboneq_dsl::device_setup::DeviceSignal;
+use laboneq_error::LabOneQError;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use laboneq_opentelemetry_python::attach_otel_context;
-use laboneq_tracing::tracing_is_enabled;
-use laboneq_tracing::with_tracing;
-
+use crate::compiler::run_compilation;
 use crate::compiler_backend::CompilerBackend;
 use crate::compiler_backend::ExperimentView;
-use crate::compiler_backend::PreprocessedBackendData;
-use crate::error::{Error, Result, create_error_message};
+use crate::error::{Error, Result as CompilerResult, create_error_message};
 use crate::experiment::Experiment;
 use crate::experiment_context::ExperimentContext;
 use crate::experiment_context::experiment_context_from_experiment;
@@ -28,21 +24,22 @@ use crate::experiment_validation::validate_experiment;
 use crate::parameter_store::create_parameter_store;
 use crate::py_device_setup_capnp::DeviceSetupCapnpBuilderPy;
 use crate::py_experiment::ExperimentPy;
-use crate::py_experiment_ir::ExperimentIrPy;
 use crate::py_signal::AmplifierPumpPy;
 use crate::qccs_feedback_calculator::QccsFeedbackCalculator;
 use crate::result_shape::ResultShapes;
 use crate::result_shape::extract_result_shapes;
 use crate::setup_processor::DelayRegistry;
+use crate::setup_processor::SetupProperties;
 use crate::setup_processor::process_setup;
+use laboneq_opentelemetry_python::attach_otel_context;
+use laboneq_tracing::tracing_is_enabled;
+use laboneq_tracing::with_tracing;
 
 use laboneq_common::compiler_settings::CompilerSettings;
 use laboneq_common::named_id::{NamedIdStore, resolve_ids};
-use laboneq_dsl::device_setup::AuxiliaryDevice;
 use laboneq_dsl::types::ExternalParameterUid;
 use laboneq_ir::ExperimentIr;
 use laboneq_ir::pulse_sheet_schedule::PulseSheetSchedule;
-use laboneq_ir::system::AwgDevice;
 use laboneq_ir::system::DeviceSetup;
 use laboneq_py_utils::py_object_interner::PyObjectInterner;
 use laboneq_scheduler::{ChunkingInfo, ExperimentContext as SchedulerContext, schedule_experiment};
@@ -66,19 +63,16 @@ mod py_signal;
 mod qccs_feedback_calculator;
 mod signal_view;
 use signal_view::signal_views;
+mod chunking_mode;
+mod compiler;
 pub mod compiler_backend;
+mod execution;
 mod py_device_setup_capnp;
+mod py_execution;
 pub mod py_experiment;
-pub mod py_experiment_ir;
 mod py_result_shape;
 mod result_shape;
 mod setup_processor;
-
-pub(crate) struct SetupProperties {
-    signals: Vec<DeviceSignal>,
-    awg_devices: Vec<AwgDevice>,
-    auxiliary_devices: Vec<AuxiliaryDevice>,
-}
 
 /// Serialize a Python experiment object to Cap'n Proto bytes.
 #[pyfunction(name = "serialize_experiment", signature = (experiment, device_setup, packed=false))]
@@ -86,39 +80,40 @@ fn serialize_experiment_py(
     experiment: &Bound<'_, PyAny>,
     device_setup: Bound<'_, DeviceSetupCapnpBuilderPy>,
     packed: bool,
-) -> Result<Vec<u8>> {
+) -> CompilerResult<Vec<u8>> {
     capnp_serializer::serialize_experiment(experiment, device_setup, packed)
 }
 
 /// Build an experiment from Cap'n Proto bytes plus device/signal configuration.
-pub fn build_experiment_with_backend_capnp_py<B: CompilerBackend>(
-    py: Python<'_>,
+pub fn compile_experiment<'py, B>(
+    py: Python<'py>,
     capnp_data: &[u8],
     packed: bool,
     compiler_settings: Option<Bound<'_, PyDict>>,
     backend: B,
-) -> PyResult<ExperimentPy>
+) -> PyResult<Bound<'py, PyAny>>
 where
-    <B as CompilerBackend>::Output: Send + Sync + 'static,
+    B: CompilerBackend + Send + Sync + 'static,
+    B::Output: Send + Sync + 'static,
+    B::CodeGenArtifact: Send + Sync + 'static,
 {
+    let _context_guard = tracing_is_enabled()
+        .then(|| attach_otel_context(py))
+        .transpose()?;
+
     let compiler_settings = compiler_settings
         .as_ref()
         .map(|dict| py_helpers::compiler_settings_from_py_dict(dict))
         .transpose()?
         .unwrap_or_default();
 
-    let processed = build_experiment_capnp(py, capnp_data, packed, backend)?;
-
-    let exp_py = ExperimentPy {
-        inner: processed.inner,
-        device_setup: processed.device_setup,
-        context: processed.context,
-        delay_compensation: processed.delay_compensation,
-        compiler_settings: compiler_settings.clone(),
-        backend_data: Arc::new(processed.backend_data),
-        result_shapes: processed.result_shapes,
-    };
-    Ok(exp_py)
+    with_tracing(|| {
+        let processed = build_experiment_capnp(py, capnp_data, packed, &backend)?;
+        let id_store = Arc::clone(&processed.inner.id_store);
+        let scheduled_experiment = run_compilation(py, backend, processed, compiler_settings)
+            .map_err(|e| e.to_pyerr(|s| resolve_ids(&s, &id_store)))?;
+        Ok(scheduled_experiment)
+    })
 }
 
 pub struct ProcessedExperiment<D> {
@@ -138,8 +133,8 @@ fn build_experiment_capnp<B: CompilerBackend>(
     py: Python<'_>,
     capnp_data: &[u8],
     packed: bool,
-    backend: B,
-) -> Result<ProcessedExperiment<impl PreprocessedBackendData>> {
+    backend: &B,
+) -> Result<ProcessedExperiment<B::Output>, LabOneQError> {
     // 1. Deserialize the experiment tree from Cap'n Proto.
     let mut deserialized = capnp_deserializer::deserialize_experiment(py, capnp_data, packed)?;
 
@@ -149,15 +144,19 @@ fn build_experiment_capnp<B: CompilerBackend>(
         py_object_store.insert(uid, value);
     }
 
-    let backend_processed = backend.preprocess_experiment(ExperimentView::new(
-        &deserialized.root,
-        &mut deserialized.id_store,
-        &deserialized.parameters,
-        &deserialized.pulses,
-        deserialized.instruments,
-        &deserialized.auxiliary_devices,
-        deserialized.signals,
-    ))?;
+    let backend_processed = backend
+        .preprocess_experiment(ExperimentView::new(
+            &deserialized.root,
+            &mut deserialized.id_store,
+            &deserialized.parameters,
+            &deserialized.pulses,
+            deserialized.experiment_signals.clone(),
+            deserialized.setup_description,
+        ))
+        .map_err(|e| {
+            let msg = create_error_message(e);
+            Error::new(resolve_ids(&msg, &deserialized.id_store))
+        })?;
 
     let mut experiment = Experiment {
         root: deserialized.root,
@@ -166,11 +165,6 @@ fn build_experiment_capnp<B: CompilerBackend>(
         pulses: deserialized.pulses,
         py_object_store: py_object_store.into(),
     };
-    let setup_properties = SetupProperties {
-        signals: backend_processed.device_signals,
-        awg_devices: backend_processed.backend_data.awg_devices().to_vec(),
-        auxiliary_devices: deserialized.auxiliary_devices,
-    };
 
     let context = experiment_context_from_experiment(&experiment).map_err(|e| {
         let msg = create_error_message(e);
@@ -178,7 +172,10 @@ fn build_experiment_capnp<B: CompilerBackend>(
     })?;
 
     let processed_setup = process_setup(
-        setup_properties,
+        SetupProperties {
+            signals: backend_processed.device_signals,
+            awg_devices: backend_processed.awg_devices,
+        },
         &backend_processed.backend_data,
         &experiment.id_store,
         &context,
@@ -194,7 +191,6 @@ fn build_experiment_capnp<B: CompilerBackend>(
             .map(|s| (s.uid, s))
             .collect(),
         processed_setup.devices,
-        processed_setup.auxiliary_devices,
     )
     .map_err(Error::new)?;
 
@@ -227,41 +223,39 @@ fn build_experiment_capnp<B: CompilerBackend>(
     Ok(res)
 }
 
-#[pyclass(name = "ScheduleResult", frozen)]
-struct ScheduleResult {
+#[pyclass(name = "RealTimeCompilerOutput", frozen)]
+struct RealTimeCompilerOutput {
     /// Parameters used in the experiment
     #[pyo3(get)]
     used_parameters: HashSet<String>,
     #[pyo3(get)]
-    experiment_ir: Py<ExperimentIrPy>,
+    code_gen_output: Py<PyAny>,
     #[pyo3(get)]
     pulse_sheet_schedule: Option<Py<PyAny>>,
 }
 
-#[pyfunction(name = "schedule_experiment")]
-fn schedule_experiment_py(
+#[pyfunction(name = "compile_realtime")]
+fn compile_realtime_py(
     py: Python,
     experiment: &ExperimentPy,
     parameters: HashMap<String, f64>,
     chunking_info: Option<(usize, usize)>, // Current chunk index, total chunk count
-) -> Result<ScheduleResult> {
-    let _context_guard = tracing_is_enabled()
-        .then(|| attach_otel_context(py))
-        .transpose()?;
-    with_tracing(|| schedule_experiment_py_impl(py, experiment, parameters, chunking_info))
+) -> PyResult<RealTimeCompilerOutput> {
+    compile_realtime_py_impl(py, experiment, parameters, chunking_info)
 }
 
-fn schedule_experiment_py_impl(
+fn compile_realtime_py_impl(
     py: Python,
     experiment: &ExperimentPy,
     parameters: HashMap<String, f64>,
     chunking_info: Option<(usize, usize)>, // Current chunk index, total chunk count
-) -> Result<ScheduleResult> {
+) -> PyResult<RealTimeCompilerOutput> {
     // The NT / RT boundaries should have been resolved at this point.
     // This means only 1 NT root.
     let chunking_info = if let Some((index, count)) = chunking_info {
-        let count = NonZeroU32::new(count as u32)
-            .ok_or_else(|| Error::new("Chunk count must be a positive integer".to_string()))?;
+        let count = NonZeroU32::new(count as u32).ok_or_else(|| {
+            laboneq_error::laboneq_error!("Chunk count must be a positive integer")
+        })?;
         Some(ChunkingInfo { index, count })
     } else {
         None
@@ -273,6 +267,8 @@ fn schedule_experiment_py_impl(
     let mut parameter_store = create_parameter_store(parameters, &inner_experiment.id_store);
     let views = signal_views(device_setup);
     let feedback_calculator = QccsFeedbackCalculator::new(py, views.values().cloned())?;
+
+    let _t = laboneq_log::StageTiming::start("Schedule");
     let result = schedule_experiment(
         &inner_experiment.root,
         SchedulerContext {
@@ -285,10 +281,8 @@ fn schedule_experiment_py_impl(
         chunking_info,
         Some(&feedback_calculator),
     )
-    .map_err(|e| {
-        let msg = create_error_message(e);
-        Error::new(resolve_ids(&msg, &inner_experiment.id_store))
-    })?;
+    .map_err(|e| laboneq_error::laboneq_error!("{e}"))?;
+    drop(_t);
 
     let ir = ExperimentIr {
         root: result.root,
@@ -298,27 +292,31 @@ fn schedule_experiment_py_impl(
         id_store: Arc::clone(&inner_experiment.id_store),
         device_setup: Arc::clone(device_setup),
     };
-
     let pulse_sheet_schedule = prepare_schedule(&ir, compiler_settings);
 
-    let ir_py = ExperimentIrPy {
-        inner: ir,
-        py_object_store: Arc::clone(&experiment.inner.py_object_store),
-        compiler_settings: experiment.compiler_settings.clone(),
-        backend_data: Arc::clone(&experiment.backend_data),
-    };
+    let _t = laboneq_log::StageTiming::start("Code generation");
+    let code_gen_output = experiment.backend.generate_code_dyn(
+        ir,
+        compiler_settings,
+        &experiment.inner.py_object_store,
+        experiment.backend_data.as_ref(),
+    )?;
+    drop(_t);
 
-    let out = ScheduleResult {
+    let out = RealTimeCompilerOutput {
+        code_gen_output: code_gen_output
+            .to_python(py)
+            .map_err(|e| laboneq_error::laboneq_error!("{e}"))?,
         used_parameters: parameter_store
             .empty_queries()
             .iter()
             .map(|p| inner_experiment.id_store.resolve(p.0).unwrap().to_string())
             .collect(),
-        experiment_ir: ir_py.into_pyobject(py)?.into(),
         pulse_sheet_schedule: pulse_sheet_schedule
             .as_ref()
             .map(|s| schedule_to_py(py, s))
-            .transpose()?
+            .transpose()
+            .map_err(|e| laboneq_error::laboneq_error!("{e}"))?
             .map(|s| s.unbind()),
     };
     Ok(out)
@@ -364,7 +362,7 @@ fn prepare_schedule(
 fn schedule_to_py<'py>(
     py: Python<'py>,
     schedule: &PulseSheetSchedule,
-) -> Result<Bound<'py, PyAny>> {
+) -> CompilerResult<Bound<'py, PyAny>> {
     // Convert to JSON then to Python dict
     let json_value = serde_json::to_value(schedule)
         .map_err(|e| Error::new(format!("Failed to serialize schedule: {}", e)))?;
@@ -373,7 +371,10 @@ fn schedule_to_py<'py>(
 }
 
 /// Helper function to convert serde_json::Value to Python objects
-fn json_to_py<'py>(py: Python<'py>, value: &serde_json::Value) -> Result<Bound<'py, PyAny>> {
+fn json_to_py<'py>(
+    py: Python<'py>,
+    value: &serde_json::Value,
+) -> CompilerResult<Bound<'py, PyAny>> {
     use pyo3::IntoPyObject;
     use pyo3::types::{PyDict, PyList};
     use serde_json::Value;
@@ -434,7 +435,7 @@ fn init_logging_py(log_level: i64) -> PyResult<()> {
     laboneq_py_utils::logging::init_logging_py(log_level)
 }
 
-pub fn create_py_module<'py>(py: Python<'py>, name: &str) -> Result<Bound<'py, PyModule>> {
+pub fn create_py_module<'py>(py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyModule>> {
     use crate::py_signal::{
         BounceCompensationPy, ExponentialCompensationPy, FirCompensationPy, HighPassCompensationPy,
         PrecompensationPy,
@@ -443,7 +444,7 @@ pub fn create_py_module<'py>(py: Python<'py>, name: &str) -> Result<Bound<'py, P
     use py_device_setup_capnp::DeviceSetupCapnpBuilderPy;
 
     let m = PyModule::new(py, name)?;
-    m.add_function(wrap_pyfunction!(schedule_experiment_py, &m)?)?;
+    m.add_function(wrap_pyfunction!(compile_realtime_py, &m)?)?;
     m.add_function(wrap_pyfunction!(serialize_experiment_py, &m)?)?;
     m.add_function(wrap_pyfunction!(init_logging_py, &m)?)?;
     m.add_class::<SpanBufferPy>()?;

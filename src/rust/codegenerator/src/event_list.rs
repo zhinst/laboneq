@@ -12,7 +12,6 @@ use crate::sampled_event_handler::awg_events::{
 use crate::sampled_event_handler::seqc_tracker::awg::HwOscillator;
 use crate::signature::WaveformSignature;
 use crate::triggers::generate_trigger_states;
-use crate::utils::normalize_phase;
 use crate::{Result, ir::IrNode, ir::NodeKind, ir::Samples, ir::SectionId};
 use std::collections::BTreeMap;
 use std::collections::{HashMap, HashSet};
@@ -142,11 +141,6 @@ fn generate_output_recursive(
                 };
                 hw_osc = Some(out);
             }
-            // The `phase_resolution_range` is irrelevant here; for the CT phase a fixed
-            // precision is used.
-            const PHASE_RESOLUTION_CT: f64 = (1 << 24) as f64 / (2.0 * std::f64::consts::PI);
-            let quantized_phase =
-                normalize_phase((ob.phase * PHASE_RESOLUTION_CT).round() / PHASE_RESOLUTION_CT);
             let waveform = WaveformSignature::Pulses {
                 length: 0,
                 pulses: vec![],
@@ -158,7 +152,7 @@ fn generate_output_recursive(
                 hw_oscillator: hw_osc,
                 amplitude_register: 0,
                 amplitude: None,
-                increment_phase: Some(quantized_phase),
+                increment_phase: Some(ob.phase),
                 increment_phase_params: vec![ob.parameter],
                 channels: vec![],
             };

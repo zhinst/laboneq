@@ -13,6 +13,36 @@ type WaveIdInternal = String;
 type ConditionInternal = String;
 type VariableInternal = String;
 
+/// Cosmetic comment attached to a SeqC statement.
+///
+/// Two statements that emit identical instructions must compare equal
+/// regardless of comment text — otherwise the SeqC compressor
+/// treats them as distinct tokens and skips run-length compression.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct CommentText(pub Option<String>);
+
+impl CommentText {
+    pub(crate) fn as_option(&self) -> &Option<String> {
+        &self.0
+    }
+}
+
+impl<S: Into<String>> From<Option<S>> for CommentText {
+    fn from(value: Option<S>) -> Self {
+        CommentText(value.map(Into::into))
+    }
+}
+
+impl Hash for CommentText {
+    fn hash<H: Hasher>(&self, _state: &mut H) {}
+}
+
+impl PartialEq for CommentText {
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
 // an enum to represent strings, integers, and floats
 #[derive(Debug, Clone, PartialEq, derive_more::From)]
 pub(crate) enum SeqCVariant {
@@ -67,7 +97,7 @@ pub(crate) enum SeqCStatement {
     Constant {
         name: String,
         value: SeqCVariant,
-        comment: Option<String>,
+        comment: CommentText,
     },
     Repeat {
         num_repeats: u64,
@@ -107,7 +137,7 @@ pub(crate) enum SeqCStatement {
     CommandTableExecution {
         table_index: SeqCVariant,
         latency: Option<SeqCVariant>,
-        comment: Option<String>,
+        comment: CommentText,
     },
     PlayZeroOrHold {
         num_samples: Samples,

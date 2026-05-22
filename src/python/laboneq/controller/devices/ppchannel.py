@@ -3,17 +3,19 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from laboneq.controller.attribute_value_tracker import DeviceAttributesView
-from laboneq.controller.devices.async_support import (
-    AsyncSubscriber,
-    InstrumentConnection,
-)
 from laboneq.controller.devices.core_base import CoreBase
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
-from laboneq.data.recipe import NtStepKey
+
+if TYPE_CHECKING:
+    from laboneq.controller.attribute_value_tracker import DeviceAttributesView
+    from laboneq.controller.devices.async_support import (
+        AsyncSubscriber,
+        InstrumentConnection,
+    )
+    from laboneq.controller.recipe_processor import DeviceRecipeData, RecipeData
+    from laboneq.data.recipe import NtStepKey
 
 
 class PPChannel(CoreBase):

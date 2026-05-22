@@ -63,7 +63,7 @@ def _format_title_laboneq(node: object) -> str:
 
 
 def _format_body_laboneq(node: object) -> list[str]:
-    naf = _name_altered_fields(cast(DataClassType, node))
+    naf = _name_altered_fields(cast("DataClassType", node))
     return [f"{YELLOW}{n}{END}: {CYAN}{repr(getattr(node, n))}{END}" for n in naf]
 
 

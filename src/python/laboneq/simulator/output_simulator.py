@@ -4,17 +4,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from numpy.typing import ArrayLike
-
-from laboneq.core.types.compiled_experiment import CompiledExperiment
 from laboneq.data.execution_payload import VIRTUAL_SHFSG_UID_SUFFIX
-from laboneq.data.recipe import RealtimeExecutionInit
-from laboneq.dsl.device.device_setup import DeviceSetup
 from laboneq.dsl.device.instruments.shfqc import SHFQC
 from laboneq.dsl.device.io_units.physical_channel import PhysicalChannel
 from laboneq.simulator.seqc_parser import simulate
 from laboneq.simulator.wave_scroller import SimTarget, WaveScroller
+
+if TYPE_CHECKING:
+    from numpy.typing import ArrayLike
+
+    from laboneq.core.types.compiled_experiment import CompiledExperiment
+    from laboneq.data.recipe import RealtimeExecutionInit
+    from laboneq.dsl.device.device_setup import DeviceSetup
 
 
 @dataclass

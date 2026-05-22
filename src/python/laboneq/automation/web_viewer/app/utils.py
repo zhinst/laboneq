@@ -10,17 +10,24 @@ import json
 from typing import TYPE_CHECKING, Any, Literal
 
 import attr
-import networkx as nx
 
+from laboneq.automation.layer import AutomationLayer
 from laboneq.automation.utils import hierarchical_layout
 
 if TYPE_CHECKING:
+    import networkx as nx
+
     from laboneq.automation import Automation
 
 
 def _first(value):
     """First value from dict, or scalar passthrough."""
     return next(iter(value.values())) if isinstance(value, dict) else value
+
+
+def _parse_errors(value) -> str:
+    """Return a string of error messages"""
+    return "\n".join([v for v in value.values() if v is not None])
 
 
 def _total(value):
@@ -35,7 +42,7 @@ def _serialize_logic(logic):
     return {"class": type(logic).__name__, **attr.asdict(logic)}
 
 
-def build_json_data(
+def build_graph_data(
     automation: Automation,
     graph: nx.DiGraph,
     graph_type: Literal["nodes", "layers"],
@@ -64,18 +71,24 @@ def build_json_data(
             "depends_on": list(el.depends_on),
         }
 
-        if is_layer:
+        if isinstance(el, AutomationLayer):
             entry["sequential"] = getattr(el, "sequential", False)
             entry["elements"] = str(len(el.node_keys))
-            logic = _serialize_logic(automation[key].logic)
+            entry["error"] = _parse_errors(el.error)
+            logic = _serialize_logic(el.logic)
             if logic:
                 entry["logic"] = logic
         else:
             entry["elements"] = el._key_str or ""
+            entry["error"] = el.error or ""
 
         elements.append(entry)
 
     return elements
+
+
+def build_automation_data(automation: Automation) -> dict[str, Any]:
+    return {"status": automation.status.value}
 
 
 def export_graph_to_json(automation: Automation) -> dict[str, Any]:
@@ -102,12 +115,13 @@ def export_graph_to_json(automation: Automation) -> dict[str, Any]:
     # until a permanent solution is developed.
     with automation._lock:
         node_graph = automation._node_graph.copy()
-        nodes_data = build_json_data(automation, graph=node_graph, graph_type="nodes")
+        nodes_data = build_graph_data(automation, graph=node_graph, graph_type="nodes")
 
         layer_graph = automation._layer_graph.copy()
-        layers_data = build_json_data(
+        layers_data = build_graph_data(
             automation, graph=layer_graph, graph_type="layers"
         )
+        automation_data = build_automation_data(automation)
 
     node_edge_list = node_graph.edges()
     layer_edge_list = layer_graph.edges()
@@ -121,9 +135,7 @@ def export_graph_to_json(automation: Automation) -> dict[str, Any]:
         "nodes": nodes_data,
         "node_links": list(node_edge_list),
         "version": version,
-        "directed": True,
-        "multigraph": False,
-        "graph": {},
+        "automation_data": automation_data,
     }
 
 

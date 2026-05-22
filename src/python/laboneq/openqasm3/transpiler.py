@@ -6,16 +6,19 @@ from __future__ import annotations
 import logging
 from contextlib import nullcontext
 from itertools import chain
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.dsl import enums, parameter, quantum
 from laboneq.dsl.calibration import Calibration
-from laboneq.dsl.experiment import Experiment, Section
-from laboneq.dsl.experiment.experiment_signal import ExperimentSignal
+from laboneq.dsl.experiment import Experiment
 from laboneq.dsl.quantum.quantum_element import QuantumElement
 from laboneq.openqasm3 import device, openqasm3_importer
 from laboneq.openqasm3.options import MultiProgramOptions, SingleProgramOptions
+
+if TYPE_CHECKING:
+    from laboneq.dsl.experiment import Section
+    from laboneq.dsl.experiment.experiment_signal import ExperimentSignal
 
 _logger = logging.getLogger(__name__)
 

@@ -5,20 +5,16 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,
     DeviceAttribute,
-    DeviceAttributesView,
 )
 from laboneq.controller.devices.async_support import (
-    AsyncSubscriber,
-    InstrumentConnection,
     ResponseWaiterAsync,
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
@@ -30,16 +26,31 @@ from laboneq.controller.devices.device_shf_base import (
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.device_zi import delay_to_rounded_samples
 from laboneq.controller.recipe_processor import (
-    DeviceRecipeData,
-    RecipeData,
     get_elf,
     get_initialization_by_device_uid,
     prepare_command_table,
     prepare_waves,
 )
 from laboneq.controller.utilities.exception import LabOneQControllerException
-from laboneq.data.recipe import IO, Initialization, NtStepKey
-from laboneq.data.scheduled_experiment import ArtifactsCodegen, ScheduledExperiment
+from laboneq.data.recipe import NtStepKey
+from laboneq.data.scheduled_experiment import ArtifactsCodegen
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from laboneq.controller.attribute_value_tracker import (
+        DeviceAttributesView,
+    )
+    from laboneq.controller.devices.async_support import (
+        AsyncSubscriber,
+        InstrumentConnection,
+    )
+    from laboneq.controller.recipe_processor import (
+        DeviceRecipeData,
+        RecipeData,
+    )
+    from laboneq.data.recipe import IO, Initialization
+    from laboneq.data.scheduled_experiment import ScheduledExperiment
 
 _logger = logging.getLogger(__name__)
 

@@ -18,11 +18,11 @@ type VariableInternal = String;
 
 static MIN_PLAY_ZERO_HOLD: Samples = 512 + 128;
 
-fn format_comment(comment: &Option<String>) -> String {
-    if let Some(comment) = comment
-        && !comment.is_empty()
+fn format_comment(comment: &super::seqc_statements::CommentText) -> String {
+    if let Some(text) = comment.as_option()
+        && !text.is_empty()
     {
-        return format!("  // {comment}");
+        return format!("  // {text}");
     }
     String::new()
 }
@@ -315,7 +315,7 @@ impl SeqCGenerator {
             SeqCStatement::Constant {
                 name: name.into(),
                 value,
-                comment: comment.map(|s| s.into()),
+                comment: comment.into(),
             }
             .into(),
         );
@@ -475,7 +475,7 @@ impl SeqCGenerator {
             SeqCStatement::CommandTableExecution {
                 table_index,
                 latency,
-                comment: comment.map(|s| s.into()),
+                comment: comment.into(),
             }
             .into(),
         );

@@ -5,4 +5,4 @@ __all__ = [
     "Serializer",
 ]
 
-from laboneq.serializers._legacy import Serializer
+from laboneq.serializers._legacy.serializer import Serializer

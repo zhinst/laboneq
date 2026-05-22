@@ -113,7 +113,12 @@ fn init_dispatcher(config: TracingConfig) -> TracingState {
     let otel_tracer: opentelemetry_sdk::trace::SdkTracerProvider =
         opentelemetry_provider::create_tracer(&config.opentelemetry_exporters).unwrap();
     // Each layer must be boxed to be type erased.
-    let otel_layer = tracing_opentelemetry::layer().with_tracer(otel_tracer.tracer("laboneq-rust"));
+    let otel_layer = tracing_opentelemetry::layer()
+        .with_tracer(otel_tracer.tracer("laboneq-rust"))
+        .with_target(false)
+        .with_threads(false)
+        .with_tracked_inactivity(false)
+        .with_location(false);
     // To add more layers, extend the `with` chain. Make sure each layer is boxed and optional.
     // TODO: Add log interoperability layer
     let registry = Registry::default().with(otel_layer);

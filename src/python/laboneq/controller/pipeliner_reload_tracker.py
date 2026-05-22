@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import copy
+from typing import TYPE_CHECKING
 
 from laboneq.controller.utilities.exception import LabOneQControllerException
-from laboneq.data.recipe import RealtimeExecutionInit
+
+if TYPE_CHECKING:
+    from laboneq.data.recipe import RealtimeExecutionInit
 
 
 def _merge(

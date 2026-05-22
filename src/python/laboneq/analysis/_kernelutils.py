@@ -1,13 +1,18 @@
 # Copyright 2023 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import warnings
+from typing import TYPE_CHECKING
 
 import numpy as np
-from numpy.typing import NDArray
 from zhinst.utils.shfqa.multistate import QuditSettings
 
 from laboneq.dsl.experiment import pulse_library as pl
+
+if TYPE_CHECKING:
+    from numpy.typing import NDArray
 
 
 def calculate_integration_kernels(

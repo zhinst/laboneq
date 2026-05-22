@@ -10,6 +10,8 @@ use crate::types::{
     RepetitionMode, SectionAlignment, SectionTimingMode, SectionUid, SignalUid, Trigger,
     ValueOrParameter,
 };
+use laboneq_common::named_id::NamedId;
+use laboneq_common::types::Literal;
 use laboneq_units::duration::{Duration, Second};
 
 impl Reserve {
@@ -31,11 +33,12 @@ pub struct Delay {
     pub precompensation_clear: bool,
 }
 
+/// Either a constant/parametric value of type [`NumericLiteral`], or an external parameter.
+///
+/// The values can be parametrized, therefore the minimum requirement for the value type is [`NumericLiteral`], which represents
+/// all the possible parametrized types (those of sweep parameters).
 #[derive(Debug, Clone, PartialEq)]
-pub enum PulseParameterValue {
-    // External parameter UID points to an arbitrary value
-    // resolved at sampling time, in case of the pulse being played
-    // is a Python function.
+pub enum ExternalOrValue {
     ExternalParameter(ExternalParameterUid),
     ValueOrParameter(ValueOrParameter<NumericLiteral>),
 }
@@ -49,8 +52,8 @@ pub struct PlayPulse {
     pub increment_oscillator_phase: Option<ValueOrParameter<f64>>,
     pub set_oscillator_phase: Option<ValueOrParameter<f64>>,
     pub length: Option<ValueOrParameter<Duration<Second>>>,
-    pub parameters: HashMap<PulseParameterUid, PulseParameterValue>,
-    pub pulse_parameters: HashMap<PulseParameterUid, PulseParameterValue>,
+    pub parameters: HashMap<PulseParameterUid, ExternalOrValue>,
+    pub pulse_parameters: HashMap<PulseParameterUid, ExternalOrValue>,
     pub markers: Vec<Marker>,
 }
 
@@ -60,8 +63,8 @@ pub struct Acquire {
     pub handle: HandleUid,
     pub length: Option<Duration<Second, f64>>,
     pub kernel: Vec<PulseUid>,
-    pub parameters: Vec<HashMap<PulseParameterUid, PulseParameterValue>>,
-    pub pulse_parameters: Vec<HashMap<PulseParameterUid, PulseParameterValue>>,
+    pub parameters: Vec<HashMap<PulseParameterUid, ExternalOrValue>>,
+    pub pulse_parameters: Vec<HashMap<PulseParameterUid, ExternalOrValue>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -168,8 +171,26 @@ pub enum Operation {
     ResetOscillatorPhase(ResetOscillatorPhase),
     Case(Case),
     /// Near-time callback is an external function call that is executed between near-time steps.
-    NearTimeCallback,
-    SetNode,
+    NearTimeCallback(NearTimeCallback),
+    SetNode(SetNode),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NearTimeCallback {
+    pub callback_id: NamedId,
+    pub args: Vec<ValueEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueEntry {
+    pub key: NamedId,
+    pub value: ExternalOrValue,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SetNode {
+    pub path: NamedId,
+    pub value: ValueOrParameter<Literal>,
 }
 
 pub struct SectionInfo<'a> {
@@ -215,8 +236,8 @@ impl Operation {
             | Operation::Delay(_)
             | Operation::ResetOscillatorPhase(_)
             | Operation::RealTimeBoundary
-            | Operation::NearTimeCallback
-            | Operation::SetNode => None,
+            | Operation::NearTimeCallback(_)
+            | Operation::SetNode(_) => None,
         }
     }
 
@@ -263,18 +284,18 @@ impl Operation {
             | Operation::Delay(_)
             | Operation::ResetOscillatorPhase(_)
             | Operation::RealTimeBoundary
-            | Operation::NearTimeCallback
-            | Operation::SetNode => None,
+            | Operation::NearTimeCallback(_)
+            | Operation::SetNode(_) => None,
         }
     }
 
     /// Validate if the operation is compatible with real-time execution.
     pub fn validate_real_time_compatible(&self) -> Result<(), &'static str> {
         match self {
-            Operation::SetNode => Err(
+            Operation::SetNode(_) => Err(
                 "'Set node' is a near-time operation and cannot be part of real-time execution.",
             ),
-            Operation::NearTimeCallback => Err(
+            Operation::NearTimeCallback(_) => Err(
                 "Near-time callback is a near-time operation and cannot be part of real-time execution.",
             ),
             Operation::Root

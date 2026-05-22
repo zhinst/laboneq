@@ -9,19 +9,22 @@
 from __future__ import annotations
 
 from functools import reduce
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import numpy as np
 from numpy import random as nprnd
-from numpy import typing as npt
 from scipy.linalg import expm as matrix_exponential
 from typing_extensions import (
     ParamSpec,  # FIXME: Reconsider when python>=3.10 is enforced.
 )
 
-from laboneq.dsl.experiment.pulse import Pulse
 from laboneq.dsl.experiment.pulse_library import PulseFunctional, gaussian
-from laboneq.simple import Experiment
+
+if TYPE_CHECKING:
+    from numpy import typing as npt
+
+    from laboneq.dsl.experiment.pulse import Pulse
+    from laboneq.simple import Experiment
 
 P = ParamSpec("P")
 

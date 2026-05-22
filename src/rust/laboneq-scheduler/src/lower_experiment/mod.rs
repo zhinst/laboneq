@@ -168,10 +168,10 @@ fn lower_to_ir_impl<T: SignalInfo + Sized>(
                 "Internal error: Scheduling is supported only for real-time part of an experiment."
             )
         }
-        Operation::NearTimeCallback => {
+        Operation::NearTimeCallback(_) => {
             panic!("Internal error: Near-time callbacks cannot exist in real-time.")
         }
-        Operation::SetNode => panic!("Internal error: Set node cannot exist in real-time."),
+        Operation::SetNode(_) => panic!("Internal error: Set node cannot exist in real-time."),
     }
 }
 

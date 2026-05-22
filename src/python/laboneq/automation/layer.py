@@ -1,13 +1,14 @@
 # Copyright 2026 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Callable, final
 
 import attrs
 
-from laboneq.automation.logic import AutomationLogic
-from laboneq.automation.node import AutomationNode, NodeKey, RootNode
+from laboneq.automation.node import AutomationNode, RootNode
 from laboneq.automation.status import AutomationStatus as Status
 from laboneq.automation.utils.class_parser import find_logic_class
 from laboneq.core.utilities.add_exception_note import add_note
@@ -16,6 +17,8 @@ from laboneq.workflow.timestamps import local_timestamp
 
 if TYPE_CHECKING:
     from laboneq.automation import Automation
+    from laboneq.automation.logic import AutomationLogic
+    from laboneq.automation.node import NodeKey
 
 
 def _node_keys_validator(
@@ -167,7 +170,14 @@ class AutomationLayer(ABC):
             for node_key in self.active_node_keys:
                 self.nodes[node_key].status = Status.RUNNING
 
-            output = self.run_executable_core(auto)
+            try:
+                output = self.run_executable_core(auto)
+            except Exception as err:
+                for node_key in self.active_node_keys:
+                    node = self.nodes[node_key]
+                    node.status = Status.ERROR
+                    node.error = getattr(err, "message", str(err))
+                raise err
 
             # Set node statuses to PASSED
             # if they were not changed in run_executable_core
@@ -184,7 +194,12 @@ class AutomationLayer(ABC):
                 if node.status in Status.active():
                     node.status = Status.RUNNING
                     self._node_keys_select = [node_key]
-                    single_run_output = self.run_executable_core(auto)
+                    try:
+                        single_run_output = self.run_executable_core(auto)
+                    except Exception as err:
+                        node.status = Status.ERROR
+                        node.error = getattr(err, "message", str(err))
+                        raise err
                     node.status = (
                         Status.PASSED
                         if single_run_output.successes.get(node_key, True)
@@ -293,6 +308,8 @@ class AutomationLayer(ABC):
         Aggregation rules in precedence order:
             `ROOT`:
                 Any nodes are `ROOT`.
+            `ERROR`:
+                Any nodes have `ERROR` status.
             `RUNNING`:
                 Any active nodes are `RUNNING`.
             `FAILED`:
@@ -307,15 +324,16 @@ class AutomationLayer(ABC):
         Returns:
             `AutomationStatus` enumerator.
         """
-        all_node_statuses = [node.status for node in self.nodes.values()]
+        nodes = self.nodes.values()
+        all_node_statuses = [node.status for node in nodes]
         active_node_statuses = [
-            node.status
-            for node in self.nodes.values()
-            if node.status in Status.active()
+            node.status for node in nodes if node.status in Status.active()
         ]
 
         if any(status == Status.ROOT for status in all_node_statuses):
             return Status.ROOT
+        elif any(status == Status.ERROR for status in all_node_statuses):
+            return Status.ERROR
         elif any(status == Status.RUNNING for status in active_node_statuses):
             return Status.RUNNING
         elif any(status == Status.FAILED for status in active_node_statuses):
@@ -332,6 +350,10 @@ class AutomationLayer(ABC):
             return Status.DEACTIVATED
         else:
             return Status.EMPTY
+
+    @property
+    def error(self) -> dict[NodeKey, str | None]:
+        return {k: v.error for k, v in self.nodes.items()}
 
     @property
     def max_fail_count(self) -> dict[NodeKey, int]:

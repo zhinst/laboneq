@@ -8,9 +8,9 @@ import hashlib
 import logging
 from collections import namedtuple
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
-import numpy.typing as npt
 
 from laboneq._rust import codegenerator as codegen_rs
 from laboneq.compiler.common.device_type import DeviceType
@@ -20,17 +20,21 @@ from laboneq.compiler.seqc.wave_compressor import (
     compress_wave,
 )
 from laboneq.core.exceptions import LabOneQException
+from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.core.utilities.pulse_sampler import (
     length_to_samples,
     sample_pulse,
     verify_amplitude_no_clipping,
 )
-from laboneq.data.compilation_job import PulseDef
 from laboneq.data.scheduled_experiment import (
-    MixerType,
     PulseInstance,
     PulseWaveformMap,
 )
+
+if TYPE_CHECKING:
+    import numpy.typing as npt
+
+    from laboneq.data.compilation_job import PulseDef
 
 _logger = logging.getLogger(__name__)
 

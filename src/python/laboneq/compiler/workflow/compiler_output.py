@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from laboneq.compiler.common.iface_compiler_output import (
-    CombinedOutput,
-)
+if TYPE_CHECKING:
+    from laboneq.compiler.common.iface_compiler_output import (
+        CombinedOutput,
+    )
 
 
 @dataclass

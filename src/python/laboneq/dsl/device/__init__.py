@@ -12,7 +12,22 @@ from .ports import Port
 from .server import Server
 
 from .device_setup import DeviceSetup  # isort: skip
-from . import system_description_builder_qccs as _system_description_builder_qccs
+
+
+__all__ = [
+    "Connection",
+    "DeviceSetup",
+    "Instrument",
+    "LogicalSignalGroup",
+    "PhysicalChannelGroup",
+    "Port",
+    "Server",
+    "create_connection",
+]
+# The following import is required to register the system description builder for QCCS.
+from . import (
+    system_description_builder_qccs as _system_description_builder_qccs,  # noqa: F401
+)
 
 
 @runtime_checkable

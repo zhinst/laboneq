@@ -7,17 +7,20 @@
 from __future__ import annotations
 
 import io
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pybase64
 
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.serializer_registry import serializer
-from laboneq.serializers.types import (
-    DeserializationOptions,
-    JsonSerializableType,
-    SerializationOptions,
-)
+
+if TYPE_CHECKING:
+    from laboneq.serializers.types import (
+        DeserializationOptions,
+        JsonSerializableType,
+        SerializationOptions,
+    )
 
 
 @serializer(types=np.ndarray, public=True)

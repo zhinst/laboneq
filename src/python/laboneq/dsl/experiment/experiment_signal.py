@@ -3,21 +3,26 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import attrs
 
-from laboneq.core.types.enums import PortMode
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
-from laboneq.dsl.calibration import MixerCalibration, SignalCalibration
-from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
+from laboneq.dsl.calibration import SignalCalibration
 from laboneq.dsl.calibration.calibratable import Calibratable
-from laboneq.dsl.calibration.oscillator import Oscillator
-from laboneq.dsl.calibration.precompensation import Precompensation
 from laboneq.dsl.device.io_units.logical_signal import (
-    LogicalSignalRef,
     resolve_logical_signal_ref,
 )
+
+if TYPE_CHECKING:
+    from laboneq.core.types.enums import PortMode
+    from laboneq.dsl.calibration import MixerCalibration
+    from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
+    from laboneq.dsl.calibration.oscillator import Oscillator
+    from laboneq.dsl.calibration.precompensation import Precompensation
+    from laboneq.dsl.device.io_units.logical_signal import (
+        LogicalSignalRef,
+    )
 
 experiment_signal_id = 0
 

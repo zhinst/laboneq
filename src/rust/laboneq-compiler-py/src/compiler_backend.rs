@@ -1,18 +1,30 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use smallvec::SmallVec;
 use std::any::Any;
 use std::collections::HashMap;
+
+use laboneq_dsl::experiment_signal::ExperimentSignal;
+use pyo3::prelude::*;
+use smallvec::SmallVec;
+use tracing::instrument;
+
+use laboneq_common::compiler_settings::CompilerSettings;
+use laboneq_ir::ExperimentIr;
+use laboneq_py_utils::py_object_interner::PyObjectInterner;
 
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::types::AwgKey;
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::device_setup::{AuxiliaryDevice, DeviceSignal, Instrument};
-use laboneq_dsl::types::{ParameterUid, PulseDef, PulseUid, SignalUid, SweepParameter};
+use laboneq_dsl::device_setup::SetupDescription;
+use laboneq_dsl::types::{
+    ExternalParameterUid, ParameterUid, PulseDef, PulseUid, SignalUid, SweepParameter,
+};
 use laboneq_ir::system::AwgDevice;
 use laboneq_units::duration::{Duration, Second};
 
+// Re-export commonly used types for convenience
+pub use crate::experiment::DeviceSignal;
 pub type CompilerBackendResult<T, E = laboneq_error::LabOneQError> = Result<T, E>;
 
 /// A backend that performs hardware-specific preprocessing of an experiment
@@ -23,6 +35,7 @@ pub type CompilerBackendResult<T, E = laboneq_error::LabOneQError> = Result<T, E
 /// that the rest of the compiler can query.
 pub trait CompilerBackend {
     type Output: PreprocessedBackendData;
+    type CodeGenArtifact: CodeGenArtifact;
 
     /// Analyze the experiment against the target device setup and produce
     /// hardware-specific data needed for subsequent compilation stages.
@@ -34,6 +47,30 @@ pub trait CompilerBackend {
         &self,
         experiment: ExperimentView,
     ) -> CompilerBackendResult<PreprocessOutput<Self::Output>>;
+
+    fn generate_code(
+        &self,
+        experiment: ExperimentIr,
+        compiler_settings: &CompilerSettings,
+        py_object_store: &PyObjectInterner<ExternalParameterUid>,
+        backend_data: &Self::Output,
+    ) -> CompilerBackendResult<Self::CodeGenArtifact>;
+
+    #[instrument(name = "laboneq.compiler.generate-code", skip_all)]
+    fn generate_code_traced(
+        &self,
+        experiment: ExperimentIr,
+        compiler_settings: &CompilerSettings,
+        py_object_store: &PyObjectInterner<ExternalParameterUid>,
+        backend_data: &Self::Output,
+    ) -> CompilerBackendResult<Self::CodeGenArtifact> {
+        self.generate_code(experiment, compiler_settings, py_object_store, backend_data)
+    }
+
+    /// A numeric identifier for the device class this backend targets.
+    ///
+    /// NOTE: This is a temporary workaround as long as the compiler calls Python code that requires this information.
+    fn device_class(&self) -> usize;
 }
 
 /// A view of the experiment and device setup passed to a [`CompilerBackend`].
@@ -43,10 +80,10 @@ pub struct ExperimentView<'a> {
     pub parameters: &'a HashMap<ParameterUid, SweepParameter>,
     pub pulses: &'a HashMap<PulseUid, PulseDef>,
 
+    pub experiment_signals: Vec<ExperimentSignal>,
+
     // Device setup properties
-    pub instruments: Vec<Instrument>,
-    pub auxiliary_devices: &'a [AuxiliaryDevice],
-    pub signals: Vec<DeviceSignal>,
+    pub setup_description: SetupDescription,
 }
 
 impl<'a> ExperimentView<'a> {
@@ -55,18 +92,16 @@ impl<'a> ExperimentView<'a> {
         id_store: &'a mut NamedIdStore,
         parameters: &'a HashMap<ParameterUid, SweepParameter>,
         pulses: &'a HashMap<PulseUid, PulseDef>,
-        instruments: Vec<Instrument>,
-        auxiliary_devices: &'a [AuxiliaryDevice],
-        signals: Vec<DeviceSignal>,
+        experiment_signals: Vec<ExperimentSignal>,
+        setup_description: SetupDescription,
     ) -> Self {
         ExperimentView {
             root,
             id_store,
             parameters,
             pulses,
-            instruments,
-            auxiliary_devices,
-            signals,
+            experiment_signals,
+            setup_description,
         }
     }
 }
@@ -78,15 +113,71 @@ impl<'a> ExperimentView<'a> {
 pub struct PreprocessOutput<T: PreprocessedBackendData> {
     pub(crate) backend_data: T,
     pub(crate) device_signals: Vec<DeviceSignal>,
+    pub(crate) awg_devices: Vec<AwgDevice>,
 }
 
 impl<T: PreprocessedBackendData> PreprocessOutput<T> {
     /// Create a new `PreprocessOutput` with the given backend data and device signals.
-    pub fn new(backend_data: T, device_signals: Vec<DeviceSignal>) -> Self {
+    pub fn new(
+        backend_data: T,
+        device_signals: Vec<DeviceSignal>,
+        awg_devices: Vec<AwgDevice>,
+    ) -> Self {
         PreprocessOutput {
             backend_data,
             device_signals,
+            awg_devices,
         }
+    }
+}
+
+/// A code generation artifact produced by a [`CompilerBackend`].
+pub trait CodeGenArtifact {
+    /// Convert the artifact to a Python object for returning to the user.
+    fn to_python(&self, py: Python) -> PyResult<Py<PyAny>>;
+}
+
+/// Object-safe version of [`CompilerBackend`] for storage in `ExperimentPy`.
+///
+/// `CompilerBackend` cannot be used as a trait object directly because its associated types
+/// prevent object safety. This trait erases them so the backend can be stored as
+/// `Arc<dyn DynCompilerBackend>`.
+///
+/// All concrete [`CompilerBackend`] implementors automatically implement this trait
+/// via the blanket impl below.
+pub(crate) trait DynCompilerBackend: Send + Sync {
+    /// Equivalent to [`CompilerBackend::generate_code`] with type-erased `backend_data`.
+    ///
+    /// `backend_data` is a reference to the erased `B::Output` stored in `ExperimentPy`.
+    /// The caller passes `&*experiment.backend_data` (deref of the stored `Arc<dyn Any>`).
+    fn generate_code_dyn(
+        &self,
+        experiment: ExperimentIr,
+        compiler_settings: &CompilerSettings,
+        py_object_store: &PyObjectInterner<ExternalParameterUid>,
+        backend_data: &(dyn PreprocessedBackendData + Send + Sync),
+    ) -> CompilerBackendResult<Box<dyn CodeGenArtifact + Send + Sync>>;
+}
+
+impl<B> DynCompilerBackend for B
+where
+    B: CompilerBackend + Send + Sync,
+    B::Output: Send + Sync + 'static,
+    B::CodeGenArtifact: Send + Sync + 'static,
+{
+    fn generate_code_dyn(
+        &self,
+        experiment: ExperimentIr,
+        compiler_settings: &CompilerSettings,
+        py_object_store: &PyObjectInterner<ExternalParameterUid>,
+        backend_data: &(dyn PreprocessedBackendData + Send + Sync),
+    ) -> CompilerBackendResult<Box<dyn CodeGenArtifact + Send + Sync>> {
+        let data = backend_data
+            .as_any()
+            .downcast_ref::<B::Output>()
+            .expect("DynCompilerBackend: backend_data type does not match backend Output type");
+        self.generate_code_traced(experiment, compiler_settings, py_object_store, data)
+            .map(|a| Box::new(a) as Box<dyn CodeGenArtifact + Send + Sync>)
     }
 }
 
@@ -101,8 +192,6 @@ pub trait PreprocessedBackendData: Any {
 
     /// Get lead delay for signal.
     fn lead_delay(&self, signal_uid: SignalUid) -> Duration<Second>;
-
-    fn awg_devices(&self) -> &[AwgDevice];
 
     /// Returns `&dyn Any` to allow downcasting to the concrete type.
     ///

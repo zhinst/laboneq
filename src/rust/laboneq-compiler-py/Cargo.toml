@@ -27,6 +27,7 @@ num-integer = { workspace = true }
 capnp = { workspace = true }
 numpy = { workspace = true }
 indexmap = { workspace = true }
+tracing = { workspace = true }
 
 laboneq-capnp = { workspace = true }
 laboneq-common = { workspace = true }
@@ -39,7 +40,7 @@ laboneq-ir = { workspace = true }
 laboneq-py-utils = { workspace = true }
 laboneq-opentelemetry-python = { workspace = true }
 laboneq-tracing = { workspace = true }
-laboneq-error = { workspace = true }
+laboneq-error = { workspace = true, features = ["pyo3"] }
 
 [dev-dependencies]
 approx = { workspace = true }

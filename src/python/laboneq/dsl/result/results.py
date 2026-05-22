@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import copy
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import attrs
@@ -14,15 +13,19 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.attribute_wrapper import AttributeWrapper
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
-from ..calibration import Calibration
-from .acquired_result import AcquiredResult, AcquiredResults
+from .acquired_result import AcquiredResults
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import numpy as np
     from numpy import typing as npt
 
     from laboneq.dsl.device.device_setup import DeviceSetup
     from laboneq.dsl.experiment import Experiment
+
+    from ..calibration import Calibration
+    from .acquired_result import AcquiredResult
 
 
 ErrorList: TypeAlias = list[tuple[list[int], str, str]]

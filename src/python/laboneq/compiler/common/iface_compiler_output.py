@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from laboneq.data.recipe import NtStepKey
-from laboneq.data.scheduled_experiment import CompilerArtifact, ResultSource
+if TYPE_CHECKING:
+    from laboneq.data.recipe import NtStepKey
+    from laboneq.data.scheduled_experiment import CompilerArtifact, ResultSource
 
 
 class NeartimeStepBase:

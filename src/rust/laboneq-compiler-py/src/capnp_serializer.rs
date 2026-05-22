@@ -174,6 +174,8 @@ struct Serializer<'py> {
     signal_indices: HashMap<String, u32>,
     /// Cached `pickle.dumps` callable — imported once to avoid per-call module lookup.
     pickle_dumps: Py<PyAny>,
+    /// Collected sweep parameters by UID for consistency checking across multiple references.
+    collected_sweep_parameters: HashMap<String, Bound<'py, PyAny>>,
 }
 
 impl<'py> Serializer<'py> {
@@ -189,6 +191,7 @@ impl<'py> Serializer<'py> {
             signal_order: Vec::new(),
             signal_indices: HashMap::new(),
             pickle_dumps,
+            collected_sweep_parameters: HashMap::new(),
         })
     }
 
@@ -262,12 +265,12 @@ impl<'py> Serializer<'py> {
 
     fn serialize_root_sections(
         &mut self,
-        experiment: &Bound<'_, PyAny>,
+        experiment: &Bound<'py, PyAny>,
         mut exp_builder: experiment_capnp::experiment::Builder<'_>,
     ) -> Result<()> {
         let py = experiment.py();
         let sections_py = experiment.getattr(intern!(py, "sections"))?;
-        let sections_list: Vec<Bound<'_, PyAny>> =
+        let sections_list: Vec<Bound<'py, PyAny>> =
             sections_py.try_iter()?.collect::<PyResult<_>>()?;
 
         // Build a root section containing all top-level sections as children.
@@ -467,7 +470,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_section(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         mut builder: section_capnp::section::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
@@ -541,7 +544,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_section_children(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         builder: &mut section_capnp::section::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
@@ -654,7 +657,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_sweep_section(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         builder: &mut section_capnp::section::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
@@ -703,12 +706,25 @@ impl<'py> Serializer<'py> {
         Ok(())
     }
 
-    fn collect_parameter(&mut self, obj: &Bound<'_, PyAny>) -> Result<u32> {
+    fn collect_parameter(&mut self, obj: &Bound<'py, PyAny>) -> Result<u32> {
         let py = obj.py();
         // Keep the binding alive so we can borrow it as &str for the lookup,
         // avoiding a String allocation on the hot cache-hit path.
         let uid_binding = obj.getattr(intern!(py, "uid"))?;
         let uid_str: &str = uid_binding.extract()?;
+
+        // Check for consistent parameter definitions with the same UID.
+        if let Some(seen) = self.collected_sweep_parameters.get(uid_str) {
+            if !seen.eq(obj).map_err(Error::new)? {
+                return Err(Error::new(format!(
+                    "Found multiple, inconsistent values for parameter '{}' with same UID.",
+                    uid_str
+                )));
+            }
+        } else {
+            self.collected_sweep_parameters
+                .insert(uid_str.to_owned(), obj.clone());
+        }
 
         // Return existing if already collected.
         if let Some(&idx) = self.entities.parameter_indices.get(uid_str) {
@@ -873,7 +889,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_match_section(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         builder: &mut section_capnp::section::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
@@ -994,7 +1010,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_operation(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         mut builder: operation_capnp::operation::Builder<'_>,
     ) -> Result<()> {
         let ty = obj.get_type();
@@ -1008,7 +1024,7 @@ impl<'py> Serializer<'py> {
         } else if ty.is(self.dsl_types.laboneq_type(DslType::Acquire)) {
             self.serialize_acquire_op(obj, &mut builder)?;
         } else if ty.is(self.dsl_types.laboneq_type(DslType::Call)) {
-            serialize_call_op(obj, &mut builder)?;
+            self.serialize_call_op(obj, &mut builder)?;
         } else if ty.is(self.dsl_types.laboneq_type(DslType::SetNode)) {
             self.serialize_set_node_op(obj, &mut builder)?;
         } else if ty.is(self.dsl_types.laboneq_type(DslType::ResetOscillatorPhase)) {
@@ -1025,7 +1041,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_set_node_op(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         builder: &mut operation_capnp::operation::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
@@ -1052,7 +1068,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_play_op(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         builder: &mut operation_capnp::operation::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
@@ -1139,7 +1155,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_pulse_parameters(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         play: operation_capnp::play_op::Builder<'_>,
     ) -> Result<()> {
         let dict = obj.cast::<PyDict>().map_err(PyErr::from)?;
@@ -1161,7 +1177,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_markers(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         play: &mut operation_capnp::play_op::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
@@ -1222,7 +1238,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_delay_op(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         builder: &mut operation_capnp::operation::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
@@ -1250,7 +1266,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_reserve_op(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         builder: &mut operation_capnp::operation::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
@@ -1264,7 +1280,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_acquire_op(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         builder: &mut operation_capnp::operation::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
@@ -1355,7 +1371,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_reset_oscillator_phase_op(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         builder: &mut operation_capnp::operation::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
@@ -1373,9 +1389,40 @@ impl<'py> Serializer<'py> {
         Ok(())
     }
 
+    fn serialize_call_op(
+        &mut self,
+        obj: &Bound<'py, PyAny>,
+        builder: &mut operation_capnp::operation::Builder<'_>,
+    ) -> Result<()> {
+        let py = obj.py();
+        let mut call = builder.reborrow().init_call();
+
+        let func_name_py = obj.getattr(intern!(py, "func_name"))?;
+        let func_name: &str = func_name_py.extract()?;
+        call.set_callback_id(func_name);
+
+        let args_py = obj.getattr(intern!(py, "args"))?;
+        let dict = args_py.cast::<PyDict>().map_err(PyErr::from)?;
+        if dict.is_empty() {
+            return Ok(());
+        }
+
+        let items: Vec<_> = dict.iter().collect();
+        let mut entries = call.init_arguments(items.len() as u32);
+        for (i, (key, value)) in items.iter().enumerate() {
+            let mut entry = entries.reborrow().get(i as u32);
+            let key_str: &str = key.extract()?;
+            entry.set_key(key_str);
+
+            let mut val_builder = entry.init_value();
+            self.set_pulse_parameter_value(value, &mut val_builder)?;
+        }
+        Ok(())
+    }
+
     // === Pulse collection ===
 
-    fn collect_pulse(&mut self, obj: &Bound<'_, PyAny>) -> Result<u32> {
+    fn collect_pulse(&mut self, obj: &Bound<'py, PyAny>) -> Result<u32> {
         let py = obj.py();
         // Keep the binding alive so we can borrow it as &str for the lookup,
         // avoiding a String allocation on the hot cache-hit path.
@@ -1512,7 +1559,7 @@ impl<'py> Serializer<'py> {
 
     fn set_pulse_parameter_value(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         builder: &mut common_capnp::value::Builder<'_>,
     ) -> Result<()> {
         match self.set_sweep_value_from_py_or_param(obj, builder) {
@@ -1523,7 +1570,7 @@ impl<'py> Serializer<'py> {
 
     fn set_external_opaque_constant(
         &self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         builder: &mut common_capnp::value::Builder<'_>,
     ) -> Result<()> {
         if let Ok(raw) = obj.cast::<PyBytes>() {
@@ -1547,7 +1594,7 @@ impl<'py> Serializer<'py> {
 
     fn set_sweep_value_from_py_or_param(
         &mut self,
-        obj: &Bound<'_, PyAny>,
+        obj: &Bound<'py, PyAny>,
         builder: &mut common_capnp::value::Builder<'_>,
     ) -> Result<()> {
         if obj.is_none() {
@@ -1564,7 +1611,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_device_setup(
         &mut self,
-        obj: &Bound<'_, DeviceSetupCapnpBuilderPy>,
+        obj: &Bound<'py, DeviceSetupCapnpBuilderPy>,
         mut builder: experiment_capnp::experiment::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
@@ -1579,7 +1626,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_oscillators(
         &mut self,
-        py: Python,
+        py: Python<'py>,
         oscillators: &[OscillatorPayload],
         builder: &mut device_setup_capnp::device_setup::Builder<'_>,
     ) -> Result<()> {
@@ -1654,7 +1701,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_device_signals(
         &mut self,
-        py: Python,
+        py: Python<'py>,
         signals: &[SignalPayload],
         builder: &mut device_setup_capnp::device_setup::Builder<'_>,
     ) -> Result<()> {
@@ -1684,7 +1731,7 @@ impl<'py> Serializer<'py> {
 
     fn serialize_signal_calibration(
         &mut self,
-        py: Python,
+        py: Python<'py>,
         signal: &SignalPayload,
         builder: &mut device_setup_capnp::device_signal::Builder<'_>,
     ) -> Result<()> {
@@ -2178,24 +2225,6 @@ fn collect_play_after_names(obj: &Bound<'_, PyAny>) -> Result<Vec<String>> {
     }
 
     Ok(names)
-}
-
-fn serialize_call_op(
-    obj: &Bound<'_, PyAny>,
-    builder: &mut operation_capnp::operation::Builder<'_>,
-) -> Result<()> {
-    let py = obj.py();
-    let mut call = builder.reborrow().init_call();
-
-    let func_name_py = obj.getattr(intern!(py, "func_name"))?;
-    if !func_name_py.is_none() {
-        let func_name: &str = func_name_py.extract()?;
-        call.set_callback_id(func_name);
-    }
-
-    // TODO: serialize call args
-
-    Ok(())
 }
 
 fn extract_acquisition_type_capnp(
