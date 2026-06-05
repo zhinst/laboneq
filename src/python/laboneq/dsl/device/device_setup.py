@@ -9,6 +9,7 @@ import attrs
 from laboneq.core import path as qct_path
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
+from laboneq.data.setup_descriptions import SetupDescription
 from laboneq.dsl.calibration import Calibration
 from laboneq.dsl.device import _device_setup_modifier as setup_modifier
 from laboneq.dsl.device._calibration_mediator import CalibrationMediator
@@ -20,9 +21,9 @@ from laboneq.dsl.device.servers import DataServer
 from ._device_setup_generator import _DeviceSetupGenerator
 
 if TYPE_CHECKING:
+    from laboneq.data.setup_descriptions import SetupDescription
     from laboneq.dsl import quantum
     from laboneq.dsl.calibration.signal_calibration import SignalCalibration
-    from laboneq.dsl.device import SystemDescription
     from laboneq.dsl.device.connection import InternalConnection, SignalConnection
     from laboneq.dsl.device.logical_signal_group import LogicalSignal
 
@@ -48,8 +49,8 @@ class DeviceSetup:
         logical_signal_groups (Optional[dict[str, LogicalSignalGroup]]): Logical signal groups of this device setup, by name of the group.
         qubits (Optional[dict[str, quantum.QuantumElement]]): Experimental: Qubits of this device setup, by the name of the qubit.
             Qubits are generated from the descriptor `qubits` section.
-        system_description (Optional[SystemDescription]): System description with hardware capabilities.
-            Populated automatically during session connection.
+        setup_description (SetupDescription | None): Hardware-generation-tagged
+            opaque setup description, or `None` if no description is attached.
 
     !!! version-changed "Changed in version 2.61.0"
 
@@ -71,10 +72,7 @@ class DeviceSetup:
     physical_channel_groups: dict[str, PhysicalChannelGroup] = attrs.field(factory=dict)
     logical_signal_groups: dict[str, LogicalSignalGroup] = attrs.field(factory=dict)
     qubits: dict[str, "quantum.QuantumElement"] = attrs.field(factory=dict)
-    # Do not include system_description in equality checks and repr - they are volatile data
-    system_description: SystemDescription | None = attrs.field(
-        default=None, eq=False, repr=False
-    )
+    setup_description: SetupDescription | None = attrs.field(default=None, repr=False)
 
     #: Mediators responsible for coupling calibration of physical channel and its mapped logical signals
     _calibration_mediators: dict[str, CalibrationMediator] = attrs.field(init=False)

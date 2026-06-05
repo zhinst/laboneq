@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Sentinel for "no fingerprint available" (device setup has no system_description).
+# Sentinel for "no fingerprint available" (device setup has no setup_description).
 _NO_FINGERPRINT = None
 
 
@@ -208,8 +208,8 @@ class ControllerContainer:
         - ``device_setup`` alone — use the setup as-is (addresses from its
           ``servers`` dict, or on the instrument for ZQCS).
         - ``dataserver`` alone — Gen 4 auto-discovery: build a new ZQCS
-          setup pointing at *dataserver*, download SystemDescription from the SCM
-          on connect.
+          setup pointing at *dataserver*, fetch the setup description blob
+          from the SCM on connect.
         - ``device_setup`` + ``dataserver`` — Gen 2 override: replace the
           dataserver entries on the setup with *dataserver*.
         - ``do_emulation`` requires an explicit ``device_setup``.

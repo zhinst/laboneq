@@ -503,4 +503,5 @@ def convert_device_setup_to_setup(
         setup_internal_connections=setup_internal_connections,
         logical_signal_groups=lsgs,
         calibration=calibration,
+        setup_description=device_setup.setup_description,
     )

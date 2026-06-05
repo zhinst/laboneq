@@ -26,6 +26,10 @@ class MixerType(Enum):
     IQ = auto()
     UhfqaEnvelope = auto()
 
+class PortMode(Enum):
+    RF = auto()
+    LF = auto()
+
 class PulseParameters:
     parameters: dict
     pulse_parameters: dict
@@ -104,11 +108,13 @@ class ChannelProperties:
     amplitude: float | str | None  # Can be a float or a parameter name
     voltage_offset: float | str | None  # Can be a float or a parameter name
     gains: Gains | None
-    port_mode: Literal["rf", "lf"] | None
+    port_mode: PortMode | None
     port_delay: float | str | None  # Can be a float or a parameter name
     range: Quantity | None
     lo_frequency: float | str | None  # Can be a float or a parameter name
     routed_outputs: list[RoutedOutput]
+    # Delay in seconds to be applied
+    scheduler_delay: float
 
 class RoutedOutput:
     source_channel: int
@@ -171,8 +177,6 @@ class AwgCodeGenerationResult:
     command_table: str | None
     sampled_waveforms: list[SampledWaveform]
     integration_kernels: list[IntegrationKernel]
-    # Signal delays in seconds to be applied to the signal
-    signal_delays: dict[str, float]
     # Signal integration lengths in seconds
     # This is a mapping from signal name to SignalIntegrationInfo
     integration_lengths: dict[str, SignalIntegrationInfo]

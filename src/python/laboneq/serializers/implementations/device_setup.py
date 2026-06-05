@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
+from laboneq.data.setup_descriptions import SetupDescription
 from laboneq.dsl.device.device_setup import DeviceSetup
 from laboneq.serializers._legacy.classic import LabOneQClassicSerializer
 from laboneq.serializers.base import VersionedClassSerializer
@@ -16,7 +17,6 @@ from laboneq.serializers.implementations._models._device_setup import (
     DataServerModel,
     LogicalSignalGroupModel,
     PhysicalChannelGroupModel,
-    SystemDescriptionModel,
     ZIStandardInstrumentModel,
     make_converter,
 )
@@ -64,23 +64,20 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
             k: QuantumElementSerializer.to_dict(v, options)
             for k, v in obj.qubits.items()
         }
-        system_description = None
-        if obj.system_description:
-            system_description = _converter.unstructure(
-                obj.system_description, SystemDescriptionModel
-            )
+        data: dict = {
+            "uid": uid,
+            "servers": servers,
+            "instruments": instruments,
+            "physical_channel_groups": physical_channels_groups,
+            "logical_signal_groups": logical_signal_groups,
+            "qubits": qubits,
+        }
+        if obj.setup_description is not None:
+            data["setup_description"] = obj.setup_description.serialize()
         return {
             "__serializer__": cls.serializer_id(),
             "__version__": cls.version(),
-            "__data__": {
-                "uid": uid,
-                "servers": servers,
-                "instruments": instruments,
-                "physical_channel_groups": physical_channels_groups,
-                "logical_signal_groups": logical_signal_groups,
-                "qubits": qubits,
-                "system_description": system_description,
-            },
+            "__data__": data,
         }
 
     @classmethod
@@ -90,13 +87,9 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
         options: DeserializationOptions | None = None,
     ) -> DeviceSetup:
         d = cls.from_dict_v3(serialized_data, options)
-        sys_prof_data: dict[str, Any] = serialized_data["__data__"].get(
-            "system_description"
-        )
-        if sys_prof_data:
-            d.system_description = _converter.structure(
-                sys_prof_data, SystemDescriptionModel
-            )
+        payload = serialized_data["__data__"].get("setup_description")
+        if payload:
+            d.setup_description = SetupDescription.deserialize(payload)
         return d
 
     @classmethod

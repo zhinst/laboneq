@@ -4,25 +4,21 @@
 from __future__ import annotations
 
 import logging
-import types
 from typing import TYPE_CHECKING
 
-# reporter import is required to register the CompilationReportGenerator hook
 import laboneq.compiler.workflow.reporter  # noqa: F401
-from laboneq.compiler.common import compiler_settings
+
+# reporter import is required to register the CompilationReportGenerator hook
+from laboneq.compiler.workflow import compiler_hooks
 from laboneq.compiler.workflow.compiler_hooks import (
     GenerateRecipeArgs,
     get_compiler_hooks,
-    resolve_compiler_module,
 )
 from laboneq.compiler.workflow.neartime_execution import (
     NtCompilerExecutor,
 )
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
-from laboneq.data.compilation_job import (
-    DeviceInfoType,
-)
 from laboneq.data.recipe import Recipe
 from laboneq.data.scheduled_experiment import (
     HandleResultShape,
@@ -34,62 +30,31 @@ from laboneq.data.scheduled_experiment import (
 from . import compat
 
 if TYPE_CHECKING:
-    import types
-
     from laboneq._rust import compiler as compiler_rs
-    from laboneq.data.compilation_job import ExperimentInfo
+    from laboneq.compiler.common import compiler_settings
     from laboneq.executor.executor import Statement
 
 _logger = logging.getLogger(__name__)
 
 
-class Compiler:
-    def __init__(self, settings: dict | None = None):
-        self._compiler_settings = settings or {}
-        self._settings = compiler_settings.from_dict(settings)
-
-        _logger.info("Starting LabOne Q Compiler run...")
-
-    def run(self, experiment: ExperimentInfo) -> ScheduledExperiment:
-        _logger.debug("Start LabOne Q Compiler run")
-
-        compiler_module: compiler_rs = _resolve_compiler_module_device_class(experiment)
-        capnp_bytes = compat.serialize_capnp(
-            experiment_info=experiment,
-            compiler_module=compiler_module,
-        )
-        scheduled_experiment: ScheduledExperiment = compiler_module.compile_experiment(
-            capnp_bytes,
-            packed=compat.use_packed_capnp(),
-            compiler_settings=compat.sanitize_compiler_settings(
-                self._compiler_settings
-            ),
-        )
-        scheduled_experiment.device_setup_fingerprint = (
-            experiment.device_setup_fingerprint
-        )
-        _logger.info("Finished LabOne Q Compiler run.")
-        return scheduled_experiment
-
-
-def _resolve_compiler_module_device_class(
-    experiment: ExperimentInfo,
-) -> types.ModuleType:
-    device_classes = {
-        _eval_device_class(info.device_type) for info in experiment.devices
-    }
-    if len(device_classes) > 1:
-        raise RuntimeError(
-            f"Multiple device classes {device_classes} found in experiment, but only one is supported"
-        )
-    device_class = next(iter(device_classes), 0)
-    return resolve_compiler_module({device_class})
-
-
-def _eval_device_class(device: DeviceInfoType) -> int:
-    if device == DeviceInfoType.ZQCS:
-        return 1
-    return 0
+def compile_capnp(
+    capnp_bytes: bytes,
+    device_setup_fingerprint: str,
+    device_class: int,
+    compiler_settings: dict | None = None,
+) -> ScheduledExperiment:
+    """Compile the given capnp data which represents an experiment and device setup."""
+    _logger.info("Starting LabOne Q Compiler run...")
+    compiler_module = compiler_hooks.resolve_compiler_module(device_class)
+    scheduled_experiment: ScheduledExperiment = compiler_module.compile_experiment(
+        capnp_bytes,
+        packed=compat.use_packed_capnp(),
+        compiler_settings=compat.sanitize_compiler_settings(compiler_settings or {}),
+    )
+    _logger.info("Finished LabOne Q Compiler run.")
+    # TODO: The compiler should return the device setup fingerprint
+    scheduled_experiment.device_setup_fingerprint = device_setup_fingerprint
+    return scheduled_experiment
 
 
 def compile_whole_or_with_chunks(

@@ -59,6 +59,7 @@ class AutomationLayer(ABC):
         node_keys: The node keys.
         key: The automation layer key.
         depends_on: A set of automation layer dependencies.
+        skip_passed: Skip running nodes with `PASSED` status.
         sequential: Whether to execute the layer sequentially.
         parameters: The layer parameters. When a layer is added to an automation,
             these are merged with any matching parameters from the automation to
@@ -71,6 +72,7 @@ class AutomationLayer(ABC):
     key: str
     depends_on: set[str]
 
+    skip_passed: bool = attrs.field(default=False, kw_only=True)
     sequential: bool = attrs.field(default=False, kw_only=True)
     parameters: dict[str, dict[str, Any]] = attrs.field(factory=dict, kw_only=True)
     results: dict = attrs.field(factory=dict, init=False)
@@ -163,9 +165,11 @@ class AutomationLayer(ABC):
             The automation layer result.
         """
         output = AutomationLayerResult()
+        if self.skip_passed:
+            self._node_keys_override = [
+                n for n in self._overridden_node_keys if self[n].status != Status.PASSED
+            ]
         if not self.sequential:
-            self._node_keys_select = self._node_keys_override
-
             # Set node statuses (pre run)
             for node_key in self.active_node_keys:
                 self.nodes[node_key].status = Status.RUNNING
@@ -237,8 +241,8 @@ class AutomationLayer(ABC):
         !!! tip
             Use `self.target_node_keys` and `self.target_parameters`
             instead of `self.node_keys` and `self.parameters`, so that optional
-            overrides in `Automation.run_layer` are respected and the `self.sequential`
-            attribute is respected.
+            overrides in `Automation.run_layer` are respected and the `self.skip_passed`
+            and `self.sequential` attributes are respected.
 
         Arguments:
             auto: The `Automation` object.

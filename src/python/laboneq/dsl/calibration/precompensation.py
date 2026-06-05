@@ -41,7 +41,7 @@ class ExponentialCompensation:
 
     !!! note
         Only supported on the HDAWG with the
-        [precompensation option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
+        [precompensation (PC) option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
         Ignored on other devices.
 
     !!! version-changed "Changed in version 26.1.0"
@@ -74,7 +74,7 @@ class HighPassCompensation:
 
     !!! note
         Only supported on the HDAWG with the
-        [precompensation option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
+        [precompensation (PC) option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
         Ignored on other devices.
 
     !!! version-changed "Changed in version 26.1.0"
@@ -97,26 +97,39 @@ class HighPassCompensation:
 class FIRCompensation:
     """Parameters for FIR filter signal precompensation.
 
-    Used to compensate for short time-scale distortions.
-
-    The FIR filter performs a convolution of the input signal with
-    the kernel specified by the coefficients below.
-
-    See [Filter Chain Specification](https://docs.zhinst.com/hdawg_user_manual/functional_description/specific/pre_compensation.html#filter-chain-specification)
-    for a description of the filter.
+    Used to compensate for short time-scale distortions by convolving the
+    output signal with a user-supplied kernel.
 
     Attributes:
         coefficients:
             Coefficients for the FIR filter convolution kernel.
-            The first 8 coefficients are directly applied to the first eight
-            taps of the FIR filter at the full time resolution. The remaining
-            32 coefficients are applied to pairs of taps.
-            Default: `np.zeros(40)`.
+            Default: `np.zeros(40)` (a zero kernel matching the HDAWG
+            40-tap layout; ZQCS users should supply an explicit kernel of the
+            desired length).
+        strict:
+            When `True`, an error is raised if the FIR tail of one waveform
+            would overlap with the next waveform in the same section, instead
+            of the default behavior of merging the two waveforms.
+            Default: `False`.
 
-    !!! note
-        Only supported on the HDAWG with the
-        [precompensation option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
-        Ignored on other devices.
+            !!! note
+                Only meaningful for ZQCS software FIR. Setting `strict=True`
+                on an HDAWG signal raises an error at compile time.
+
+    !!! note "HDAWG"
+        Implemented in hardware DSP on the HDAWG precompensation (PC) option.
+        Accepts up to 40 coefficients. The first 8 are applied at full
+        sample resolution; the remaining 32 at half resolution (pairs of
+        taps). See the
+        [Filter Chain Specification](https://docs.zhinst.com/hdawg_user_manual/functional_description/specific/pre_compensation.html#filter-chain-specification).
+        Coefficients are clamped to the range +/-4.
+
+    !!! note "ZQCS"
+        Implemented in software by convolving waveform samples at compile time.
+        Accepts an arbitrary-length kernel with no coefficient
+        constraints. The convolution tail (length `kernel_len - 1`) extends
+        each waveform beyond its nominal end; overlapping tails from adjacent
+        waveforms are merged by default.
 
     !!! version-changed "Changed in version 26.1.0"
 
@@ -127,10 +140,13 @@ class FIRCompensation:
 
     # FIR filter coefficients
     coefficients: ArrayLike = validated_field(factory=lambda: np.zeros(40))
+    strict: bool = validated_field(default=False)
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, FIRCompensation):
-            return np.allclose(self.coefficients, other.coefficients)
+            return self.strict == other.strict and np.allclose(
+                self.coefficients, other.coefficients
+            )
         else:
             return NotImplemented
 
@@ -161,7 +177,7 @@ class BounceCompensation:
 
     !!! note
         Only supported on the HDAWG with the
-        [precompensation option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
+        [precompensation (PC) option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
         Ignored on other devices.
 
     !!! version-changed "Changed in version 26.1.0"
@@ -203,13 +219,20 @@ class Precompensation:
         it will still be visible in the pulse sheet and when measuring
         the signal by other means (e.g. using an oscilloscope).
 
+    !!! note "HDAWG"
+        The exponential, high-pass, bounce, and FIR filters are implemented
+        in hardware and require the
+        [precompensation (PC) option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
         See [Filter Chain Specification](https://docs.zhinst.com/hdawg_user_manual/functional_description/specific/pre_compensation.html#filter-chain-specification)
-        for details on the delays.
+        for details on delays and filter layout.
+        Precompensation settings are ignored on HDAWG without this option
+        and on other devices.
 
-    !!! note
-        Only supported on the HDAWG with the
-        [precompensation option](https://www.zhinst.com/ch/en/products/hdawg-pc-real-time-precompensation).
-        Ignored on other devices.
+    !!! note "ZQCS"
+        `FIR` is implemented in software for all channels. `exponential` and
+        `high_pass` are implemented in hardware for flux (LF) channels only;
+        setting them on other channel types raises an error at compile time.
+        `bounce` is not yet implemented and raises an error at compile time.
 
     !!! version-changed "Changed in version 26.1.0"
 
@@ -239,4 +262,4 @@ class Precompensation:
         Returns:
             True if any filters are defined. False otherwise.
         """
-        return self.exponential or self.high_pass or self.bounce or self.FIR
+        return bool(self.exponential or self.high_pass or self.bounce or self.FIR)

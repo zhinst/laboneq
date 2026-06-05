@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 
 import yaml
-from zhinst.toolkit.driver.devices import PQSC
 from zhinst.toolkit.session import Session
 
 
@@ -36,7 +35,6 @@ def generate_descriptor(
     internal_clock=False,
     save=False,
     filename="yaml_descriptor",
-    get_zsync=False,
     get_dio=False,
     dummy_dio: dict | None = None,  # {"DEV8XX0":"DEV2XX0"}
     ip_address: str = "localhost",
@@ -87,17 +85,13 @@ def generate_descriptor(
         save: If True, creates a Descriptor file in the active directory and
             saves a YAML file with the name specified in filename.
         filename: The file name to give to the YAML descriptor (e.g. `"yaml_descriptor"`).
-        get_zsync: If True, starts a Session to communicate with the PQSC and
-            listed devices to determine the connections of the ZSync cables.
-            This will also automatically query device options.
         get_dio: If True, starts a Session to determine the connections of HDAWG
             to UHFQA instruments via DIO cables.
         dummy_dio: Allows the user to specify a dictionary with a DIO connection
             without querying the instruments with the HDAWG as the key and UHFQA as
             the value
             (e.g. `{"DEV8XX0": "DEV2XX0"}`).
-        ip_address: The IP address needed to connect to the instruments if using
-            get_zsync or get_dio.
+        ip_address: The IP address needed to connect to the instruments if using get_dio.
 
     Returns:
         A string in YAML format and, optionally, a YAML file.
@@ -330,24 +324,24 @@ for how to set them up without a PQSC.
         if shfqc_6 is not None:
             i_shfqc_6, i_qc_ch_6 = 0, 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQC_{shfqc_6[i_shfqc_6]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/drive",
                         "ports": f"SGCHANNELS/{i_qc_ch_6}/OUTPUT",
                     }
                 )
                 if include_ef_lines:
-                    sig_dict.append(
+                    sig_list.append(
                         {
                             "iq_signal": f"q{i}/drive_ef",
                             "ports": f"SGCHANNELS/{i_qc_ch_6}/OUTPUT",
                         }
                     )
                 if include_cr_lines:
-                    sig_dict.append(
+                    sig_list.append(
                         {
                             "iq_signal": f"q{i}/drive_cr",
                             "ports": f"SGCHANNELS/{i_qc_ch_6}/OUTPUT",
@@ -363,24 +357,24 @@ for how to set them up without a PQSC.
         if shfqc_4 is not None:
             i_shfqc_4, i_qc_ch_4 = 0, 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQC_{shfqc_4[i_shfqc_4]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/drive",
                         "ports": f"SGCHANNELS/{i_qc_ch_4}/OUTPUT",
                     }
                 )
                 if include_ef_lines:
-                    sig_dict.append(
+                    sig_list.append(
                         {
                             "iq_signal": f"q{i}/drive_ef",
                             "ports": f"SGCHANNELS/{i_qc_ch_4}/OUTPUT",
                         }
                     )
                 if include_cr_lines:
-                    sig_dict.append(
+                    sig_list.append(
                         {
                             "iq_signal": f"q{i}/drive_cr",
                             "ports": f"SGCHANNELS/{i_qc_ch_4}/OUTPUT",
@@ -396,24 +390,24 @@ for how to set them up without a PQSC.
         if shfqc_2 is not None:
             i_shfqc_2, i_qc_ch_2 = 0, 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQC_{shfqc_2[i_shfqc_2]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/drive",
                         "ports": f"SGCHANNELS/{i_qc_ch_2}/OUTPUT",
                     }
                 )
                 if include_ef_lines:
-                    sig_dict.append(
+                    sig_list.append(
                         {
                             "iq_signal": f"q{i}/drive_ef",
                             "ports": f"SGCHANNELS/{i_qc_ch_2}/OUTPUT",
                         }
                     )
                 if include_cr_lines:
-                    sig_dict.append(
+                    sig_list.append(
                         {
                             "iq_signal": f"q{i}/drive_cr",
                             "ports": f"SGCHANNELS/{i_qc_ch_2}/OUTPUT",
@@ -429,24 +423,24 @@ for how to set them up without a PQSC.
         if shfsg_8 is not None:
             i_shfsg_8, i_sg_ch_8 = 0, 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFSG_{shfsg_8[i_shfsg_8]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/drive",
                         "ports": f"SGCHANNELS/{i_sg_ch_8}/OUTPUT",
                     }
                 )
                 if include_ef_lines:
-                    sig_dict.append(
+                    sig_list.append(
                         {
                             "iq_signal": f"q{i}/drive_ef",
                             "ports": f"SGCHANNELS/{i_sg_ch_8}/OUTPUT",
                         }
                     )
                 if include_cr_lines:
-                    sig_dict.append(
+                    sig_list.append(
                         {
                             "iq_signal": f"q{i}/drive_cr",
                             "ports": f"SGCHANNELS/{i_sg_ch_8}/OUTPUT",
@@ -462,24 +456,24 @@ for how to set them up without a PQSC.
         if shfsg_4 is not None:
             i_shfsg_4, i_sg_ch_4 = 0, 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFSG_{shfsg_4[i_shfsg_4]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/drive",
                         "ports": f"SGCHANNELS/{i_sg_ch_4}/OUTPUT",
                     }
                 )
                 if include_ef_lines:
-                    sig_dict.append(
+                    sig_list.append(
                         {
                             "iq_signal": f"q{i}/drive_ef",
                             "ports": f"SGCHANNELS/{i_sg_ch_4}/OUTPUT",
                         }
                     )
                 if include_cr_lines:
-                    sig_dict.append(
+                    sig_list.append(
                         {
                             "iq_signal": f"q{i}/drive_cr",
                             "ports": f"SGCHANNELS/{i_sg_ch_4}/OUTPUT",
@@ -495,10 +489,10 @@ for how to set them up without a PQSC.
         if hdawg_8 is not None:
             i_hdawg_8, i_hd_ch_8 = 0, 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"HDAWG_{hdawg_8[i_hdawg_8]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/drive",
                         "ports": [f"SIGOUTS/{i_hd_ch_8}", f"SIGOUTS/{i_hd_ch_8 + 1}"],
@@ -514,10 +508,10 @@ for how to set them up without a PQSC.
         if hdawg_4 is not None:
             i_hdawg_4, i_hd_ch_4 = 0, 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"HDAWG_{hdawg_4[i_hdawg_4]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/drive",
                         "ports": [f"SIGOUTS/{i_hd_ch_4}", f"SIGOUTS/{i_hd_ch_4 + 1}"],
@@ -536,10 +530,10 @@ for how to set them up without a PQSC.
     if readout_only is False:
         if hdawg_8 is not None:
             for i in range(current_qubit, number_flux_lines):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"HDAWG_{hdawg_8[i_hdawg_8]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "rf_signal": f"q{i}/flux",
                         "ports": f"SIGOUTS/{i_hd_ch_8}",
@@ -554,10 +548,10 @@ for how to set them up without a PQSC.
                     break
         if hdawg_4 is not None:
             for i in range(current_qubit, number_flux_lines):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"HDAWG_{hdawg_4[i_hdawg_4]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "rf_signal": f"q{i}/flux",
                         "ports": f"SIGOUTS/{i_hd_ch_4}",
@@ -572,10 +566,10 @@ for how to set them up without a PQSC.
                     break
         if shfsg_8 is not None:
             for i in range(current_qubit, number_flux_lines):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFSG_{shfsg_8[i_shfsg_8]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/flux",
                         "ports": f"SGCHANNELS/{i_sg_ch_8}/OUTPUT",
@@ -590,10 +584,10 @@ for how to set them up without a PQSC.
                     break
         if shfsg_4 is not None:
             for i in range(current_qubit, number_flux_lines):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFSG_{shfsg_4[i_shfsg_4]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/flux",
                         "ports": f"SGCHANNELS/{i_sg_ch_4}/OUTPUT",
@@ -608,10 +602,10 @@ for how to set them up without a PQSC.
                     break
         if shfqc_6 is not None:
             for i in range(current_qubit, number_flux_lines):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQC_{shfqc_6[i_shfqc_6]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/flux",
                         "ports": f"SGCHANNELS/{i_qc_ch_6}/OUTPUT",
@@ -626,10 +620,10 @@ for how to set them up without a PQSC.
                     break
         if shfqc_4 is not None:
             for i in range(current_qubit, number_flux_lines):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQC_{shfqc_4[i_shfqc_4]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/flux",
                         "ports": f"SGCHANNELS/{i_qc_ch_4}/OUTPUT",
@@ -644,10 +638,10 @@ for how to set them up without a PQSC.
                     break
         if shfqc_2 is not None:
             for i in range(current_qubit, number_flux_lines):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQC_{shfqc_2[i_shfqc_2]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/flux",
                         "ports": f"SGCHANNELS/{i_qc_ch_2}/OUTPUT",
@@ -668,16 +662,16 @@ for how to set them up without a PQSC.
         if shfqc_6 is not None:
             i_shfqc_6, i_qc_qa_6 = 0, 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQC_{shfqc_6[i_shfqc_6]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qc_qa_6}/OUTPUT",
                     }
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qc_qa_6}/INPUT",
@@ -693,16 +687,16 @@ for how to set them up without a PQSC.
         if shfqc_4 is not None:
             i_shfqc_4, i_qc_qa_4 = 0, 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQC_{shfqc_4[i_shfqc_4]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qc_qa_4}/OUTPUT",
                     }
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qc_qa_4}/INPUT",
@@ -718,16 +712,16 @@ for how to set them up without a PQSC.
         if shfqc_2 is not None:
             i_shfqc_2, i_qc_qa_2 = 0, 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQC_{shfqc_2[i_shfqc_2]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qc_qa_2}/OUTPUT",
                     }
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qc_qa_2}/INPUT",
@@ -743,16 +737,16 @@ for how to set them up without a PQSC.
         if shfqa_4 is not None:
             i_shfqa_4, i_qa_ch_4 = 0, 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQA_{shfqa_4[i_shfqa_4]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qa_ch_4}/OUTPUT",
                     }
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qa_ch_4}/INPUT",
@@ -768,16 +762,16 @@ for how to set them up without a PQSC.
         if shfqa_2 is not None:
             i_shfqa_2, i_qa_ch_2 = 0, 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQA_{shfqa_2[i_shfqa_2]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qa_ch_2}/OUTPUT",
                     }
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qa_ch_2}/INPUT",
@@ -793,16 +787,16 @@ for how to set them up without a PQSC.
         if uhfqa is not None:
             i_uhfqa, i_uhfqa_ch = 0, 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"UHFQA_{uhfqa[i_uhfqa]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/measure",
                         "ports": [f"SIGOUTS/{i_uhfqa_ch}", f"SIGOUTS/{i_uhfqa_ch + 1}"],
                     }
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "acquire_signal": f"q{i}/acquire",
                     }
@@ -820,16 +814,16 @@ for how to set them up without a PQSC.
             i_shfqc_6, i_qc_qa_6 = 0, 0
             multiplex_number = 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQC_{shfqc_6[i_shfqc_6]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qc_qa_6}/OUTPUT",
                     }
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qc_qa_6}/INPUT",
@@ -849,16 +843,16 @@ for how to set them up without a PQSC.
             i_shfqc_4, i_qc_qa_4 = 0, 0
             multiplex_number = 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQC_{shfqc_4[i_shfqc_4]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qc_qa_4}/OUTPUT",
                     }
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qc_qa_4}/INPUT",
@@ -878,16 +872,16 @@ for how to set them up without a PQSC.
             i_shfqc_2, i_qc_qa_2 = 0, 0
             multiplex_number = 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQC_{shfqc_2[i_shfqc_2]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qc_qa_2}/OUTPUT",
                     }
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qc_qa_2}/INPUT",
@@ -907,16 +901,16 @@ for how to set them up without a PQSC.
             i_shfqa_4, i_qa_ch_4 = 0, 0
             multiplex_number = 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQA_{shfqa_4[i_shfqa_4]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qa_ch_4}/OUTPUT",
                     }
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qa_ch_4}/INPUT",
@@ -936,16 +930,16 @@ for how to set them up without a PQSC.
             i_shfqa_2, i_qa_ch_2 = 0, 0
             multiplex_number = 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"SHFQA_{shfqa_2[i_shfqa_2]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/measure",
                         "ports": f"QACHANNELS/{i_qa_ch_2}/OUTPUT",
                     }
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "acquire_signal": f"q{i}/acquire",
                         "ports": f"QACHANNELS/{i_qa_ch_2}/INPUT",
@@ -965,16 +959,16 @@ for how to set them up without a PQSC.
             i_uhfqa, i_uhfqa_ch = 0, 0
             multiplex_number = 0
             for i in range(current_qubit, number_data_qubits):
-                sig_dict = signal_and_port_dict.setdefault(
+                sig_list = signal_and_port_dict.setdefault(
                     f"UHFQA_{uhfqa[i_uhfqa]}", []
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "iq_signal": f"q{i}/measure",
                         "ports": [f"SIGOUTS/{i_uhfqa_ch}", f"SIGOUTS/{i_uhfqa_ch + 1}"],
                     }
                 )
-                sig_dict.append(
+                sig_list.append(
                     {
                         "acquire_signal": f"q{i}/acquire",
                     }
@@ -991,93 +985,53 @@ for how to set them up without a PQSC.
                         break
 
     # PQSC connections
-    if pqsc is not None and not get_zsync:
-        for k in devid_uid:
-            sig_dict = signal_and_port_dict.setdefault(f"PQSC_{pqsc[0]}", [])
-            if devid_uid[k].split("_")[0] == "UHFQA":
-                continue
-            sig_dict.append({"to": f"{devid_uid[k]}"})
+    if pqsc is not None:
+        sig_list = signal_and_port_dict.setdefault(f"PQSC_{pqsc[0]}", [])
         if internal_clock is True:
-            sig_dict.append("internal_clock_signal")
+            sig_list.append("internal_clock_signal")
 
-    if get_zsync or get_dio:
+    if get_dio:
         session = Session(ip_address)
-        if pqsc is not None and get_zsync:
-            device_pqsc = session.connect_device(pqsc[0])
-            print("Checking PQSC Connections...")
-            for k in devid_uid:
-                session_device = session.connect_device(devid_uid[k].split("_")[1])
-                if "SHF" in session_device.device_type:
-                    session_device.system.clocks.referenceclock.in_.source(2)
-                if "HDAWG" in session_device.device_type:
-                    session_device.system.clocks.referenceclock.source(2)
-                if "UHFQA" in session_device.device_type:
-                    continue
-                time.sleep(2)
-                # added to ask device to list its options
-                short_name = devid_uid[k].split("_")[0]
-                short_id = devid_uid[k].split("_")[1]
-                my_options = (
-                    f"{session_device.device_type}"
-                    + "/"
-                    + "/".join(str(session_device.device_options).split())
-                )
-                for v in instrument_dict[short_name]:
-                    for v_item in v.copy():
-                        if v[f"{v_item}"] == short_id:
-                            v["options"] = my_options
-                sig_dict = signal_and_port_dict.setdefault(f"PQSC_{pqsc[0]}", [])
-                sig_dict.append({"to": f"{devid_uid[k]}"})
-                print(devid_uid[k].split("_")[1])
-                print("Options: " + f"{my_options}")
-                print(
-                    "ZSync Port: "
-                    + f"{PQSC.find_zsync_worker_port(self=device_pqsc, device=session_device)}"
-                )
-            if internal_clock is True:
-                sig_dict.append("internal_clock_signal")
-
         # HD and UHFQA DIOS
-        if get_dio:
-            time.sleep(2)
-            if hdawg_8 is not None and uhfqa is not None:
-                for hd in hdawg_8:
-                    sig_dict = signal_and_port_dict.setdefault(f"HDAWG_{hd}", [])
-                    device_hd = session.connect_device(hd)
-                    device_hd.dios[0].output(int(hd.split("V")[1]))
-                    device_hd.dios[0].drive(15)
-                    for uhf in uhfqa:
-                        device_uhfqa = session.connect_device(uhf)
-                        time.sleep(4)
-                        codeword = device_uhfqa.dios[0].input()["dio"][0]
-                        if codeword == int(hd.split("V")[1]):
-                            print(f"{hd} connected to {uhf} via DIO")
-                            sig_dict.append(
-                                {
-                                    "to": f"UHFQA_{uhf}",
-                                    "port": "DIOS/0",
-                                }
-                            )
-                    device_hd.dios[0].drive(0)
-            if hdawg_4 is not None and uhfqa is not None:
-                for hd in hdawg_4:
-                    sig_dict = signal_and_port_dict.setdefault(f"HDAWG_{hd}", [])
-                    device_hd = session.connect_device(hd)
-                    device_hd.dios[0].output(int(hd.split("V")[1]))
-                    device_hd.dios[0].drive(15)
-                    for uhf in uhfqa:
-                        device_uhfqa = session.connect_device(uhf)
-                        time.sleep(4)
-                        codeword = device_uhfqa.dios[0].input()["dio"][0]
-                        if codeword == int(hd.split("V")[1]):
-                            print(f"{hd} connected to {uhf} via DIO")
-                            sig_dict.append(
-                                {
-                                    "to": f"UHFQA_{uhf}",
-                                    "port": "DIOS/0",
-                                }
-                            )
-                    device_hd.dios[0].drive(0)
+        time.sleep(2)
+        if hdawg_8 is not None and uhfqa is not None:
+            for hd in hdawg_8:
+                sig_list = signal_and_port_dict.setdefault(f"HDAWG_{hd}", [])
+                device_hd = session.connect_device(hd)
+                device_hd.dios[0].output(int(hd.split("V")[1]))
+                device_hd.dios[0].drive(15)
+                for uhf in uhfqa:
+                    device_uhfqa = session.connect_device(uhf)
+                    time.sleep(4)
+                    codeword = device_uhfqa.dios[0].input()["dio"][0]
+                    if codeword == int(hd.split("V")[1]):
+                        print(f"{hd} connected to {uhf} via DIO")
+                        sig_list.append(
+                            {
+                                "to": f"UHFQA_{uhf}",
+                                "port": "DIOS/0",
+                            }
+                        )
+                device_hd.dios[0].drive(0)
+        if hdawg_4 is not None and uhfqa is not None:
+            for hd in hdawg_4:
+                sig_list = signal_and_port_dict.setdefault(f"HDAWG_{hd}", [])
+                device_hd = session.connect_device(hd)
+                device_hd.dios[0].output(int(hd.split("V")[1]))
+                device_hd.dios[0].drive(15)
+                for uhf in uhfqa:
+                    device_uhfqa = session.connect_device(uhf)
+                    time.sleep(4)
+                    codeword = device_uhfqa.dios[0].input()["dio"][0]
+                    if codeword == int(hd.split("V")[1]):
+                        print(f"{hd} connected to {uhf} via DIO")
+                        sig_list.append(
+                            {
+                                "to": f"UHFQA_{uhf}",
+                                "port": "DIOS/0",
+                            }
+                        )
+                device_hd.dios[0].drive(0)
         with session.set_transaction():
             session.disconnect_device(pqsc[0])
             for device in all_list:
@@ -1085,9 +1039,9 @@ for how to set them up without a PQSC.
 
     if hdawg_8 is not None and uhfqa is not None and dummy_dio:
         for hd in hdawg_8:
-            sig_dict = signal_and_port_dict.setdefault(f"HDAWG_{hd}", [])
+            sig_list = signal_and_port_dict.setdefault(f"HDAWG_{hd}", [])
             if hd in str(dummy_dio):
-                sig_dict.append(
+                sig_list.append(
                     {
                         "to": f"UHFQA_{dummy_dio[hd]}",
                         "port": "DIOS/0",
@@ -1096,9 +1050,9 @@ for how to set them up without a PQSC.
 
     if hdawg_4 is not None and uhfqa is not None and dummy_dio:
         for hd in hdawg_4:
-            sig_dict = signal_and_port_dict.setdefault(f"HDAWG_{hd}", [])
+            sig_list = signal_and_port_dict.setdefault(f"HDAWG_{hd}", [])
             if hd in str(dummy_dio):
-                sig_dict.append(
+                sig_list.append(
                     {
                         "to": f"UHFQA_{dummy_dio[hd]}",
                         "port": "DIOS/0",

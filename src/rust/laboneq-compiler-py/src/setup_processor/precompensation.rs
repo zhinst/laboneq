@@ -4,11 +4,13 @@
 use std::collections::HashMap;
 
 use crate::error::{Error, Result};
+use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::types::AwgKey;
 use laboneq_dsl::signal_calibration::{
     BounceCompensation, ExponentialCompensation, FirCompensation, Precompensation,
 };
 use laboneq_dsl::types::SignalUid;
+use laboneq_log::warn;
 
 #[derive(Debug)]
 pub(super) struct AssignedPrecompensation {
@@ -27,7 +29,23 @@ pub(super) fn precompensation_is_active(precompensation: &Precompensation) -> bo
 /// Adapt precompensations for HDAWG to ensure that signals sharing the same AWG have compatible precompensation settings.
 pub(super) fn adapt_precompensations(
     precompensations: &mut [AssignedPrecompensation],
+    id_store: &NamedIdStore,
 ) -> Result<()> {
+    for precomp in precompensations.iter() {
+        if let Some(pc) = &precomp.precompensation
+            && let Some(fir) = &pc.fir
+            && !fir.coefficients.is_empty()
+            && fir.coefficients.iter().all(|&c| c == 0.0)
+        {
+            warn!(
+                "FIR coefficients for signal '{}' are all zero: the output signal will be silenced. \
+                         Use a non-zero kernel (e.g. starting with 1.0 for identity).",
+                id_store
+                    .resolve(precomp.signal_uid)
+                    .expect("BUG: signal_uid not in id_store")
+            );
+        }
+    }
     // Group by awg to adapt precompensations that share the same AWG together
     let mut by_awg: HashMap<AwgKey, Vec<&mut AssignedPrecompensation>> = precompensations
         .iter_mut()
@@ -121,6 +139,7 @@ fn adapt_awg_precompensation(precompensations: &mut [&mut AssignedPrecompensatio
 fn default_fir_settings() -> FirCompensation {
     FirCompensation {
         coefficients: vec![1.0],
+        strict: false,
     }
 }
 

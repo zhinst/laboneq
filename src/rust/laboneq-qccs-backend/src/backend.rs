@@ -6,7 +6,10 @@ use pyo3::prelude::*;
 
 use codegenerator_py::{HardwareSetup, SignalChannelProperties, generate_code_py};
 use laboneq_common::compiler_settings::CompilerSettings;
-use laboneq_compiler_py::compiler_backend::{CodeGenArtifact, CompilerBackend, ExperimentView};
+use laboneq_compiler_py::compiler_backend::{
+    CodeGenArtifact, CompilerBackend, Error as CompilerError, ExperimentView, FeedbackCalculator,
+    QccsFeedbackCalculator, SignalView,
+};
 use laboneq_compiler_py::compiler_backend::{CompilerBackendResult, PreprocessOutput};
 use laboneq_dsl::types::ExternalParameterUid;
 use laboneq_ir::ExperimentIr;
@@ -63,6 +66,14 @@ impl CompilerBackend for QccsBackend {
 
     fn device_class(&self) -> usize {
         0
+    }
+
+    fn feedback_calculator(
+        &self,
+        signals: &[SignalView],
+    ) -> Option<Box<dyn FeedbackCalculator<Error = CompilerError> + Send + Sync + 'static>> {
+        let model = QccsFeedbackCalculator::new(signals.iter().cloned()).ok()?;
+        Some(Box::new(model))
     }
 }
 

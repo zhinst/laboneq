@@ -11,11 +11,9 @@ mod test_compute_delays {
         Precompensation,
     };
     use laboneq_units::duration::{Duration, Second};
-    use smallvec::SmallVec;
 
     use crate::setup_processor::delays::{
         calculator::{SignalDelayProperties, compute_signal_delays},
-        output_routing::OUTPUT_ROUTE_DELAY_SAMPLES,
         precompensation::{
             PRECOMPENSATION_BASE_DELAY_SAMPLES, PRECOMPENSATION_HIGH_PASS_DELAY_SAMPLES,
         },
@@ -27,18 +25,16 @@ mod test_compute_delays {
         device_uid: u32,
         device_kind: DeviceKind,
         sampling_rate: f64,
-        ports: &'a Vec<String>,
-        output_route_channels: &'a SmallVec<[String; 4]>,
+        delay_signal: i64,
         precompensation: Option<&'a Precompensation>,
         lead_delay: Duration<Second>,
     ) -> SignalDelayProperties<'a> {
         SignalDelayProperties::new(
             uid.into(),
-            ports,
             sampling_rate,
             device_uid.into(),
             device_kind,
-            output_route_channels.iter().map(|s| s.as_str()).collect(),
+            delay_signal,
             precompensation,
             lead_delay,
         )
@@ -74,6 +70,7 @@ mod test_compute_delays {
             },
             fir: if fir {
                 Some(FirCompensation {
+                    strict: false,
                     coefficients: vec![0.0],
                 })
             } else {
@@ -84,47 +81,14 @@ mod test_compute_delays {
 
     #[test]
     fn test_compute_delays_no_delays() {
-        let ports_0 = &vec![0.to_string()];
-        let ports_1 = &vec![1.to_string()];
-        let ports_2 = &vec![2.to_string()];
-
-        let output_routes = &SmallVec::new();
-
-        let signal_a = create_signal_props(
-            0,
-            0,
-            DeviceKind::Shfsg,
-            2e9,
-            ports_0,
-            output_routes,
-            None,
-            0.0.into(),
-        );
-        let signal_b = create_signal_props(
-            1,
-            1,
-            DeviceKind::Hdawg,
-            2e9,
-            ports_1,
-            output_routes,
-            None,
-            0.0.into(),
-        );
-        let signal_c = create_signal_props(
-            2,
-            0,
-            DeviceKind::Shfsg,
-            2e9,
-            ports_2,
-            output_routes,
-            None,
-            0.0.into(),
-        );
+        let signal_a = create_signal_props(0, 0, DeviceKind::Shfsg, 2e9, 0, None, 0.0.into());
+        let signal_b = create_signal_props(1, 1, DeviceKind::Hdawg, 2e9, 0, None, 0.0.into());
+        let signal_c = create_signal_props(2, 0, DeviceKind::Shfsg, 2e9, 0, None, 0.0.into());
 
         let signals = vec![signal_a, signal_b, signal_c];
         let delays = compute_signal_delays(&signals);
 
-        // All signals should have zero delay when no precompensation or output routing
+        // All signals should have zero delay when no precompensation
         assert_abs_diff_eq!(
             delays.signal_port_delay(0.into()).value(),
             0.0,
@@ -142,142 +106,70 @@ mod test_compute_delays {
         );
     }
 
-    /// Test that output routing delays are correctly applied along SHFSG signals,
+    /// Test that signal delays are correctly applied to signals,
     /// and that HDAWG signal delays are compensated accordingly.
     #[test]
-    fn test_compute_delays_with_output_routing() {
-        let ports_0 = &vec![0.to_string()];
-        let ports_1 = &vec![1.to_string()];
+    fn test_compute_delays_with_dedicated_delay() {
+        let delay_signal = 52;
 
-        let output_routes_0 = &SmallVec::from_vec(vec!["0".to_string(), "1".to_string()]);
-        let output_routes_1 = &SmallVec::new();
-
-        let signal_sg_0 = create_signal_props(
-            0,
-            1,
-            DeviceKind::Shfsg,
-            2e9,
-            ports_0,
-            output_routes_0,
-            None,
-            0.0.into(),
-        );
-        let signal_sg_1 = create_signal_props(
-            1,
-            1,
-            DeviceKind::Shfsg,
-            2e9,
-            ports_1,
-            output_routes_1,
-            None,
-            0.0.into(),
-        );
-        let signal_hdawg_0 = create_signal_props(
-            2,
-            2,
-            DeviceKind::Hdawg,
-            2e9,
-            ports_0,
-            output_routes_1,
-            None,
-            0.0.into(),
-        );
+        let signal_sg_0 =
+            create_signal_props(0, 1, DeviceKind::Shfsg, 2e9, delay_signal, None, 0.0.into());
+        let signal_sg_1 =
+            create_signal_props(1, 1, DeviceKind::Shfsg, 2e9, delay_signal, None, 0.0.into());
+        let signal_hdawg_0 = create_signal_props(2, 2, DeviceKind::Hdawg, 2e9, 0, None, 0.0.into());
 
         let signals = vec![signal_sg_0, signal_sg_1, signal_hdawg_0];
         let delays = compute_signal_delays(&signals);
 
-        // Signals using output routing should have the same total delay
+        // Signals using dedicated delay routing should have the same total delay
         let delay_sg_0 = delays.signal_start_delay(0.into()) + delays.signal_port_delay(0.into());
         let delay_sg_1 = delays.signal_start_delay(1.into()) + delays.signal_port_delay(1.into());
         let delay_hdawg_0 =
             delays.signal_start_delay(2.into()) + delays.signal_port_delay(2.into());
 
-        // Output router enabled signals on SG should have the same delay
+        // Dedicated delay routing enabled signals on SG should have the same delay
         assert_abs_diff_eq!(delay_sg_0.value(), delay_sg_1.value());
-        // Signal not using output router should have a different delay
+        // Signal not using dedicated delay routing should have a different delay
         let delay_diff = delay_hdawg_0.value() - delay_sg_0.value();
-        assert_abs_diff_eq!(delay_diff, OUTPUT_ROUTE_DELAY_SAMPLES as f64 / 2e9);
+        assert_abs_diff_eq!(delay_diff, delay_signal as f64 / 2e9);
     }
 
     /// Test that precompensation delays are correctly calculated and applied to signals with precompensation settings,
     /// and the other signal delays are calculated accordingly.
     #[test]
     fn test_compute_delays_with_precompensation() {
-        let ports_0 = &vec![0.to_string()];
-        let output_routes_0 = &SmallVec::from_vec(vec!["1".to_string()]);
-
-        let ports_1 = &vec![0.to_string()];
-        let output_routes_1 = &SmallVec::new();
-
         let precomp = dummy_precompensation(0, true, false, false);
+        let delay_signal = 52;
+        let signal_with_delay =
+            create_signal_props(0, 0, DeviceKind::Shfsg, 2e9, delay_signal, None, 0.0.into());
+        let signal_precomp =
+            create_signal_props(1, 1, DeviceKind::Hdawg, 2e9, 0, Some(&precomp), 0.0.into());
 
-        let signal_output_route = create_signal_props(
-            0,
-            0,
-            DeviceKind::Shfsg,
-            2e9,
-            ports_0,
-            output_routes_0,
-            None,
-            0.0.into(),
-        );
-        let signal_precomp = create_signal_props(
-            1,
-            1,
-            DeviceKind::Hdawg,
-            2e9,
-            ports_1,
-            output_routes_1,
-            Some(&precomp),
-            0.0.into(),
-        );
-
-        let signals = vec![signal_output_route, signal_precomp];
+        let signals = vec![signal_with_delay, signal_precomp];
         let delays = compute_signal_delays(&signals);
 
         // Calculate total delays including precompensation effects
-        let delay_output_route =
+        let delay_with_delay =
             delays.signal_start_delay(0.into()) + delays.signal_port_delay(0.into());
         let delay_precomp =
             delays.signal_start_delay(1.into()) + delays.signal_port_delay(1.into());
 
-        // The precompensation delay should be greater than the output route delay, and the difference should match the expected compensation
-        let diff = delay_output_route.value() - delay_precomp.value();
+        // The precompensation delay should be greater than the delay with dedicated delay routing, and the difference should match the expected compensation
+        let diff = delay_with_delay.value() - delay_precomp.value();
         let expected_precompensation_delay = PRECOMPENSATION_HIGH_PASS_DELAY_SAMPLES as f64
             + PRECOMPENSATION_BASE_DELAY_SAMPLES as f64; // From precompensation_delay_samples for the given precompensation
-        let expected_output_router_delay = OUTPUT_ROUTE_DELAY_SAMPLES as f64; // From output router delay for 2 output routes
+        let expected_dedicated_delay_routing_delay = delay_signal as f64;
         let expected_compensation =
-            (expected_precompensation_delay - expected_output_router_delay) / 2e9; // Precompensation delay minus output router delay
+            (expected_precompensation_delay - expected_dedicated_delay_routing_delay) / 2e9; // Precompensation delay minus dedicated delay routing delay
 
         assert_abs_diff_eq!(diff, expected_compensation);
     }
 
     #[test]
     fn test_compute_delays_hdawg_uhfqa() {
-        let ports_0 = &vec![0.to_string()];
-        let output_routes_0 = &SmallVec::new();
-
         // Test with different sample multiples affecting delay calculations
-        let signal_hdawg = create_signal_props(
-            0,
-            0,
-            DeviceKind::Hdawg,
-            2.4e9,
-            ports_0,
-            output_routes_0,
-            None,
-            5.0.into(),
-        );
-        let signal_uhfqa = create_signal_props(
-            1,
-            1,
-            DeviceKind::Uhfqa,
-            1.8e9,
-            ports_0,
-            output_routes_0,
-            None,
-            5.0.into(),
-        );
+        let signal_hdawg = create_signal_props(0, 0, DeviceKind::Hdawg, 2.4e9, 0, None, 5.0.into());
+        let signal_uhfqa = create_signal_props(1, 1, DeviceKind::Uhfqa, 1.8e9, 0, None, 5.0.into());
 
         let signals = vec![signal_hdawg, signal_uhfqa];
         let delays = compute_signal_delays(&signals);

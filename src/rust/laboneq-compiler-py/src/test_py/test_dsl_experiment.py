@@ -7,12 +7,14 @@ The file is meant to be executed by the Rust library,
 but written in Python for readability.
 """
 
+from types import SimpleNamespace
 from typing import cast
 
 import laboneq._rust.compiler as compiler_rs
 import laboneq._rust.test_compiler as test_compiler
 from laboneq import simple
 from laboneq.core.utilities.compile_experiment import compile_experiment
+from laboneq.implementation.payload_builder.payload_builder import serialize_experiment
 
 compiler_rs = cast(compiler_rs, test_compiler)
 
@@ -76,19 +78,7 @@ def run_experiment():
                 )
 
     compile_experiment(setup, exp)  # Smoke test to ensure the experiment is valid
-
-    device_setup_rs = compiler_rs.DeviceSetupBuilder()
-    device_setup_rs.add_instrument(
-        uid="device_hdawg",
-        device_type="HDAWG",
-    )
-    device_setup_rs.add_signal_with_calibration(
-        uid="q0/drive",
-        instrument_uid="device_hdawg",
-        channel_type="IQ",
-        ports=["0", "1"],
-    )
-    return compiler_rs.serialize_experiment(exp, device_setup_rs, packed=False)
+    return serialize_experiment(setup, exp)
 
 
 def create_derived_param_experiment_calibration():
@@ -117,24 +107,7 @@ def create_derived_param_experiment_calibration():
                 exp.play("q0/drive", simple.pulse_library.const())
 
     compile_experiment(setup, exp)  # Smoke test to ensure the experiment is valid
-
-    device_setup_rs = compiler_rs.DeviceSetupBuilder()
-    device_setup_rs.add_instrument(
-        uid="device_hdawg",
-        device_type="HDAWG",
-    )
-    device_setup_rs.add_signal_with_calibration(
-        uid="q0/drive",
-        instrument_uid="device_hdawg",
-        channel_type="IQ",
-        ports=["0", "1"],
-        oscillator=device_setup_rs.create_oscillator(
-            uid="osc",
-            frequency=derived,
-            modulation="HARDWARE",
-        ),
-    )
-    return compiler_rs.serialize_experiment(exp, device_setup_rs, packed=False)
+    return serialize_experiment(setup, exp)
 
 
 def create_derived_param_experiment_operation_field():
@@ -161,18 +134,54 @@ def create_derived_param_experiment_operation_field():
                 exp.delay("q0/drive", time=derived)
 
     compile_experiment(setup, exp)  # Smoke test to ensure the experiment is valid
-    device_setup_rs = compiler_rs.DeviceSetupBuilder()
-    device_setup_rs.add_instrument(
-        uid="device_hdawg",
-        device_type="HDAWG",
+    return serialize_experiment(setup, exp)
+
+
+def simple_zqcs_setup():
+    desc = """\
+instruments:
+  ZQCS:
+    - address: http://box
+      uid: device_zqcs
+connections:
+  device_zqcs:
+    - rf_signal: q0/drive_line
+      ports: ["1:1:1:1"]
+    - iq_signal: q0/measure_line
+      ports: ["1:3:1:1"]
+    - acquire_signal: q0/acquire_line
+      ports: ["1:1:2:1"]
+"""
+    return simple.DeviceSetup.from_descriptor(
+        desc, server_host="localhost", server_port=8008
     )
-    device_setup_rs.add_signal_with_calibration(
-        uid="q0/drive",
-        instrument_uid="device_hdawg",
-        channel_type="IQ",
-        ports=["0", "1"],
+
+
+ZQCS_SETUP_DESCRIPTION_BLOB = '{"a":1,"b":"1.2.3","data":{}}'.encode()
+
+
+def create_experiment_with_zqcs_setup_description():
+    """Experiment carrying a setup-description blob."""
+    setup = simple_zqcs_setup()
+    lsg = setup.logical_signal_groups["q0"].logical_signals
+    exp = simple.Experiment(
+        uid="test",
+        signals=[
+            simple.ExperimentSignal("q0/drive_line", map_to=lsg["drive_line"]),
+            simple.ExperimentSignal("q0/measure_line", map_to=lsg["measure_line"]),
+            simple.ExperimentSignal("q0/acquire_line", map_to=lsg["acquire_line"]),
+        ],
     )
-    return compiler_rs.serialize_experiment(exp, device_setup_rs, packed=False)
+    with exp.acquire_loop_rt(count=1):
+        with exp.section(uid="play"):
+            exp.play("q0/drive_line", simple.pulse_library.const())
+        with exp.section(uid="readout"):
+            exp.play("q0/measure_line", simple.pulse_library.const())
+            exp.acquire("q0/acquire_line", handle="h0", length=96e-9)
+
+    # NOTE: `SimpleNamespace` is intentionally used here, since the type itself is irrelevant.
+    setup.setup_description = SimpleNamespace(data=ZQCS_SETUP_DESCRIPTION_BLOB)
+    return serialize_experiment(setup, exp)
 
 
 def create_missing_signal_experiment():
@@ -190,9 +199,4 @@ def create_missing_signal_experiment():
         with exp.section(uid="section"):
             exp.delay("q1/drive", time=1e-6)
 
-    device_setup_rs = compiler_rs.DeviceSetupBuilder()
-    device_setup_rs.add_instrument(
-        uid="device_hdawg",
-        device_type="HDAWG",
-    )
-    return compiler_rs.serialize_experiment(exp, device_setup_rs, packed=False)
+    return serialize_experiment(setup, exp)

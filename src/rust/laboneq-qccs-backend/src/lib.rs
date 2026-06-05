@@ -3,6 +3,8 @@
 
 mod backend;
 mod experiment_view;
+mod output_routing;
+mod precompensation;
 mod preprocessor;
 mod setup_processor;
 

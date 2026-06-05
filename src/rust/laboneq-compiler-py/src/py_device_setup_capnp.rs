@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use pyo3::prelude::*;
-use pyo3::types::PyString;
+use pyo3::types::{PyBytes, PyString};
 
 use crate::py_signal::{AmplifierPumpPy, PrecompensationPy};
 
@@ -11,6 +11,8 @@ pub(crate) struct DeviceSetupCapnpBuilderPy {
     pub instruments: Vec<InstrumentPayload>,
     pub signals: Vec<SignalPayload>,
     pub oscillators: Vec<OscillatorPayload>,
+    /// Optional ZQCS setup-description blob. Absent => QCCS (default on the wire).
+    pub zqcs_setup_description: Option<Vec<u8>>,
 }
 
 #[pymethods]
@@ -21,7 +23,13 @@ impl DeviceSetupCapnpBuilderPy {
             instruments: Vec::new(),
             signals: Vec::new(),
             oscillators: Vec::new(),
+            zqcs_setup_description: None,
         }
+    }
+
+    fn set_zqcs_setup_description(&mut self, blob: Bound<'_, PyBytes>) -> PyResult<()> {
+        self.zqcs_setup_description = Some(blob.as_bytes().to_vec());
+        Ok(())
     }
 
     #[pyo3(signature = (uid, device_type, options=None, reference_clock_source=None))]

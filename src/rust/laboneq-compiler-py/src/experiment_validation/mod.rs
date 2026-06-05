@@ -56,7 +56,6 @@ fn nt_only_parameter_uids(signal: &Signal) -> impl Iterator<Item = ParameterUid>
         device_uid: _,
         sampling_rate: _,
         port_mode: _,
-        ports: _,
         kind: _,
         oscillator: _,
         amplifier_pump: _,

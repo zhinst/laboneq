@@ -15,6 +15,7 @@ from laboneq.controller.attribute_value_tracker import (
     AttributeName,
     DeviceAttribute,
 )
+from laboneq.controller.constants import adjusted_transfer_rate
 from laboneq.controller.devices.async_support import (
     ResponseWaiterAsync,
     _gather,
@@ -31,8 +32,8 @@ from laboneq.controller.recipe_processor import (
     AwgKey,
     get_artifacts,
     get_elf,
+    get_execution_time,
     get_initialization_by_device_uid,
-    get_readout_time,
     get_wave,
     get_weights_info,
     prepare_waves,
@@ -194,6 +195,17 @@ class QAChannel(SHFChannelBase):
     @property
     def pipeliner(self) -> AwgPipeliner:
         return self._pipeliner
+
+    def _get_block_readout_time(self, recipe_data: RecipeData) -> float:
+        awg_config = recipe_data.awg_configs[AwgKey(self._device_uid, self._core_index)]
+        result_length = (
+            0 if awg_config.result_length is None else awg_config.result_length
+        )
+        # The maximum result block size is figured out by taking the result length
+        # and multiplying it by 16 bytes per sample (complex128). We assume a default transfer
+        # speed of 1MB/s (conservative). The final timeout is then scaled based on the timeout the user
+        # sets during connect, compared to the default 10-second connect timeout.
+        return result_length * 16 / adjusted_transfer_rate()
 
     async def disable_output(self, outputs: set[int], invert: bool):
         if (self._core_index in outputs) != invert:
@@ -955,9 +967,12 @@ class QAChannel(SHFChannelBase):
         recipe_data: RecipeData,
         num_results: int,
     ) -> list[RawReadoutData]:
-        # TODO(2K): adjust timeout based on timeout_s from connect
-        guarded_wait_time, max_result_wait_time = get_readout_time(recipe_data)
+        # In the async execution model, result waiting starts as soon as execution begins,
+        # so the execution time must be included when calculating the result retrieval timeout.
+        _, guarded_wait_time = get_execution_time(recipe_data)
+        max_result_wait_time = self._get_block_readout_time(recipe_data)
 
+        # TODO(2K): adjust timeout based on timeout_s from connect
         rt_execution_info = recipe_data.rt_execution_info
         if is_spectroscopy(rt_execution_info.acquisition_type):
             timeout_s = guarded_wait_time + max_result_wait_time

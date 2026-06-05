@@ -82,6 +82,13 @@ impl NumericArray {
             NumericArray::Complex64(vec) => NumericArray::Complex64(vec[range].to_vec()),
         }
     }
+
+    pub fn as_f64_slice(&self) -> Option<&[f64]> {
+        match self {
+            NumericArray::Float64(vec) => Some(vec),
+            _ => None,
+        }
+    }
 }
 
 impl From<Vec<i64>> for NumericArray {
@@ -205,5 +212,18 @@ mod tests {
                 Complex::new(-1.0, -1.0)
             ]
         );
+    }
+
+    #[test]
+    fn test_as_f64_slice() {
+        let float_array = NumericArray::Float64(vec![1.0, 2.0, 3.0]);
+        assert_eq!(float_array.as_f64_slice(), Some(&[1.0, 2.0, 3.0][..]));
+
+        let int_array = NumericArray::Integer64(vec![1, 2, 3]);
+        assert_eq!(int_array.as_f64_slice(), None);
+
+        let complex_array =
+            NumericArray::Complex64(vec![Complex::new(1.0, 1.0), Complex::new(2.0, 2.0)]);
+        assert_eq!(complex_array.as_f64_slice(), None);
     }
 }

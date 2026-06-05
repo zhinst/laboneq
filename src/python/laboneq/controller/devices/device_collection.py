@@ -11,25 +11,16 @@ from contextlib import asynccontextmanager
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Iterator, cast
 
+from laboneq.controller.constants import DEFAULT_TIMEOUT_S
 from laboneq.controller.devices.async_support import (
-    ConditionsCheckerAsync,
     DataServerConnection,
     DataServerConnections,
     _gather,
-    _gather_with_timeout,
 )
 from laboneq.controller.devices.device_factory import DeviceFactory
-from laboneq.controller.devices.device_qhub import DeviceQHUB
 from laboneq.controller.devices.device_setup_dao import DeviceSetupDAO, ServerQualifier
-from laboneq.controller.devices.device_utils import (
-    NodeCollector,
-    prepare_emulator_state,
-)
+from laboneq.controller.devices.device_utils import prepare_emulator_state
 from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
-from laboneq.controller.devices.node_control import (
-    NodeControlKind,
-    filter_states,
-)
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.for_each import for_each
 from laboneq.implementation.utils.devices import target_setup_fingerprint
@@ -41,6 +32,7 @@ if TYPE_CHECKING:
     from laboneq.controller.devices.zi_emulator import EmulatorState
     from laboneq.controller.versioning import SetupCaps
     from laboneq.data.execution_payload import TargetSetup
+    from laboneq.data.setup_descriptions import SetupDescription
 
 
 SUPPRESSED_WARNINGS = frozenset(
@@ -51,9 +43,6 @@ SUPPRESSED_WARNINGS = frozenset(
 
 
 _logger = logging.getLogger(__name__)
-
-
-DEFAULT_TIMEOUT_S = 10
 
 
 class DeviceCollection:
@@ -99,6 +88,18 @@ class DeviceCollection:
     @property
     def has_qhub(self) -> bool:
         return self._ds.has_qhub
+
+    @property
+    def setup_description(self) -> SetupDescription | None:
+        descriptions = [d.setup_description for _, d in self.all]
+        descriptions = [d for d in descriptions if d is not None]
+        if not descriptions:
+            return None
+        if len(descriptions) > 1:
+            raise LabOneQControllerException(
+                "More than one device published a setup description; only one device expected."
+            )
+        return descriptions[0]
 
     @asynccontextmanager
     async def capture_logs(self):
@@ -180,64 +181,6 @@ class DeviceCollection:
             # TODO(2K): Error check
             for _, device in self.all:
                 device.clear_cache()
-
-        if self.has_qhub:
-            leaders = [dev for dev in self._devices.values() if dev.is_leader()]
-            followers = _followers_of(leaders)
-            # Switch QHUB to the external clock as usual
-            await self._configure_async(
-                leaders,
-                lambda d: cast("DeviceBase", d).clock_source_control_nodes(),
-                "QHUB: Reference clock switching",
-            )
-            # Check if zsync link is already established
-            async_checkers: list[ConditionsCheckerAsync] = [
-                ConditionsCheckerAsync(
-                    dev._api,
-                    {
-                        n.path: n.value
-                        for n in filter_states(dev.clock_source_control_nodes())
-                    },
-                )
-                for dev in followers
-                if isinstance(dev, DeviceBase)
-            ]
-            dev_results = await _gather(
-                *(async_checker.check() for async_checker in async_checkers)
-            )
-            failed = [res for dev_res in dev_results for res in dev_res]
-            if len(failed) > 0:
-                # Switch followers to ZSync, but don't wait for completion yet
-                for dev in followers:
-                    if not isinstance(dev, DeviceBase):
-                        continue
-                    ref_set = next(
-                        (
-                            c
-                            for c in dev.clock_source_control_nodes()
-                            if c.kind == NodeControlKind.Setting
-                        ),
-                        None,
-                    )
-                    if ref_set is not None:
-                        nc = NodeCollector()
-                        nc.add(ref_set.path, ref_set.value)
-                        await dev.set_async(nc)
-                # Reset the QHub phy. TODO(2K): This is the actual workaround, remove this whole block once fixed.
-                for dev in leaders:
-                    if isinstance(dev, DeviceQHUB):
-                        await dev.qhub_reset_zsync_phy()
-                # Wait for completion using the dumb get method, as the streamed state sequence may be unreliable
-                # with this workaround due to unexpected state bouncing.
-                results = await _gather_with_timeout(
-                    *(async_checker.wait_by_get() for async_checker in async_checkers),
-                    timeout_s=10,  # TODO(2K): use timeout passed to connect
-                )
-                for res in results:
-                    if isinstance(res, Exception):
-                        raise res
-            # From here we will continue with the regular config. Since the ZSync link is now established,
-            # the respective actions from the regular config will be skipped.
 
         configs = {
             "Configure runtime checks": lambda d: cast(

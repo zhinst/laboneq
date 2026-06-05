@@ -45,6 +45,7 @@ where
 const RESOURCE_LIMIT_MSG: &str = "Compilation error - resource limitation exceeded.\n\
     To circumvent this, try one or more of the following:\n\
     - Double check the integrity of your experiment (look for unexpectedly long pulses, large number of sweep steps, etc.)\n\
+    - Use length of pulses that are multiple of 8 ns to improve memory effficiency\n\
     - Reduce the number of sweep steps\n\
     - Reduce the number of variations in the pulses that are being played\n\
     - Enable chunking for a sweep\n\
@@ -53,6 +54,7 @@ const RESOURCE_LIMIT_MSG: &str = "Compilation error - resource limitation exceed
 const AUTO_CHUNK_EXHAUSTED_MSG: &str = "Automatic chunking was not able to find a chunk count to circumvent resource limitations.\n\
     This means that one iteration of a sweep is too large and cannot be executed.\n\
     To circumvent this, try one or more of the following:\n\
+    - Use length of pulses that are multiple of 8 ns to improve memory effficiency\n\
     - Chunking another sweep (e.g. in case of nested sweeps, enable chunking for the inner one)\n\
     - Find ways suitable for your use case to reduce the size of the program in one iteration";
 

@@ -28,6 +28,11 @@ from laboneq.controller.attribute_value_tracker import (
     AttributeValueTracker,
     DeviceAttribute,
 )
+from laboneq.controller.constants import (
+    PIPELINER_RELOAD_WORST_CASE,
+    RESULT_TRANSFER_RATE_GW_FW,
+    adjusted_transfer_rate,
+)
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.core.types.enums import PortMode as RecipePortMode
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
@@ -101,8 +106,9 @@ class AwgConfig:
 class AwgConfigs:
     def __init__(self):
         self._configs: dict[AwgKey, AwgConfig] = {}
-        # Used to estimate timeouts due to possible slowdowns on
-        # the network when fetching large results.
+        # Used for timeout estimation to account for possible slowdowns in the
+        # result delivery path. Use the worst-case (maximum) result length, since
+        # faster AWGs will still be blocked by slower ones due to HW synchronization.
         self._max_result_length: int = 0
 
     @property
@@ -120,7 +126,10 @@ class AwgConfigs:
 
     def add(self, key: AwgKey, config: AwgConfig):
         assert key not in self._configs
-        if config.result_length or 0 > self._max_result_length:
+        if (
+            config.result_length is not None
+            and config.result_length > self._max_result_length
+        ):
             self._max_result_length = config.result_length
         self._configs[key] = config
 
@@ -371,7 +380,7 @@ class RecipeData:
         return awgs
 
     @cached_method(1)
-    def get_program_refs(self) -> NearestDict[tuple[int, ...], set[str]]:
+    def get_program_refs(self) -> dict[tuple[int, ...], set[str]]:
         refs = NearestDict(rounding=NearestDict.NEAREST_PREV)
 
         for init in self.recipe.realtime_execution_init:
@@ -652,7 +661,7 @@ def _pre_process_qa_channels(
         channel_data.input_enable = True
         channel_data.input_range = input.range
         channel_data.input_rf_path = (
-            input.port_mode is None or input.port_mode == RecipePortMode.RF.value
+            input.port_mode is None or input.port_mode == RecipePortMode.RF
         )
 
     return channels
@@ -682,7 +691,7 @@ def _pre_process_sg_channels(
         channel_data.modulation = output.modulation
         channel_data.marker_source_trigger = output.marker_mode != "MARKER"
         channel_data.output_rf_path = (
-            output.port_mode is None or output.port_mode == "rf"
+            output.port_mode is None or output.port_mode == RecipePortMode.RF
         )
         for route in output.routed_outputs:
             fixed_amplitude, param_amplitude = (
@@ -908,27 +917,41 @@ def pre_process_compiled(
     return recipe_data
 
 
-def calc_result_transfer_base_time(recipe_data: RecipeData) -> float:
-    # The maximum result block size is figured out by taking the maximum result length
-    # and multiplying it by 16 bytes per sample (complex128). We assume a default transfer
-    # speed of 1MB/s (conservative). The final timeout is then scaled based on the timeout the user
-    # sets during connect, compared to the default 10-second connect timeout.
-    return recipe_data.awg_configs.max_result_length * 16 / (2**20)
+def _result_size_per_integrator(recipe_data: RecipeData) -> int:
+    # max_result_length is in samples for a single integrator. Each sample is complex128, i.e. 16 bytes.
+    return recipe_data.awg_configs.max_result_length * 16
+
+
+def _result_size_per_job(recipe_data: RecipeData) -> int:
+    # The device always returns data for all integrators, even if only a subset is used.
+    # TODO(2K): Use the actual number of HW integrators once it is available here.
+    # For now, assume the worst case of 16. This only affects timeout estimation, not runtime
+    # performance when execution proceeds normally.
+    return _result_size_per_integrator(recipe_data) * 16
 
 
 def get_execution_time(recipe_data: RecipeData) -> tuple[float, float]:
     rt_execution_info = recipe_data.rt_execution_info
     min_wait_time = recipe_data.max_step_execution_time
     if rt_execution_info.is_chunked:
-        pipeliner_reload_worst_case = 1500e-6
+        internal_result_transfer_time = (
+            _result_size_per_job(recipe_data) / RESULT_TRANSFER_RATE_GW_FW
+        )
         min_wait_time = (
-            min_wait_time + pipeliner_reload_worst_case
+            # Assume reload and result transfer happen simultaneously, and take the worst case of the two.
+            min_wait_time
+            + max(PIPELINER_RELOAD_WORST_CASE, internal_result_transfer_time)
         ) * rt_execution_info.chunk_count_or_1
 
-    # Add extra guard time for potential state node update delayed by the
-    # large result transfer from a previous measurement. Assume up to two result blocks
-    # of maximum size may need to be delivered before the state update.
-    extra_guard_for_results = calc_result_transfer_base_time(recipe_data) * 2
+    # Add extra guard time for cases where execution state node updates are delayed
+    # by an ongoing large result transfer from previously completed jobs. Assume that
+    # up to two maximum-size result vectors may need to be transferred before the
+    # state update is delivered.
+    # TODO(2K): Pass the actual controller connection timeout for a more accurate
+    # estimate that reflects the real network speed and load.
+    extra_guard_for_results = (
+        _result_size_per_integrator(recipe_data) / adjusted_transfer_rate() * 2
+    )
 
     # +10% and fixed 1sec guard time rounded up to next full second
     guarded_wait_time = round((min_wait_time + extra_guard_for_results) * 1.1 + 1.5)
@@ -936,22 +959,14 @@ def get_execution_time(recipe_data: RecipeData) -> tuple[float, float]:
     return min_wait_time, guarded_wait_time
 
 
-def get_readout_time(recipe_data: RecipeData) -> tuple[float, float]:
-    # In the async execution model, result waiting starts as soon as execution begins,
-    # so the execution time must be included when calculating the result retrieval timeout.
-    _, guarded_wait_time = get_execution_time(recipe_data)
-    max_result_wait_time = calc_result_transfer_base_time(recipe_data)
-    return guarded_wait_time, max_result_wait_time
-
-
 def get_weights_info(
     artifacts: ArtifactsCodegen, kernel_ref: str | None
-) -> dict[str, list[WeightInfo]]:
+) -> dict[int, list[WeightInfo]]:
     if kernel_ref is None:
         return {}
     # Group by channel
-    weights = artifacts.integration_weights.get(kernel_ref, {})
-    out = {}
+    weights = artifacts.integration_weights.get(kernel_ref, [])
+    out: dict[int, list[WeightInfo]] = {}
     for weight in weights:
         for channel in weight.integration_units:
             out.setdefault(channel, []).append(weight)

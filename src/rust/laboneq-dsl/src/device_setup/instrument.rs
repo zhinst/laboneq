@@ -15,6 +15,7 @@ pub struct Instrument {
     pub reference_clock: Option<ReferenceClock>,
 }
 
+/// Instrument that is part of the QCCS device setup.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum InstrumentKind {
     Hdawg,
@@ -22,7 +23,6 @@ pub enum InstrumentKind {
     Shfqa,
     Shfqc,
     Uhfqa,
-    Zqcs,
     Shfppc,
     Pqsc,
     Qhub,
@@ -37,7 +37,6 @@ impl TryInto<DeviceKind> for InstrumentKind {
             InstrumentKind::Shfsg => Ok(DeviceKind::Shfsg),
             InstrumentKind::Shfqa => Ok(DeviceKind::Shfqa),
             InstrumentKind::Uhfqa => Ok(DeviceKind::Uhfqa),
-            InstrumentKind::Zqcs => Ok(DeviceKind::Zqcs),
             _ => Err(format!(
                 "Cannot convert instrument kind '{self:?}' to device kind"
             )),
@@ -55,7 +54,6 @@ impl std::str::FromStr for InstrumentKind {
             "SHFQA" => Ok(InstrumentKind::Shfqa),
             "SHFQC" => Ok(InstrumentKind::Shfqc),
             "UHFQA" => Ok(InstrumentKind::Uhfqa),
-            "ZQCS" => Ok(InstrumentKind::Zqcs),
             "SHFPPC" => Ok(InstrumentKind::Shfppc),
             "PQSC" => Ok(InstrumentKind::Pqsc),
             "QHUB" => Ok(InstrumentKind::Qhub),
@@ -72,7 +70,6 @@ impl std::fmt::Display for InstrumentKind {
             InstrumentKind::Shfqa => "SHFQA",
             InstrumentKind::Uhfqa => "UHFQA",
             InstrumentKind::Shfqc => "SHFQC",
-            InstrumentKind::Zqcs => "ZQCS",
             InstrumentKind::Shfppc => "SHFPPC",
             InstrumentKind::Pqsc => "PQSC",
             InstrumentKind::Qhub => "QHUB",

@@ -1,5 +1,5 @@
 [workspace.package]
-version = "26.7.0-b2"
+version = "26.7.0-b3"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
 edition = "2024"
 publish = false
@@ -49,12 +49,13 @@ smallvec = "1.15.1"
 string-interner = "0.19.0"
 capnp = "0.25"
 thiserror = "2.0"
-opentelemetry = { version = "0.31.0", default-features = false }
-opentelemetry_sdk = { version = "0.31.0", default-features = false }
-opentelemetry-otlp = { version = "0.31.0", default-features = false }
+uuid = { version = "1", default-features = false, features = ["serde"] }
+opentelemetry = { version = "0.32.0", default-features = false }
+opentelemetry_sdk = { version = "0.32.0", default-features = false }
+opentelemetry-otlp = { version = "0.32.0", default-features = false }
 tracing = "0.1.44"
-tracing-subscriber = { version = "0.3.22", default-features = false }
-tracing-opentelemetry = { version = "0.32.0", default-features = false }
+tracing-subscriber = { version = "0.3.23", default-features = false }
+tracing-opentelemetry = { version = "0.33.0", default-features = false }
 
 # 1st party
 codegenerator = { path = "src/rust/codegenerator" }

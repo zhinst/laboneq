@@ -25,8 +25,6 @@ from laboneq.data.scheduled_experiment import (
     WeightInfo,
 )
 
-from .types import SignalDelay
-
 if TYPE_CHECKING:
     from laboneq._rust import codegenerator as codegen_rs
 
@@ -39,7 +37,6 @@ def generate_output(output: codegen_rs.SeqCGenOutput) -> SeqCGenOutput:
     integration_unit_allocations = {}
     awg_properties = {}
     channel_properties = defaultdict(list)
-    signal_delays = {}
     integration_times = {}
     result_lengths = {}
     integration_kernels = {}
@@ -61,8 +58,6 @@ def generate_output(output: codegen_rs.SeqCGenOutput) -> SeqCGenOutput:
 
         awg_properties[awg_key] = awg_output.awg_properties
         channel_properties[awg_key].extend(awg_output.channel_properties)
-        for signal, delay in awg_output.signal_delays.items():
-            signal_delays[signal] = SignalDelay(on_device=delay)
         for signal, integration_time in awg_output.integration_lengths.items():
             integration_times[signal] = SignalIntegrationInfo(
                 is_play=integration_time.is_play,
@@ -122,7 +117,6 @@ def generate_output(output: codegen_rs.SeqCGenOutput) -> SeqCGenOutput:
 
     return SeqCGenOutput(
         awg_properties=awg_properties,
-        signal_delays=signal_delays,
         integration_weights=integration_weights,
         integration_times=IntegrationTimes(signal_infos=integration_times),
         result_handle_maps={

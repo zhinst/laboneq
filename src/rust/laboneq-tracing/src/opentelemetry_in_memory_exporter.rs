@@ -89,11 +89,11 @@ impl SpanExporter for InMemorySpanExporter {
         Ok(())
     }
 
-    fn force_flush(&mut self) -> OTelSdkResult {
+    fn force_flush(&self) -> OTelSdkResult {
         Ok(())
     }
 
-    fn shutdown(&mut self) -> OTelSdkResult {
+    fn shutdown(&self) -> OTelSdkResult {
         Ok(())
     }
 }

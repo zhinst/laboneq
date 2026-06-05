@@ -4,6 +4,8 @@
 @0xabd22f51d0b05b7b;
 
 using Calibration = import "calibration.capnp";
+using Qccs = import "setup_description_qccs.capnp";
+using Zqcs = import "setup_description_zqcs.capnp";
 
 struct DeviceSetup {
   instruments @0 :List(Instrument);
@@ -11,6 +13,11 @@ struct DeviceSetup {
 
   signals @1 :List(DeviceSignal);
   oscillators @2 :List(Calibration.Oscillator);
+
+  setupDescription :union {
+    qccs @3 :Qccs.SetupDescriptionQccs;
+    zqcs @4 :Zqcs.SetupDescriptionZqcs;
+  }
 }
 
 struct Instrument {

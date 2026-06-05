@@ -17,5 +17,13 @@ pub mod pulse {
         capnp::generated_code!(pub mod pulse_capnp, "pulse/v1/pulse_capnp.rs");
         capnp::generated_code!(pub mod section_capnp, "pulse/v1/section_capnp.rs");
         capnp::generated_code!(pub mod sweep_capnp, "pulse/v1/sweep_capnp.rs");
+        capnp::generated_code!(
+            pub mod setup_description_qccs_capnp,
+            "pulse/v1/setup_description_qccs_capnp.rs"
+        );
+        capnp::generated_code!(
+            pub mod setup_description_zqcs_capnp,
+            "pulse/v1/setup_description_zqcs_capnp.rs"
+        );
     }
 }

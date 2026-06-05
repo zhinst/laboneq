@@ -10,6 +10,12 @@ import os
 import warnings
 from typing import TYPE_CHECKING
 
+from laboneq.compiler.workflow import compiler_hooks
+from laboneq.data.compilation_job import (
+    ExperimentInfo,
+    SignalInfo,
+)
+
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
     from laboneq.data.compilation_job import (
@@ -21,15 +27,23 @@ if TYPE_CHECKING:
 
 def serialize_capnp(
     experiment_info: ExperimentInfo,
-    compiler_module: compiler_rs,
+    device_class: int,
 ) -> bytes:
     """Serializes the experiment into a Cap'n Proto payload."""
-    compiler_rs = compiler_module
-    compiler_rs.init_logging(logging.getLogger("laboneq").getEffectiveLevel())
+    compiler_module = compiler_hooks.resolve_compiler_module(device_class)
+    compiler_module.init_logging(logging.getLogger("laboneq").getEffectiveLevel())
 
     # Builder the device setup capnp payload
-    device_setup_capnp = compiler_rs.DeviceSetupBuilder()
+    device_setup_capnp = compiler_module.DeviceSetupBuilder()
     setup_builder = DeviceSetupCompat(device_setup_capnp)
+
+    if device_class == 1 and experiment_info.setup_description is not None:
+        assert experiment_info.setup_description.data is not None, (
+            "Setup description `.data` must not be None if setup description is provided"
+        )
+        device_setup_capnp.set_zqcs_setup_description(
+            experiment_info.setup_description.data
+        )
 
     for device in experiment_info.devices:
         device_setup_capnp.add_instrument(
@@ -53,7 +67,7 @@ def serialize_capnp(
             oscillator=setup_builder.create_oscillator(signal_info.oscillator),
             lo_frequency=signal_info.lo_frequency,
             voltage_offset=signal_info.voltage_offset,
-            amplifier_pump=compiler_rs.AmplifierPump(
+            amplifier_pump=compiler_module.AmplifierPump(
                 device=signal_info.amplifier_pump.ppc_device.uid,
                 channel=signal_info.amplifier_pump.channel,
                 alc_on=signal_info.amplifier_pump.alc_on,
@@ -81,7 +95,7 @@ def serialize_capnp(
             range=(signal_info.signal_range.value, signal_info.signal_range.unit)
             if signal_info.signal_range is not None
             else None,
-            precompensation=_build_precompensation(signal_info, compiler_rs),
+            precompensation=_build_precompensation(signal_info, compiler_module),
             added_outputs=[
                 device_setup_capnp.create_output_route(
                     source_signal=route.from_port,
@@ -103,7 +117,7 @@ def serialize_capnp(
             else [t],
         )
 
-    return compiler_rs.serialize_experiment(
+    return compiler_module.serialize_experiment(
         experiment_info.src,
         device_setup=device_setup_capnp,
         packed=use_packed_capnp(),
@@ -220,6 +234,7 @@ def _build_precompensation(
         if not pc.FIR
         else compiler_rs.FirCompensation(
             coefficients=pc.FIR.coefficients,
+            strict=pc.FIR.strict,
         )
     )
     return compiler_rs.Precompensation(

@@ -25,3 +25,8 @@ laboneq-error = { workspace = true }
 laboneq-units = { workspace = true }
 laboneq-py-utils = { workspace = true }
 codegenerator-py = { workspace = true }
+laboneq-log = { workspace = true }
+
+[dev-dependencies]
+laboneq-dsl = { workspace = true, features = ["test_utils"] }
+approx = { workspace = true }

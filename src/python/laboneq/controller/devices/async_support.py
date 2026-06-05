@@ -563,6 +563,10 @@ class ResponseWaiterAsync:
         self._timeout_s = timeout_s
         self._queues: dict[str, DataQueue] = {}
 
+    @property
+    def timeout_s(self) -> float | None:
+        return self._timeout_s
+
     def add_nodes(self, nodes: dict[str, Any]):
         self._nodes.update(nodes)
 

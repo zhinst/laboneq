@@ -1,28 +1,23 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_ir::system::AwgDevice;
 use pyo3::exceptions::PyValueError;
 use pyo3::{intern, prelude::*, types::PyDict, types::PyModule};
 
-use laboneq_common::types::DeviceKind;
-
-use crate::qccs_feedback_calculator::feedback_calculator::FeedbackModel;
+use crate::qccs_feedback_calculator::feedback_calculator::{FeedbackDevice, FeedbackModel};
 
 /// Wrapper around the QCCS feedback model.
 ///
 /// This struct provides an interface to calculate feedback latency using the QCCS feedback model implemented in Python.
 /// It interacts with the `zhinst.timing_models` Python module to build the feedback model.
-pub(crate) struct QCCSFeedbackModel<'py> {
-    module: Bound<'py, PyModule>,
-}
+pub struct QCCSFeedbackModel {}
 
-impl FeedbackModel<'_> for QCCSFeedbackModel<'_> {
+impl FeedbackModel for QCCSFeedbackModel {
     fn get_latency(
         &self,
         acquisition_end_samples: i64,
-        acquisition_device: &AwgDevice,
-        generator_device: &AwgDevice,
+        acquisition_device: &FeedbackDevice,
+        generator_device: &FeedbackDevice,
         local_feedback: bool,
     ) -> anyhow::Result<i64> {
         let latency = self.get_latency(
@@ -35,130 +30,135 @@ impl FeedbackModel<'_> for QCCSFeedbackModel<'_> {
     }
 }
 
-impl QCCSFeedbackModel<'_> {
-    pub(super) fn new(py: Python<'_>) -> PyResult<QCCSFeedbackModel<'_>> {
-        let module = PyModule::import(py, intern!(py, "zhinst.timing_models"))?;
-        Ok(QCCSFeedbackModel { module })
+impl QCCSFeedbackModel {
+    pub(super) fn new() -> QCCSFeedbackModel {
+        QCCSFeedbackModel {}
     }
 
-    fn get_sg_type(&self, py: Python<'_>, device: &AwgDevice) -> PyResult<Py<PyAny>> {
-        let sg_device = if device.is_shfqc() {
-            return Ok(self
-                .module
+    fn get_sg_type(
+        &self,
+        module: &Bound<'_, PyModule>,
+        device: &FeedbackDevice,
+    ) -> PyResult<Py<PyAny>> {
+        let py = module.py();
+
+        match device {
+            FeedbackDevice::Shfqc => Ok(module
                 .getattr(intern!(py, "SGType"))?
                 .getattr(intern!(py, "SHFQC"))?
-                .into());
-        } else {
-            match device.kind() {
-                DeviceKind::Hdawg => self
-                    .module
-                    .getattr(intern!(py, "SGType"))?
-                    .getattr(intern!(py, "HDAWG"))?
-                    .into(),
-                DeviceKind::Shfsg => self
-                    .module
-                    .getattr(intern!(py, "SGType"))?
-                    .getattr(intern!(py, "SHFSG"))?
-                    .into(),
-                _ => Err(PyValueError::new_err(format!(
-                    "Device: '{}' cannot be used to generate feedback pulses",
-                    device.kind()
-                )))?,
-            }
-        };
-        Ok(sg_device)
+                .into()),
+            FeedbackDevice::Hdawg => Ok(module
+                .getattr(intern!(py, "SGType"))?
+                .getattr(intern!(py, "HDAWG"))?
+                .into()),
+            FeedbackDevice::Shfsg => Ok(module
+                .getattr(intern!(py, "SGType"))?
+                .getattr(intern!(py, "SHFSG"))?
+                .into()),
+            _ => Err(PyValueError::new_err(format!(
+                "Device: '{device}' cannot be used to generate feedback pulses"
+            )))?,
+        }
     }
 
-    fn get_qa_type(&self, py: Python<'_>, device: &AwgDevice) -> PyResult<Option<Py<PyAny>>> {
-        let qa_type = if device.is_shfqc() {
-            Some(
-                self.module
+    fn get_qa_type(
+        &self,
+        module: &Bound<'_, PyModule>,
+        device: &FeedbackDevice,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        let py = module.py();
+
+        match device {
+            FeedbackDevice::Shfqc => Ok(Some(
+                module
                     .getattr(intern!(py, "QAType"))?
                     .getattr(intern!(py, "SHFQC"))?
                     .into(),
-            )
-        } else {
-            match device.kind() {
-                DeviceKind::Shfqa => Some(
-                    self.module
-                        .getattr(intern!(py, "QAType"))?
-                        .getattr(intern!(py, "SHFQA"))?
-                        .into(),
-                ),
-                DeviceKind::Uhfqa => None,
-                _ => panic!("Unsupported device kind for feedback QA device model"),
-            }
-        };
-        Ok(qa_type)
+            )),
+            FeedbackDevice::Shfqa => Ok(Some(
+                module
+                    .getattr(intern!(py, "QAType"))?
+                    .getattr(intern!(py, "SHFQA"))?
+                    .into(),
+            )),
+            FeedbackDevice::Uhfqa => Ok(None),
+            _ => Err(PyValueError::new_err(format!(
+                "Device: '{device}' cannot be used as feedback QA device"
+            )))?,
+        }
     }
 
-    fn build_model(
+    fn build_model<'py>(
         &self,
-        acquisition_device: &AwgDevice,
-        generator_device: &AwgDevice,
+        module: Bound<'py, PyModule>,
+        acquisition_device: &FeedbackDevice,
+        generator_device: &FeedbackDevice,
         local_feedback: bool,
-    ) -> PyResult<Bound<'_, PyAny>> {
-        let qa_type = self.get_qa_type(self.module.py(), acquisition_device)?;
-        let sg_type = self.get_sg_type(self.module.py(), generator_device)?;
-        let model_class = self
-            .module
-            .getattr(intern!(self.module.py(), "QCCSFeedbackModel"))?;
-        let system_description_func = self
-            .module
-            .getattr(intern!(self.module.py(), "get_feedback_system_description"))?;
-        let trigger_source = self
-            .module
-            .getattr(intern!(self.module.py(), "TriggerSource"))?
-            .getattr(intern!(self.module.py(), "ZSYNC"))?;
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let py = module.py();
+
+        let qa_type = self.get_qa_type(&module, acquisition_device)?;
+        let sg_type = self.get_sg_type(&module, generator_device)?;
+        let model_class = module.getattr(intern!(py, "QCCSFeedbackModel"))?;
+        let system_description_func =
+            module.getattr(intern!(py, "get_feedback_system_description"))?;
+        let trigger_source = module
+            .getattr(intern!(py, "TriggerSource"))?
+            .getattr(intern!(py, "ZSYNC"))?;
         let pqsc_mode = if !local_feedback {
-            let pqsc_mode = self
-                .module
-                .getattr(intern!(self.module.py(), "PQSCMode"))?
-                .getattr(intern!(self.module.py(), "REGISTER_FORWARD"))?;
+            let pqsc_mode = module
+                .getattr(intern!(py, "PQSCMode"))?
+                .getattr(intern!(py, "REGISTER_FORWARD"))?;
             Some(pqsc_mode)
         } else {
             None
         };
         let feedback_path = if local_feedback {
-            let feedback_path = self
-                .module
-                .getattr(intern!(self.module.py(), "FeedbackPath"))?
-                .getattr(intern!(self.module.py(), "INTERNAL"))?;
+            let feedback_path = module
+                .getattr(intern!(py, "FeedbackPath"))?
+                .getattr(intern!(py, "INTERNAL"))?;
             Some(feedback_path)
         } else {
-            let feedback_path = self
-                .module
-                .getattr(intern!(self.module.py(), "FeedbackPath"))?
-                .getattr(intern!(self.module.py(), "ZSYNC"))?;
+            let feedback_path = module
+                .getattr(intern!(py, "FeedbackPath"))?
+                .getattr(intern!(py, "ZSYNC"))?;
             Some(feedback_path)
         };
 
         // Init the system description
-        let kwargs = PyDict::new(self.module.py());
-        kwargs.set_item(intern!(self.module.py(), "generator_type"), sg_type)?;
-        kwargs.set_item(intern!(self.module.py(), "analyzer_type"), qa_type)?;
-        kwargs.set_item(intern!(self.module.py(), "pqsc_mode"), pqsc_mode)?;
-        kwargs.set_item(intern!(self.module.py(), "trigger_source"), trigger_source)?;
-        kwargs.set_item(intern!(self.module.py(), "feedback_path"), feedback_path)?;
+        let kwargs = PyDict::new(py);
+        kwargs.set_item(intern!(py, "generator_type"), sg_type)?;
+        kwargs.set_item(intern!(py, "analyzer_type"), qa_type)?;
+        kwargs.set_item(intern!(py, "pqsc_mode"), pqsc_mode)?;
+        kwargs.set_item(intern!(py, "trigger_source"), trigger_source)?;
+        kwargs.set_item(intern!(py, "feedback_path"), feedback_path)?;
         let system_description = system_description_func.call((), Some(&kwargs))?;
 
         // Initialize `QCCSFeedbackModel` with the system description
-        let model_instance: Bound<'_, PyAny> = model_class.call1((system_description,))?;
+        let model_instance = model_class.call1((system_description,))?;
         Ok(model_instance)
     }
 
     pub(super) fn get_latency(
         &self,
         acquisition_end_samples: i64,
-        acquisition_device: &AwgDevice,
-        generator_device: &AwgDevice,
+        acquisition_device: &FeedbackDevice,
+        generator_device: &FeedbackDevice,
         local_feedback: bool,
     ) -> PyResult<i64> {
-        let model = self.build_model(acquisition_device, generator_device, local_feedback)?;
-        let get_latency_func = model.getattr(intern!(self.module.py(), "get_latency"))?;
-        let latency_samples = get_latency_func.call1((acquisition_end_samples,))?;
-        Ok(latency_samples
-            .extract::<i64>()
-            .expect("Expected feedback latency to be integer."))
+        Python::attach(|py| {
+            let module = PyModule::import(py, intern!(py, "zhinst.timing_models"))?;
+            let model = QCCSFeedbackModel::new().build_model(
+                module,
+                acquisition_device,
+                generator_device,
+                local_feedback,
+            )?;
+            let get_latency_func = model.getattr(intern!(py, "get_latency"))?;
+            let latency_samples = get_latency_func.call1((acquisition_end_samples,))?;
+            Ok(latency_samples
+                .extract::<i64>()
+                .expect("Expected feedback latency to be integer."))
+        })
     }
 }

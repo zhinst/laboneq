@@ -66,6 +66,7 @@ mod tests {
             }
             .into(),
             fir: FirCompensation {
+                strict: false,
                 coefficients: vec![0.0],
             }
             .into(),

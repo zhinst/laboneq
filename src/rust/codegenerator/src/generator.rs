@@ -276,6 +276,11 @@ where
                 channel: *channel,
                 marker_mode: awg_info.marker_modes.get(channel).cloned(),
                 hw_oscillator_index: oscillator_index,
+                scheduler_delay: measurement_info
+                    .delays
+                    .get(&signal.uid)
+                    .map(|d| d.delay_port())
+                    .unwrap_or_default(),
                 amplitude: signal_properties.amplitude.clone(),
                 voltage_offset,
                 gains: mixer_props.gains,
@@ -303,6 +308,11 @@ where
                 signal: signal.uid,
                 channel: *channel,
                 hw_oscillator_index: oscillator_index,
+                scheduler_delay: measurement_info
+                    .delays
+                    .get(&signal.uid)
+                    .map(|d| d.delay_port())
+                    .unwrap_or_default(),
                 port_mode: signal_properties.port_mode.clone(),
                 port_delay: signal_properties.port_delay.clone(),
                 range: signal_properties.range.clone(),
@@ -363,11 +373,6 @@ where
             }),
         sampled_waveforms,
         integration_kernels: integration_weights,
-        signal_delays: measurement_info
-            .delays
-            .iter()
-            .map(|(k, v)| (*k, v.delay_port().into()))
-            .collect(),
         integration_lengths: measurement_info
             .integration_lengths
             .into_iter()

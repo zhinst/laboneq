@@ -169,8 +169,11 @@ struct BounceCompensation {
 struct FirCompensation {
   # Finite impulse response (FIR) compensation filter.
 
-  coefficients @0 :List(Float64);  
+  coefficients @0 :List(Float64);
   # FIR filter coefficients. Output is convolution with input.
+
+  strict @1 :Bool;
+  # When true, FIR tail overlap with adjacent waveforms raises an error instead of merging.
 }
 
 struct AmplifierPump {

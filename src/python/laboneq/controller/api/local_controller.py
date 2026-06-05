@@ -7,8 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 from laboneq.controller.api.commons import SubmissionRegistry
 from laboneq.controller.api.controller_api import ControllerAPI
+from laboneq.controller.constants import DEFAULT_TIMEOUT_S
 from laboneq.controller.controller import Controller, SubmissionStatus
-from laboneq.controller.devices.device_collection import DEFAULT_TIMEOUT_S
 from laboneq.dsl.result.results import Results
 from laboneq.implementation.legacy_adapters.device_setup_converter import (
     convert_device_setup_to_setup,

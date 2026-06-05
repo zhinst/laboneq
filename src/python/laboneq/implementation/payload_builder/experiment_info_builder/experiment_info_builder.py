@@ -4,13 +4,8 @@
 from __future__ import annotations
 
 import logging
-import re
-from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Dict, TypeVar
 
-import numpy as np
-
-from laboneq.compiler import DeviceType
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.path import LogicalSignalGroups_Path, insert_logical_signal_prefix
 from laboneq.core.types.enums import IODirection, PhysicalChannelType
@@ -37,11 +32,6 @@ from laboneq.dsl.experiment.experiment_signal import ExperimentSignal
 from laboneq.dsl.experiment.section import (
     AcquireLoopRt,
     Section,
-)
-from laboneq.dsl.parameter import (
-    LinearSweepParameter,
-    Parameter,
-    SweepParameter,
 )
 from laboneq.implementation.payload_builder.experiment_info_builder.device_info_builder import (
     DeviceInfoBuilder,
@@ -109,6 +99,7 @@ class ExperimentInfoBuilder:
             devices=list(self._device_info.device_mapping.values()),
             signals=sorted(self._signal_infos.values(), key=lambda s: s.uid),
             src=self._experiment,
+            setup_description=self._device_setup.setup_description,
         )
         return experiment_info
 
@@ -148,39 +139,6 @@ class ExperimentInfoBuilder:
             calibration.local_oscillator = Oscillator(frequency=frequency)
         else:
             local_oscillator.frequency = frequency
-
-    @staticmethod
-    def _get_output_routes(calibration: Any) -> list[Any]:
-        # Prefer DSL output routing fields; when calibration is an AttributeOverrider,
-        # data-shaped base fields may exist as empty lists and would otherwise mask
-        # DSL routes from the overriding experiment calibration.
-        routes = getattr(calibration, "added_outputs", None)
-        if routes is not None:
-            return routes
-        routes = getattr(calibration, "output_routing", None)
-        return routes or []
-
-    @staticmethod
-    def _route_source(route: Any) -> str | None:
-        return getattr(route, "source_signal", None) or getattr(route, "source", None)
-
-    @staticmethod
-    def _route_amplitude(route: Any) -> Any:
-        amplitude = getattr(route, "amplitude", None)
-        if amplitude is None:
-            amplitude = getattr(route, "amplitude_scaling", None)
-        return amplitude
-
-    @staticmethod
-    def _route_phase(route: Any) -> Any:
-        phase = getattr(route, "phase", None)
-        if phase is None:
-            phase = getattr(route, "phase_shift", None)
-        return phase
-
-    @staticmethod
-    def _is_parameter(value: Any) -> bool:
-        return isinstance(value, Parameter)
 
     def _check_physical_channel_calibration_conflict(self):
         field_accessors: dict[str, Any] = {
@@ -367,7 +325,7 @@ class ExperimentInfoBuilder:
                 if physical_channel.direction != IODirection.IN:
                     _logger.warning(
                         "'amplifier_pump' calibration for logical signal %s will be ignored - "
-                        "only applicable to acquire lines",
+                        "only applicable to SHFQA acquire lines",
                         mapped_ls_path,
                     )
                 elif (ppc_connection := self._ppc_connections.get(mapped_ls)) is None:
@@ -384,24 +342,9 @@ class ExperimentInfoBuilder:
                     )
 
             # Output router and adder (RTR SHFSG/QC). Requires: RTR option
-            output_routes = self._get_output_routes(calibration)
-            if output_routes:
-                for port in physical_channel.ports:
-                    if (
-                        not re.match(r"SGCHANNELS/\d/OUTPUT", port.path)
-                        and device.device_type != DeviceType.SHFSG
-                    ):
-                        msg = f"Error on signal {mapped_ls_path}: Output routing can be only applied to output SGCHANNELS."
-                        raise LabOneQException(msg)
-            output_routers_per_channel = defaultdict(set)
-            for output_router in output_routes:
-                source_signal = self._route_source(output_router)
-                if source_signal is None:
-                    msg = (
-                        f"Error on signal {mapped_ls_path}: Output routing source signal"
-                        " is not set."
-                    )
-                    raise LabOneQException(msg)
+            output_routes = calibration.added_outputs or []
+            for output_route in output_routes:
+                source_signal = output_route.source
                 if LogicalSignalGroups_Path not in source_signal:
                     source_signal = insert_logical_signal_prefix(source_signal)
 
@@ -410,7 +353,7 @@ class ExperimentInfoBuilder:
                         source_signal
                     )
                 except KeyError:
-                    msg = f"Error on signal {mapped_ls_path}: Output routing source signal {self._route_source(output_router)} does not exist."
+                    msg = f"Error on signal {mapped_ls_path}: Output routing source signal {source_signal} does not exist."
                     raise LabOneQException(msg) from None
                 from_pc = (
                     self._setup_helper.instruments.physical_channel_by_logical_signal(
@@ -422,54 +365,12 @@ class ExperimentInfoBuilder:
                 if from_device != device:
                     msg = f"Error on signal {mapped_ls_path}: Output routing can be only applied within the same device SGCHANNELS: {device_uid} != {from_device.uid}"
                     raise LabOneQException(msg)
-                assert len(physical_channel.ports) == 1 and len(from_pc.ports) == 1, (
-                    "Output SG physical channels must have exactly one port."
-                )
-                to_port = physical_channel.ports[0]
                 from_port = from_pc.ports[0]
-                if to_port == from_port:
-                    msg = f"Error on signal {mapped_ls_path}: Output routing source is the same as the target channel: {from_port.path}"
-                    raise LabOneQException(msg)
-                if from_port.channel in output_routers_per_channel[to_port.channel]:
-                    msg = f"Error on signal {mapped_ls_path}: Duplicate output routing from channel {from_port.channel}."
-                    raise LabOneQException(msg)
-                output_routers_per_channel[to_port.channel].add(from_port.channel)
-                if len(output_routers_per_channel[to_port.channel]) > 3:
-                    msg = f"Error on signal {mapped_ls_path}: Maximum of three signals can be routed per output SGCHANNELS."
-                    raise LabOneQException(msg)
-                route_amplitude = self._route_amplitude(output_router)
-                if self._is_parameter(route_amplitude):
-                    if isinstance(route_amplitude, SweepParameter):
-                        if route_amplitude.uid not in self._sweep_params_min_maxes:
-                            self._sweep_params_min_maxes[route_amplitude.uid] = (
-                                np.min(route_amplitude.values),
-                                np.max(route_amplitude.values),
-                            )
-                        min_val, max_val = self._sweep_params_min_maxes[
-                            route_amplitude.uid
-                        ]
-                    elif isinstance(
-                        route_amplitude,
-                        LinearSweepParameter,
-                    ):
-                        min_val = route_amplitude.start
-                        max_val = route_amplitude.stop
-                    if min_val < 0.0 or max_val > 1.0:
-                        msg = "Output route amplitude value must be between 0 and 1."
-                        raise LabOneQException(
-                            f"Invalid sweep parameter {route_amplitude.uid}: {msg}"
-                        )
                 signal_info.output_routing.append(
                     OutputRoute(
-                        to_channel=to_port.channel,
-                        to_signal=signal_info.uid,
-                        from_channel=from_port.channel,
-                        from_signal=self._ls_to_exp_sig_mapping.get(
-                            self._setup_helper.logical_signal_path(source_signal)
-                        ),
                         from_port=from_port.path,
-                        amplitude=route_amplitude,
-                        phase=self._route_phase(output_router),
+                        amplitude=output_route.amplitude_scaling,
+                        phase=output_route.phase_shift,
                     )
                 )
             signal_info.automute = calibration.automute

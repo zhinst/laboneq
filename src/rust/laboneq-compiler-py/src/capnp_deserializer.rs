@@ -1976,7 +1976,10 @@ impl<'py> Deserializer<'py> {
                     .map_err(Error::new)?
                     .into_iter()
                     .collect::<Vec<f64>>();
-                Ok::<FirCompensation, Error>(FirCompensation { coefficients })
+                Ok::<FirCompensation, Error>(FirCompensation {
+                    coefficients,
+                    strict: fir.get_strict(),
+                })
             })
             .transpose()?;
 
@@ -2140,19 +2143,10 @@ impl SetupDescriptionQccsDeserializer<'_> {
                 .collect::<Result<Vec<_>>>()?;
             let ports = ports.iter().map(|p| p.to_string()).collect::<Vec<_>>();
 
-            let channel_type = signal
-                .get_channel_type()
-                .map_err(Error::new)?
-                .to_str()
-                .map_err(Error::new)?
-                .parse()
-                .map_err(Error::new)?;
-
             let physical_channel = PhysicalChannel {
                 uid: channel_uid.to_string(),
                 device_uid: self.id_store.get_or_insert(device_uid).into(),
                 ports,
-                channel_type,
             };
             self.physical_channels.push(physical_channel);
             self.signal_map
@@ -2234,8 +2228,20 @@ impl SetupDescriptionZqcsDeserializer {
 
         let device_uid = derializer.deserialize_instrument(reader)?;
         derializer.deserialize_signals(reader)?;
+        // Opaque Cap'n Proto blob describing the ZQCS rack (delivery rules,
+        // topology, latency almanac). The compiler treats it as bytes; only
+        // the ZQCS backend decodes it. Relevant for a stable fingerprint.
+        let data = match reader.get_setup_description().which() {
+            Ok(device_setup_capnp::device_setup::setup_description::Which::Zqcs(zqcs)) => zqcs
+                .map_err(Error::new)?
+                .get_data()
+                .map_err(Error::new)?
+                .to_vec(),
+            Ok(device_setup_capnp::device_setup::setup_description::Which::Qccs(_)) => Vec::new(),
+            Err(::capnp::NotInSchema(_)) => Vec::new(),
+        };
         let setup = SetupDescriptionZqcs::new(
-            vec![],
+            data,
             id_store.get_or_insert(device_uid).into(),
             derializer.channels,
         );

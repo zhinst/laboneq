@@ -22,6 +22,7 @@ use codegenerator::result::{AwgCodeGenerationResult, MarkerMode};
 use codegenerator::result::{FixedValueOrParameter, ParameterPhaseIncrement};
 use codegenerator::result::{PpcSettings, RoutedOutput, SeqCGenOutput};
 
+use crate::common_types::PortModePy;
 use crate::waveform_sampler::WaveformSamplerPy;
 
 #[pyo3::pyclass(name = "FeedbackRegisterConfig", skip_from_py_object)]
@@ -174,8 +175,6 @@ pub(crate) struct AwgCodeGenerationResultPy {
     sampled_waveforms: Vec<Py<SampledWaveformPy>>,
     #[pyo3(get)]
     integration_kernels: Vec<Py<IntegrationKernelPy>>,
-    #[pyo3(get)]
-    signal_delays: HashMap<String, f64>,
     #[pyo3(get)]
     integration_lengths: HashMap<String, Py<SignalIntegrationInfoPy>>,
     #[pyo3(get)]
@@ -341,11 +340,7 @@ impl AwgCodeGenerationResultPy {
                 })
                 .collect()
         });
-        let signal_delays = result
-            .signal_delays
-            .into_iter()
-            .map(|(k, v)| (id_store.resolve_unchecked(k).to_string(), v))
-            .collect();
+
         // We take a detour via a Vec to ensure the order of wave indices is preserved
         let wave_indices = result
             .wave_indices
@@ -419,7 +414,9 @@ impl AwgCodeGenerationResultPy {
                         .unwrap()
                         .unbind()
                     }),
-                    port_mode: output.port_mode.map(|pm| pm.to_string().to_lowercase()),
+                    port_mode: output
+                        .port_mode
+                        .map(|pm| PortModePy::from(pm).into_pyobject(py).unwrap().unbind()),
                     port_delay: output.port_delay.map(|pd| {
                         fixed_value_or_parameter_duration_to_pyany(py, &pd, id_store).unwrap()
                     }),
@@ -432,6 +429,7 @@ impl AwgCodeGenerationResultPy {
                         .iter()
                         .map(|o| routed_output_to_py(py, o, id_store).unwrap())
                         .collect(),
+                    scheduler_delay: output.scheduler_delay.into(),
                 }
                 .into_pyobject(py)
                 .unwrap()
@@ -450,7 +448,9 @@ impl AwgCodeGenerationResultPy {
                     amplitude: None, // Input channels don't have amplitude settings
                     voltage_offset: None, // Input channels don't have voltage offset
                     gains: None,     // Input channels don't have gain settings
-                    port_mode: properties.port_mode.map(|pm| pm.to_string().to_lowercase()),
+                    port_mode: properties
+                        .port_mode
+                        .map(|pm| PortModePy::from(pm).into_pyobject(py).unwrap().unbind()),
                     port_delay: properties.port_delay.map(|pd| {
                         fixed_value_or_parameter_duration_to_pyany(py, &pd, id_store).unwrap()
                     }),
@@ -459,6 +459,7 @@ impl AwgCodeGenerationResultPy {
                         .lo_frequency
                         .map(|lf| fixed_value_or_parameterf64_to_pyany(py, &lf, id_store).unwrap()),
                     routed_outputs: Vec::new(), // Input channels don't have routed outputs
+                    scheduler_delay: properties.scheduler_delay.into(),
                 }
                 .into_pyobject(py)
                 .unwrap()
@@ -508,7 +509,6 @@ impl AwgCodeGenerationResultPy {
             command_table,
             sampled_waveforms,
             integration_kernels,
-            signal_delays,
             integration_lengths,
             parameter_phase_increment_map,
             feedback_register_config,
@@ -830,7 +830,7 @@ pub(crate) struct ChannelPropertiesPy {
     #[pyo3(get)]
     pub gains: Option<Py<Gains>>, // Internal field to hold the Gains struct
     #[pyo3(get)]
-    pub port_mode: Option<String>,
+    pub port_mode: Option<Py<PortModePy>>,
     #[pyo3(get)]
     pub port_delay: Option<Py<PyAny>>, // Can be either a float or a parameter reference (string)
     #[pyo3(get)]
@@ -839,6 +839,8 @@ pub(crate) struct ChannelPropertiesPy {
     pub lo_frequency: Option<Py<PyAny>>, // Can be either a float or a parameter reference (string)
     #[pyo3(get)]
     pub routed_outputs: Vec<Py<RoutedOutputPy>>,
+    #[pyo3(get)]
+    pub scheduler_delay: f64,
 }
 
 #[pyclass(name = "Gains", skip_from_py_object)]

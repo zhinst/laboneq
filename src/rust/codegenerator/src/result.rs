@@ -47,7 +47,6 @@ pub struct AwgCodeGenerationResult<T: SampleWaveforms> {
     pub(crate) shf_sweeper_config: Option<ShfPpcSweepJson>,
     pub sampled_waveforms: Vec<SampledWaveform<T::Signature>>,
     pub integration_kernels: Vec<T::SampledIntegrationKernel>,
-    pub signal_delays: HashMap<SignalUid, f64>,
     pub integration_lengths: HashMap<SignalUid, SignalIntegrationInfo>,
     pub feedback_register_config: FeedbackRegisterConfig,
     pub output_channel_properties: Vec<ChannelProperties>,
@@ -195,8 +194,10 @@ pub struct ChannelProperties {
     pub channel: ChannelIndex,
     pub marker_mode: Option<MarkerMode>,
     pub hw_oscillator_index: Option<u16>,
-    // Near-time sweep values.
-    // Controller accepts either a fixed value or a parameter.
+    /// Delay to apply to this channel.
+    pub scheduler_delay: Duration<Second>,
+    /// Near-time sweep values.
+    /// Controller accepts either a fixed value or a parameter.
     pub amplitude: Option<FixedValueOrParameter<f64>>,
     pub voltage_offset: FixedValueOrParameter<f64>,
     pub gains: Option<Gains>,
@@ -225,6 +226,8 @@ pub struct InputChannelProperties {
     pub signal: SignalUid,
     pub channel: ChannelIndex,
     pub hw_oscillator_index: Option<u16>,
+    /// Delay to apply to this channel.
+    pub scheduler_delay: Duration<Second>,
     pub port_mode: Option<PortMode>,
     pub port_delay: Option<FixedValueOrParameter<Duration<Second>>>,
     pub range: Option<Quantity>,

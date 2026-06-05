@@ -66,6 +66,7 @@ if TYPE_CHECKING:
     from laboneq.core.types.numpy_support import NumPyArray
     from laboneq.data.recipe import Initialization, NtStepKey
     from laboneq.data.scheduled_experiment import ScheduledExperiment
+    from laboneq.data.setup_descriptions import SetupDescription
 
 
 _logger = logging.getLogger(__name__)
@@ -164,6 +165,15 @@ class DeviceZI(DeviceAbstract):
     @property
     def is_secondary(self) -> bool:
         return False
+
+    @property
+    def setup_description(self) -> SetupDescription | None:
+        """Per-device setup description payload, if any.
+
+        Devices that fetch a hardware-side description (e.g. ZQCS via SCM)
+        override this; everything else returns None.
+        """
+        return None
 
     ### Device linking by trigger chain
     def remove_all_links(self):
@@ -762,7 +772,7 @@ class DeviceBase(DeviceZI):
         if len(failed_responses) > 0:
             failures = "\n".join(failed_responses)
             raise LabOneQControllerException(
-                f"{self.dev_repr}: Internal error: {config_name} is not complete within {timeout_s}s. "
+                f"{self.dev_repr}: Internal error: {config_name} is not complete within {response_waiter.timeout_s}s. "
                 f"Not fulfilled:\n{failures}"
             )
 
@@ -822,15 +832,14 @@ class DeviceBase(DeviceZI):
                 "Conditions to start RT on followers still not fulfilled after %.1f"
                 " seconds, nonetheless trying to continue..."
                 "\nNot fulfilled:\n%s",
-                timeout_s,
+                rw.timeout_s,
                 "\n".join(failed_nodes),
             )
 
-    async def make_waiter_for_execution_done(
-        self, recipe_data: RecipeData, timeout_s: float
-    ):
+    async def make_waiter_for_execution_done(self, recipe_data: RecipeData):
+        min_wait_time, guarded_wait_time = get_execution_time(recipe_data)
         response_waiter = ResponseWaiterAsync(
-            api=self._api, dev_repr=self.dev_repr, timeout_s=timeout_s
+            api=self._api, dev_repr=self.dev_repr, timeout_s=guarded_wait_time
         )
         for core in self.allocated_cores(recipe_data=recipe_data):
             response_waiter.add_with_msg(
@@ -839,12 +848,11 @@ class DeviceBase(DeviceZI):
                 )
             )
         await response_waiter.prepare()
-        return response_waiter
+        return min_wait_time, response_waiter
 
     async def wait_for_execution_done(
         self,
         response_waiter: ResponseWaiterAsync,
-        timeout_s: float,
         min_wait_time: float,
     ):
         failed_nodes = await response_waiter.wait()
@@ -855,7 +863,7 @@ class DeviceBase(DeviceZI):
                     " execution time was %.2f s. Continuing to the next step."
                     "\nNot fulfilled:\n%s"
                 ),
-                timeout_s,
+                response_waiter.timeout_s,
                 min_wait_time,
                 "\n".join(failed_nodes),
             )

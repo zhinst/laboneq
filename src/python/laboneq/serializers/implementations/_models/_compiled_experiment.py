@@ -14,6 +14,7 @@ import attrs
 import numpy
 
 from laboneq.core.types.enums.awg_signal_type import AWGSignalType
+from laboneq.core.types.enums.port_mode import PortMode
 from laboneq.data.awg_info import AwgKey
 from laboneq.data.recipe import (
     AWG,
@@ -103,7 +104,7 @@ class IOModel:
     range_unit: str | None
     precompensation: Any
     lo_frequency: Any
-    port_mode: str | None
+    port_mode: PortMode | None
     port_delay: Any
     scheduler_port_delay: float
     delay_signal: float | None

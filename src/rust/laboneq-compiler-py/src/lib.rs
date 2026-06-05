@@ -25,7 +25,6 @@ use crate::parameter_store::create_parameter_store;
 use crate::py_device_setup_capnp::DeviceSetupCapnpBuilderPy;
 use crate::py_experiment::ExperimentPy;
 use crate::py_signal::AmplifierPumpPy;
-use crate::qccs_feedback_calculator::QccsFeedbackCalculator;
 use crate::result_shape::ResultShapes;
 use crate::result_shape::extract_result_shapes;
 use crate::setup_processor::DelayRegistry;
@@ -143,12 +142,15 @@ fn build_experiment_capnp<B: CompilerBackend>(
     for (uid, value) in deserialized.external_parameter_values {
         py_object_store.insert(uid, value);
     }
-
     let backend_processed = backend
         .preprocess_experiment(ExperimentView::new(
             &deserialized.root,
             &mut deserialized.id_store,
-            &deserialized.parameters,
+            deserialized
+                .parameters
+                .iter()
+                .map(|(k, v)| (*k, v.inner_values().as_ref()))
+                .collect(),
             &deserialized.pulses,
             deserialized.experiment_signals.clone(),
             deserialized.setup_description,
@@ -266,7 +268,10 @@ fn compile_realtime_py_impl(
     let inner_experiment = &experiment.inner;
     let mut parameter_store = create_parameter_store(parameters, &inner_experiment.id_store);
     let views = signal_views(device_setup);
-    let feedback_calculator = QccsFeedbackCalculator::new(py, views.values().cloned())?;
+
+    let feedback_calculator = experiment
+        .backend
+        .feedback_calculator(&views.values().cloned().collect::<Vec<_>>());
 
     let _t = laboneq_log::StageTiming::start("Schedule");
     let result = schedule_experiment(
@@ -279,7 +284,7 @@ fn compile_realtime_py_impl(
         },
         &parameter_store,
         chunking_info,
-        Some(&feedback_calculator),
+        feedback_calculator.as_ref(),
     )
     .map_err(|e| laboneq_error::laboneq_error!("{e}"))?;
     drop(_t);

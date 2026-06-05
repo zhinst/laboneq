@@ -27,6 +27,7 @@ pub struct ExponentialCompensation {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FirCompensation {
     pub coefficients: Vec<f64>,
+    pub strict: bool,
 }
 
 /// Bounce precompensation

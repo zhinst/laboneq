@@ -11,6 +11,7 @@ from typing_extensions import TypeAlias
 
 if TYPE_CHECKING:
     from laboneq.core.types.enums.awg_signal_type import AWGSignalType
+    from laboneq.core.types.enums.port_mode import PortMode
 
 ParameterUID: TypeAlias = str
 
@@ -56,7 +57,7 @@ class IO:
     range_unit: str | None = None
     precompensation: dict[str, dict] | None = None
     lo_frequency: Any = None
-    port_mode: str | None = None
+    port_mode: PortMode | None = None
     port_delay: Any = None
     scheduler_port_delay: float = 0.0
     delay_signal: float | None = None

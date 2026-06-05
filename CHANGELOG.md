@@ -1,3 +1,22 @@
+# LabOne Q 26.7.0b3 (2026-06-05)
+
+## Features
+
+- Added a `skip_passed` argument/attribute to the `AutomationLayer` class that makes it possible to skip running passed nodes.
+
+## Bug Fixes
+
+- Fixed a bug where a timeout error could occur during experiments using pipelined execution
+  (chunked) with large result sizes. The timeout calculation now accounts for
+  the GW-to-FW result transfer time, which was previously unaccounted for
+  and could cause premature timeouts on experiments with many jobs and long readout
+  blocks.
+- Fixed a bug where explicitly setting `PortMode.RF` on a QA channel had no effect and the hardware used the LF path instead.
+
+## Documentation
+
+- Added reference documentation for `for_each` and `sweep_range`.
+
 # LabOne Q 26.7.0b2 (2026-05-22)
 
 ## Features

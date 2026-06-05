@@ -16,6 +16,7 @@ if TYPE_CHECKING:
         PhysicalChannelType,
         ReferenceClockSource,
     )
+    from laboneq.data.setup_descriptions import SetupDescription
 
 
 class DeviceType(EnumReprMixin, Enum):
@@ -156,3 +157,4 @@ class Setup:
         default_factory=list
     )
     calibration: Calibration = field(default_factory=Calibration)
+    setup_description: SetupDescription | None = None

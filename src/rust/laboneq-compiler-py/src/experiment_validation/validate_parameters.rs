@@ -103,12 +103,12 @@ pub(super) fn check_ppc_sweeper<'a>(
     if !conflicts.is_empty() {
         let msg = format!(
             "Signals on the following channels drive both SHFPPC sweeps, and use the \
-            output auto-muting feature:\n {}",
+            output auto-muting feature: {}",
             conflicts
                 .iter()
-                .map(|s| format!("- device {}, channel {}", s.device_uid().0, s.ports()[0]))
+                .map(|s| format!("{}", s.uid().0))
                 .collect::<Vec<String>>()
-                .join("\n")
+                .join(", ")
         );
         return Err(Error::new(msg));
     }
@@ -122,12 +122,12 @@ pub(super) fn check_ppc_sweeper<'a>(
     if !conflicts.is_empty() {
         let msg = format!(
             "Signals on the following channels drive both SHFPPC sweeps, and use \
-            section triggers:\n {}",
+            section triggers: {}",
             conflicts
                 .into_iter()
-                .map(|s| format!("- device {}, channel {}", s.device_uid().0, s.ports()[0]))
+                .map(|s| format!("{}", s.uid().0))
                 .collect::<Vec<String>>()
-                .join("\n")
+                .join(", ")
         );
         return Err(Error::new(msg));
     }

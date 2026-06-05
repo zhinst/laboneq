@@ -92,6 +92,7 @@ pub fn create_py_module<'a>(py: Python<'a>, name: &str) -> PyResult<Bound<'a, Py
     m.add_class::<common_types::SignalTypePy>()?;
     m.add_class::<common_types::DeviceTypePy>()?;
     m.add_class::<common_types::MixerTypePy>()?;
+    m.add_class::<common_types::PortModePy>()?;
     // Waveform sampling
     m.add_class::<PlaySamplesPy>()?;
     m.add_class::<PlayHoldPy>()?;

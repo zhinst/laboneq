@@ -46,53 +46,24 @@ impl ExperimentPy {
         self.delay_compensation.signal_port_delay(uid).into()
     }
 
-    fn signal_sampling_rate(&self, signal_uid: &str) -> f64 {
-        let uid = self.inner.id_store.get(signal_uid).unwrap().into();
-        self.device_setup.signal_by_uid(&uid).unwrap().sampling_rate
-    }
-
-    fn signals(&self) -> Vec<String> {
-        self.device_setup
-            .signals()
-            .map(|signal| self.inner.id_store.resolve(signal.uid).unwrap().to_string())
-            .collect()
-    }
-
-    fn signal_device_uid(&self, signal_uid: &str) -> String {
-        let uid = self.inner.id_store.get(signal_uid).unwrap().into();
-        let signal = self.device_setup.signal_by_uid(&uid).unwrap();
-        let device: &laboneq_ir::system::AwgDevice =
-            self.device_setup.device_by_uid(&signal.device_uid).unwrap();
-        self.inner
-            .id_store
-            .resolve(device.uid())
-            .unwrap()
-            .to_string()
-    }
-
     fn device_lead_delay(&self, device_uid: &str) -> f64 {
         let uid = self.inner.id_store.get(device_uid).unwrap().into();
         self.delay_compensation.device_lead_delay(uid).into()
     }
 
-    fn signal_precompensation(
-        &self,
-        py: Python,
-        signal_uid: &str,
-    ) -> Option<Py<PrecompensationPy>> {
+    fn signal_precompensation(&self, py: Python, signal_uid: &str) -> Option<PrecompensationPy> {
         let uid = self.inner.id_store.get(signal_uid).unwrap().into();
         if let Some(signal) = self.device_setup.signal_by_uid(&uid)
             && let Some(p) = &signal.precompensation
         {
             let precomp_py = PrecompensationPy {
                 high_pass: p.high_pass.as_ref().map(|hp| {
-                    Py::new(
-                        py,
-                        HighPassCompensationPy {
-                            timeconstant: hp.timeconstant,
-                        },
-                    )
+                    HighPassCompensationPy {
+                        timeconstant: hp.timeconstant,
+                    }
+                    .into_pyobject(py)
                     .unwrap()
+                    .unbind()
                 }),
                 exponential: p
                     .exponential
@@ -109,26 +80,25 @@ impl ExperimentPy {
                     })
                     .collect(),
                 fir: p.fir.as_ref().map(|fir| {
-                    Py::new(
-                        py,
-                        FirCompensationPy {
-                            coefficients: fir.coefficients.clone(),
-                        },
-                    )
+                    FirCompensationPy {
+                        coefficients: fir.coefficients.clone(),
+                        strict: fir.strict,
+                    }
+                    .into_pyobject(py)
                     .unwrap()
+                    .unbind()
                 }),
                 bounce: p.bounce.as_ref().map(|bounce| {
-                    Py::new(
-                        py,
-                        BounceCompensationPy {
-                            delay: bounce.delay,
-                            amplitude: bounce.amplitude,
-                        },
-                    )
+                    BounceCompensationPy {
+                        delay: bounce.delay,
+                        amplitude: bounce.amplitude,
+                    }
+                    .into_pyobject(py)
                     .unwrap()
+                    .unbind()
                 }),
             };
-            Some(Py::new(py, precomp_py).unwrap())
+            Some(precomp_py)
         } else {
             None
         }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use codegenerator::ir::compilation_job::{DeviceKind, MixerType, SignalKind};
+use laboneq_dsl::signal_calibration::PortMode;
 use pyo3::prelude::*;
 
 #[allow(clippy::upper_case_acronyms)]
@@ -60,6 +61,22 @@ impl From<MixerType> for MixerTypePy {
         match mixer_type {
             MixerType::IQ => MixerTypePy::IQ,
             MixerType::UhfqaEnvelope => MixerTypePy::UhfqaEnvelope,
+        }
+    }
+}
+
+#[pyclass(name = "PortMode", eq, hash, frozen, skip_from_py_object)]
+#[derive(PartialEq, Clone, Hash)]
+pub(crate) enum PortModePy {
+    RF,
+    LF,
+}
+
+impl From<PortMode> for PortModePy {
+    fn from(pm: PortMode) -> Self {
+        match pm {
+            PortMode::RF => PortModePy::RF,
+            PortMode::LF => PortModePy::LF,
         }
     }
 }

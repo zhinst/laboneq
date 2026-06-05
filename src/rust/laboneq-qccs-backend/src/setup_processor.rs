@@ -12,6 +12,7 @@ use laboneq_ir::system::AwgDevice;
 
 use crate::Result;
 use crate::experiment_view::ExperimentViewWrapper;
+use crate::ports::Port;
 use crate::ports::is_shfqa_port;
 use crate::ports::is_shfsg_port;
 
@@ -59,7 +60,7 @@ struct InstrumentProperties<'a> {
 
 struct SignalProperties<'a> {
     signal: SignalUid,
-    ports: Vec<&'a String>,
+    ports: Vec<&'a Port>,
 }
 
 fn device_to_awg_devices(

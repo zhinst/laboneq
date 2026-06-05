@@ -9,14 +9,8 @@ from typing import TYPE_CHECKING
 from typing_extensions import deprecated
 
 from laboneq.core.types import CompiledExperiment
-from laboneq.implementation.legacy_adapters.converters_experiment_description import (
-    convert_signal_map,
-)
-from laboneq.implementation.legacy_adapters.device_setup_converter import (
-    convert_device_setup_to_setup,
-)
 from laboneq.implementation.payload_builder.payload_builder import (
-    compile_experiment as compile_experiment_impl,
+    compile_experiment as _compile_experiment,
 )
 
 if TYPE_CHECKING:
@@ -30,14 +24,9 @@ def compile_experiment(
     compiler_settings: dict | None = None,
 ) -> CompiledExperiment:
     """Compile a LabOne Q experiment."""
-
-    new_setup = convert_device_setup_to_setup(device_setup)
-    signal_mapping = convert_signal_map(experiment)
-
-    scheduled_experiment = compile_experiment_impl(
-        device_setup=new_setup,
+    scheduled_experiment = _compile_experiment(
+        device_setup=device_setup,
         experiment=experiment,
-        signal_mappings=signal_mapping,
         compiler_settings=compiler_settings,
     )
     compiled_experiment = CompiledExperiment(

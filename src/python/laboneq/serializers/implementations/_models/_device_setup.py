@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import sys
 from enum import Enum
-from typing import Any, ClassVar, Type, Union
+from typing import ClassVar, Type, Union
 
 import attrs
 
@@ -14,7 +14,6 @@ from laboneq.core.types.enums import PhysicalChannelType
 from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.core.types.enums.io_signal_type import IOSignalType
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
-from laboneq.dsl.device import SystemDescription
 from laboneq.dsl.device.connection import Connection
 from laboneq.dsl.device.instruments.hdawg import HDAWG
 from laboneq.dsl.device.instruments.nonqc import NonQC
@@ -31,6 +30,7 @@ from laboneq.dsl.device.io_units.logical_signal import LogicalSignal
 from laboneq.dsl.device.io_units.physical_channel import PhysicalChannel
 from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
+from laboneq.dsl.device.ports import Port
 from laboneq.dsl.device.servers.data_server import DataServer
 from laboneq.serializers.implementations._models._calibration import (
     SignalCalibrationModel,
@@ -94,6 +94,16 @@ class ConnectionModel:
 
 
 @attrs.define
+class PortModel:
+    direction: IODirectionModel
+    uid: str | None
+    connector_labels: list[str]
+    physical_port_ids: list[str]
+    signal_type: IOSignalTypeModel | None
+    _target_class: ClassVar[Type] = Port
+
+
+@attrs.define
 class ZIStandardInstrumentModel:
     uid: str
     interface: str
@@ -122,7 +132,7 @@ class ZIStandardInstrumentModel:
             raise ValueError(
                 f"Unsupported instrument type: {type(obj).__name__} when unstructuring ZIStandardInstrumentModel"
             )
-        return {
+        out = {
             "uid": obj.uid,
             "interface": obj.interface,
             "connections": [
@@ -136,6 +146,9 @@ class ZIStandardInstrumentModel:
             ),
             "_instrument_type": type(obj).__name__,
         }
+        if isinstance(obj, ZQCS):
+            out["ports"] = [_converter.unstructure(p, PortModel) for p in obj.ports]
+        return out
 
     @classmethod
     def _structure(cls, obj, _):
@@ -152,7 +165,7 @@ class ZIStandardInstrumentModel:
             ref_clk_source = ReferenceClockSourceModel._target_class.value(
                 obj["reference_clock_source"]
             )
-        return instrument(
+        kwargs = dict(
             uid=obj["uid"],
             interface=obj["interface"],
             connections=[
@@ -163,6 +176,11 @@ class ZIStandardInstrumentModel:
             device_options=obj["device_options"],
             reference_clock_source=ref_clk_source,
         )
+        if instrument is ZQCS:
+            kwargs["ports"] = [
+                _converter.structure(p, PortModel) for p in obj.get("ports", [])
+            ]
+        return instrument(**kwargs)
 
 
 @attrs.define
@@ -226,42 +244,6 @@ class LogicalSignalGroupModel:
     _target_class: ClassVar[Type] = LogicalSignalGroup
 
 
-@attrs.define
-class SystemDescriptionModel:
-    """Polymorphic model for SystemDescription using plugin registry."""
-
-    _target_class: ClassVar[Type] = None
-
-    @classmethod
-    def _unstructure(cls, obj: SystemDescription):
-        for description_type, (
-            target_class,
-            model_class,
-        ) in _system_description_plugins.items():
-            if isinstance(obj, target_class):
-                result = _converter.unstructure(obj, model_class)
-                result["_system_description_type"] = description_type
-                return result
-
-        raise ValueError(
-            f"Unknown SystemDescription type: {type(obj).__name__}. "
-            f"No registered handler found. Available types: {', '.join(_system_description_plugins.keys())}"
-        )
-
-    @classmethod
-    def _structure(cls, obj: dict[str, Any], _) -> SystemDescription:
-        system_description_type = obj.pop("_system_description_type")
-
-        if system_description_type in _system_description_plugins:
-            _, model_class = _system_description_plugins[system_description_type]
-            return _converter.structure(obj, model_class)
-
-        raise ValueError(
-            f"Unknown _system_description_type: {system_description_type}. "
-            f"Available types: {', '.join(_system_description_plugins.keys())}"
-        )
-
-
 def make_converter():
     _converter = make_calibration_converter()
     register_models(_converter, collect_models(sys.modules[__name__]))
@@ -269,19 +251,3 @@ def make_converter():
 
 
 _converter = make_converter()
-
-_system_description_plugins: dict[str, tuple[type, type]] = {}
-
-
-def register_system_description_plugin(
-    system_description_type: str, target_class: type, model_class: type
-) -> None:
-    """
-    Register a SystemDescription plugin for optional system_description types.
-
-    Args:
-        system_description_type: The discriminator value (e.g., "QCCS")
-        target_class: The target class (e.g., SystemDescriptionQCCS)
-        model_class: The serialization model class (e.g., SystemDescriptionQCCSModel)
-    """
-    _system_description_plugins[system_description_type] = (target_class, model_class)

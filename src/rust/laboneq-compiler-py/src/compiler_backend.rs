@@ -12,20 +12,27 @@ use tracing::instrument;
 use laboneq_common::compiler_settings::CompilerSettings;
 use laboneq_ir::ExperimentIr;
 use laboneq_py_utils::py_object_interner::PyObjectInterner;
+use numeric_array::NumericArray;
 
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::types::AwgKey;
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::device_setup::SetupDescription;
-use laboneq_dsl::types::{
-    ExternalParameterUid, ParameterUid, PulseDef, PulseUid, SignalUid, SweepParameter,
-};
+use laboneq_dsl::types::{ExternalParameterUid, ParameterUid, PulseDef, PulseUid, SignalUid};
 use laboneq_ir::system::AwgDevice;
 use laboneq_units::duration::{Duration, Second};
 
 // Re-export commonly used types for convenience
+pub use crate::error::Error;
 pub use crate::experiment::DeviceSignal;
+pub use crate::qccs_feedback_calculator::QccsFeedbackCalculator;
+pub use crate::signal_view::SignalView;
+pub use laboneq_scheduler::FeedbackCalculator;
+
 pub type CompilerBackendResult<T, E = laboneq_error::LabOneQError> = Result<T, E>;
+
+// Re-exported so the compiler backend implementations can use these types without `numeric-array`
+pub type ParameterValues = NumericArray;
 
 /// A backend that performs hardware-specific preprocessing of an experiment
 /// before it enters the generic compilation pipeline.
@@ -71,13 +78,21 @@ pub trait CompilerBackend {
     ///
     /// NOTE: This is a temporary workaround as long as the compiler calls Python code that requires this information.
     fn device_class(&self) -> usize;
+
+    /// Get a feedback calculator for the given backend. The default implementation returns `None`, indicating that no feedback calculator is available for this backend.
+    fn feedback_calculator(
+        &self,
+        _signals: &[SignalView],
+    ) -> Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>> {
+        None
+    }
 }
 
 /// A view of the experiment and device setup passed to a [`CompilerBackend`].
 pub struct ExperimentView<'a> {
     pub root: &'a ExperimentNode,
     pub id_store: &'a mut NamedIdStore,
-    pub parameters: &'a HashMap<ParameterUid, SweepParameter>,
+    pub parameters: HashMap<ParameterUid, &'a ParameterValues>,
     pub pulses: &'a HashMap<PulseUid, PulseDef>,
 
     pub experiment_signals: Vec<ExperimentSignal>,
@@ -90,7 +105,7 @@ impl<'a> ExperimentView<'a> {
     pub fn new(
         root: &'a ExperimentNode,
         id_store: &'a mut NamedIdStore,
-        parameters: &'a HashMap<ParameterUid, SweepParameter>,
+        parameters: HashMap<ParameterUid, &'a ParameterValues>,
         pulses: &'a HashMap<PulseUid, PulseDef>,
         experiment_signals: Vec<ExperimentSignal>,
         setup_description: SetupDescription,
@@ -157,6 +172,11 @@ pub(crate) trait DynCompilerBackend: Send + Sync {
         py_object_store: &PyObjectInterner<ExternalParameterUid>,
         backend_data: &(dyn PreprocessedBackendData + Send + Sync),
     ) -> CompilerBackendResult<Box<dyn CodeGenArtifact + Send + Sync>>;
+
+    fn feedback_calculator(
+        &self,
+        signals: &[SignalView],
+    ) -> Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>>;
 }
 
 impl<B> DynCompilerBackend for B
@@ -178,6 +198,13 @@ where
             .expect("DynCompilerBackend: backend_data type does not match backend Output type");
         self.generate_code_traced(experiment, compiler_settings, py_object_store, data)
             .map(|a| Box::new(a) as Box<dyn CodeGenArtifact + Send + Sync>)
+    }
+
+    fn feedback_calculator(
+        &self,
+        signals: &[SignalView],
+    ) -> Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>> {
+        <Self as CompilerBackend>::feedback_calculator(self, signals)
     }
 }
 

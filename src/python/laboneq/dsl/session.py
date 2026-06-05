@@ -18,10 +18,7 @@ from laboneq.core.types import CompiledExperiment
 from laboneq.core.utilities.compile_experiment import compile_experiment
 from laboneq.core.utilities.environment import is_testing
 from laboneq.data.experiment_results import ExperimentResults
-from laboneq.dsl.device import (
-    DeviceSetup,
-    system_description_session,
-)
+from laboneq.dsl.device import DeviceSetup
 from laboneq.dsl.device.io_units.logical_signal import (
     resolve_logical_signal_ref,
 )
@@ -32,11 +29,6 @@ from laboneq.implementation.legacy_adapters.converters_target_setup import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
-    from laboneq.dsl.device import (
-        SystemDescription,
-    )
     from laboneq.dsl.device.io_units.logical_signal import (
         LogicalSignalRef,
     )
@@ -105,7 +97,6 @@ class Session:
         experiment: Experiment | None = None,
         include_results_metadata: bool = False,
         server_log: bool = False,
-        system_description: SystemDescription | Path | str | None = None,
     ):
         """Constructor of the session.
 
@@ -134,11 +125,6 @@ class Session:
                 If `True`, the data server log - including device firmware logs - will be forwarded to the LabOneQ
                 log under the logger named `server.log.<server_uid>`. Additionally, it will be written to the file
                 `server.log` alongside the regular LabOneQ log, assuming the standard logging configuration is used.
-            system_description: system description to use for this session.
-                Can be a SystemDescription object, path to a system description YAML file (str or Path),
-                or None to auto-load from cache. If not provided, the system description will be
-                loaded from cache based on device_setup.uid when needed.
-
         !!! version-removed "Removed in version 2.57.0"
             Removed the `register_user_function` method that was deprecated in 2.19.0.
             Use `register_neartime_callback` instead.
@@ -191,12 +177,6 @@ class Session:
             self._logger = logging.getLogger("null")
         self._neartime_callbacks: Dict[str, Callable] = {}
         self._toolkit_devices = ToolkitDevices()
-
-        resolved_description = system_description_session.resolve_system_description(
-            system_description
-        )
-        if resolved_description is not None:
-            self._device_setup.system_description = resolved_description
 
     def __del__(self):
         self.disconnect()
@@ -263,7 +243,6 @@ class Session:
         use_async_api: bool | None = None,
         disable_runtime_checks: bool = True,
         timeout: float | None = None,
-        update_description: bool = True,
     ) -> ConnectionState:
         """Connects the session to the QCCS system.
 
@@ -293,11 +272,6 @@ class Session:
                 by device firmware. Defaults to `True`.
 
             timeout (float): Specifies the timeout for the initial connection to the instrument in seconds.
-
-            update_description (bool): If True (default), query hardware capabilities and update
-                the cached system description. If False, use existing cached system description if available.
-                Automatically disabled when using emulation mode. Set to False to skip system description
-                updates when hardware configuration has not changed.
 
         Returns:
             connection_state:
@@ -339,12 +313,8 @@ class Session:
         else:
             self._toolkit_devices = ToolkitDevices(controller.devices)
 
-        if update_description and not do_emulation and self._controller is not None:  # type: ignore
-            description = system_description_session.update_system_description(
-                self._device_setup, self._controller
-            )
-            if description is not None:
-                self._device_setup.system_description = description
+        if not do_emulation and self._controller is not None:
+            self._device_setup.setup_description = self._controller.setup_description
 
         self._connection_state.connected = True
         return self._connection_state

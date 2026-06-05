@@ -31,9 +31,6 @@ if TYPE_CHECKING:
     import laboneq._rust.codegenerator as codegen_rs
     from laboneq.compiler import CompilerSettings
     from laboneq.compiler.common.integration_times import IntegrationTimes
-    from laboneq.compiler.seqc.types import (
-        SignalDelays,
-    )
     from laboneq.core.types.enums.wave_type import WaveType
     from laboneq.data.scheduled_experiment import (
         AwgWeights,
@@ -48,7 +45,6 @@ if TYPE_CHECKING:
 class CombinedRTOutputSeqC(CombinedOutput):
     integration_times: IntegrationTimes
     awg_properties: dict[AwgKey, codegen_rs.AwgProperties] = field(default_factory=dict)
-    signal_delays: SignalDelays = field(default_factory=dict)
     # key - SeqC name
     integration_weights: dict[str, AwgWeights] = field(default_factory=dict)
     result_handle_maps: dict[ResultSource, list[set[str]]] = field(default_factory=dict)
@@ -127,7 +123,6 @@ class SeqCProgram:
 
 @dataclass
 class SeqCGenOutput(RTCompilerOutput):
-    signal_delays: SignalDelays
     integration_weights: dict[AwgKey, AwgWeights]
     integration_times: IntegrationTimes
     result_handle_maps: dict[ResultSource, list[set[str]]]
@@ -156,10 +151,21 @@ class SeqCGenOutput(RTCompilerOutput):
     result_lengths: dict[AwgKey, int] = field(default_factory=dict)
 
 
-def _check_compatibility(this: SeqCGenOutput, new: SeqCGenOutput):
-    if this.signal_delays != new.signal_delays:
+def _check_compatibility(this: CombinedRTOutputSeqC, new: SeqCGenOutput):
+    def scheduler_delays(
+        channels: dict[AwgKey, list[codegen_rs.ChannelProperties]],
+    ) -> dict[str, float]:
+        return {
+            c.signal: c.scheduler_delay
+            for channels in channels.values()
+            for c in channels
+        }
+
+    if scheduler_delays(this.channel_properties) != scheduler_delays(
+        new.channel_properties
+    ):
         raise LabOneQException(
-            "Signal delays do not match between real-time iterations"
+            "Signal scheduler delays do not match between real-time iterations"
         )
     if this.result_lengths != new.result_lengths:
         raise LabOneQException("Measurements do not match between real-time iterations")
@@ -240,7 +246,6 @@ class SeqCLinker(ILinker):
         return CombinedRTOutputSeqC(
             awg_properties=output.awg_properties,
             integration_times=output.integration_times,
-            signal_delays=output.signal_delays,
             integration_weights=integration_weights,
             result_handle_maps=output.result_handle_maps,
             total_execution_time=output.total_execution_time,

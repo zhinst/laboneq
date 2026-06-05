@@ -18,7 +18,7 @@ use laboneq_units::duration::{Duration, Second};
 ///
 /// Provides convenient access to signal and device properties.
 #[derive(Debug, Clone, PartialEq, Copy)]
-pub(crate) struct SignalView<'a> {
+pub struct SignalView<'a> {
     device: &'a AwgDevice,
     signal: &'a Signal,
 }
@@ -28,15 +28,15 @@ impl SignalView<'_> {
         SignalView { device, signal }
     }
 
-    pub(crate) fn device(&self) -> &AwgDevice {
+    pub fn device(&self) -> &AwgDevice {
         self.device
     }
 
-    pub(crate) fn uid(&self) -> SignalUid {
+    pub fn uid(&self) -> SignalUid {
         self.signal.uid
     }
 
-    pub(crate) fn awg_key(&self) -> &AwgKey {
+    pub fn awg_key(&self) -> &AwgKey {
         &self.signal.awg_key
     }
 
@@ -44,24 +44,20 @@ impl SignalView<'_> {
         self.signal.automute
     }
 
-    pub(crate) fn device_kind(&self) -> DeviceKind {
+    pub fn device_kind(&self) -> DeviceKind {
         self.device.kind()
     }
 
-    pub(crate) fn device_uid(&self) -> DeviceUid {
+    pub fn device_uid(&self) -> DeviceUid {
         self.device.uid()
     }
 
-    pub(crate) fn device_traits(&self) -> &'static DeviceTraits {
+    pub fn device_traits(&self) -> &'static DeviceTraits {
         DeviceTraits::from_device_kind(&self.device_kind())
     }
 
-    pub(crate) fn sampling_rate(&self) -> f64 {
+    pub fn sampling_rate(&self) -> f64 {
         self.signal.sampling_rate
-    }
-
-    pub(crate) fn ports(&self) -> &[String] {
-        &self.signal.ports
     }
 
     pub(crate) fn port_mode(&self) -> Option<&PortMode> {
@@ -80,7 +76,7 @@ impl SignalView<'_> {
         self.signal.voltage_offset.as_ref()
     }
 
-    pub(crate) fn signal_kind(&self) -> &SignalKind {
+    pub fn signal_kind(&self) -> &SignalKind {
         &self.signal.kind
     }
 
@@ -99,15 +95,15 @@ impl SignalView<'_> {
         self.device.has_option(opt)
     }
 
-    pub(crate) fn signal_delay(&self) -> Duration<Second> {
+    pub fn signal_delay(&self) -> Duration<Second> {
         self.signal.signal_delay
     }
 
-    pub(crate) fn port_delay(&self) -> Option<&ValueOrParameter<Duration<Second>>> {
+    pub fn port_delay(&self) -> Option<&ValueOrParameter<Duration<Second>>> {
         self.signal.port_delay.as_ref()
     }
 
-    pub(crate) fn start_delay(&self) -> Duration<Second> {
+    pub fn start_delay(&self) -> Duration<Second> {
         self.signal.start_delay
     }
 }

@@ -3,7 +3,7 @@
 
 use itertools::Itertools;
 
-use laboneq_common::types::{AuxiliaryDeviceKind, SignalKind};
+use laboneq_common::types::AuxiliaryDeviceKind;
 
 use crate::device_setup::{Instrument, InstrumentKind};
 use crate::types::DeviceUid;
@@ -75,5 +75,4 @@ pub struct PhysicalChannel {
     pub uid: String,
     pub device_uid: DeviceUid,
     pub ports: Vec<String>,
-    pub channel_type: SignalKind,
 }

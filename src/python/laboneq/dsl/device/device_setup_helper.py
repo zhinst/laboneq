@@ -4,7 +4,7 @@
 import json
 import logging
 
-import requests
+import httpx
 import yaml
 
 _logger = logging.getLogger(__name__)
@@ -23,8 +23,8 @@ class DeviceSetupHelper:
             status_code (int): 200 if succeeded.
         """
 
-        with requests.Session() as session:
-            response = session.post(api_url, data=wiring_text, timeout=5)
+        with httpx.Client() as session:
+            response = session.post(api_url, content=wiring_text.encode(), timeout=5)
             response.raise_for_status()
             _logger.info("Wiring successfully uploaded at %s", api_url)
             return response.status_code
@@ -53,7 +53,7 @@ class DeviceSetupHelper:
         Returns:
             status_code (int): 200 if succeeded.
         """
-        with requests.Session() as session:
+        with httpx.Client() as session:
             response = session.delete(api_url, timeout=5)
             response.raise_for_status()
             _logger.info("Wiring successfully deleted at %s", api_url)
@@ -71,7 +71,7 @@ class DeviceSetupHelper:
                 the GET content if succeeded.
         """
 
-        with requests.Session() as session:
+        with httpx.Client() as session:
             response = session.get(api_url, timeout=5)
             response.raise_for_status()
             _logger.info("Successfully downloaded wiring information from %s", api_url)

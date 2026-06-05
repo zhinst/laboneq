@@ -150,14 +150,7 @@ def convert_calibration(
             new.threshold = getattr(legacy_ls, "threshold", None)
             new.amplitude = legacy_ls.amplitude
             new.amplifier_pump = convert_amplifier_pump(legacy_ls.amplifier_pump)
-            if legacy_ls.added_outputs is not None:
-                for router in legacy_ls.added_outputs:
-                    routing = calibration.OutputRouting(
-                        source_signal=router.source,
-                        amplitude=router.amplitude_scaling,
-                        phase=router.phase_shift,
-                    )
-                    new.output_routing.append(routing)
+            new.added_outputs = legacy_ls.added_outputs or []
             new.automute = getattr(legacy_ls, "automute", None)
         cals[uid_formatter(uid)] = new
 

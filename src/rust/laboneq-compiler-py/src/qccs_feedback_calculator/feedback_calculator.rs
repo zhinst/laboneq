@@ -5,7 +5,6 @@ use std::collections::HashMap;
 
 use laboneq_dsl::types::{SignalUid, ValueOrParameter};
 use laboneq_ir::system::AwgDevice;
-use pyo3::Python;
 
 use laboneq_common::types::{AwgKey, DeviceKind, SignalKind};
 use laboneq_scheduler::FeedbackCalculator;
@@ -19,13 +18,34 @@ type Samples = i64;
 /// Latency in samples added by the ExecuteTableEntry command.
 const EXECUTETABLEENTRY_LATENCY: Samples = 3;
 
-pub(crate) trait FeedbackModel<'py> {
+#[derive(Debug, Clone)]
+pub enum FeedbackDevice {
+    Shfqa,
+    Uhfqa,
+    Hdawg,
+    Shfsg,
+    Shfqc,
+}
+
+impl std::fmt::Display for FeedbackDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FeedbackDevice::Shfqa => write!(f, "SHFQA"),
+            FeedbackDevice::Uhfqa => write!(f, "UHFQA"),
+            FeedbackDevice::Hdawg => write!(f, "HDAWG"),
+            FeedbackDevice::Shfsg => write!(f, "SHFSG"),
+            FeedbackDevice::Shfqc => write!(f, "SHFQC"),
+        }
+    }
+}
+
+pub trait FeedbackModel {
     /// Get the feedback latency in samples from the feedback model.
     fn get_latency(
         &self,
         acquisition_end_samples: Samples,
-        qa_device: &AwgDevice,
-        sg_device: &AwgDevice,
+        qa_device: &FeedbackDevice,
+        sg_device: &FeedbackDevice,
         local_feedback: bool,
     ) -> anyhow::Result<Samples>;
 }
@@ -35,101 +55,163 @@ pub(crate) trait FeedbackModel<'py> {
 /// The calculator uses a feedback model to compute the latency based on
 /// acquisition and generator signal parameters for each signal involved in
 /// the feedback loop.
-pub(crate) struct QccsFeedbackCalculator<'a, M: for<'py> FeedbackModel<'py>> {
-    /// All the signals, indexed by their UIDs.
-    all_signals: HashMap<SignalUid, SignalView<'a>>,
-    /// Signals used for generation in feedback mode, indexed by their acquisition signal UIDs.
-    generator_signals: HashMap<SignalUid, SignalView<'a>>,
+pub struct QccsFeedbackCalculator<M: FeedbackModel> {
+    acquisition_signal_params: HashMap<SignalUid, AcquisitionParameters>,
+    generator_signal_params: HashMap<SignalUid, GeneratorParameters>,
+    acquisition_generator_mapping: HashMap<SignalUid, SignalUid>,
     /// The feedback model used for latency calculations.
     model: M,
 }
 
 /// Parameters required for acquisition latency calculation.
-struct AcquisitionParameters<'a> {
+struct AcquisitionParameters {
     acquisition_start_delay: Duration<Second>,
     acquisition_signal_delay: Duration<Second>,
-    acquisition_port_delay: Duration<Second>,
+    acquisition_port_delay: ValueOrParameter<Duration<Second>>,
     /// Signal delay of the associated generator signal, if any.
     generator_signal_delay: Duration<Second>,
     /// Port delay of the associated generator signal, if any.
-    generator_port_delay: Duration<Second>,
+    generator_port_delay: ValueOrParameter<Duration<Second>>,
     integration_dsp_latency: Duration<Second>,
     /// Acquisition device properties
     sampling_rate: f64,
     port_granularity_samples: i64,
-    device: &'a AwgDevice,
+    device: FeedbackDevice,
+}
+
+impl AcquisitionParameters {
+    fn fixed_generator_port_delay(&self) -> Result<Duration<Second>, Error> {
+        match self.generator_port_delay {
+            ValueOrParameter::Value(value) => Ok(value),
+            _ => Err(Error::new(
+                "Feedback measure line requires a constant 'port_delay', but it is a sweep parameter.",
+            )),
+        }
+    }
+
+    fn fixed_acquisition_port_delay(&self) -> Result<Duration<Second>, Error> {
+        match self.acquisition_port_delay {
+            ValueOrParameter::Value(value) => Ok(value),
+            _ => Err(Error::new(
+                "Feedback acquisition line requires a constant 'port_delay', but it is a sweep parameter.",
+            )),
+        }
+    }
 }
 
 /// Parameters required for generator latency calculation.
-struct GeneratorParameters<'a> {
+#[derive(Debug, Clone)]
+struct GeneratorParameters {
     lead_time: Duration<Second>,
     signal_delay: Duration<Second>,
     /// Generator device properties
     sampling_rate: f64,
     sample_multiple: i64,
-    device: &'a AwgDevice,
+    device: FeedbackDevice,
 }
 
-impl<'a> QccsFeedbackCalculator<'a, QCCSFeedbackModel<'a>> {
-    pub(crate) fn new(
-        py: Python<'a>,
-        signals: impl Iterator<Item = SignalView<'a>>,
-    ) -> Result<QccsFeedbackCalculator<'a, QCCSFeedbackModel<'a>>, Error> {
-        let model = QCCSFeedbackModel::new(py)
-            .map_err(|e| Error::new(format!("Failed to create QCCS feedback model: {}", e)))?;
-        Ok(Self::new_with_model(signals, model))
+impl QccsFeedbackCalculator<QCCSFeedbackModel> {
+    pub fn new<'a>(
+        signals: impl Iterator<Item = SignalView<'a>> + 'a,
+    ) -> Result<QccsFeedbackCalculator<QCCSFeedbackModel>, Error> {
+        Self::new_with_model(signals, QCCSFeedbackModel::new())
     }
 }
 
-impl<'a, M> QccsFeedbackCalculator<'a, M>
+impl<M> QccsFeedbackCalculator<M>
 where
-    M: for<'py> FeedbackModel<'py>,
+    M: FeedbackModel,
 {
-    pub(crate) fn new_with_model(
-        signals: impl Iterator<Item = SignalView<'a>>,
+    pub(crate) fn new_with_model<'a>(
+        signals: impl Iterator<Item = SignalView<'a>> + 'a,
         model: M,
-    ) -> QccsFeedbackCalculator<'a, M> {
+    ) -> Result<QccsFeedbackCalculator<M>, Error> {
+        let signal_map = signals
+            .into_iter()
+            .map(|s| (s.uid(), s))
+            .collect::<HashMap<_, _>>();
+
         // Organize signals into acquisition and generator signals per AWG.
         // Acquisition signals can share AWGs with generator signals.
-        let mut acquisition_signals_per_awg: HashMap<AwgKey, Vec<SignalView<'_>>> = HashMap::new();
+        let mut acquisition_signals_per_awg: HashMap<AwgKey, Vec<SignalUid>> = HashMap::new();
         // There is only one generator signal per AWG(?)
-        let mut generator_signals_per_awg: HashMap<AwgKey, SignalView<'_>> = HashMap::new();
-        let mut all_signals = HashMap::new();
+        let mut generator_signals_per_awg: HashMap<AwgKey, SignalUid> = HashMap::new();
 
-        for signal in signals {
-            all_signals.insert(signal.uid(), signal);
+        // First map acquisition and generator signals
+        for signal in signal_map.values() {
             match signal.signal_kind() {
                 SignalKind::Integration => {
                     acquisition_signals_per_awg
                         .entry(*signal.awg_key())
                         .or_default()
-                        .push(signal);
+                        .push(signal.uid());
                 }
                 _ => {
-                    generator_signals_per_awg.insert(*signal.awg_key(), signal);
+                    generator_signals_per_awg.insert(*signal.awg_key(), signal.uid());
+                }
+            }
+        }
+        let mut acquisition_generator_mapping = HashMap::new();
+        let mut generator_to_acquisition_mapping: HashMap<SignalUid, Vec<SignalUid>> =
+            HashMap::new();
+        for (awg_key, acquisition_signal) in acquisition_signals_per_awg {
+            for acq_signal_uid in acquisition_signal.iter() {
+                if let Some(generator_signal) = generator_signals_per_awg.get(&awg_key) {
+                    acquisition_generator_mapping.insert(*acq_signal_uid, *generator_signal);
+                    generator_to_acquisition_mapping
+                        .entry(*generator_signal)
+                        .or_default()
+                        .push(*acq_signal_uid);
                 }
             }
         }
 
-        let mut generator_signals = HashMap::new();
-        for (awg_key, acquisition_signal) in acquisition_signals_per_awg {
-            for acq_signal_uid in acquisition_signal.iter().map(|s| s.uid()) {
-                if let Some(generator_signal) = generator_signals_per_awg.get(&awg_key) {
-                    generator_signals.insert(acq_signal_uid, *generator_signal);
+        // Then extract parameters for acquisition and generator signals, and map acquisition signals to their associated generator signal parameters.
+        let mut acquisition_signal_params = HashMap::new();
+        let mut generator_signal_params = HashMap::new();
+
+        for signal in signal_map.values() {
+            match signal.signal_kind() {
+                SignalKind::Integration => {
+                    let acq_signal = signal_map.get(&signal.uid()).expect(
+                        "Internal error: Acquisition signal not found in feedback calculator",
+                    );
+                    let gen_signal = acquisition_generator_mapping
+                        .get(&signal.uid())
+                        .and_then(|gen_uid| signal_map.get(gen_uid));
+                    let params = Self::extract_acquisition_parameters(acq_signal, gen_signal)?;
+                    acquisition_signal_params.insert(signal.uid(), params);
+                }
+                _ => {
+                    let params = Self::extract_generator_parameters(signal)?;
+                    generator_signal_params.insert(signal.uid(), params);
                 }
             }
         }
-        QccsFeedbackCalculator {
-            all_signals,
-            generator_signals,
+
+        let result = QccsFeedbackCalculator {
+            acquisition_signal_params,
+            generator_signal_params,
+            acquisition_generator_mapping,
             model,
+        };
+        Ok(result)
+    }
+
+    /// Get the generator parameters for a given signal UID, checking both generator signals and acquisition signals mapped to generator signals.
+    fn generator_parameters(&self, signal_uid: SignalUid) -> Option<&GeneratorParameters> {
+        if let Some(params) = self.generator_signal_params.get(&signal_uid) {
+            return Some(params);
         }
+        self.acquisition_generator_mapping
+            .get(&signal_uid)
+            .and_then(|gen_uid| self.generator_signal_params.get(gen_uid))
     }
 }
 
-impl<M> QccsFeedbackCalculator<'_, M>
+impl<M> QccsFeedbackCalculator<M>
 where
-    for<'py> M: FeedbackModel<'py>,
+    M: FeedbackModel,
 {
     /// Calculate the end of the integration in seconds from trigger.
     ///
@@ -148,24 +230,33 @@ where
         acquisition_length: Duration<Second>,
         local_feedback: bool,
         acquisition_signal: SignalUid,
-        associated_signals: impl Iterator<Item = SignalUid>,
+        associated_signals: &[SignalUid],
     ) -> Result<Duration<Second>, Error> {
-        let acquisition_params = self.extract_acquisition_parameters(acquisition_signal)?;
+        let acquisition_params = self
+            .acquisition_signal_params
+            .get(&acquisition_signal)
+            .expect(
+                "Internal error: Acquisition signal parameters not found in feedback calculator",
+            );
         let acquisition_end_samples = self.calculate_acquisition_end_samples(
             absolute_start,
             acquisition_length,
-            &acquisition_params,
-        );
+            acquisition_params,
+        )?;
         let mut earliest_execute_table_entry = seconds(0.0);
         for signal_uid in associated_signals {
-            if signal_uid == acquisition_signal {
+            if *signal_uid == acquisition_signal {
                 continue;
             }
-            let generator_params = self.extract_generator_parameters(signal_uid)?;
+            let generator_params = self.generator_parameters(*signal_uid).ok_or_else(|| {
+                Error::new(
+                    "Internal error: Generator signal parameters not found in feedback calculator",
+                )
+            })?;
             let latency_in_s = self.calculate_latency_for_signal(
                 acquisition_end_samples,
-                &acquisition_params,
-                &generator_params,
+                acquisition_params,
+                generator_params,
                 local_feedback,
                 absolute_start,
                 acquisition_length,
@@ -196,7 +287,10 @@ where
         absolute_start: Duration<Second>,
         acquisition_length: Duration<Second>,
     ) -> Result<Duration<Second>, Error> {
-        if acquisition_params.device.kind() == DeviceKind::Shfqa {
+        if matches!(
+            acquisition_params.device,
+            FeedbackDevice::Shfqa | FeedbackDevice::Shfqc
+        ) {
             // TODO: Currently the Python error is not properly propagated to enable
             // Python tracebacks. We should improve this in the future, currently it is
             // fine as it is not something the users should encounter.
@@ -204,8 +298,8 @@ where
                 .model
                 .get_latency(
                     acquisition_end_samples,
-                    acquisition_params.device,
-                    signal.device,
+                    &acquisition_params.device,
+                    &signal.device,
                     local_feedback,
                 )
                 .map_err(|e| {
@@ -232,8 +326,8 @@ where
             const LATENCY: Duration<Second> = seconds(900e-9); // https://www.zhinst.com/ch/en/blogs/practical-active-qubit-reset
             let qa_total_port_delay = calculate_total_port_delay(
                 &[
-                    acquisition_params.generator_port_delay,
-                    acquisition_params.acquisition_port_delay,
+                    acquisition_params.fixed_generator_port_delay()?,
+                    acquisition_params.fixed_acquisition_port_delay()?,
                     acquisition_params.integration_dsp_latency,
                 ],
                 acquisition_params.sampling_rate,
@@ -250,13 +344,8 @@ where
     }
 
     fn extract_generator_parameters(
-        &self,
-        generator_signal: SignalUid,
-    ) -> Result<GeneratorParameters<'_>, Error> {
-        let generator_signal = self
-            .all_signals
-            .get(&generator_signal)
-            .expect("Internal error: Generator signal not found in feedback calculator");
+        generator_signal: &SignalView<'_>,
+    ) -> Result<GeneratorParameters, Error> {
         let lead_time = generator_signal.start_delay();
         let signal_delay = generator_signal.signal_delay();
         let sampling_rate = generator_signal.sampling_rate();
@@ -267,47 +356,27 @@ where
             signal_delay,
             sampling_rate,
             sample_multiple,
-            device: generator_signal.device(),
+            device: awg_device_to_feedback_device(generator_signal.device()),
         })
     }
 
     fn extract_acquisition_parameters(
-        &self,
-        acquisition_signal: SignalUid,
-    ) -> Result<AcquisitionParameters<'_>, Error> {
-        let acquisition_signal = self
-            .all_signals
-            .get(&acquisition_signal)
-            .expect("Internal error: Acquisition signal not found in feedback calculator");
-
+        acquisition_signal: &SignalView<'_>,
+        generator_signal: Option<&SignalView<'_>>,
+    ) -> Result<AcquisitionParameters, Error> {
         let mut generator_signal_delay = seconds(0.0);
-        let mut generator_port_delay = seconds(0.0);
-        if let Some(generator_signal) = self.generator_signals.get(&acquisition_signal.uid()) {
+        let mut generator_port_delay = ValueOrParameter::Value(seconds(0.0));
+        if let Some(generator_signal) = generator_signal {
             generator_signal_delay = generator_signal.signal_delay();
-            if let Some(port_delay) = generator_signal.port_delay() {
-                if let ValueOrParameter::Value(value) = port_delay {
-                    generator_port_delay = *value;
-                } else {
-                    return Err(Error::new(
-                        "Feedback measure line requires a constant 'port_delay', but it is a sweep parameter.",
-                    ));
-                }
-            }
+            generator_port_delay = *generator_signal
+                .port_delay()
+                .unwrap_or(&ValueOrParameter::Value(seconds(0.0)));
         }
-
         let acquisition_start_delay = acquisition_signal.start_delay();
         let acquisition_signal_delay = acquisition_signal.signal_delay();
-        let acquisition_port_delay = if let Some(port_delay) = acquisition_signal.port_delay() {
-            if let ValueOrParameter::Value(value) = port_delay {
-                *value
-            } else {
-                return Err(Error::new(
-                    "Feedback acquisition line requires a constant 'port_delay', but it is a sweep parameter.",
-                ));
-            }
-        } else {
-            seconds(0.0)
-        };
+        let acquisition_port_delay = *acquisition_signal
+            .port_delay()
+            .unwrap_or(&ValueOrParameter::Value(seconds(0.0)));
 
         let integration_dsp_latency = acquisition_signal
             .device_traits()
@@ -327,7 +396,7 @@ where
             integration_dsp_latency,
             sampling_rate,
             port_granularity_samples,
-            device: acquisition_signal.device(),
+            device: awg_device_to_feedback_device(acquisition_signal.device()),
         })
     }
 
@@ -336,11 +405,11 @@ where
         absolute_start: Duration<Second>,
         acquisition_length: Duration<Second>,
         params: &AcquisitionParameters,
-    ) -> Samples {
+    ) -> Result<Samples, Error> {
         let qa_total_port_delay = calculate_total_port_delay(
             &[
-                params.generator_port_delay,
-                params.acquisition_port_delay,
+                params.fixed_generator_port_delay()?,
+                params.fixed_acquisition_port_delay()?,
                 // The controller may offset the integration delay node to compensate the DSP
                 // latency, thereby aligning measure and acquire for port_delay=0.
                 params.integration_dsp_latency,
@@ -348,7 +417,7 @@ where
             params.sampling_rate,
             params.port_granularity_samples,
         );
-        ((absolute_start
+        let result = ((absolute_start
             + acquisition_length
             + params.acquisition_start_delay
             + params.acquisition_signal_delay
@@ -356,7 +425,8 @@ where
             + qa_total_port_delay)
             * params.sampling_rate)
             .value()
-            .round() as Samples
+            .round() as Samples;
+        Ok(result)
     }
 }
 
@@ -380,7 +450,7 @@ fn calculate_total_port_delay(
     (total_delay as f64 / sample_frequency_hz).into()
 }
 
-impl FeedbackCalculator for QccsFeedbackCalculator<'_, QCCSFeedbackModel<'_>> {
+impl FeedbackCalculator for QccsFeedbackCalculator<QCCSFeedbackModel> {
     type Error = Error;
 
     fn compute_feedback_latency(
@@ -389,7 +459,7 @@ impl FeedbackCalculator for QccsFeedbackCalculator<'_, QCCSFeedbackModel<'_>> {
         acquisition_length: Duration<Second>,
         local_feedback: bool,
         acquisition_signal: SignalUid,
-        associated_signals: impl Iterator<Item = SignalUid>,
+        associated_signals: &[SignalUid],
     ) -> Result<Duration<Second>, Self::Error> {
         let latency_s = self.compute_start_with_latency(
             absolute_start,
@@ -399,6 +469,20 @@ impl FeedbackCalculator for QccsFeedbackCalculator<'_, QCCSFeedbackModel<'_>> {
             associated_signals,
         )?;
         Ok(latency_s)
+    }
+}
+
+fn awg_device_to_feedback_device(device: &AwgDevice) -> FeedbackDevice {
+    if device.is_shfqc() {
+        FeedbackDevice::Shfqc
+    } else {
+        match device.kind() {
+            DeviceKind::Shfqa => FeedbackDevice::Shfqa,
+            DeviceKind::Uhfqa => FeedbackDevice::Uhfqa,
+            DeviceKind::Hdawg => FeedbackDevice::Hdawg,
+            DeviceKind::Shfsg => FeedbackDevice::Shfsg,
+            _ => panic!("Unsupported device kind for feedback: {:?}", device.kind()),
+        }
     }
 }
 
@@ -423,12 +507,12 @@ mod tests {
         }
     }
 
-    impl FeedbackModel<'_> for MockFeedbackModel {
+    impl FeedbackModel for MockFeedbackModel {
         fn get_latency(
             &self,
             _acquisition_end_samples: Samples,
-            _qa_device: &AwgDevice,
-            _sg_device: &AwgDevice,
+            _qa_device: &FeedbackDevice,
+            _sg_device: &FeedbackDevice,
             _local_feedback: bool,
         ) -> anyhow::Result<Samples> {
             Ok((_acquisition_end_samples / 8) as Samples)
@@ -581,14 +665,15 @@ mod tests {
                 ]
                 .into_iter(),
                 mock_model,
-            );
+            )
+            .unwrap();
 
             let result = calculator.compute_start_with_latency(
                 acquisition_absolute_start,
                 acquisition_length,
                 false,
                 acq_signal.uid,
-                [gen_signal.uid].into_iter(),
+                &[gen_signal.uid],
             );
 
             let latency = result.unwrap();
@@ -663,17 +748,20 @@ mod tests {
                 ]
                 .into_iter(),
                 mock_model,
-            );
+            )
+            .unwrap();
 
-            let result = calculator.compute_start_with_latency(
-                acquisition_absolute_start,
-                acquisition_length,
-                false,
-                acq_signal.uid,
-                [gen_signal.uid].into_iter(),
-            );
+            let result = calculator
+                .compute_start_with_latency(
+                    acquisition_absolute_start,
+                    acquisition_length,
+                    false,
+                    acq_signal.uid,
+                    &[gen_signal.uid],
+                )
+                .unwrap();
 
-            let latency = result.unwrap();
+            let latency = result;
             let msg = format!("Failed for case: {:?}, expected: {}", case, latency.value());
             assert!(
                 abs_diff_eq!(latency.value(), case.expected_start),

@@ -833,16 +833,18 @@ fn schedule_feedback_match(
         .get(handle)
         .expect("Acquires for handle not found");
 
-    // Compute earliest execute time based on feedback latency
-    let earliest_execute_table_entry = ctx
+    let feedback_calculator = ctx
         .feedback_calculator
-        .expect("Feedback calculator not set")
+        .ok_or_else(|| Error::new("Feedback is not supported on this device."))?;
+
+    // Compute earliest execute time based on feedback latency
+    let earliest_execute_table_entry = feedback_calculator
         .compute_feedback_latency(
             tinysamples_to_seconds(latest_acquire.absolute_start),
             tinysamples_to_seconds(latest_acquire.length),
             match_info.local,
             latest_acquire.signal,
-            node.schedule.signals.iter().cloned(),
+            &node.schedule.signals.iter().cloned().collect::<Vec<_>>(),
         )
         .map_err(Error::new)?;
     let earliest_execute_table_entry = seconds_to_tinysamples(earliest_execute_table_entry);

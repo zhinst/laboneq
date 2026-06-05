@@ -130,13 +130,19 @@ impl ExponentialCompensationPy {
 pub struct FirCompensationPy {
     #[pyo3(get)]
     pub coefficients: Vec<f64>,
+    #[pyo3(get)]
+    pub strict: bool,
 }
 
 #[pymethods]
 impl FirCompensationPy {
     #[new]
-    pub fn new(coefficients: Vec<f64>) -> Self {
-        Self { coefficients }
+    #[pyo3(signature = (coefficients, strict=false))]
+    pub fn new(coefficients: Vec<f64>, strict: bool) -> Self {
+        Self {
+            coefficients,
+            strict,
+        }
     }
 }
 

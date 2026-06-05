@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
     from laboneq.core.types.enums import ModulationType, PortMode
     from laboneq.core.types.units import Quantity
+    from laboneq.dsl.calibration.output_routing import OutputRoute
     from laboneq.dsl.parameter import Parameter
 
 
@@ -47,10 +48,13 @@ class ExponentialCompensation:
 @dataclass
 class FIRCompensation:
     coefficients: ArrayLike = None
+    strict: bool = False
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, FIRCompensation):
-            return np.allclose(self.coefficients, other.coefficients)
+            return self.strict == other.strict and np.allclose(
+                self.coefficients, other.coefficients
+            )
         else:
             return NotImplemented
 
@@ -100,13 +104,6 @@ class AmplifierPump:
 
 
 @dataclass
-class OutputRouting:
-    source_signal: str
-    amplitude: float
-    phase: float
-
-
-@dataclass
 class SignalCalibration:
     oscillator: Oscillator | None = None
     local_oscillator_frequency: float | Parameter | None = None
@@ -120,5 +117,5 @@ class SignalCalibration:
     threshold: float | list[float] | None = None
     amplitude: float | Parameter | None = None
     amplifier_pump: AmplifierPump | None = None
-    output_routing: list[OutputRouting] = field(default_factory=list)
+    added_outputs: list[OutputRoute] = field(default_factory=list)
     automute: bool = False

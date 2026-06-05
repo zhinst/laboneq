@@ -5,10 +5,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum
 from typing import TYPE_CHECKING
-
-import numpy as np
 
 from laboneq.data import EnumReprMixin
 from laboneq.data.calibration import CancellationSource
@@ -16,6 +14,7 @@ from laboneq.data.calibration import CancellationSource
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
 
+    from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
     from laboneq.data.calibration import (
         BounceCompensation,
         ExponentialCompensation,
@@ -23,30 +22,11 @@ if TYPE_CHECKING:
         HighPassCompensation,
         PortMode,
     )
+    from laboneq.data.setup_description import DeviceType
+    from laboneq.data.setup_descriptions import SetupDescription
     from laboneq.dsl.calibration.oscillator import Oscillator
     from laboneq.dsl.experiment import Experiment
     from laboneq.dsl.parameter import Parameter
-
-
-#
-# Enums
-#
-class DeviceInfoType(EnumReprMixin, Enum):
-    UHFQA = "uhfqa"
-    HDAWG = "hdawg"
-    SHFQA = "shfqa"
-    SHFSG = "shfsg"
-    SHFQC = "shfqc"
-    PQSC = "pqsc"
-    QHUB = "qhub"
-    SHFPPC = "shfppc"
-    ZQCS = "zqcs"
-    NONQC = "nonqc"
-
-
-class ReferenceClockSourceInfo(EnumReprMixin, Enum):
-    INTERNAL = auto()
-    EXTERNAL = auto()
 
 
 class SignalInfoType(EnumReprMixin, Enum):
@@ -58,61 +38,19 @@ class SignalInfoType(EnumReprMixin, Enum):
 @dataclass
 class DeviceInfo:
     uid: str
-    device_type: DeviceInfoType
+    device_type: DeviceType
     options: str = field(default_factory=str)
-    dev_opts: list[str] = field(default_factory=list)
-    reference_clock_source: ReferenceClockSourceInfo | None = None
+    reference_clock_source: ReferenceClockSource | None = None
 
 
-@dataclass()
+@dataclass
 class PulseDef:
     uid: str = None
     function: str | None = None
     length: float = None
     amplitude: float = 1.0
-    phase: float = 0.0
     can_compress: bool = False
     samples: ArrayLike | None = None
-
-    # auto generated __eq__ fails to compare array-likes correctly
-    def __eq__(self, other: object) -> bool:
-        if isinstance(other, PulseDef):
-            if (self.samples is None) != (other.samples is None):
-                return False
-            samples_equal = (
-                self.samples is None and other.samples is None
-            ) or np.allclose(self.samples, other.samples)
-            return (
-                self.uid,
-                self.function,
-                self.length,
-                self.amplitude,
-                self.phase,
-                self.can_compress,
-            ) == (
-                other.uid,
-                other.function,
-                other.length,
-                other.amplitude,
-                other.phase,
-                other.can_compress,
-            ) and samples_equal
-        return NotImplemented
-
-    def __hash__(self) -> int:
-        samples_tuple = tuple(self.samples) if self.samples is not None else None
-
-        return hash(
-            (
-                self.uid,
-                self.function,
-                self.length,
-                self.amplitude,
-                self.phase,
-                self.can_compress,
-                samples_tuple,
-            )
-        )
 
 
 @dataclass
@@ -135,21 +73,14 @@ class OutputRoute:
     """Output route of Output Router and Adder (RTR).
 
     Attributes:
-        to_channel: Target channel of the Output Router.
-        from_channel: Source channel of the Output Router.
-        to_signal: Target channel's Experiment signal UID.
-        from_signal: Source channel's Experiment signal UID.
+        from_port: Source channel's port.
         amplitude: Amplitude scaling of the source signal.
         phase: Phase shift of the source signal.
     """
 
-    to_channel: int
-    from_channel: int
-    to_signal: str
-    from_signal: str | None
-    from_port: str | None
-    amplitude: float | Parameter
-    phase: float | Parameter
+    from_port: str
+    amplitude: float | Parameter | None
+    phase: float | Parameter | None
 
 
 @dataclass
@@ -214,5 +145,5 @@ class ExperimentInfo:
     device_setup_fingerprint: str
     devices: list[DeviceInfo]
     signals: list[SignalInfo]
-    # Scheduler Rust integration fields
     src: Experiment | None = field(default=None)
+    setup_description: SetupDescription | None = None

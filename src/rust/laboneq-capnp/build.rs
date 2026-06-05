@@ -14,6 +14,8 @@ fn main() {
         "pulse",
         "section",
         "sweep",
+        "setup_description_qccs",
+        "setup_description_zqcs",
     ];
 
     let mut cmd = capnpc::CompilerCommand::new();

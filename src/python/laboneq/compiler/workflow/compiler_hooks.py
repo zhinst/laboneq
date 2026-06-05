@@ -62,17 +62,8 @@ def all_compiler_hooks() -> Iterator[type[CompilerHooks]]:
     yield from _registered_compiler_hooks.values()
 
 
-def resolve_compiler_module(device_classes: set[int]) -> compiler_rs:
-    """Return the compiler module for the given device classes.
-
-    Exactly one device class must be present; mixed device classes are not
-    supported. Falls back to the default (SeqC) backend for empty experiments.
-    """
-    if not device_classes:
-        device_classes = {0}
-    if len(device_classes) != 1:
-        raise ValueError(f"Expected exactly one device class, got {device_classes}")
-    (device_class,) = device_classes
+def resolve_compiler_module(device_class: int) -> compiler_rs:
+    """Return the compiler module for the given device class."""
     return get_compiler_hooks(device_class).compiler_module()
 
 

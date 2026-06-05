@@ -4,4 +4,4 @@
 mod feedback_calculator;
 mod feedback_model;
 
-pub(crate) use feedback_calculator::QccsFeedbackCalculator;
+pub use feedback_calculator::QccsFeedbackCalculator;

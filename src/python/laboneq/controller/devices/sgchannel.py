@@ -32,6 +32,7 @@ from laboneq.controller.recipe_processor import (
     prepare_waves,
 )
 from laboneq.controller.utilities.exception import LabOneQControllerException
+from laboneq.core.types.enums.port_mode import PortMode
 from laboneq.data.recipe import NtStepKey
 from laboneq.data.scheduled_experiment import ArtifactsCodegen
 
@@ -579,7 +580,7 @@ class SHFSGMixIn:
                     f"{self.dev_repr}: Local oscillator for channel {io.channel} is required, "
                     f"but is not provided."
                 )
-            if io.port_mode is None or io.port_mode == "rf":
+            if io.port_mode is None or io.port_mode == PortMode.RF:
                 yield DeviceAttribute(
                     name=AttributeName.SG_SYNTH_CENTER_FREQ,
                     index=get_synth_idx(io),

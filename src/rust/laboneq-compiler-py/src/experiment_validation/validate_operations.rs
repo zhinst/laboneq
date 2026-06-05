@@ -197,7 +197,6 @@ fn check_markers(
         .ok_or(Error::new("Internal error: section not found."))?;
     if matches!(signal.device_kind(), DeviceKind::Hdawg)
         && matches!(signal.signal_kind(), SignalKind::Rf)
-        && signal.ports().len() == 1
         && pulse
             .markers
             .iter()

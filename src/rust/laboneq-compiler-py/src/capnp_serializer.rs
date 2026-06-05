@@ -1621,6 +1621,11 @@ impl<'py> Serializer<'py> {
         self.serialize_instruments(py, &obj.instruments, &mut device_setup_builder)?;
         self.serialize_oscillators(py, &obj.oscillators, &mut device_setup_builder)?;
         self.serialize_device_signals(py, &obj.signals, &mut device_setup_builder)?;
+        if let Some(blob) = &obj.zqcs_setup_description {
+            let sd = device_setup_builder.reborrow().init_setup_description();
+            let mut zqcs_builder = sd.init_zqcs();
+            zqcs_builder.set_data(blob);
+        }
         Ok(())
     }
 
@@ -1842,6 +1847,7 @@ impl<'py> Serializer<'py> {
                 for (i, coeff) in fir.coefficients.iter().enumerate() {
                     coeff_builder.set(i as u32, *coeff);
                 }
+                fir_builder.set_strict(fir.strict);
             }
         }
 

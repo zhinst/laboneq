@@ -3,7 +3,6 @@
 
 mod calculator;
 mod on_device;
-mod output_routing;
 mod precompensation;
 
 #[cfg(test)]

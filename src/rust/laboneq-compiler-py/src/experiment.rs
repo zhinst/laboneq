@@ -10,6 +10,7 @@ use laboneq_dsl::types::{
     DeviceUid, ExternalParameterUid, ParameterUid, PulseDef, PulseUid, SignalUid, SweepParameter,
 };
 use laboneq_py_utils::py_object_interner::PyObjectInterner;
+use laboneq_units::duration::{Frequency, Hertz};
 
 use crate::NamedIdStore;
 use crate::error::{Error, Result};
@@ -40,12 +41,14 @@ impl Experiment {
 /// Device signal definition, representing a signal in the device setup.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DeviceSignal {
-    // Identification parameters
+    /// Identification parameters
     pub uid: SignalUid,
     pub device_uid: DeviceUid,
 
-    // Configuration parameters
-    pub ports: Vec<String>,
+    /// Configuration parameters
     pub kind: SignalKind,
     pub calibration: SignalCalibration,
+    /// Delay signal in samples
+    pub delay_signal: i64,
+    pub sampling_rate: Frequency<Hertz>,
 }

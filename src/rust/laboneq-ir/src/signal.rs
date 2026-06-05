@@ -7,7 +7,6 @@ use laboneq_dsl::{
     types::{AmplifierPump, DeviceUid, Oscillator, Quantity, SignalUid, ValueOrParameter},
 };
 use laboneq_units::duration::{Duration, Second};
-use smallvec::SmallVec;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Signal {
@@ -19,7 +18,6 @@ pub struct Signal {
     // Configuration parameters
     pub sampling_rate: f64,
     pub port_mode: Option<PortMode>,
-    pub ports: SmallVec<[String; 4]>,
     pub kind: SignalKind,
 
     // Calibration parameters
@@ -43,7 +41,6 @@ pub struct Signal {
 
 pub mod builder {
     use super::*;
-    use smallvec::smallvec;
 
     pub struct SignalBuilder {
         inner: Signal,
@@ -68,7 +65,6 @@ pub mod builder {
                     voltage_offset: None,
                     kind,
                     amplifier_pump: None,
-                    ports: smallvec![],
                     port_mode: None,
                     automute: false,
                     amplitude: None,
@@ -146,11 +142,6 @@ pub mod builder {
 
         pub fn port_mode(mut self, port_mode: PortMode) -> Self {
             self.inner.port_mode = Some(port_mode);
-            self
-        }
-
-        pub fn ports(mut self, ports: Vec<String>) -> Self {
-            self.inner.ports = SmallVec::from_vec(ports);
             self
         }
 

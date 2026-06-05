@@ -12,6 +12,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable
 
 from laboneq import __version__
+from laboneq.controller.constants import CONNECT_CHECK_HOLDOFF
 from laboneq.controller.devices.async_support import _gather
 from laboneq.controller.devices.device_collection import DeviceCollection
 from laboneq.controller.devices.device_utils import zhinst_core_version
@@ -22,7 +23,6 @@ from laboneq.controller.near_time_replacement import (
 )
 from laboneq.controller.near_time_runner import NearTimeRunner
 from laboneq.controller.recipe_processor import (
-    get_execution_time,
     pre_process_compiled,
     validate_scheduled_experiment,
 )
@@ -51,16 +51,11 @@ if TYPE_CHECKING:
     from laboneq.data.scheduled_experiment import (
         ScheduledExperiment,
     )
+    from laboneq.data.setup_descriptions import SetupDescription
     from laboneq.dsl.experiment.pulse import Pulse
 
 
 _logger = logging.getLogger(__name__)
-
-
-# Only recheck for the proper connected state if there was no check since more than
-# the below amount of seconds. Important for performance with many small experiments
-# executed in a batch.
-CONNECT_CHECK_HOLDOFF = 10  # sec
 
 
 @dataclass
@@ -148,6 +143,11 @@ class Controller(EventLoopMixIn):
     def devices(self) -> dict[str, DeviceZI]:
         return self._devices.devices
 
+    @property
+    def setup_description(self) -> SetupDescription | None:
+        """Setup description from connected device, if any."""
+        return self._devices.setup_description
+
     async def _prepare_nt_step(
         self,
         recipe_data: RecipeData,
@@ -192,22 +192,25 @@ class Controller(EventLoopMixIn):
             raise LabOneQControllerException(device_errors)
 
     async def _wait_execution_to_stop(self, execution_context: ExecutionContext):
-        recipe_data = execution_context.recipe_data
-        min_wait_time, guarded_wait_time = get_execution_time(recipe_data)
-        if min_wait_time > 5:  # Only inform about RT executions taking longer than 5s
-            _logger.info("Estimated RT execution time: %.2f s.", min_wait_time)
-
         target_devs = [
             device for _, device in self._devices.all if isinstance(device, DeviceBase)
         ]
-        response_waiters = await _gather(
+        if len(target_devs) == 0:
+            return
+
+        recipe_data = execution_context.recipe_data
+        water_results = await _gather(
             *(
-                device.make_waiter_for_execution_done(
-                    recipe_data=recipe_data, timeout_s=guarded_wait_time
-                )
+                device.make_waiter_for_execution_done(recipe_data=recipe_data)
                 for device in target_devs
             )
         )
+        wait_times, response_waiters = zip(*water_results)
+
+        min_wait_time = max(wait_times)
+        if min_wait_time > 5:  # Only inform about RT executions taking longer than 5s
+            _logger.info("Estimated RT execution time: %.2f s.", min_wait_time)
+
         await _gather(
             *(
                 device.emit_start_trigger(recipe_data=recipe_data)
@@ -218,7 +221,6 @@ class Controller(EventLoopMixIn):
             *(
                 device.wait_for_execution_done(
                     response_waiter=response_waiter,
-                    timeout_s=guarded_wait_time,
                     min_wait_time=min_wait_time,
                 )
                 for device, response_waiter in zip(target_devs, response_waiters)

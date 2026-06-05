@@ -5,11 +5,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Mapping
 
-from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
 from laboneq.data.compilation_job import (
     DeviceInfo,
-    DeviceInfoType,
-    ReferenceClockSourceInfo,
 )
 from laboneq.data.setup_description import (
     DeviceType,
@@ -23,22 +20,12 @@ if TYPE_CHECKING:
     )
 
 
-def _ref_clk_from_ds(
-    ref_clk: ReferenceClockSource | None,
-) -> ReferenceClockSourceInfo | None:
-    if ref_clk == ReferenceClockSource.INTERNAL:
-        return ReferenceClockSourceInfo.INTERNAL
-    elif ref_clk == ReferenceClockSource.EXTERNAL:
-        return ReferenceClockSourceInfo.EXTERNAL
-    return None
-
-
 def _build_device_info(device: Instrument) -> DeviceInfo:
     return DeviceInfo(
         uid=device.uid,
-        device_type=DeviceInfoType(device.device_type.name.lower()),
+        device_type=device.device_type,
         options=device.device_options or "",
-        reference_clock_source=_ref_clk_from_ds(device.reference_clock.source),
+        reference_clock_source=device.reference_clock.source,
     )
 
 

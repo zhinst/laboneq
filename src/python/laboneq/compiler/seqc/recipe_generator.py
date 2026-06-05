@@ -8,12 +8,11 @@ from typing import TYPE_CHECKING
 
 from zhinst.core import __version__ as zhinst_version
 
+from laboneq._rust import codegenerator as codegen_rs
 from laboneq._version import get_version
-from laboneq.compiler.workflow.precompensation_helpers import (
-    verify_precompensation_parameters,
-)
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.awg_signal_type import AWGSignalType
+from laboneq.core.types.enums.port_mode import PortMode
 from laboneq.data.calibration import CancellationSource
 from laboneq.data.recipe import (
     AWG,
@@ -34,22 +33,20 @@ if TYPE_CHECKING:
     from laboneq._rust.codegenerator import ChannelProperties, FeedbackRegisterConfig
     from laboneq.compiler.common.integration_times import IntegrationTimes
     from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC, NeartimeStep
-    from laboneq.compiler.seqc.types import SignalDelays
     from laboneq.data.awg_info import AwgKey
 
 
 _logger = logging.getLogger(__name__)
 
+_PORT_MODE = {
+    codegen_rs.PortMode.RF: PortMode.RF,
+    codegen_rs.PortMode.LF: PortMode.LF,
+}
+
 
 class RecipeGenerator:
     def __init__(self, experiment_rs: compiler_rs.Experiment):
         self._experiment_rs = experiment_rs
-        self._sampling_rates_by_device = {}
-        for signal_id in experiment_rs.signals():
-            device_id = experiment_rs.signal_device_uid(signal_id)
-            self._sampling_rates_by_device[device_id] = (
-                experiment_rs.signal_sampling_rate(signal_id)
-            )
 
         self._recipe = Recipe()
         self._recipe.versions.target_labone = zhinst_version
@@ -285,25 +282,15 @@ def calc_outputs(
 
         signal_range = channel_properties.range
 
-        scheduler_port_delay: float = 0.0
-        signal_delays = combined_compiler_output.signal_delays
-        if signal_id in signal_delays:
-            scheduler_port_delay += signal_delays[signal_id].on_device
+        scheduler_port_delay = channel_properties.scheduler_delay
         scheduler_port_delay += experiment_rs.signal_delay_compensation(signal_id)
 
         precompensation = experiment_rs.signal_precompensation(signal_id)
-        warnings = verify_precompensation_parameters(
-            precompensation,
-            experiment_rs.signal_sampling_rate(signal_id),
-            signal_id,
-        )
-        if warnings:
-            _logger.warning(warnings)
         output = {
             "device_id": awg_key.device_id,
             "channel": channel,
             "lo_frequency": channel_properties.lo_frequency,
-            "port_mode": channel_properties.port_mode,
+            "port_mode": _PORT_MODE.get(channel_properties.port_mode),
             "range": signal_range.value if signal_range is not None else None,
             "range_unit": (signal_range.unit if signal_range is not None else None),
             "port_delay": channel_properties.port_delay,
@@ -341,7 +328,6 @@ def calc_outputs(
 
 
 def calc_inputs(
-    signal_delays: SignalDelays,
     combined_compiler_output: CombinedRTOutputSeqC,
 ):
     all_channels = {}
@@ -353,12 +339,8 @@ def calc_inputs(
     for awg_key, channel_properties in channels_flat:
         if channel_properties.direction != "IN":
             continue
-        signal_id = channel_properties.signal
         signal_range = channel_properties.range
-
-        scheduler_port_delay: float = 0.0
-        if signal_id in signal_delays:
-            scheduler_port_delay += signal_delays[signal_id].on_device
+        scheduler_port_delay: float = channel_properties.scheduler_delay
         input = {
             "device_id": awg_key.device_id,
             "channel": channel_properties.channel,
@@ -367,7 +349,7 @@ def calc_inputs(
             "range_unit": (signal_range.unit if signal_range is not None else None),
             "port_delay": channel_properties.port_delay,
             "scheduler_port_delay": scheduler_port_delay,
-            "port_mode": channel_properties.port_mode,
+            "port_mode": _PORT_MODE.get(channel_properties.port_mode),
         }
         channel_key = (awg_key.device_id, channel_properties.channel)
         # TODO(2K): check for conflicts if 'channel_key' already present in 'all_channels'
@@ -436,7 +418,6 @@ def generate_recipe(
         )
 
     for input in calc_inputs(
-        combined_compiler_output.signal_delays,
         combined_compiler_output,
     ):
         _logger.debug("Adding input %s", input)

@@ -8,6 +8,9 @@ use std::collections::HashSet;
 use indexmap::IndexMap;
 
 use laboneq_common::device_options::DeviceOptions;
+use laboneq_common::device_traits;
+use laboneq_common::named_id::NamedIdStore;
+use laboneq_common::named_id::resolve_ids;
 use laboneq_common::types::AuxiliaryDeviceKind;
 use laboneq_common::types::ReferenceClock;
 use laboneq_common::types::SignalKind;
@@ -19,6 +22,8 @@ use laboneq_dsl::setup_description_qccs::AuxiliaryDevice;
 
 use laboneq_dsl::signal_calibration::SignalCalibration;
 use laboneq_units::duration::Duration;
+use laboneq_units::duration::Frequency;
+use laboneq_units::duration::Hertz;
 use laboneq_units::duration::Second;
 use laboneq_units::duration::seconds;
 use smallvec::SmallVec;
@@ -35,7 +40,9 @@ use laboneq_ir::system::AwgDevice;
 use crate::Result;
 use crate::experiment_view::ExperimentSignal;
 use crate::experiment_view::ExperimentViewWrapper;
-use crate::ports::parse_port;
+use crate::output_routing::process_output_routing;
+use crate::ports::{IoDirection, Port, parse_port};
+use crate::precompensation::{SignalPrecompensation, process_precompensation};
 use crate::setup_processor::create_awg_devices;
 
 pub struct QccsBackendPreprocessedData {
@@ -127,7 +134,7 @@ pub(crate) fn preprocess_experiment(
     let mut experiment = ExperimentViewWrapper::from_experiment_view(experiment)?;
     fill_missing_device_options(&mut experiment);
     validate_setup(&experiment)?;
-    let routed_output_channel_map = resolve_output_routing_map(&experiment)?;
+    let routed_outputs = process_output_routing(&experiment)?;
 
     let hdawg_triggering_signal = create_uhfqa_hdawg_triggering_signal(&mut experiment);
     let (awg_devices, reassigned_signals) = create_awg_devices(&mut experiment)?;
@@ -155,6 +162,10 @@ pub(crate) fn preprocess_experiment(
         &experiment.auxiliary_devices,
     );
 
+    let device_sampling_rates = eval_sampling_rates(&awg_device_map.values().collect::<Vec<_>>())?;
+
+    process_precompensations(&experiment, &device_sampling_rates, experiment.id_store)?;
+
     let mut backend_signals = Vec::with_capacity(experiment.signals.len());
     let mut device_signals = Vec::with_capacity(experiment.signals.len());
     let mut awg_cores: HashMap<(u16, DeviceUid), AwgKey> = HashMap::new();
@@ -164,11 +175,8 @@ pub(crate) fn preprocess_experiment(
             laboneq_error!("Device with UID {} not found in setup", signal.device_uid.0)
         })?;
 
-        let mut channels: SmallVec<[u16; 4]> = signal
-            .ports
-            .iter()
-            .map(|p| parse_port(p, device.kind()).map(|p| p.channel as u16))
-            .collect::<Result<_, _>>()?;
+        let mut channels: SmallVec<[u16; 4]> =
+            signal.ports.iter().map(|p| p.channel as u16).collect();
         if channels.is_empty() {
             bail!(
                 "Signal with UID {} does not have any valid ports",
@@ -199,6 +207,15 @@ pub(crate) fn preprocess_experiment(
             new_key
         };
 
+        let sampling_rate = device_sampling_rates
+            .get(&signal.device_uid)
+            .ok_or_else(|| {
+                laboneq_error!(
+                    "Expected sampling rate for device UID {}",
+                    signal.device_uid.0
+                )
+            })?;
+
         backend_signals.push(BackendSignal {
             uid: signal.uid,
             device_uid: signal.device_uid,
@@ -206,12 +223,20 @@ pub(crate) fn preprocess_experiment(
             awg_key,
             awg_index,
         });
+
+        let signal_kind = signal_kind(&signal.ports, device.kind())?;
+
         device_signals.push(DeviceSignal {
             uid: signal.uid,
             device_uid: signal.device_uid,
-            ports: signal.ports.clone(),
-            kind: signal.signal_type.clone(),
+            kind: signal_kind,
             calibration: signal.calibration.clone(),
+            delay_signal: routed_outputs
+                .delay_signal
+                .get(&signal.uid)
+                .copied()
+                .unwrap_or(0),
+            sampling_rate: *sampling_rate,
         });
     }
 
@@ -220,7 +245,7 @@ pub(crate) fn preprocess_experiment(
             backend_signals,
             experiment.auxiliary_devices,
             lead_delays,
-            routed_output_channel_map,
+            routed_outputs.channel_map,
         ),
         device_signals,
         awg_device_map.into_values().collect(),
@@ -265,9 +290,10 @@ fn create_uhfqa_hdawg_triggering_signal(
         .find(|d| d.kind == InstrumentKind::Hdawg)
         .unwrap();
 
-    let has_channel_0_on_hdawg = experiment.signals.iter().any(|s| {
-        s.device_uid == hdawg.uid && s.ports.iter().any(|p| p == "SIGOUTS/0" || p == "SIGOUTS/1") // TODO: Proper channel - port converter
-    });
+    let has_channel_0_on_hdawg = experiment
+        .signals
+        .iter()
+        .any(|s| s.device_uid == hdawg.uid && s.ports.iter().any(|p| [0, 1].contains(&p.channel)));
 
     if has_channel_0_on_hdawg {
         return None;
@@ -278,8 +304,10 @@ fn create_uhfqa_hdawg_triggering_signal(
             .get_or_insert("__small_system_trigger__")
             .into(),
         device_uid: hdawg.uid,
-        ports: vec!["SIGOUTS/0".to_string(), "SIGOUTS/1".to_string()], // TODO: Proper channel - port converter
-        signal_type: SignalKind::Iq,
+        ports: vec![
+            parse_port("SIGOUTS/0", hdawg.kind).unwrap(),
+            parse_port("SIGOUTS/1", hdawg.kind).unwrap(),
+        ],
         calibration: SignalCalibration::default(),
     })
 }
@@ -290,10 +318,6 @@ fn validate_setup(experiment: &ExperimentViewWrapper) -> Result<()> {
         .values()
         .map(|dev| dev.kind)
         .collect::<HashSet<_>>();
-
-    if all_devices.contains(&InstrumentKind::Zqcs) {
-        bail!("ZQCS devices are not supported in the QCCS backend");
-    }
 
     let has_sync_devices = contains_sync_devices(&experiment.auxiliary_devices);
     if !has_sync_devices
@@ -439,14 +463,79 @@ fn fill_missing_device_options(experiment_view: &mut ExperimentViewWrapper) {
     }
 }
 
-/// Resolve the source channels for all output signals based on the assigned ports.
-fn resolve_output_routing_map(experiment: &ExperimentViewWrapper) -> Result<HashMap<String, u8>> {
-    let mut routed_output_channel_map = HashMap::new();
-    for signal in &experiment.signals {
-        for output in signal.calibration.added_outputs.iter() {
-            let port = parse_port(&output.source_channel, DeviceKind::Shfsg)?;
-            routed_output_channel_map.insert(output.source_channel.clone(), port.channel);
-        }
+fn signal_kind(ports: &[Port], instrument: DeviceKind) -> Result<SignalKind> {
+    if ports.len() > 1
+        && ports
+            .iter()
+            .map(|p| p.direction)
+            .collect::<HashSet<_>>()
+            .len()
+            != 1
+    {
+        bail!("Signal ports must all have the same direction (input or output)");
     }
-    Ok(routed_output_channel_map)
+
+    if ports
+        .iter()
+        .all(|p| matches!(p.direction, IoDirection::Input))
+    {
+        return Ok(SignalKind::Integration);
+    }
+    if instrument == DeviceKind::Hdawg && ports.len() == 1 {
+        return Ok(SignalKind::Rf);
+    }
+    Ok(SignalKind::Iq)
+}
+
+/// Evaluates the sampling rates for each device.
+fn eval_sampling_rates(devices: &[&AwgDevice]) -> Result<HashMap<DeviceUid, Frequency<Hertz>>> {
+    let has_shf = devices
+        .iter()
+        .any(|dev| matches!(dev.kind(), DeviceKind::Shfqa | DeviceKind::Shfsg));
+
+    devices
+        .iter()
+        .map(|device| {
+            let sampling_rate = match device.kind() {
+                DeviceKind::Shfsg => device_traits::SHFSG_SAMPLING_RATE,
+                DeviceKind::Shfqa => device_traits::SHFQA_SAMPLING_RATE,
+                DeviceKind::Hdawg => {
+                    if has_shf {
+                        device_traits::HDAWG_SAMPLING_RATE_WITH_SHF
+                    } else {
+                        device_traits::HDAWG_SAMPLING_RATE_WITHOUT_SHF
+                    }
+                }
+                DeviceKind::Uhfqa => device_traits::UHFQA_SAMPLING_RATE,
+                k => bail!("Unsupported device kind for sampling rate evaluation: {k:?}"),
+            };
+            Ok((device.uid(), sampling_rate))
+        })
+        .collect::<Result<HashMap<_, _>>>()
+}
+
+fn process_precompensations(
+    experiment: &ExperimentViewWrapper,
+    sampling_rates: &HashMap<DeviceUid, Frequency<Hertz>>,
+    id_store: &NamedIdStore,
+) -> Result<()> {
+    let precompensations = experiment
+        .signals
+        .iter()
+        .filter_map(|s| {
+            s.calibration
+                .precompensation
+                .as_ref()
+                .map(|p| SignalPrecompensation {
+                    signal_uid: s.uid,
+                    precompensation: p,
+                    sampling_rate: sampling_rates[&s.device_uid].value(),
+                })
+        })
+        .collect::<Vec<_>>();
+    let result = process_precompensation(precompensations)?;
+    for warning in result.warnings {
+        laboneq_log::warn!("{}", resolve_ids(&warning.to_string(), id_store));
+    }
+    Ok(())
 }

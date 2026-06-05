@@ -3,7 +3,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use laboneq_common::device_traits;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::types::{DeviceKind, SignalKind};
 use laboneq_dsl::types::{AcquisitionType, DeviceUid, OscillatorKind, SignalUid};
@@ -49,33 +48,22 @@ pub(crate) fn process_setup(
         .map(|d| (d.uid(), d))
         .collect::<HashMap<_, _>>();
 
-    let sampling_rates = eval_sampling_rates(&signals, &device_map);
-
     resolve_oscillator_modulation(
         &mut signals,
         &device_map,
-        &sampling_rates,
         context,
         id_store,
         backend_processed,
     )?;
 
     // Adapt precompensation before computing the delays, as the presence of precompensation can affect the delay calculations.
-    adapt_precompensation_on_signals(&mut signals, &device_map, backend_processed)?;
+    adapt_precompensation_on_signals(&mut signals, &device_map, backend_processed, id_store)?;
 
     // Compute the on-device delays based on the signal properties and device information.
-    let delays = compute_delays(&signals, &device_map, &sampling_rates, backend_processed)
-        .map_err(Error::new)?;
+    let delays = compute_delays(&signals, &device_map, backend_processed).map_err(Error::new)?;
 
     // Process the signals, generating the final signal configurations with the computed delays and adapted precompensation settings.
-    let signals = process_signals(
-        signals,
-        &sampling_rates,
-        &device_map,
-        &delays,
-        id_store,
-        backend_processed,
-    )?;
+    let signals = process_signals(signals, &device_map, &delays, id_store, backend_processed)?;
 
     Ok(ProcessedSetup {
         signals,
@@ -84,48 +72,10 @@ pub(crate) fn process_setup(
     })
 }
 
-/// Evaluates the sampling rates for each signal based on the device information and signal properties.
-fn eval_sampling_rates(
-    signals: &[DeviceSignal],
-    device_map: &HashMap<DeviceUid, &AwgDevice>,
-) -> HashMap<SignalUid, Frequency<Hertz>> {
-    let has_shf = device_map
-        .values()
-        .any(|d| matches!(d.kind(), DeviceKind::Shfqa | DeviceKind::Shfsg));
-
-    signals
-        .iter()
-        .map(|signal| {
-            let device = device_map.get(&signal.device_uid).unwrap();
-            let sampling_rate = match device.kind() {
-                DeviceKind::Shfsg => device_traits::SHFSG_SAMPLING_RATE,
-                DeviceKind::Shfqa => device_traits::SHFQA_SAMPLING_RATE,
-                DeviceKind::Hdawg => {
-                    if has_shf {
-                        device_traits::HDAWG_SAMPLING_RATE_WITH_SHF
-                    } else {
-                        device_traits::HDAWG_SAMPLING_RATE_WITHOUT_SHF
-                    }
-                }
-                DeviceKind::Uhfqa => device_traits::UHFQA_SAMPLING_RATE,
-                DeviceKind::Zqcs => {
-                    if signal.kind == SignalKind::Integration {
-                        device_traits::ZQCS_INPUT_SAMPLING_RATE
-                    } else {
-                        device_traits::ZQCS_OUTPUT_SAMPLING_RATE
-                    }
-                }
-            };
-            (signal.uid, sampling_rate)
-        })
-        .collect()
-}
-
 /// Resolves the modulation type for oscillators with AUTO modulation based on the device capabilities.
 fn resolve_oscillator_modulation(
     signals: &mut [DeviceSignal],
     device_map: &HashMap<DeviceUid, &AwgDevice>,
-    sampling_rates: &HashMap<SignalUid, Frequency<Hertz>>,
     context: &ExperimentContext,
     id_store: &NamedIdStore,
     backend_processed: &impl PreprocessedBackendData,
@@ -158,8 +108,8 @@ fn resolve_oscillator_modulation(
             matches!(device.kind(), DeviceKind::Shfqa)
         })
         .filter_map(|signal| {
-            let sampling_rate = sampling_rates.get(&signal.uid).unwrap();
-            let max_acq_len = max_acquisition_length_seconds(&signal.uid, context, *sampling_rate);
+            let max_acq_len =
+                max_acquisition_length_seconds(&signal.uid, context, signal.sampling_rate);
             let has_long_readout =
                 max_acq_len.is_some_and(|len| len.value() > _LRT_HW_MODULATION_THRESHOLD);
             if has_long_readout {
@@ -265,7 +215,6 @@ fn max_acquisition_length_seconds(
 /// Generates the signals from the signal properties and device information.
 fn process_signals(
     signal_properties: Vec<DeviceSignal>,
-    sampling_rates: &HashMap<SignalUid, Frequency<Hertz>>,
     devices: &HashMap<DeviceUid, &AwgDevice>,
     delays: &DelayRegistry,
     id_store: &NamedIdStore,
@@ -275,11 +224,11 @@ fn process_signals(
         .into_iter()
         .map(|prop| -> Result<Signal> {
             let device = devices.get(&prop.device_uid).unwrap();
-            let sampling_rate = sampling_rates.get(&prop.uid).unwrap().value();
+            let sampling_rate = prop.sampling_rate;
 
             let signal_delay = round_signal_delay(
                 prop.calibration.signal_delay,
-                sampling_rate,
+                sampling_rate.value(),
                 device.traits().sample_multiple,
                 prop.uid,
                 id_store,
@@ -287,7 +236,6 @@ fn process_signals(
 
             let signal = Signal {
                 uid: prop.uid,
-                ports: prop.ports.into(),
                 automute: prop.calibration.automute,
                 port_mode: prop.calibration.port_mode,
                 port_delay: prop.calibration.port_delay,
@@ -298,7 +246,7 @@ fn process_signals(
                 signal_delay,
                 awg_key: backend_processed.awg_key(prop.uid)?,
                 device_uid: prop.device_uid,
-                sampling_rate,
+                sampling_rate: prop.sampling_rate.value(),
                 amplifier_pump: prop.calibration.amplifier_pump,
                 oscillator: prop.calibration.oscillator,
                 lo_frequency: prop.calibration.lo_frequency,
@@ -323,6 +271,7 @@ fn adapt_precompensation_on_signals(
     signals: &mut [DeviceSignal],
     devices: &HashMap<DeviceUid, &AwgDevice>,
     backend_processed: &impl PreprocessedBackendData,
+    id_store: &NamedIdStore,
 ) -> Result<()> {
     // Find AWGs that may need precompensation adaptation
     let should_adapt_pc: Vec<_> = signals
@@ -369,7 +318,7 @@ fn adapt_precompensation_on_signals(
         }
     }
 
-    adapt_precompensations(&mut pcs)?;
+    adapt_precompensations(&mut pcs, id_store)?;
 
     // Apply adapted precompensations back to signals
     for pc in pcs {
@@ -431,14 +380,13 @@ fn round_delay(
 ///
 /// The alignment takes into account following factors:
 /// - Lead delay: The inherent delay of the device before the signal starts being output.
-/// - Output routing delay: Delay introduced by output routing.
+/// - Signal delay: The delay introduced by the setup properties for the signal (e.g. output routing).
 /// - Precompensation delay: Delay introduced by precompensation settings on the signal.
 ///
 /// Returns a struct containing the start and port delays for each signal, which can be used to adjust the signal timing in the setup processing.
 fn compute_delays(
     signals: &[DeviceSignal],
     devices: &HashMap<DeviceUid, &AwgDevice>,
-    sampling_rates: &HashMap<SignalUid, Frequency<Hertz>>,
     backend_processed: &impl PreprocessedBackendData,
 ) -> Result<DelayRegistry> {
     let signal_delay_props = signals
@@ -447,15 +395,10 @@ fn compute_delays(
             let device = devices.get(&s.device_uid).unwrap();
             SignalDelayProperties::new(
                 s.uid,
-                &s.ports,
-                sampling_rates.get(&s.uid).unwrap().value(),
+                s.sampling_rate.value(),
                 device.uid(),
                 device.kind(),
-                s.calibration
-                    .added_outputs
-                    .iter()
-                    .map(|r| r.source_channel.as_str())
-                    .collect(),
+                s.delay_signal,
                 s.calibration.precompensation.as_ref(),
                 backend_processed.lead_delay(s.uid),
             )

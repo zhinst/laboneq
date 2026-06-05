@@ -11,6 +11,7 @@ use crate::create_py_module;
 mod test_derived_parameters;
 mod test_experiment_signals;
 mod test_pulse_parameters;
+mod test_setup_description;
 
 #[macro_export]
 macro_rules! include_py_file {
