@@ -1,7 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
 use laboneq_dsl::types::SignalUid;
 use laboneq_error::bail;
@@ -9,7 +9,7 @@ use laboneq_error::bail;
 use crate::Result;
 use crate::ir::compilation_job::{AwgCore, ChannelIndex, DeviceKind, SignalKind};
 use crate::ir::experiment::Handle;
-use crate::ir::{IrNode, NodeKind, PlayPulse, PpcChannelKey, TriggerBitData};
+use crate::ir::{IrNode, NodeKind, PlayPulse, TriggerBitData};
 use crate::result::MarkerMode;
 
 /// Maps a channel to marker.
@@ -28,7 +28,6 @@ fn channel_to_trigger_bit_hdawg(channel: u8) -> u8 {
 
 pub(crate) struct AwgCompilationInfo {
     device_kind: DeviceKind,
-    ppc_device: Option<Arc<PpcChannelKey>>,
     feedback_handles: Vec<Handle>,
     pub marker_modes: HashMap<ChannelIndex, MarkerMode>,
 }
@@ -37,7 +36,6 @@ impl AwgCompilationInfo {
     fn new(device_kind: DeviceKind) -> Self {
         Self {
             device_kind,
-            ppc_device: None,
             feedback_handles: Vec::new(),
             marker_modes: HashMap::new(),
         }
@@ -47,24 +45,8 @@ impl AwgCompilationInfo {
         !self.feedback_handles.is_empty()
     }
 
-    pub(crate) fn ppc_device(&self) -> Option<&Arc<PpcChannelKey>> {
-        self.ppc_device.as_ref()
-    }
-
     pub(crate) fn feedback_handles(&self) -> &Vec<Handle> {
         &self.feedback_handles
-    }
-
-    fn add_ppc_device(&mut self, ppc_device: &Arc<PpcChannelKey>) {
-        if self.ppc_device.is_none() {
-            self.ppc_device = Some(Arc::clone(ppc_device));
-        } else if let Some(unique_ppc) = &self.ppc_device {
-            assert_eq!(
-                unique_ppc, ppc_device,
-                "Internal error: Multiple SHFPPC devices found in the same AWG. \
-                Only a single device and a single channel is supported."
-            )
-        }
     }
 
     fn visit_play_pulse(&mut self, play: &PlayPulse) -> Result<()> {
@@ -156,9 +138,6 @@ fn traverse_awg_ir(node: &IrNode, info: &mut AwgCompilationInfo) -> Result<()> {
             if let Some(handle) = ob.handle.as_ref() {
                 info.feedback_handles.push(handle.clone());
             }
-        }
-        NodeKind::PpcStep(ob) => {
-            info.add_ppc_device(&ob.ppc_device);
         }
         NodeKind::PlayPulse(obj) => {
             info.visit_play_pulse(obj)?;

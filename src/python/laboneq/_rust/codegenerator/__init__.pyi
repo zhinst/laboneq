@@ -104,7 +104,6 @@ class ChannelProperties:
     channel: int
     direction: Literal["IN", "OUT"]
     marker_mode: Literal["TRIGGER", "MARKER"] | None
-    hw_oscillator_index: int | None
     amplitude: float | str | None  # Can be a float or a parameter name
     voltage_offset: float | str | None  # Can be a float or a parameter name
     gains: Gains | None
@@ -115,6 +114,13 @@ class ChannelProperties:
     routed_outputs: list[RoutedOutput]
     # Delay in seconds to be applied
     scheduler_delay: float
+    output_mute_enable: bool
+    hardware_oscillator: HardwareOscillator | None
+
+class HardwareOscillator:
+    uid: str
+    index: int
+    frequency: float | str  # Can be a float or a parameter name
 
 class RoutedOutput:
     source_channel: int

@@ -640,7 +640,7 @@ class Automation:
 
         # Run layer
         new_layer_key = self.next_layer_key(layer_key)
-        new_params = {}
+        new_params: dict[str, Any] = {}
         layer.run_executable(self)
 
         # Deactivate after node on failure

@@ -3,155 +3,55 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, is_dataclass
-from typing import Any, Callable, Optional
+import copy
+from typing import TYPE_CHECKING
 
-import attrs
-
+from laboneq.core.path import remove_logical_signal_prefix
 from laboneq.core.types.enums import ModulationType
+from laboneq.core.types.units import Quantity
 from laboneq.data import calibration
-from laboneq.dsl import calibration as legacy_calibration
-from laboneq.implementation.legacy_adapters.utils import (
-    LogicalSignalPhysicalChannelUID,
-    raise_not_implemented,
-)
+
+if TYPE_CHECKING:
+    from laboneq.dsl import calibration as dsl_calibration
 
 
-def _change_type(source: Any, target: Any) -> Any:
-    if source is None:
-        return None
-    if is_dataclass(source):
-        return target(**asdict(source))
-    if attrs.has(source.__class__):
-        return target(**attrs.asdict(source))
-    raise_not_implemented(source)
-
-
-def convert_oscillator(
-    obj: legacy_calibration.Oscillator | None,
-) -> Optional[calibration.Oscillator]:
-    if obj is None:
-        return None
-    return calibration.Oscillator(
-        uid=obj.uid,
-        frequency=obj.frequency,
-        modulation_type=obj.modulation_type,
-    )
-
-
-def convert_mixer_calibration(
-    obj: legacy_calibration.MixerCalibration | None,
-) -> Optional[calibration.MixerCalibration]:
-    if obj is None:
-        return None
-    if isinstance(obj, legacy_calibration.MixerCalibration):
-        return calibration.MixerCalibration(
-            uid=obj.uid,
-            voltage_offsets=obj.voltage_offsets or [],
-            correction_matrix=obj.correction_matrix or [],
-        )
-    raise_not_implemented(obj)
-
-
-def convert_exponential(
-    obj: legacy_calibration.ExponentialCompensation | None,
-) -> Optional[calibration.ExponentialCompensation]:
-    if obj is None:
-        return None
-    if isinstance(obj, list):
-        return [convert_exponential(x) for x in obj]
-    return calibration.ExponentialCompensation(
-        timeconstant=obj.timeconstant, amplitude=obj.amplitude
-    )
-
-
-def convert_highpass_compensation(
-    obj: legacy_calibration.HighPassCompensation | None,
-) -> Optional[calibration.HighPassCompensation]:
-    if obj is None:
-        return None
-    return calibration.HighPassCompensation(timeconstant=obj.timeconstant)
-
-
-def convert_precompensation(
-    obj: legacy_calibration.Precompensation | None,
-) -> Optional[calibration.Precompensation]:
-    if obj is None:
-        return obj
-    new = calibration.Precompensation()
-    new.uid = obj.uid
-    new.exponential = convert_exponential(obj.exponential)
-    new.high_pass = convert_highpass_compensation(obj.high_pass)
-    new.bounce = _change_type(obj.bounce, calibration.BounceCompensation)
-    new.FIR = _change_type(obj.FIR, calibration.FIRCompensation)
-    return new
-
-
-def convert_amplifier_pump(
-    obj: legacy_calibration.AmplifierPump | None,
-) -> Optional[calibration.AmplifierPump]:
-    if obj is None:
-        return obj
-    return calibration.AmplifierPump(
-        uid=obj.uid,
-        pump_on=obj.pump_on,
-        pump_frequency=obj.pump_frequency,
-        pump_power=obj.pump_power,
-        pump_filter_on=obj.pump_filter_on,
-        cancellation_on=obj.cancellation_on,
-        cancellation_phase=obj.cancellation_phase,
-        cancellation_attenuation=obj.cancellation_attenuation,
-        cancellation_source=obj.cancellation_source,
-        cancellation_source_frequency=obj.cancellation_source_frequency,
-        alc_on=obj.alc_on,
-        probe_on=obj.probe_on,
-        probe_frequency=obj.probe_frequency,
-        probe_power=obj.probe_power,
-    )
-
-
-def format_ls_pc_uid(seq: str) -> str:
-    return LogicalSignalPhysicalChannelUID(seq).uid
-
-
-def convert_calibration(
-    target: legacy_calibration.Calibration,
-    uid_formatter: Callable[[str], str] = format_ls_pc_uid,
-) -> calibration.Calibration:
-    cals = {}
-    legacy_ls: legacy_calibration.SignalCalibration
-    for uid, legacy_ls in target.calibration_items.items():
-        if legacy_ls is None:
-            continue
-        else:
-            new = calibration.SignalCalibration()
-            new.oscillator = convert_oscillator(getattr(legacy_ls, "oscillator", None))
-            if legacy_ls.local_oscillator is not None:
-                if (
-                    legacy_ls.local_oscillator.modulation_type
-                    == ModulationType.SOFTWARE
-                ):
-                    raise ValueError(
-                        "Encountered `ModulationType.SOFTWARE` in local oscillator configuration "
-                        "which is not allowed. Make sure modulation type for "
-                        "all local oscillator calibration settings is set to "
-                        "either `ModulationType.HARDWARE` or `ModulationType.AUTO`."
-                    )
-                new.local_oscillator_frequency = legacy_ls.local_oscillator.frequency
-            new.mixer_calibration = convert_mixer_calibration(
-                legacy_ls.mixer_calibration
+def convert_signal_calibration(
+    signal_calibration: dsl_calibration.SignalCalibration | None,
+) -> calibration.SignalCalibration:
+    if signal_calibration is None:
+        return calibration.SignalCalibration()
+    new = calibration.SignalCalibration()
+    new.oscillator = signal_calibration.oscillator
+    if signal_calibration.local_oscillator is not None:
+        if (
+            signal_calibration.local_oscillator.modulation_type
+            == ModulationType.SOFTWARE
+        ):
+            raise ValueError(
+                "Encountered `ModulationType.SOFTWARE` in local oscillator configuration "
+                "which is not allowed. Make sure modulation type for "
+                "all local oscillator calibration settings is set to "
+                "either `ModulationType.HARDWARE` or `ModulationType.AUTO`."
             )
-            new.precompensation = convert_precompensation(legacy_ls.precompensation)
-            new.port_delay = legacy_ls.port_delay
-            new.delay_signal = getattr(legacy_ls, "delay_signal", None)
-            new.port_mode = legacy_ls.port_mode
-            new.voltage_offset = legacy_ls.voltage_offset
-            new.range = legacy_ls.range
-            new.threshold = getattr(legacy_ls, "threshold", None)
-            new.amplitude = legacy_ls.amplitude
-            new.amplifier_pump = convert_amplifier_pump(legacy_ls.amplifier_pump)
-            new.added_outputs = legacy_ls.added_outputs or []
-            new.automute = getattr(legacy_ls, "automute", None)
-        cals[uid_formatter(uid)] = new
-
-    return calibration.Calibration(cals)
+        new.local_oscillator_frequency = signal_calibration.local_oscillator.frequency
+    new.mixer_calibration = signal_calibration.mixer_calibration
+    new.precompensation = signal_calibration.precompensation
+    new.port_delay = signal_calibration.port_delay
+    new.delay_signal = signal_calibration.delay_signal
+    new.port_mode = signal_calibration.port_mode
+    new.voltage_offset = signal_calibration.voltage_offset
+    if signal_calibration.range is not None and not isinstance(
+        signal_calibration.range, Quantity
+    ):
+        new.range = Quantity(value=signal_calibration.range, unit=None)
+    else:
+        new.range = signal_calibration.range
+    new.threshold = signal_calibration.threshold
+    new.amplitude = signal_calibration.amplitude
+    new.amplifier_pump = signal_calibration.amplifier_pump
+    for route in signal_calibration.added_outputs or []:
+        route = copy.copy(route)
+        route.source = remove_logical_signal_prefix(route.source)
+        new.added_outputs.append(route)
+    new.automute = signal_calibration.automute
+    return new

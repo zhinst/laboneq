@@ -8,6 +8,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from laboneq import workflow
+from laboneq.core.types.enums import AveragingMode
+from laboneq.dsl.device.instruments import ZQCS
+from laboneq.dsl.experiment.section import AcquireLoopRt
 
 if TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment
@@ -29,6 +32,31 @@ class CompileExperimentOptions:
         None,
         description="Optional settings to pass to the compiler.",
     )
+
+
+def _find_acquire_loop(experiment: Experiment) -> AcquireLoopRt:
+    """Find acquire loop in the experiment.
+
+    Arguments:
+        experiment: The experiment to search in.
+
+    Returns:
+        The acquire loop.
+    """
+
+    def _search(sections):
+        for section in sections:
+            if isinstance(section, AcquireLoopRt):
+                return section
+            found = _search(section.sections)
+            if found is not None:
+                return found
+        return None
+
+    result = _search(experiment.sections)
+    if result is None:
+        raise ValueError("No acquire loop found in the experiment.")
+    return result
 
 
 @workflow.task
@@ -55,7 +83,19 @@ def compile_experiment(
             The `laboneq` compiled experiment.
     """
     opts = CompileExperimentOptions() if options is None else options
-    return session.compile(
+
+    # TODO: remove this once we have a better solution for the AveragingMode in ZQCS
+    if any(isinstance(x, ZQCS) for x in session.device_setup.instruments):
+        acquire = _find_acquire_loop(experiment)
+        zqcs_requested_averaging_mode = acquire.averaging_mode
+        acquire.averaging_mode = AveragingMode.SINGLE_SHOT
+    else:
+        zqcs_requested_averaging_mode = None
+
+    compiled_experiment = session.compile(
         experiment=experiment,
         compiler_settings=opts.compiler_settings,
     )
+    compiled_experiment._zqcs_requested_averaging_mode = zqcs_requested_averaging_mode
+
+    return compiled_experiment

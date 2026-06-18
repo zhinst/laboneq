@@ -9,7 +9,7 @@ use std::num::NonZeroU32;
 use crate::TinySamples;
 use laboneq_dsl::operation::ExternalOrValue;
 use laboneq_dsl::types::{
-    AveragingMode, ComplexOrFloat, DeviceUid, HandleUid, Marker, ParameterUid, PrngSampleUid,
+    AveragingMode, ComplexOrFloat, HandleUid, Marker, ParameterUid, PrngSampleUid,
     PulseParameterUid, PulseUid, SectionUid, SignalUid, ValueOrParameter,
 };
 
@@ -212,8 +212,6 @@ pub struct Section {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PpcStep {
     pub signal: SignalUid,
-    pub device: DeviceUid,
-    pub channel: u16,
     pub trigger_duration: TinySamples,
     pub pump_power: Option<ValueOrParameter<f64>>,
     pub pump_frequency: Option<ValueOrParameter<f64>>,

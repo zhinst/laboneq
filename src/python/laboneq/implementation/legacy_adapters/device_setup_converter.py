@@ -13,7 +13,6 @@ from laboneq.data.setup_description import (
     DeviceType,
     Instrument,
     LogicalSignal,
-    LogicalSignalGroup,
     PhysicalChannel,
     PortType,
     ReferenceClock,
@@ -23,18 +22,18 @@ from laboneq.data.setup_description import (
 )
 from laboneq.dsl.device import instruments as legacy_instruments
 from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
-from laboneq.implementation.legacy_adapters import calibration_converter, utils
+from laboneq.implementation.legacy_adapters.calibration_converter import (
+    convert_signal_calibration,
+)
 from laboneq.implementation.legacy_adapters.utils import (
     LogicalSignalPhysicalChannelUID,
+    format_ls_pc_uid,
     raise_not_implemented,
 )
 from laboneq.implementation.utils import devices
 
 if TYPE_CHECKING:
-    from laboneq.data.setup_description import (
-        IODirection,
-        Port,
-    )
+    from laboneq.data.setup_description import IODirection, Port
     from laboneq.dsl import device as legacy_device
     from laboneq.dsl.device import io_units as legacy_io_units
     from laboneq.dsl.device import logical_signal_group as legacy_lsg
@@ -48,19 +47,13 @@ def convert_logical_signal(target: legacy_lsg.LogicalSignal) -> LogicalSignal:
 
 def convert_logical_signal_groups_with_ls_mapping(
     logical_signal_groups: dict[str, legacy_lsg.LogicalSignalGroup],
-) -> tuple[
-    dict[str, LogicalSignalGroup], dict[legacy_lsg.LogicalSignal, LogicalSignal]
-]:
-    mapping = {}
+) -> dict[legacy_lsg.LogicalSignal, LogicalSignal]:
     legacy_to_new = {}
-    for uid, lsg in logical_signal_groups.items():
-        new_lsg = LogicalSignalGroup(uid)
+    for lsg in logical_signal_groups.values():
         for ls in lsg.logical_signals.values():
             new_ls = convert_logical_signal(ls)
             legacy_to_new[ls] = new_ls
-            new_lsg.logical_signals[new_ls.name] = new_ls
-        mapping[new_lsg.uid] = new_lsg
-    return mapping, legacy_to_new
+    return legacy_to_new
 
 
 def convert_dataserver(target: legacy_servers.DataServer) -> Server:
@@ -99,7 +92,7 @@ def convert_physical_channel(
     target: legacy_io_units.PhysicalChannel,
     direction: IODirection,
 ) -> PhysicalChannel:
-    pc_helper = utils.LogicalSignalPhysicalChannelUID(target.uid)
+    pc_helper = LogicalSignalPhysicalChannelUID(target.uid)
 
     return PhysicalChannel(
         name=pc_helper.name,
@@ -196,7 +189,7 @@ class LegacyConnectionFinder:
                 if remote_logical_signal.direction != conn.direction:
                     yield remote_logical_signal, from_port
                 else:
-                    uid = utils.LogicalSignalPhysicalChannelUID(
+                    uid = LogicalSignalPhysicalChannelUID(
                         remote_logical_signal.physical_channel.uid
                     )
                     if uid.group != self.legacy_device.uid:
@@ -418,49 +411,6 @@ def make_device_to_device_connections(
     return conns
 
 
-def combine_shfqa_and_shfsg(
-    shfqa: legacy_instruments.SHFQA, shfsg: legacy_instruments.SHFSG
-) -> legacy_instruments.SHFQC:
-    if shfqa.interface != shfsg.interface:
-        raise AssertionError(
-            f"Virtual SHFQA {shfqa.uid} and SHFSG {shfsg.uid} have different interfaces"
-        )
-    if shfqa.server_uid != shfsg.server_uid:
-        raise AssertionError(
-            f"Virtual SHFQA {shfqa.uid} and SHFSG {shfsg.uid} have different"
-            " server_uids"
-        )
-    if shfqa.address != shfsg.address:
-        raise AssertionError(
-            f"Virtual SHFQA {shfqa.uid} and SHFSG {shfsg.uid} have different addresses"
-        )
-    if shfqa.reference_clock_source != shfsg.reference_clock_source:
-        raise AssertionError(
-            f"Virtual SHFQA {shfqa.uid} and SHFSG {shfsg.uid} have different"
-            " reference clock sources"
-        )
-
-    connections = shfqa.connections + shfsg.connections
-
-    device_options = None
-    if shfqa is not None:
-        device_options = shfqa.device_options
-    if shfsg is not None and shfsg.device_options is not None:
-        if device_options is not None:
-            assert device_options == shfsg.device_options
-        device_options = shfsg.device_options
-
-    return legacy_instruments.SHFQC(
-        uid=shfqa.uid,
-        interface=shfqa.interface,
-        server_uid=shfqa.server_uid,
-        address=shfqa.address,
-        reference_clock_source=shfqa.reference_clock_source,
-        connections=connections,
-        device_options=device_options,
-    )
-
-
 def convert_device_setup_to_setup(
     device_setup: legacy_device.device_setup.DeviceSetup,
 ) -> Setup:
@@ -472,12 +422,12 @@ def convert_device_setup_to_setup(
     for name, server in device_setup.servers.items():
         servers[name] = convert_dataserver(server)
 
-    calibration = calibration_converter.convert_calibration(
-        device_setup.get_calibration(),
-        uid_formatter=calibration_converter.format_ls_pc_uid,
-    )
+    calibration = {
+        format_ls_pc_uid(ls_pc_uid): convert_signal_calibration(cal)
+        for ls_pc_uid, cal in device_setup.get_calibration().items()
+    }
 
-    lsgs, ls_legacy_to_new_map = convert_logical_signal_groups_with_ls_mapping(
+    ls_legacy_to_new_map = convert_logical_signal_groups_with_ls_mapping(
         device_setup.logical_signal_groups
     )
 
@@ -501,7 +451,6 @@ def convert_device_setup_to_setup(
         servers=servers,
         instruments=instruments,
         setup_internal_connections=setup_internal_connections,
-        logical_signal_groups=lsgs,
         calibration=calibration,
         setup_description=device_setup.setup_description,
     )

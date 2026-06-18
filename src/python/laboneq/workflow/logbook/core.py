@@ -39,7 +39,7 @@ class LogbookStore(abc.ABC):
             _active_logbook_stores.remove(self)
 
 
-_active_logbook_stores = []
+_active_logbook_stores: list[LogbookStore] = []
 
 
 def active_logbook_stores() -> list[LogbookStore]:

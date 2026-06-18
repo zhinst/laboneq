@@ -304,7 +304,6 @@ mod tests {
             signal_delay: 0,
             start_delay: 0,
             oscillator: None,
-            automute: false,
         });
         let mut tracker = FrameChangeTracker::new();
         let pulse_signature = make_signature(0, 50, None, Some(1.0), vec![]);
@@ -338,7 +337,6 @@ mod tests {
             signal_delay: 0,
             start_delay: 0,
             oscillator: None,
-            automute: false,
         });
         let mut tracker = FrameChangeTracker::new();
         let pulse_signature = make_signature(0, 50, None, None, vec!["param0".to_string()]);
@@ -362,7 +360,6 @@ mod tests {
             signal_delay: 0,
             start_delay: 0,
             oscillator: None,
-            automute: false,
         });
         let mut tracker = FrameChangeTracker::new();
         let pulse_signature = make_signature(0, 50, None, None, vec!["param0".to_string()]);
@@ -404,7 +401,6 @@ mod tests {
                 kind: cjob::OscillatorKind::HARDWARE,
                 frequency: 0.0.into(),
             }),
-            automute: false,
         });
         // Test error when frame change inside waveform, start/end exclusive
         let result = tracker.try_insert_frame_change(&None, &signal_fc, 5, 1.0, &mut None);

@@ -1,7 +1,9 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_common::named_id::NamedId;
+//! Typed UIDs for identifying experiment components.
+
+use crate::named_id::NamedId;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct SectionUid(pub NamedId);
@@ -30,16 +32,19 @@ pub struct PulseParameterUid(pub NamedId);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct PrngSampleUid(pub NamedId);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub struct PhysicalChannelUid(pub NamedId);
+
 #[macro_export]
 macro_rules! impl_from_named_id {
     ($t:ty) => {
-        impl From<laboneq_common::named_id::NamedId> for $t {
-            fn from(value: laboneq_common::named_id::NamedId) -> Self {
+        impl From<$crate::named_id::NamedId> for $t {
+            fn from(value: $crate::named_id::NamedId) -> Self {
                 Self(value)
             }
         }
 
-        impl From<$t> for laboneq_common::named_id::NamedId {
+        impl From<$t> for $crate::named_id::NamedId {
             fn from(value: $t) -> Self {
                 value.0
             }
@@ -48,7 +53,7 @@ macro_rules! impl_from_named_id {
         #[cfg(feature = "test_utils")]
         impl From<u32> for $t {
             fn from(value: u32) -> Self {
-                Self(laboneq_common::named_id::NamedId::debug_id(value))
+                Self($crate::named_id::NamedId::debug_id(value))
             }
         }
     };
@@ -63,6 +68,7 @@ impl_from_named_id!(PulseUid);
 impl_from_named_id!(SectionUid);
 impl_from_named_id!(PulseParameterUid);
 impl_from_named_id!(PrngSampleUid);
+impl_from_named_id!(PhysicalChannelUid);
 
 /// UID of an external parameter.
 ///

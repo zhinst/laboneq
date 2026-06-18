@@ -139,7 +139,6 @@ fn adapt_awg_precompensation(precompensations: &mut [&mut AssignedPrecompensatio
 fn default_fir_settings() -> FirCompensation {
     FirCompensation {
         coefficients: vec![1.0],
-        strict: false,
     }
 }
 

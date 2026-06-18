@@ -1,3 +1,23 @@
+# LabOne Q 26.7.0b4 (2026-06-18)
+
+## Features
+
+- Removed `FIRCompensation.strict`. When waveform memory is exhausted and pulse merging occurred (due to FIR precompensation tail or overlapping pulses), the error now includes a note identifying the merged pulses and their combined size.
+- Added an option for the caller of a quantum operation to override the pulse name used by create_pulse.
+
+  The create_pulse function used inside many quantum operations allows the implementation of the quantum operation to directly supply a pulse name, which is used to identify the kind of pulse and as part of the pulse UID.
+
+  However, a user may wish to generate different pulse objects even when using the same quantum operations. For example, in an experiment with M measure operations, a user may wish to replace a specific subset of those measurements with new pulses.
+
+  To enable this, create_pulse now accepts a new special key named name in the dictionary of pulse options. This allows the user to override the supplied name by passing, for example, qop.measure(q, handle, readout_pulse={"name": "my-special-tag"}) when calling a quantum operation.
+- Changed the device setup compatibility verification between compilation and execution. Experiments compiled with previous versions of LabOne Q may need recompilation.
+
+## Bug Fixes
+
+- Fixed a bug where outputs on different AWG cores of a single HDAWG were not synchronized (e.g. channels 1 and 3 out of sync).
+- Fixed a bug where automute was not correctly applied when multiplexing output.
+- Fixed a bug where "zi:fw:19" execution errors occurred with (auto-)chunking on HDAWG.
+
 # LabOne Q 26.7.0b3 (2026-06-05)
 
 ## Features

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
@@ -13,13 +14,23 @@ if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
     from laboneq.compiler.common.iface_compiler_output import CombinedOutput
     from laboneq.compiler.common.iface_linker import ILinker
+    from laboneq.data.compilation_job import DeviceInfo, ExperimentInfo
     from laboneq.data.recipe import Recipe
 
 
 @dataclass
 class GenerateRecipeArgs:
-    experiment_rs: compiler_rs.Experiment
+    experiment_rs: compiler_rs.ProcessedExperiment
     combined_compiler_output: CombinedOutput
+
+
+@dataclass
+class SetupDescriptionResult:
+    """Result of `build_setup_description()`: the capnp setup description object and the
+    per-signal maps_to mapping (experiment signal -> channel identifier)."""
+
+    setup_description: SimpleNamespace
+    signal_map: dict[str, str]
 
 
 class CompilerHooks(ABC):
@@ -38,6 +49,16 @@ class CompilerHooks(ABC):
     @staticmethod
     @abstractmethod
     def compiler_module() -> compiler_rs: ...
+
+    @staticmethod
+    @abstractmethod
+    def build_setup_description(experiment: ExperimentInfo) -> SetupDescriptionResult:
+        """Build the capnp setup description for this backend's device class.
+
+        Converts `experiment` into the backend-specific setup representation used
+        during compiler payload serialization, and returns the signal map that
+        resolves experiment signal UIDs to physical channel identifiers.
+        """
 
 
 T = TypeVar("T", bound=CompilerHooks)
@@ -95,3 +116,34 @@ class CompilerHooksSeqC(CompilerHooks):
             args.experiment_rs,
             args.combined_compiler_output,
         )
+
+    @staticmethod
+    def build_setup_description(experiment: ExperimentInfo) -> SetupDescriptionResult:
+        signals = []
+        for physical_channel in experiment.physical_channels:
+            sig = SimpleNamespace(
+                uid=physical_channel.uid,
+                ports=physical_channel.ports,
+                instrument_uid=physical_channel.device_uid,
+            )
+            signals.append(sig)
+
+        return SetupDescriptionResult(
+            setup_description=SimpleNamespace(
+                instruments=[_to_instrument(d) for d in experiment.devices],
+                signals=signals,
+                internal_connections=experiment.internal_connections,
+            ),
+            signal_map=experiment.signal_map,
+        )
+
+
+def _to_instrument(device: DeviceInfo) -> SimpleNamespace:
+    return SimpleNamespace(
+        uid=device.uid,
+        device_type=device.device_type.name,
+        options=device.options.upper().split("/") if device.options else [],
+        reference_clock_source=device.reference_clock_source.name
+        if device.reference_clock_source
+        else None,
+    )

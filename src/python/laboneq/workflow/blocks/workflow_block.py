@@ -77,7 +77,7 @@ class WorkflowBlock(blocks.Block):
                     opts[x.name] = maybe_opts
             return None
 
-        tasks = {}
+        tasks: dict[str, WorkflowOptions | TaskOptions] = {}
         for x in self.body:
             maybe_opts = get_options(x, tasks)
             if maybe_opts:

@@ -896,7 +896,6 @@ mod tests {
                 signal_delay: 0,
                 start_delay: 0,
                 oscillator: None,
-                automute: false,
             })
         }
 

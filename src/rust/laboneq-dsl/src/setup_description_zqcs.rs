@@ -1,8 +1,6 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_common::types::SignalKind;
-
 use crate::types::DeviceUid;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,5 +23,12 @@ impl SetupDescriptionZqcs {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ZqcsChannel {
     pub geolocation: String,
-    pub channel_type: SignalKind,
+    pub channel_type: ChannelType,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChannelType {
+    Rf,
+    Qa,
+    Flux,
 }

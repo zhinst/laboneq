@@ -51,7 +51,11 @@ def repeat_previous(
     )
 
 
-def finalize(this: CombinedRTCompilerOutputContainer, settings: CompilerSettings):
+def finalize(
+    this: CombinedRTCompilerOutputContainer,
+    settings: CompilerSettings,
+    uses_chunking: bool,
+):
     get_compiler_hooks(this.device_class).linker().finalize(
-        this.combined_output, settings
+        this.combined_output, settings, uses_chunking
     )

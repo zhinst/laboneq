@@ -6,6 +6,8 @@ use std::fmt::Display;
 mod literal;
 pub use literal::*;
 
+use crate::uid::DeviceUid;
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct PhysicalDeviceUid(pub u16);
 
@@ -182,6 +184,38 @@ impl std::str::FromStr for SignalKind {
             "integration" => Ok(SignalKind::Integration),
             _ => Err(format!("Unknown signal type: {}", s)),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy, PartialOrd, Ord)]
+pub struct ChannelKey {
+    device_uid: DeviceUid,
+    channel: u16,
+}
+
+impl ChannelKey {
+    pub fn new<T>(device_uid: DeviceUid, channel: T) -> Self
+    where
+        T: Into<u16>,
+    {
+        Self {
+            device_uid,
+            channel: channel.into(),
+        }
+    }
+
+    pub fn device_uid(&self) -> DeviceUid {
+        self.device_uid
+    }
+
+    pub fn channel(&self) -> u16 {
+        self.channel
+    }
+}
+
+impl Display for ChannelKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.device_uid.0, self.channel)
     }
 }
 

@@ -17,7 +17,7 @@ class DeviceTraits:
     min_play_wave: int
     sample_multiple: int
     channels_per_awg: int
-    sampling_rate_2GHz: float = None
+    sampling_rate_2GHz: float | None = None
     oscillator_set_latency: float = 0.0
     reset_osc_duration: float = 0.0
     lo_frequency_granularity: Optional[float] = None

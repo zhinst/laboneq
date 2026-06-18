@@ -79,12 +79,14 @@ pub trait CompilerBackend {
     /// NOTE: This is a temporary workaround as long as the compiler calls Python code that requires this information.
     fn device_class(&self) -> usize;
 
-    /// Get a feedback calculator for the given backend. The default implementation returns `None`, indicating that no feedback calculator is available for this backend.
+    /// Get a feedback calculator for the given backend. The default implementation returns `Ok(None)`, indicating that no feedback calculator is available for this backend.
     fn feedback_calculator(
         &self,
         _signals: &[SignalView],
-    ) -> Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>> {
-        None
+        _compiler_settings: &CompilerSettings,
+    ) -> Result<Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>>, Error>
+    {
+        Ok(None)
     }
 }
 
@@ -129,6 +131,7 @@ pub struct PreprocessOutput<T: PreprocessedBackendData> {
     pub(crate) backend_data: T,
     pub(crate) device_signals: Vec<DeviceSignal>,
     pub(crate) awg_devices: Vec<AwgDevice>,
+    pub(crate) device_setup_fingerprint: String,
 }
 
 impl<T: PreprocessedBackendData> PreprocessOutput<T> {
@@ -137,11 +140,13 @@ impl<T: PreprocessedBackendData> PreprocessOutput<T> {
         backend_data: T,
         device_signals: Vec<DeviceSignal>,
         awg_devices: Vec<AwgDevice>,
+        device_setup_fingerprint: String,
     ) -> Self {
         PreprocessOutput {
             backend_data,
             device_signals,
             awg_devices,
+            device_setup_fingerprint,
         }
     }
 }
@@ -176,7 +181,8 @@ pub(crate) trait DynCompilerBackend: Send + Sync {
     fn feedback_calculator(
         &self,
         signals: &[SignalView],
-    ) -> Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>>;
+        compiler_settings: &CompilerSettings,
+    ) -> Result<Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>>, Error>;
 }
 
 impl<B> DynCompilerBackend for B
@@ -203,8 +209,10 @@ where
     fn feedback_calculator(
         &self,
         signals: &[SignalView],
-    ) -> Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>> {
-        <Self as CompilerBackend>::feedback_calculator(self, signals)
+        compiler_settings: &CompilerSettings,
+    ) -> Result<Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>>, Error>
+    {
+        <Self as CompilerBackend>::feedback_calculator(self, signals, compiler_settings)
     }
 }
 

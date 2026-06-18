@@ -5,10 +5,15 @@ from typing import Any, NoReturn
 
 from laboneq.core import path as legacy_path
 from laboneq.data.path import Separator
+from laboneq.data.setup_description import LogicalSignal
 
 
 def raise_not_implemented(obj: Any) -> NoReturn:
     raise NotImplementedError(f"Legacy converter could not convert: {obj} to new type.")
+
+
+def format_ls_pc_uid(seq: str) -> str:
+    return LogicalSignalPhysicalChannelUID(seq).uid
 
 
 class LogicalSignalPhysicalChannelUID:
@@ -41,11 +46,7 @@ class LogicalSignalPhysicalChannelUID:
     def name(self):
         return self._name
 
-    def replace(self, group=None, name=None):
-        if group is None:
-            group = self._group
-        if name is None:
-            name = self._name
-        parts = [*self._parts[:-2], group, name]
-        path = legacy_path.Separator.join(parts)
-        return LogicalSignalPhysicalChannelUID(path)
+
+def parse_logical_signal(path: str) -> LogicalSignal:
+    uid = LogicalSignalPhysicalChannelUID(path)
+    return LogicalSignal(name=uid.name, group=uid.group)

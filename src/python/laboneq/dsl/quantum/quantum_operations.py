@@ -173,6 +173,11 @@ def create_pulse(
         `pulse_library` to use to construct the pulse. The function may
         either be the name of a registered functional pulse or
         `"sampled_pulse"` which uses `pulse_library.sampled_pulse`.
+      - an optional key `"name"` that overrides any name supplied directly
+        to `create_pulse` via the `name` argument (see Arguments below).
+        This may be used to generate a pulse with a unique ID so that one
+        may, for example, perform pulse replace on a subset of measurement
+        pulses within an experiment.
       - any other parameters required by the given pulse function.
 
     Arguments:
@@ -187,7 +192,8 @@ def create_pulse(
             The dictionary of overrides may contain sweep parameters.
         name:
             The name of the pulse. This is used as a prefix to generate the
-            pulse `uid`.
+            pulse `uid`. It may be overridden if a `name` key is supplied
+            in either `parameters` or `overrides`.
 
     Returns:
         pulse:
@@ -201,6 +207,9 @@ def create_pulse(
         parameters = {**parameters, **overrides}
 
     function = parameters.pop("function")
+    pulse_name = parameters.pop("name", name)
+    if pulse_name is None:
+        pulse_name = "unnamed"
 
     if function == "sampled_pulse":
         # special case the sampled_pulse function that is not registered as a
@@ -212,14 +221,11 @@ def create_pulse(
         except KeyError as err:
             raise ValueError(f"Unsupported pulse function {function!r}.") from err
 
-    if name is None:
-        name = "unnamed"
-
     pulse_cache = _PulseCache.experiment_or_global_cache()
-    pulse = pulse_cache.get(name, function, parameters)
+    pulse = pulse_cache.get(pulse_name, function, parameters)
     if pulse is None:
-        pulse = pulse_function(uid=builtins.uid(name), **parameters)
-        pulse_cache.store(pulse, name, function, parameters)
+        pulse = pulse_function(uid=builtins.uid(pulse_name), **parameters)
+        pulse_cache.store(pulse, pulse_name, function, parameters)
 
     return pulse
 
@@ -261,7 +267,7 @@ class QuantumOperations:
             )
 
         self.qpu = qpu
-        self._ops = {}
+        self._ops: dict[str, MultiMethod] = {}
 
         for name, f in self.BASE_OPS.items():
             self.register(f.copy(), name=name)

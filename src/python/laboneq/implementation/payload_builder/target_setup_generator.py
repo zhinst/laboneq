@@ -22,7 +22,6 @@ from laboneq.data.setup_description import (
     Server,
     Setup,
 )
-from laboneq.data.utils.calibration_helper import CalibrationHelper
 
 
 class TargetSetupGenerator:
@@ -255,7 +254,7 @@ class TargetSetupGenerator:
         instrument: Instrument,
         port_path_filter=("SIGOUTS", "SGCHANNELS", "QACHANNELS"),
     ) -> dict[str, list[int]]:
-        ls_ports = {}
+        ls_ports: dict[str, list[int]] = {}
         for c in instrument.connections:
             if c.physical_channel.direction != IODirection.OUT:
                 continue
@@ -285,12 +284,11 @@ class TargetSetupGenerator:
         instrument: Instrument,
         setup: Setup,
     ) -> list[TargetChannelCalibration]:
-        calibration = CalibrationHelper(setup.calibration)
-        calibrations = []
-        if calibration.empty():
+        calibrations: list[TargetChannelCalibration] = []
+        if not setup.calibration:
             return calibrations
         for c in instrument.connections:
-            sig_calib = calibration.by_logical_signal(c.logical_signal)
+            sig_calib = setup.calibration.get(c.logical_signal.path())
             if sig_calib is not None and sig_calib.voltage_offset is not None:
                 channel_type = {
                     PhysicalChannelType.IQ_CHANNEL: TargetChannelType.IQ,

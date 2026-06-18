@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod backend;
+mod device_setup_fingerprint;
 mod experiment_view;
 mod output_routing;
+mod ppc_connections;
 mod precompensation;
 mod preprocessor;
 mod setup_processor;

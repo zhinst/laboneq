@@ -109,7 +109,7 @@ class OptionBuilder:
         # TODO: Optimize this method
         fields: OptionNodeList = getattr(self, field)
         d = {type(f.option).__name__: (f.description, f.default_value) for f in fields}
-        d2 = {}
+        d2: dict[str, list[tuple[str, typing.Any]]] = {}
         # iterate over d and combine fields if they have the same description
         for k, v in d.items():
             if v[0] in d2:

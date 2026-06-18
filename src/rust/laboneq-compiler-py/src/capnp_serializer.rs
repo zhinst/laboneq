@@ -16,17 +16,20 @@
 
 use std::collections::HashMap;
 
+use crate::capnp_py_types::{
+    CancellationSourcePy, ChannelTypePy, DeviceSetupCapnpPy, DeviceSignalPy, ExperimentCapnpPy,
+    ExperimentSignalPy, InstrumentPy, InternalConnectionPy, OscillatorPy, SetupDescriptionPy,
+    SetupDescriptionQccsPy, SetupDescriptionZqcsPy, UnitPy,
+};
 use crate::error::{Error, Result};
 use crate::py_conversion::{DslType, DslTypes};
-use crate::py_device_setup_capnp::{
-    DeviceSetupCapnpBuilderPy, InstrumentPayload, OscillatorPayload, SignalPayload,
-};
 use crate::py_helpers::is_exact_type;
 use numeric_array::NumericArray;
 
 use laboneq_capnp::pulse::v1::{
     calibration_capnp, common_capnp, device_setup_capnp, experiment_capnp, operation_capnp,
-    pulse_capnp, section_capnp, sweep_capnp,
+    pulse_capnp, section_capnp, setup_description_qccs_capnp, setup_description_zqcs_capnp,
+    sweep_capnp,
 };
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -213,19 +216,14 @@ impl<'py> Serializer<'py> {
 
     // === Top-level serialization steps ===
 
-    fn collect_signals(&mut self, experiment: &Bound<'_, PyAny>) -> Result<()> {
-        let py = experiment.py();
-        let signals_py = experiment.getattr(intern!(py, "signals"))?;
-        let signals_list: Vec<Bound<'_, PyAny>> = crate::py_helpers::signal_iterable(&signals_py)?
-            .try_iter()?
-            .collect::<PyResult<_>>()?;
-
+    fn collect_signals(
+        &mut self,
+        experiment: &ExperimentCapnpPy,
+    ) -> Result<(HashMap<String, u32>, Vec<String>)> {
         // Collect UIDs.
-        let mut uid_strings: Vec<String> = Vec::with_capacity(signals_list.len());
-        for signal in &signals_list {
-            let uid_obj = signal.getattr(intern!(py, "uid"))?;
-            let uid_str: String = uid_obj.extract()?;
-            uid_strings.push(uid_str);
+        let mut uid_strings: Vec<String> = Vec::with_capacity(experiment.experiment_signals.len());
+        for signal in experiment.experiment_signals.iter() {
+            uid_strings.push(signal.uid.to_string());
         }
 
         // Sort alphabetically for deterministic ordering (matches py_conversion.rs).
@@ -239,40 +237,52 @@ impl<'py> Serializer<'py> {
         }
 
         // Assign indices in sorted order.
+        let mut signal_indices = HashMap::with_capacity(uid_strings.len());
+        let mut signal_order = Vec::with_capacity(uid_strings.len());
+
         for uid_str in uid_strings {
-            let idx = self.signal_order.len() as u32;
-            self.signal_indices.insert(uid_str.clone(), idx);
-            self.signal_order.push(uid_str);
+            let idx = signal_order.len() as u32;
+            signal_indices.insert(uid_str.clone(), idx);
+            signal_order.push(uid_str);
         }
-        Ok(())
+        Ok((signal_indices, signal_order))
     }
 
     fn serialize_signals(
         &mut self,
-        experiment: &Bound<'_, PyAny>,
+        experiment: &ExperimentCapnpPy<'py>,
         mut exp_builder: experiment_capnp::experiment::Builder<'_>,
     ) -> Result<()> {
-        self.collect_signals(experiment)?;
+        let (signal_indices, signal_order) = self.collect_signals(experiment)?;
+
+        let signal_by_uid: HashMap<&str, &ExperimentSignalPy> = experiment
+            .experiment_signals
+            .iter()
+            .map(|s| Ok((s.uid.to_str()?, s)))
+            .collect::<Result<_>>()?;
+
         let mut signals_builder = exp_builder
             .reborrow()
-            .init_signals(self.signal_order.len() as u32);
-        for (i, uid_str) in self.signal_order.iter().enumerate() {
+            .init_signals(signal_order.len() as u32);
+        for (i, uid_str) in signal_order.iter().enumerate() {
             let mut sig_builder = signals_builder.reborrow().get(i as u32);
             sig_builder.set_uid(uid_str.as_str());
+            if let Some(&signal) = signal_by_uid.get(uid_str.as_str()) {
+                sig_builder.set_maps_to(signal.maps_to.to_str()?);
+                self.serialize_signal_calibration(signal, sig_builder)?;
+            }
         }
+        self.signal_indices = signal_indices;
+        self.signal_order = signal_order;
         Ok(())
     }
 
     fn serialize_root_sections(
         &mut self,
-        experiment: &Bound<'py, PyAny>,
+        experiment: &ExperimentCapnpPy<'py>,
         mut exp_builder: experiment_capnp::experiment::Builder<'_>,
     ) -> Result<()> {
-        let py = experiment.py();
-        let sections_py = experiment.getattr(intern!(py, "sections"))?;
-        let sections_list: Vec<Bound<'py, PyAny>> =
-            sections_py.try_iter()?.collect::<PyResult<_>>()?;
-
+        let sections_list = &experiment.sections;
         // Build a root section containing all top-level sections as children.
         let mut root_builder = exp_builder.reborrow().init_root_section();
         let mut items_builder = root_builder
@@ -1611,147 +1621,67 @@ impl<'py> Serializer<'py> {
 
     fn serialize_device_setup(
         &mut self,
-        obj: &Bound<'py, DeviceSetupCapnpBuilderPy>,
+        obj: DeviceSetupCapnpPy,
         mut builder: experiment_capnp::experiment::Builder<'_>,
     ) -> Result<()> {
-        let py = obj.py();
-        let obj = obj.borrow();
-        let mut device_setup_builder = builder.reborrow().init_device_setup();
-
-        self.serialize_instruments(py, &obj.instruments, &mut device_setup_builder)?;
-        self.serialize_oscillators(py, &obj.oscillators, &mut device_setup_builder)?;
-        self.serialize_device_signals(py, &obj.signals, &mut device_setup_builder)?;
-        if let Some(blob) = &obj.zqcs_setup_description {
-            let sd = device_setup_builder.reborrow().init_setup_description();
-            let mut zqcs_builder = sd.init_zqcs();
-            zqcs_builder.set_data(blob);
-        }
-        Ok(())
-    }
-
-    fn serialize_oscillators(
-        &mut self,
-        py: Python<'py>,
-        oscillators: &[OscillatorPayload],
-        builder: &mut device_setup_capnp::device_setup::Builder<'_>,
-    ) -> Result<()> {
-        let mut osc_builder = builder
-            .reborrow()
-            .init_oscillators(oscillators.len() as u32);
-        for (i, osc) in oscillators.iter().enumerate() {
-            let mut o = osc_builder.reborrow().get(i as u32);
-            o.set_uid(osc.uid.to_str(py)?);
-            self.set_sweep_value_from_py_or_param(
-                osc.frequency.bind(py),
-                &mut o.reborrow().get_frequency().map_err(Error::new)?,
-            )?;
-            let modulation_type = if let Some(modulation) = &osc.modulation {
-                match modulation.extract::<&str>(py)? {
-                    "AUTO" => calibration_capnp::ModulationType::Auto,
-                    "HARDWARE" => calibration_capnp::ModulationType::Hardware,
-                    "SOFTWARE" => calibration_capnp::ModulationType::Software,
-                    other => {
-                        return Err(Error::new(format!(
-                            "Invalid modulation type: {}. Expected 'AUTO', 'HARDWARE', or 'SOFTWARE'.",
-                            other
-                        )));
-                    }
-                }
-            } else {
-                calibration_capnp::ModulationType::Auto
-            };
-            o.set_modulation_type(modulation_type);
-        }
-        Ok(())
-    }
-
-    fn serialize_instruments(
-        &mut self,
-        py: Python,
-        instruments: &[InstrumentPayload],
-        builder: &mut device_setup_capnp::device_setup::Builder<'_>,
-    ) -> Result<()> {
-        let mut instruments_builder = builder
-            .reborrow()
-            .init_instruments(instruments.len() as u32);
-        for (i, instrument) in instruments.iter().enumerate() {
-            let mut instrument_builder = instruments_builder.reborrow().get(i as u32);
-            instrument_builder.set_uid(instrument.uid.extract::<&str>(py)?);
-            instrument_builder.set_device_type(instrument.device_type.extract::<&str>(py)?);
-
-            let mut options_builder = instrument_builder
-                .reborrow()
-                .init_options(instrument.options.len() as u32);
-            for (j, option) in instrument.options.iter().enumerate() {
-                options_builder.set(j as u32, option.extract::<&str>(py)?);
+        let device_setup_builder = builder.reborrow().init_device_setup();
+        match obj.setup_description {
+            SetupDescriptionPy::Qccs(data) => {
+                SetupDescriptionQccsSerializer {}.serialize(data, device_setup_builder)?;
             }
+            SetupDescriptionPy::Zqcs(data) => {
+                SetupDescriptionZqcsSerializer {}.serialize(data, device_setup_builder)?;
+            }
+        }
+        Ok(())
+    }
 
-            if let Some(ref clock_source) = instrument.reference_clock_source {
-                match clock_source.extract::<&str>(py)? {
-                    "INTERNAL" => instrument_builder
-                        .set_reference_clock_source(device_setup_capnp::ReferenceClock::Internal),
-                    "EXTERNAL" => instrument_builder
-                        .set_reference_clock_source(device_setup_capnp::ReferenceClock::External),
-                    other => {
-                        return Err(Error::new(format!(
-                            "Invalid reference clock source: {}. Expected 'INTERNAL' or 'EXTERNAL'.",
-                            other
-                        )));
-                    }
+    fn serialize_oscillator(
+        &mut self,
+        oscillator: &OscillatorPy<'py>,
+        builder: calibration_capnp::signal_calibration::Builder<'_>,
+    ) -> Result<()> {
+        let mut osc_builder = builder.init_oscillator();
+        osc_builder.set_uid(oscillator.uid.to_str()?);
+        self.set_sweep_value_from_py_or_param(
+            &oscillator.frequency,
+            &mut osc_builder.reborrow().get_frequency().map_err(Error::new)?,
+        )?;
+        let modulation_type = if let Some(modulation) = &oscillator.modulation {
+            match modulation.extract::<&str>()? {
+                "AUTO" => calibration_capnp::ModulationType::Auto,
+                "HARDWARE" => calibration_capnp::ModulationType::Hardware,
+                "SOFTWARE" => calibration_capnp::ModulationType::Software,
+                other => {
+                    return Err(Error::new(format!(
+                        "Invalid modulation type: {}. Expected 'AUTO', 'HARDWARE', or 'SOFTWARE'.",
+                        other
+                    )));
                 }
             }
-        }
-        Ok(())
-    }
-
-    fn serialize_device_signals(
-        &mut self,
-        py: Python<'py>,
-        signals: &[SignalPayload],
-        builder: &mut device_setup_capnp::device_setup::Builder<'_>,
-    ) -> Result<()> {
-        let mut signals_builder = builder.reborrow().init_signals(signals.len() as u32);
-
-        for (i, signal) in signals.iter().enumerate() {
-            let mut signal_builder = signals_builder.reborrow().get(i as u32);
-
-            signal_builder.set_uid(signal.uid.to_str(py)?);
-            signal_builder.set_instrument_uid(signal.instrument_uid.to_str(py)?);
-            signal_builder.set_channel_type(signal.channel_type.to_str(py)?);
-
-            let ports: Vec<&str> = signal
-                .ports
-                .iter()
-                .map(|p| p.to_str(py).map_err(Error::new))
-                .collect::<Result<Vec<&str>>>()?;
-            let mut ports_builder = signal_builder.reborrow().init_ports(ports.len() as u32);
-            for (j, port) in ports.iter().enumerate() {
-                ports_builder.set(j as u32, port);
-            }
-
-            self.serialize_signal_calibration(py, signal, &mut signal_builder)?;
-        }
+        } else {
+            calibration_capnp::ModulationType::Auto
+        };
+        osc_builder.set_modulation_type(modulation_type);
         Ok(())
     }
 
     fn serialize_signal_calibration(
         &mut self,
-        py: Python<'py>,
-        signal: &SignalPayload,
-        builder: &mut device_setup_capnp::device_signal::Builder<'_>,
+        signal: &ExperimentSignalPy<'py>,
+        mut builder: experiment_capnp::experiment_signal::Builder<'_>,
     ) -> Result<()> {
         let mut calibration_builder = builder.reborrow().init_calibration();
-        if let Some(osc_index) = &signal.oscillator_index {
-            let mut osc_builder = calibration_builder.reborrow().init_oscillator();
-            osc_builder.set_value(*osc_index as u32);
+        if let Some(oscillator) = &signal.oscillator {
+            self.serialize_oscillator(oscillator, calibration_builder.reborrow())?;
         }
 
-        calibration_builder.set_delay_signal(signal.signal_delay);
+        calibration_builder.set_delay_signal(signal.delay_signal);
         calibration_builder.set_automute(signal.automute);
 
         if let Some(amplitude) = &signal.amplitude {
             self.set_sweep_value_from_py_or_param(
-                amplitude.bind(py),
+                amplitude,
                 &mut calibration_builder
                     .reborrow()
                     .get_amplitude()
@@ -1761,7 +1691,7 @@ impl<'py> Serializer<'py> {
 
         if let Some(lo_freq) = &signal.lo_frequency {
             self.set_sweep_value_from_py_or_param(
-                lo_freq.bind(py),
+                lo_freq,
                 &mut calibration_builder
                     .reborrow()
                     .get_local_oscillator_frequency()
@@ -1771,7 +1701,7 @@ impl<'py> Serializer<'py> {
 
         if let Some(port_delay) = &signal.port_delay {
             self.set_sweep_value_from_py_or_param(
-                port_delay.bind(py),
+                port_delay,
                 &mut calibration_builder
                     .reborrow()
                     .get_port_delay()
@@ -1781,7 +1711,7 @@ impl<'py> Serializer<'py> {
 
         if let Some(voltage_offset) = &signal.voltage_offset {
             self.set_sweep_value_from_py_or_param(
-                voltage_offset.bind(py),
+                voltage_offset,
                 &mut calibration_builder
                     .reborrow()
                     .get_voltage_offset()
@@ -1790,7 +1720,7 @@ impl<'py> Serializer<'py> {
         }
 
         if let Some(port_mode) = &signal.port_mode {
-            match port_mode.extract::<&str>(py)? {
+            match port_mode.extract::<&str>()? {
                 "RF" => calibration_builder.set_port_mode(calibration_capnp::PortMode::Rf),
                 "LF" => calibration_builder.set_port_mode(calibration_capnp::PortMode::Lf),
                 other => {
@@ -1806,23 +1736,23 @@ impl<'py> Serializer<'py> {
 
         // Precompensation
         if let Some(precompensation) = &signal.precompensation {
-            let precompensation = precompensation.borrow(py);
             let mut precomp_builder = calibration_builder.reborrow().init_precompensation();
-            let mut exponential_builder = precomp_builder
-                .reborrow()
-                .init_exponentials(precompensation.exponential.len() as u32);
 
             // Exponentials
-            for (i, exp) in precompensation.exponential.iter().enumerate() {
-                let exp = exp.borrow(py);
-                let mut exp_builder = exponential_builder.reborrow().get(i as u32);
-                exp_builder.set_amplitude(exp.amplitude);
-                exp_builder.set_timeconstant(exp.timeconstant);
+            if let Some(exponentials) = &precompensation.exponential {
+                let mut exponential_builder = precomp_builder
+                    .reborrow()
+                    .init_exponentials(exponentials.len() as u32);
+
+                for (i, exp) in exponentials.iter().enumerate() {
+                    let mut exp_builder = exponential_builder.reborrow().get(i as u32);
+                    exp_builder.set_amplitude(exp.amplitude);
+                    exp_builder.set_timeconstant(exp.timeconstant);
+                }
             }
 
             // High-pass
             if let Some(high_pass) = &precompensation.high_pass {
-                let high_pass = high_pass.borrow(py);
                 precomp_builder
                     .reborrow()
                     .init_high_pass()
@@ -1831,7 +1761,6 @@ impl<'py> Serializer<'py> {
 
             // Bounce
             if let Some(bounce) = &precompensation.bounce {
-                let bounce = bounce.borrow(py);
                 let mut bounce_builder = precomp_builder.reborrow().init_bounce();
                 bounce_builder.set_amplitude(bounce.amplitude);
                 bounce_builder.set_delay(bounce.delay);
@@ -1839,7 +1768,6 @@ impl<'py> Serializer<'py> {
 
             // FIR
             if let Some(fir) = &precompensation.fir {
-                let fir = fir.borrow(py);
                 let mut fir_builder = precomp_builder.reborrow().init_fir();
                 let mut coeff_builder = fir_builder
                     .reborrow()
@@ -1847,34 +1775,21 @@ impl<'py> Serializer<'py> {
                 for (i, coeff) in fir.coefficients.iter().enumerate() {
                     coeff_builder.set(i as u32, *coeff);
                 }
-                fir_builder.set_strict(fir.strict);
             }
         }
 
         // Amplifier pump
         if let Some(amplifier_pump) = &signal.amplifier_pump {
-            let amplifier_pump = amplifier_pump.borrow(py);
             let mut pump_builder = calibration_builder.reborrow().init_amplifier_pump();
-            pump_builder.set_device_uid(amplifier_pump.device.as_str());
-            pump_builder.set_channel(amplifier_pump.channel);
             pump_builder.set_alc_on(amplifier_pump.alc_on);
             pump_builder.set_pump_on(amplifier_pump.pump_on);
             pump_builder.set_pump_filter_on(amplifier_pump.pump_filter_on);
             pump_builder.set_probe_on(amplifier_pump.probe_on);
             pump_builder.set_cancellation_on(amplifier_pump.cancellation_on);
-
-            match amplifier_pump.cancellation_source.as_str() {
-                "INTERNAL" => pump_builder
-                    .set_cancellation_source(calibration_capnp::CancellationSource::Internal),
-                "EXTERNAL" => pump_builder
-                    .set_cancellation_source(calibration_capnp::CancellationSource::External),
-                other => {
-                    return Err(Error::new(format!(
-                        "Invalid pump cancellation source: {}.",
-                        other
-                    )));
-                }
-            }
+            pump_builder.set_cancellation_source(match amplifier_pump.cancellation_source {
+                CancellationSourcePy::Internal => calibration_capnp::CancellationSource::Internal,
+                CancellationSourcePy::External => calibration_capnp::CancellationSource::External,
+            });
 
             if let Some(frequency) = amplifier_pump.cancellation_source_frequency {
                 pump_builder
@@ -1884,7 +1799,7 @@ impl<'py> Serializer<'py> {
             }
 
             self.set_sweep_value_from_py_or_param(
-                amplifier_pump.pump_power.bind(py),
+                &amplifier_pump.pump_power,
                 &mut pump_builder
                     .reborrow()
                     .get_pump_power()
@@ -1892,7 +1807,7 @@ impl<'py> Serializer<'py> {
             )?;
 
             self.set_sweep_value_from_py_or_param(
-                amplifier_pump.pump_frequency.bind(py),
+                &amplifier_pump.pump_frequency,
                 &mut pump_builder
                     .reborrow()
                     .get_pump_frequency()
@@ -1900,7 +1815,7 @@ impl<'py> Serializer<'py> {
             )?;
 
             self.set_sweep_value_from_py_or_param(
-                amplifier_pump.probe_power.bind(py),
+                &amplifier_pump.probe_power,
                 &mut pump_builder
                     .reborrow()
                     .get_probe_power()
@@ -1908,7 +1823,7 @@ impl<'py> Serializer<'py> {
             )?;
 
             self.set_sweep_value_from_py_or_param(
-                amplifier_pump.probe_frequency.bind(py),
+                &amplifier_pump.probe_frequency,
                 &mut pump_builder
                     .reborrow()
                     .get_probe_frequency()
@@ -1916,7 +1831,7 @@ impl<'py> Serializer<'py> {
             )?;
 
             self.set_sweep_value_from_py_or_param(
-                amplifier_pump.cancellation_phase.bind(py),
+                &amplifier_pump.cancellation_phase,
                 &mut pump_builder
                     .reborrow()
                     .get_cancellation_phase()
@@ -1924,7 +1839,7 @@ impl<'py> Serializer<'py> {
             )?;
 
             self.set_sweep_value_from_py_or_param(
-                amplifier_pump.cancellation_attenuation.bind(py),
+                &amplifier_pump.cancellation_attenuation,
                 &mut pump_builder
                     .reborrow()
                     .get_cancellation_attenuation()
@@ -1933,11 +1848,14 @@ impl<'py> Serializer<'py> {
         }
 
         // Range
-        if let Some((value, unit)) = &signal.range {
+        if let Some(quantity) = &signal.range {
             let mut range_builder = calibration_builder.reborrow().init_range();
-            range_builder.set_value(*value);
-            if let Some(unit_str) = unit {
-                range_builder.set_unit(unit_str);
+            range_builder.set_value(quantity.value);
+            if let Some(unit) = &quantity.unit {
+                match unit {
+                    UnitPy::Volt => range_builder.set_unit("volt"),
+                    UnitPy::DBm => range_builder.set_unit("dbm"),
+                }
             }
         }
 
@@ -1946,19 +1864,18 @@ impl<'py> Serializer<'py> {
             .reborrow()
             .init_added_outputs(signal.added_outputs.len() as u32);
         for (i, output) in signal.added_outputs.iter().enumerate() {
-            let output = output.borrow(py);
             let mut output_builder = added_outputs_builder.reborrow().get(i as u32);
 
-            output_builder.set_source_signal(output.source_signal.to_str(py)?);
+            output_builder.set_source_signal(output.source.to_str()?);
             self.set_sweep_value_from_py_or_param(
-                output.amplitude_scaling.bind(py),
+                &output.amplitude_scaling,
                 &mut output_builder
                     .reborrow()
                     .get_amplitude_scaling()
                     .map_err(Error::new)?,
             )?;
             self.set_sweep_value_from_py_or_param(
-                output.phase_shift.bind(py),
+                &output.phase_shift,
                 &mut output_builder
                     .reborrow()
                     .get_phase_shift()
@@ -1978,35 +1895,36 @@ impl<'py> Serializer<'py> {
 
         // Mixer calibration
         if let Some(mixer_calibration) = &signal.mixer_calibration {
-            let mixer_calibration = mixer_calibration.borrow(py);
             let mut mixer_builder = calibration_builder.reborrow().init_mixer_calibration();
 
             // Voltage offsets for I and Q. We use the presence of each entry to determine whether to set it,
-            if let Some(value) = mixer_calibration.voltage_offsets.first() {
-                self.set_sweep_value_from_py_or_param(
-                    value.bind(py),
-                    &mut mixer_builder
-                        .reborrow()
-                        .get_voltage_offset_i()
-                        .map_err(Error::new)?,
-                )?;
-            }
-            if let Some(value) = mixer_calibration.voltage_offsets.get(1) {
-                self.set_sweep_value_from_py_or_param(
-                    value.bind(py),
-                    &mut mixer_builder
-                        .reborrow()
-                        .get_voltage_offset_q()
-                        .map_err(Error::new)?,
-                )?;
+            if let Some(voltage_offsets) = &mixer_calibration.voltage_offsets {
+                if let Some(value) = voltage_offsets.first() {
+                    self.set_sweep_value_from_py_or_param(
+                        value,
+                        &mut mixer_builder
+                            .reborrow()
+                            .get_voltage_offset_i()
+                            .map_err(Error::new)?,
+                    )?;
+                }
+                if let Some(value) = voltage_offsets.get(1) {
+                    self.set_sweep_value_from_py_or_param(
+                        value,
+                        &mut mixer_builder
+                            .reborrow()
+                            .get_voltage_offset_q()
+                            .map_err(Error::new)?,
+                    )?;
+                }
             }
 
-            if !mixer_calibration.correction_matrix.is_empty() {
-                if mixer_calibration.correction_matrix.len() != 2
-                    || mixer_calibration
-                        .correction_matrix
-                        .iter()
-                        .any(|row| row.len() != 2)
+            // Correction matrix
+            if let Some(correction_matrix) = &mixer_calibration.correction_matrix
+                && !correction_matrix.is_empty()
+            {
+                if correction_matrix.len() != 2
+                    || correction_matrix.iter().any(|row| row.len() != 2)
                 {
                     return Err(Error::new(
                         "Correction matrix must be 2x2 for I/Q mixer calibration",
@@ -2016,15 +1934,14 @@ impl<'py> Serializer<'py> {
                 // Correction matrix (2x2). We flatten the nested Vec<Vec<T>> into a single row-major Vec<T> for capnp.
                 let mut correction_matrix_builder =
                     mixer_builder.reborrow().init_correction_matrix(4);
-                for (flat_index, correction) in mixer_calibration
-                    .correction_matrix
+                for (flat_index, correction) in correction_matrix
                     .iter()
                     .flat_map(|row| row.iter())
                     .enumerate()
                 {
                     let mut entry_builder =
                         correction_matrix_builder.reborrow().get(flat_index as u32);
-                    self.set_sweep_value_from_py_or_param(correction.bind(py), &mut entry_builder)?;
+                    self.set_sweep_value_from_py_or_param(correction, &mut entry_builder)?;
                 }
             }
         }
@@ -2038,26 +1955,26 @@ impl<'py> Serializer<'py> {
 ///
 /// Returns the serialized bytes as a `Vec<u8>`.
 pub(crate) fn serialize_experiment(
-    experiment: &Bound<'_, PyAny>,
-    device_setup: Bound<'_, DeviceSetupCapnpBuilderPy>,
+    py: Python,
+    experiment: ExperimentCapnpPy,
+    device_setup: DeviceSetupCapnpPy,
     packed: bool,
 ) -> Result<Vec<u8>> {
-    let py = experiment.py();
     let mut ser = Serializer::new(py)?;
 
     let mut message = capnp::message::Builder::new_default();
     let mut exp_builder = message.init_root::<experiment_capnp::experiment::Builder<'_>>();
 
-    ser.serialize_device_setup(&device_setup, exp_builder.reborrow())?;
+    ser.serialize_device_setup(device_setup, exp_builder.reborrow())?;
 
     // Signals are indexed first (sorted alphabetically for determinism) so that
     // signal references written during section tree traversal use final indices.
-    ser.serialize_signals(experiment, exp_builder.reborrow())?;
+    ser.serialize_signals(&experiment, exp_builder.reborrow())?;
 
     // Traverse the section tree. All entity collections (pulses, parameters,
     // handles) accumulate into `ser.entities` with final zero-based indices
     // assigned at first insertion.
-    ser.serialize_root_sections(experiment, exp_builder.reborrow())?;
+    ser.serialize_root_sections(&experiment, exp_builder.reborrow())?;
 
     // Write entity definition lists. Indices used for cross-references within
     // definitions (e.g. PulseParamValue::ParameterRef) are already final.
@@ -2066,9 +1983,8 @@ pub(crate) fn serialize_experiment(
     ser.write_handles(exp_builder.reborrow())?;
 
     let mut metadata = exp_builder.reborrow().init_metadata();
-    let uid_py = experiment.getattr(intern!(py, "uid"))?;
-    if let Ok(Some(uid_str)) = uid_py.extract::<Option<&str>>() {
-        metadata.set_uid(uid_str);
+    if let Some(uid) = experiment.uid {
+        metadata.set_uid(uid.to_str()?);
     }
     metadata.set_schema_version(experiment_capnp::SCHEMA_VERSION);
     metadata.set_created_by(format!("laboneq/{}", env!("CARGO_PKG_VERSION")));
@@ -2362,4 +2278,131 @@ fn set_sweep_value_from_py(
     Err(Error::new(format!(
         "Cannot convert value to sweep value: {obj}"
     )))
+}
+
+struct SetupDescriptionZqcsSerializer {}
+
+impl SetupDescriptionZqcsSerializer {
+    fn serialize(
+        &mut self,
+        description: SetupDescriptionZqcsPy<'_>,
+        mut builder: device_setup_capnp::device_setup::Builder<'_>,
+    ) -> Result<()> {
+        let mut setup_builder = builder.reborrow().init_setup_description().init_zqcs();
+        setup_builder.set_data(&description.data);
+        setup_builder.set_uid(description.uid.to_str()?);
+
+        let mut channels_builder = setup_builder
+            .reborrow()
+            .init_channels(description.channels.len() as u32);
+        for (i, channel) in description.channels.iter().enumerate() {
+            let mut channel_builder = channels_builder.reborrow().get(i as u32);
+            channel_builder.set_geolocation(channel.geolocation.to_str()?);
+            channel_builder.set_channel_type(match channel.channel_type {
+                ChannelTypePy::Rf => setup_description_zqcs_capnp::ChannelType::Rf,
+                ChannelTypePy::Qa => setup_description_zqcs_capnp::ChannelType::Qa,
+                ChannelTypePy::Flux => setup_description_zqcs_capnp::ChannelType::Flux,
+            });
+        }
+        Ok(())
+    }
+}
+
+struct SetupDescriptionQccsSerializer {}
+
+impl SetupDescriptionQccsSerializer {
+    fn serialize(
+        &mut self,
+        description: SetupDescriptionQccsPy,
+        mut builder: device_setup_capnp::device_setup::Builder<'_>,
+    ) -> Result<()> {
+        let mut setup_builder = builder.reborrow().init_setup_description().init_qccs();
+        self.serialize_instruments(description.instruments, &mut setup_builder)?;
+        self.serialize_device_signals(description.signals, &mut setup_builder)?;
+        self.serialize_internal_connections(description.internal_connections, &mut setup_builder)?;
+        Ok(())
+    }
+
+    fn serialize_instruments(
+        &mut self,
+        instruments: Vec<InstrumentPy<'_>>,
+        builder: &mut setup_description_qccs_capnp::setup_description_qccs::Builder<'_>,
+    ) -> Result<()> {
+        let mut instruments_builder = builder
+            .reborrow()
+            .init_instruments(instruments.len() as u32);
+        for (i, instrument) in instruments.iter().enumerate() {
+            let mut instrument_builder = instruments_builder.reborrow().get(i as u32);
+            instrument_builder.set_uid(instrument.uid.to_str()?);
+            instrument_builder.set_device_type(instrument.device_type.to_str()?);
+
+            let mut options_builder = instrument_builder
+                .reborrow()
+                .init_options(instrument.options.len() as u32);
+            for (j, option) in instrument.options.iter().enumerate() {
+                options_builder.set(j as u32, option.to_str()?);
+            }
+
+            if let Some(ref clock_source) = instrument.reference_clock_source {
+                match clock_source.to_str()? {
+                    "INTERNAL" => instrument_builder.set_reference_clock_source(
+                        setup_description_qccs_capnp::ReferenceClock::Internal,
+                    ),
+                    "EXTERNAL" => instrument_builder.set_reference_clock_source(
+                        setup_description_qccs_capnp::ReferenceClock::External,
+                    ),
+                    other => {
+                        return Err(Error::new(format!(
+                            "Invalid reference clock source: {}. Expected 'INTERNAL' or 'EXTERNAL'.",
+                            other
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn serialize_device_signals(
+        &mut self,
+        signals: Vec<DeviceSignalPy>,
+        builder: &mut setup_description_qccs_capnp::setup_description_qccs::Builder<'_>,
+    ) -> Result<()> {
+        let mut signals_builder = builder.reborrow().init_signals(signals.len() as u32);
+
+        for (i, signal) in signals.iter().enumerate() {
+            let mut signal_builder = signals_builder.reborrow().get(i as u32);
+
+            signal_builder.set_uid(signal.uid.to_str()?);
+            signal_builder.set_instrument_uid(signal.instrument_uid.to_str()?);
+
+            let mut ports_builder = signal_builder
+                .reborrow()
+                .init_ports(signal.ports.len() as u32);
+            for (j, port) in signal.ports.iter().enumerate() {
+                ports_builder.set(j as u32, port.to_str()?);
+            }
+        }
+        Ok(())
+    }
+
+    fn serialize_internal_connections(
+        &mut self,
+        connections: Vec<InternalConnectionPy<'_>>,
+        builder: &mut setup_description_qccs_capnp::setup_description_qccs::Builder<'_>,
+    ) -> Result<()> {
+        let mut connections_builder = builder
+            .reborrow()
+            .init_internal_connections(connections.len() as u32);
+
+        for (i, connection) in connections.iter().enumerate() {
+            let mut connection_builder = connections_builder.reborrow().get(i as u32);
+
+            connection_builder.set_from_instrument(connection.from_instrument.to_str()?);
+            connection_builder.set_from_port(connection.from_port.to_str()?);
+            connection_builder.set_to_instrument(connection.to_instrument.to_str()?);
+            connection_builder.set_to_port(connection.to_port.to_str()?);
+        }
+        Ok(())
+    }
 }

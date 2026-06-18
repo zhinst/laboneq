@@ -70,7 +70,6 @@ mod test_compute_delays {
             },
             fir: if fir {
                 Some(FirCompensation {
-                    strict: false,
                     coefficients: vec![0.0],
                 })
             } else {

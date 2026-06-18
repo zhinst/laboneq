@@ -7,7 +7,6 @@ The file is meant to be executed by the Rust library,
 but written in Python for readability.
 """
 
-from types import SimpleNamespace
 from typing import cast
 
 import laboneq._rust.compiler as compiler_rs
@@ -160,6 +159,13 @@ connections:
 ZQCS_SETUP_DESCRIPTION_BLOB = '{"a":1,"b":"1.2.3","data":{}}'.encode()
 
 
+class SetupDescriptionZQCS:
+    """Mock setup description for ZQCS tests."""
+
+    def __init__(self, data: bytes):
+        self.data = data
+
+
 def create_experiment_with_zqcs_setup_description():
     """Experiment carrying a setup-description blob."""
     setup = simple_zqcs_setup()
@@ -179,8 +185,7 @@ def create_experiment_with_zqcs_setup_description():
             exp.play("q0/measure_line", simple.pulse_library.const())
             exp.acquire("q0/acquire_line", handle="h0", length=96e-9)
 
-    # NOTE: `SimpleNamespace` is intentionally used here, since the type itself is irrelevant.
-    setup.setup_description = SimpleNamespace(data=ZQCS_SETUP_DESCRIPTION_BLOB)
+    setup.setup_description = SetupDescriptionZQCS(data=ZQCS_SETUP_DESCRIPTION_BLOB)
     return serialize_experiment(setup, exp)
 
 

@@ -13,6 +13,8 @@ version.workspace = true
 string-interner = { workspace = true }
 regex = { workspace = true }
 num-complex = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 laboneq-units = { workspace = true }
 laboneq-error = { workspace = true }

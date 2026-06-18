@@ -94,7 +94,7 @@ class QuantumParameters:
     @classmethod
     def _nested_evolve(cls, obj, **changes) -> dict | QuantumParameters:
         obj_changes = {}
-        nested_changes = defaultdict(dict)
+        nested_changes: defaultdict[str, dict[str, Any]] = defaultdict(dict)
 
         # separate object and nested changes
         for path, value in changes.items():

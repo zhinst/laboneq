@@ -116,11 +116,6 @@ fn verify_precompensation_parameters(
         if fir.coefficients.iter().any(|c| c.abs() > 4.0) {
             warnings.push(PrecompensationWarningType::FirCoefficients);
         }
-        if fir.strict {
-            bail!(
-                "FIR precompensation has strict=True, which is not supported on QCCS hardware. strict is only meaningful for ZQCS software FIR."
-            );
-        }
     }
 
     Ok(warnings)
@@ -314,7 +309,6 @@ mod tests {
         let pc = Precompensation {
             fir: Some(FirCompensation {
                 coefficients: vec![0.1; 41],
-                strict: false,
             }),
             ..Default::default()
         };
@@ -372,7 +366,6 @@ mod tests {
         let pc = Precompensation {
             fir: Some(FirCompensation {
                 coefficients: vec![5.0, 0.1],
-                strict: false,
             }),
             ..Default::default()
         };

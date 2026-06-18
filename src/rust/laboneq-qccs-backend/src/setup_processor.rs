@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use laboneq_common::named_id::NamedIdStore;
+use laboneq_common::shfqc::to_sg_uid;
 use laboneq_common::types::DeviceKind;
 
 use laboneq_dsl::device_setup::Instrument;
@@ -19,6 +20,7 @@ use crate::ports::is_shfsg_port;
 pub(crate) fn create_awg_devices(
     experiment: &mut ExperimentViewWrapper,
 ) -> Result<(Vec<AwgDevice>, Vec<ReassignedSignal>)> {
+    let mut physical_instrument_uid_counter = 0;
     let mut instruments = experiment.instruments.values().map(|instrument| {
         let signals = experiment
             .signals
@@ -30,7 +32,11 @@ pub(crate) fn create_awg_devices(
             })
             .collect::<Vec<_>>();
 
+        let physical_instrument_uid = physical_instrument_uid_counter;
+        physical_instrument_uid_counter += 1;
+
         InstrumentProperties {
+            physical_instrument_uid,
             instrument,
             signals,
         }
@@ -54,6 +60,7 @@ pub(crate) struct ReassignedSignal {
 }
 
 struct InstrumentProperties<'a> {
+    physical_instrument_uid: u16,
     instrument: &'a Instrument,
     signals: Vec<SignalProperties<'a>>,
 }
@@ -83,7 +90,7 @@ fn device_to_awg_devices(
 fn instrument_to_awg_device(instrument: &InstrumentProperties) -> AwgDevice {
     let mut builder = AwgDevice::builder(
         instrument.instrument.uid,
-        instrument.instrument.physical_device_uid,
+        instrument.physical_instrument_uid.into(),
         instrument
             .instrument
             .kind
@@ -131,7 +138,7 @@ fn split_shfqc(
     let shfqa_device = if has_shfqa_ports {
         let shfqa_builder = AwgDevice::builder(
             instrument.instrument.uid,
-            instrument.instrument.physical_device_uid,
+            instrument.physical_instrument_uid.into(),
             DeviceKind::Shfqa,
         )
         .options(instrument.instrument.options.clone())
@@ -144,14 +151,13 @@ fn split_shfqc(
     // Create SHFSG device if there are any SG signals.
     let shfsg_device = if !shfsg_ports.is_empty() {
         let shfsg_uid = {
-            let new_uid =
-                format_shfqc_sg_device_uid(id_store.resolve(instrument.instrument.uid).unwrap());
+            let new_uid = to_sg_uid(id_store.resolve(instrument.instrument.uid).unwrap());
             id_store.get_or_insert(&new_uid).into()
         };
 
         let shfsg_builder = AwgDevice::builder(
             shfsg_uid,
-            instrument.instrument.physical_device_uid,
+            instrument.physical_instrument_uid.into(),
             DeviceKind::Shfsg,
         )
         .options(instrument.instrument.options.clone())
@@ -181,13 +187,4 @@ fn split_shfqc(
         reassigned_signals,
     };
     Ok(result)
-}
-
-/// Format the UID for the virtual SHFSG device created from splitting an SHFQC device.
-///
-/// The UID is derived from the original SHFQC instrument UID by appending a suffix to indicate it's the SG part of the split device.
-/// This is necessary to ensure the new SHFSG device has a unique UID.
-fn format_shfqc_sg_device_uid(instrument_uid: &str) -> String {
-    const VIRTUAL_SHFSG_UID_SUFFIX: &str = "_sg";
-    format!("{}{}", instrument_uid, VIRTUAL_SHFSG_UID_SUFFIX)
 }

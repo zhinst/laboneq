@@ -44,4 +44,4 @@ laboneq-error = { workspace = true, features = ["pyo3"] }
 
 [dev-dependencies]
 approx = { workspace = true }
-laboneq-dsl = { workspace = true, features = ["test_utils"] }
+laboneq-common = { workspace = true, features = ["test_utils"] }

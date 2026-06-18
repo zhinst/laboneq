@@ -45,9 +45,7 @@ _PORT_MODE = {
 
 
 class RecipeGenerator:
-    def __init__(self, experiment_rs: compiler_rs.Experiment):
-        self._experiment_rs = experiment_rs
-
+    def __init__(self):
         self._recipe = Recipe()
         self._recipe.versions.target_labone = zhinst_version
         self._recipe.versions.laboneq = get_version()
@@ -58,25 +56,21 @@ class RecipeGenerator:
     ):
         for awg_key, channels in channel_properties.items():
             for channel_prop in channels:
-                if channel_prop.hw_oscillator_index is not None:
-                    osc_id, fixed_freq, param_uid = (
-                        self._experiment_rs.signal_hw_oscillator(channel_prop.signal)
+                if (osc := channel_prop.hardware_oscillator) is not None:
+                    frequency = (
+                        osc.frequency if not isinstance(osc.frequency, str) else None
                     )
-                    self._recipe.oscillator_params.append(
-                        OscillatorParam(
-                            id=osc_id,
-                            device_id=awg_key.device_id,
-                            channel=channel_prop.channel,
-                            signal_id=channel_prop.signal,
-                            allocated_index=channel_prop.hw_oscillator_index,
-                            frequency=fixed_freq,
-                            param=param_uid,
-                        )
+                    param = osc.frequency if isinstance(osc.frequency, str) else None
+                    osc = OscillatorParam(
+                        id=osc.uid,
+                        device_id=awg_key.device_id,
+                        channel=channel_prop.channel,
+                        signal_id=channel_prop.signal,
+                        allocated_index=osc.index,
+                        frequency=frequency,
+                        param=param,
                     )
-        self._recipe.oscillator_params = sorted(
-            self._recipe.oscillator_params,
-            key=lambda op: (op.channel, op.allocated_index),
-        )
+                    self._recipe.oscillator_params.append(osc)
 
     def add_integrator_allocations(self, integrator_allocation: IntegratorAllocation):
         self._recipe.integrator_allocations.append(integrator_allocation)
@@ -100,99 +94,6 @@ class RecipeGenerator:
         raise LabOneQException(
             f"Internal error: missing initialization for device {device_uid}"
         )
-
-    def add_output(
-        self,
-        device_id,
-        channel,
-        output_routers: list[RoutedOutput],
-        offset: float | str = 0.0,
-        gains: Gains | None = None,
-        precompensation=None,
-        modulation=False,
-        lo_frequency=None,
-        port_mode=None,
-        output_range=None,
-        output_range_unit=None,
-        port_delay=None,
-        scheduler_port_delay=0.0,
-        marker_mode=None,
-        amplitude: float | str | None = None,
-        enable_output_mute: bool = False,
-    ):
-        def precompensation_to_recipe_dict(precompensation) -> dict:
-            out = {
-                "exponential": None,
-                "high_pass": None,
-                "bounce": None,
-                "FIR": None,
-            }
-            if precompensation.exponential:
-                out["exponential"] = [
-                    {"timeconstant": exp.timeconstant, "amplitude": exp.amplitude}
-                    for exp in precompensation.exponential
-                ]
-            if precompensation.high_pass:
-                out["high_pass"] = {
-                    "timeconstant": precompensation.high_pass.timeconstant
-                }
-            if precompensation.bounce:
-                out["bounce"] = {
-                    "delay": precompensation.bounce.delay,
-                    "amplitude": precompensation.bounce.amplitude,
-                }
-            if precompensation.fir:
-                out["FIR"] = {"coefficients": precompensation.fir.coefficients}
-            return out
-
-        output = IO(
-            channel=channel,
-            enable=True,
-            offset=offset,
-            precompensation=precompensation_to_recipe_dict(precompensation)
-            if precompensation is not None
-            else None,
-            lo_frequency=lo_frequency,
-            port_mode=port_mode,
-            range=None if output_range is None else float(output_range),
-            range_unit=output_range_unit,
-            modulation=modulation,
-            port_delay=port_delay,
-            scheduler_port_delay=scheduler_port_delay,
-            marker_mode=marker_mode,
-            amplitude=amplitude,
-            routed_outputs=output_routers,
-            enable_output_mute=enable_output_mute,
-            gains=gains,
-        )
-
-        initialization = self.find_initialization(device_id)
-        initialization.outputs.append(output)
-
-    def add_input(
-        self,
-        device_id,
-        channel,
-        lo_frequency=None,
-        input_range=None,
-        input_range_unit=None,
-        port_delay=None,
-        scheduler_port_delay=0.0,
-        port_mode=None,
-    ):
-        input = IO(
-            channel=channel,
-            enable=True,
-            lo_frequency=lo_frequency,
-            range=None if input_range is None else float(input_range),
-            range_unit=input_range_unit,
-            port_delay=port_delay,
-            scheduler_port_delay=scheduler_port_delay,
-            port_mode=port_mode,
-        )
-
-        initialization = self.find_initialization(device_id)
-        initialization.inputs.append(input)
 
     def add_awg(
         self,
@@ -256,15 +157,32 @@ class RecipeGenerator:
             initialization.measurements = measurements.get(device_uid, [])
 
     def recipe(self) -> Recipe:
+        for init in self._recipe.initializations:
+            init.outputs.sort(key=lambda o: o.channel)
+            init.inputs.sort(key=lambda i: i.channel)
+
+            init.outputs = list(self._remove_duplicate_channels(init.outputs))
+            init.inputs = list(self._remove_duplicate_channels(init.inputs))
+
+        self._recipe.oscillator_params = sorted(
+            self._recipe.oscillator_params,
+            key=lambda op: (op.channel, op.allocated_index),
+        )
         return self._recipe
+
+    def _remove_duplicate_channels(self, ios: list[IO]) -> list[IO]:
+        # TODO: Check for conflicting settings on duplicate channels
+        seen_channels = {}
+        for io in ios:
+            seen_channels[io.channel] = io
+        return list(seen_channels.values())
 
 
 def calc_outputs(
     combined_compiler_output: CombinedRTOutputSeqC,
-    experiment_rs: compiler_rs.Experiment,
+    experiment_rs: compiler_rs.ProcessedExperiment,
+    recipe_generator: RecipeGenerator,
 ):
-    all_channels = {}
-
     channels_flat = (
         (awg_key, ch_props)
         for awg_key, ch_props_list in combined_compiler_output.channel_properties.items()
@@ -276,26 +194,27 @@ def calc_outputs(
 
         signal_id = channel_properties.signal
         channel = channel_properties.channel
-        oscillator_is_hardware = (
-            experiment_rs.signal_hw_oscillator(signal_id) is not None
-        )
-
         signal_range = channel_properties.range
 
         scheduler_port_delay = channel_properties.scheduler_delay
         scheduler_port_delay += experiment_rs.signal_delay_compensation(signal_id)
 
         precompensation = experiment_rs.signal_precompensation(signal_id)
-        output = {
-            "device_id": awg_key.device_id,
-            "channel": channel,
-            "lo_frequency": channel_properties.lo_frequency,
-            "port_mode": _PORT_MODE.get(channel_properties.port_mode),
-            "range": signal_range.value if signal_range is not None else None,
-            "range_unit": (signal_range.unit if signal_range is not None else None),
-            "port_delay": channel_properties.port_delay,
-            "scheduler_port_delay": scheduler_port_delay,
-            "output_routers": [
+        output = IO(
+            channel=channel,
+            enable=True,
+            offset=channel_properties.voltage_offset,
+            precompensation=precompensation,
+            lo_frequency=channel_properties.lo_frequency,
+            port_mode=_PORT_MODE.get(channel_properties.port_mode),
+            range=None if signal_range is None else float(signal_range.value),
+            range_unit=(signal_range.unit if signal_range is not None else None),
+            modulation=channel_properties.hardware_oscillator is not None,
+            port_delay=channel_properties.port_delay,
+            scheduler_port_delay=scheduler_port_delay,
+            marker_mode=channel_properties.marker_mode,
+            amplitude=channel_properties.amplitude,
+            routed_outputs=[
                 RoutedOutput(
                     from_channel=router.source_channel,
                     amplitude=router.amplitude_scaling,
@@ -303,34 +222,22 @@ def calc_outputs(
                 )
                 for router in channel_properties.routed_outputs
             ],
-            "enable_output_mute": experiment_rs.signal_automute(signal_id),
-            "precompensation": precompensation,
-            "modulation": oscillator_is_hardware,
-            "marker_mode": channel_properties.marker_mode,
-            "amplitude": channel_properties.amplitude,
-            "offset": channel_properties.voltage_offset,
-            "gains": Gains(
+            enable_output_mute=channel_properties.output_mute_enable,
+            gains=Gains(
                 diagonal=channel_properties.gains.diagonal,
                 off_diagonal=channel_properties.gains.off_diagonal,
             )
             if channel_properties.gains is not None
             else None,
-        }
+        )
 
-        channel_key = (awg_key.device_id, channel)
-        # TODO(2K): check for conflicts if 'channel_key' already present in 'all_channels'
-        all_channels[channel_key] = output
-    retval = sorted(
-        all_channels.values(),
-        key=lambda output: output["device_id"] + str(output["channel"]),
-    )
-    return retval
+        initialization = recipe_generator.find_initialization(awg_key.device_id)
+        initialization.outputs.append(output)
 
 
 def calc_inputs(
-    combined_compiler_output: CombinedRTOutputSeqC,
+    combined_compiler_output: CombinedRTOutputSeqC, recipe_generator: RecipeGenerator
 ):
-    all_channels = {}
     channels_flat = (
         (device_uid, ch_props)
         for device_uid, ch_props_list in combined_compiler_output.channel_properties.items()
@@ -341,31 +248,25 @@ def calc_inputs(
             continue
         signal_range = channel_properties.range
         scheduler_port_delay: float = channel_properties.scheduler_delay
-        input = {
-            "device_id": awg_key.device_id,
-            "channel": channel_properties.channel,
-            "lo_frequency": channel_properties.lo_frequency,
-            "range": signal_range.value if signal_range is not None else None,
-            "range_unit": (signal_range.unit if signal_range is not None else None),
-            "port_delay": channel_properties.port_delay,
-            "scheduler_port_delay": scheduler_port_delay,
-            "port_mode": _PORT_MODE.get(channel_properties.port_mode),
-        }
-        channel_key = (awg_key.device_id, channel_properties.channel)
-        # TODO(2K): check for conflicts if 'channel_key' already present in 'all_channels'
-        all_channels[channel_key] = input
-    retval = sorted(
-        all_channels.values(),
-        key=lambda input: input["device_id"] + str(input["channel"]),
-    )
-    return retval
+        input = IO(
+            channel=channel_properties.channel,
+            enable=True,
+            lo_frequency=channel_properties.lo_frequency,
+            range=None if signal_range is None else float(signal_range.value),
+            range_unit=signal_range.unit if signal_range is not None else None,
+            port_delay=channel_properties.port_delay,
+            scheduler_port_delay=scheduler_port_delay,
+            port_mode=_PORT_MODE.get(channel_properties.port_mode),
+        )
+        initialization = recipe_generator.find_initialization(awg_key.device_id)
+        initialization.inputs.append(input)
 
 
 def generate_recipe(
-    experiment_rs: compiler_rs.Experiment,
+    experiment_rs: compiler_rs.ProcessedExperiment,
     combined_compiler_output: CombinedRTOutputSeqC,
 ) -> Recipe:
-    recipe_generator = RecipeGenerator(experiment_rs)
+    recipe_generator = RecipeGenerator()
 
     for device in combined_compiler_output.device_properties:
         init = Initialization(device_uid=device.uid, device_type=device.device_type)
@@ -396,41 +297,8 @@ def generate_recipe(
 
     recipe_generator.add_oscillator_params(combined_compiler_output.channel_properties)
 
-    for output in calc_outputs(combined_compiler_output, experiment_rs):
-        _logger.debug("Adding output %s", output)
-        recipe_generator.add_output(
-            device_id=output["device_id"],
-            channel=output["channel"],
-            offset=output["offset"],
-            gains=output["gains"],
-            precompensation=output.get("precompensation"),
-            modulation=output["modulation"],
-            lo_frequency=output["lo_frequency"],
-            port_mode=output["port_mode"],
-            output_range=output["range"],
-            output_range_unit=output["range_unit"],
-            port_delay=output["port_delay"],
-            scheduler_port_delay=output["scheduler_port_delay"],
-            marker_mode=output["marker_mode"],
-            amplitude=output["amplitude"],
-            output_routers=output["output_routers"],
-            enable_output_mute=output["enable_output_mute"],
-        )
-
-    for input in calc_inputs(
-        combined_compiler_output,
-    ):
-        _logger.debug("Adding input %s", input)
-        recipe_generator.add_input(
-            device_id=input["device_id"],
-            channel=input["channel"],
-            lo_frequency=input["lo_frequency"],
-            input_range=input["range"],
-            input_range_unit=input["range_unit"],
-            port_delay=input["port_delay"],
-            scheduler_port_delay=input["scheduler_port_delay"],
-            port_mode=input["port_mode"],
-        )
+    calc_outputs(combined_compiler_output, experiment_rs, recipe_generator)
+    calc_inputs(combined_compiler_output, recipe_generator)
 
     for step in combined_compiler_output.neartime_steps:
         recipe_generator.add_neartime_execution_step(step)
@@ -463,7 +331,7 @@ def generate_recipe(
             recipe_generator.add_integrator_allocations(integrator_allocation)
 
     recipe_generator.add_acquire_lengths(combined_compiler_output.integration_times)
-    measurement_map_per_device = {}
+    measurement_map_per_device: dict[str, list[Measurement]] = {}
     for meas in combined_compiler_output.measurements:
         measurement_map_per_device.setdefault(meas.device, []).append(
             Measurement(

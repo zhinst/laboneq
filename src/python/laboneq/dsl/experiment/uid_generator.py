@@ -55,7 +55,7 @@ class UidGenerator:
 
     def __init__(self, is_global: bool = False):
         self.is_global = is_global
-        self._uid_counts = defaultdict(int)
+        self._uid_counts: defaultdict[str, int] = defaultdict(int)
 
     def _reset(self):
         """Reset the all prefix counts used by the generator to zero."""

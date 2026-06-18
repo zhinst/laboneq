@@ -8,12 +8,6 @@ from typing import TYPE_CHECKING
 from laboneq.compiler.workflow import compat
 from laboneq.compiler.workflow.compiler import compile_capnp
 from laboneq.dsl.device.instruments import ZQCS
-from laboneq.implementation.legacy_adapters.converters_experiment_description import (
-    convert_signal_map,
-)
-from laboneq.implementation.legacy_adapters.device_setup_converter import (
-    convert_device_setup_to_setup,
-)
 from laboneq.implementation.payload_builder.experiment_info_builder.experiment_info_builder import (
     ExperimentInfoBuilder,
 )
@@ -31,13 +25,11 @@ def compile_experiment(
     compiler_settings: dict | None = None,
 ) -> ScheduledExperiment:
     """Compile the given experiment and device setup into a ScheduledExperiment."""
-    capnp_bytes, device_setup_fingerprint, device_class = _serialize_experiment(
-        experiment=experiment,
+    capnp_bytes, device_class = _serialize_experiment(
         device_setup=device_setup,
+        experiment=experiment,
     )
-    return compile_capnp(
-        capnp_bytes, device_setup_fingerprint, device_class, compiler_settings
-    )
+    return compile_capnp(capnp_bytes, device_class, compiler_settings)
 
 
 def serialize_experiment(
@@ -47,7 +39,7 @@ def serialize_experiment(
     """Serializes the given experiment and device setup into capnp bytes.
 
     The payload is either packed or unpacked, depending on `LABONEQ_CAPNP_PACKED` environment variable."""
-    capnp_bytes, _, _ = _serialize_experiment(
+    capnp_bytes, _ = _serialize_experiment(
         device_setup=device_setup,
         experiment=experiment,
     )
@@ -57,19 +49,15 @@ def serialize_experiment(
 def _serialize_experiment(
     device_setup: DeviceSetup,
     experiment: Experiment,
-) -> tuple[bytes, str, int]:
+) -> tuple[bytes, int]:
     device_class = _resolve_device_class(device_setup)
-    device_setup = convert_device_setup_to_setup(device_setup)
-    signal_mapping = convert_signal_map(experiment)
 
-    experiment_info = ExperimentInfoBuilder(
-        experiment, device_setup, signal_mapping
-    ).load_experiment()
+    experiment_info = ExperimentInfoBuilder(device_setup, experiment).load_experiment()
     capnp_bytes = compat.serialize_capnp(
         experiment_info=experiment_info,
         device_class=device_class,
     )
-    return capnp_bytes, experiment_info.device_setup_fingerprint, device_class
+    return capnp_bytes, device_class
 
 
 def _resolve_device_class(

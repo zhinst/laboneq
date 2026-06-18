@@ -37,4 +37,4 @@ laboneq-dsl = { workspace = true }
 codegenerator-utils = { workspace = true }
 
 [dev-dependencies]
-laboneq-dsl = { workspace = true, features = ["test_utils"] }
+laboneq-common = { workspace = true, features = ["test_utils"] }

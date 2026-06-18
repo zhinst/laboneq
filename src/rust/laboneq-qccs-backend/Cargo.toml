@@ -28,5 +28,5 @@ codegenerator-py = { workspace = true }
 laboneq-log = { workspace = true }
 
 [dev-dependencies]
-laboneq-dsl = { workspace = true, features = ["test_utils"] }
+laboneq-common = { workspace = true, features = ["test_utils"] }
 approx = { workspace = true }

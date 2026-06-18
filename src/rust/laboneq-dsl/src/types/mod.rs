@@ -16,7 +16,6 @@ mod section_alignment;
 mod section_timing_mode;
 mod sweep_parameter;
 mod trigger;
-mod uid;
 mod value_or_parameter;
 
 pub use acquisition_type::*;
@@ -34,7 +33,9 @@ pub use section_alignment::SectionAlignment;
 pub use section_timing_mode::SectionTimingMode;
 pub use sweep_parameter::*;
 pub use trigger::Trigger;
-pub use uid::*;
 pub use value_or_parameter::*;
 
 pub type UserRegister = u16;
+
+#[doc(inline)]
+pub use laboneq_common::uid::*;

@@ -728,7 +728,6 @@ mod tests {
             start_delay: 0,
             channels: vec![],
             oscillator: None,
-            automute: false,
         }
     }
 

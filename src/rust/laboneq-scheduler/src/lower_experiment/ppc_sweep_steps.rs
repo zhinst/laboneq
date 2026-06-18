@@ -103,8 +103,6 @@ fn create_ppc_step_for_parameter(
     }
     let ppc_step = PpcStep {
         signal,
-        device: pump.device,
-        channel: pump.channel,
         trigger_duration: seconds_to_tinysamples(PPC_TRIGGER_ASSERT_DURATION),
         pump_power,
         pump_frequency,

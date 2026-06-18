@@ -516,10 +516,10 @@ class SimpleRuntime:
             "getPRNGValue": self.getPRNGValue,
             "configureFeedbackProcessing": self.configureFeedbackProcessing,
         }
-        self.variables = {}
+        self.variables: dict[str, Any] = {}
         self.seqc_simulation = SeqCSimulation()
-        self.times = {}
-        self.times_at_port = {}
+        self.times: dict[str, float] = {}
+        self.times_at_port: dict[str, Any] = {}
         self.descriptor = descriptor
         self.waves = waves
         self.source = preprocess_source(descriptor.source)
@@ -527,7 +527,7 @@ class SimpleRuntime:
         self.wave_names_by_index: dict[int, list[str]] = {}
         self.wave_data: list[Any] = []
         self.max_time: float | None = max_time
-        self._oscillator_sweep_config = {}
+        self._oscillator_sweep_config: dict[int, dict[str, float]] = {}
         self._oscillator_sweep_params: dict[str, dict[int, float]] = {}
         self._command_table_by_index = {
             ct["index"]: ct for ct in self.descriptor.command_table
@@ -830,7 +830,7 @@ class SimpleRuntime:
         result_addr=0,
         trigger=None,
     ):
-        wave_data_idx = []
+        wave_data_idx: list[int] = []
         event_length = 0
 
         def add_wave(gen_index, wave_data_idx, event_length):
@@ -1133,7 +1133,7 @@ def analyze_recipe(
 
             awg_index += 1
 
-    seq_c_wave_indices = {}
+    seq_c_wave_indices: dict[str, dict[str, dict[str, Any]]] = {}
     for wave_index in wave_indices or []:
         wave_seq_c_filename = wave_index["filename"]
         values = cast("dict[int, tuple[str, WaveType]]", wave_index["value"])

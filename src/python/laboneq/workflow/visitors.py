@@ -20,8 +20,8 @@ class SpecificBlockTypeCollector(BlockVisitor):
 
     def __init__(self, root: WorkflowBlock) -> None:
         self.root = root
-        self._block_types = []
-        self._blocks = []
+        self._block_types: list[type[Block]] = []
+        self._blocks: list[Block] = []
 
     def collect(self, block_types: Sequence[type[Block]]) -> list[Block]:
         """Collect specific type of blocks.

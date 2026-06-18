@@ -32,14 +32,15 @@ where
 {
     let execution = create_execution(&processed.inner)?;
     let chunking_mode = collect_chunking_mode(&processed.inner)?;
-    compile_whole_or_with_chunks(
+    let scheduled_experiment = compile_whole_or_with_chunks(
         py,
         backend,
         processed,
         compiler_settings,
         execution,
         chunking_mode,
-    )
+    )?;
+    Ok(scheduled_experiment)
 }
 
 const RESOURCE_LIMIT_MSG: &str = "Compilation error - resource limitation exceeded.\n\
@@ -98,7 +99,7 @@ where
     let bound_exp_py = exp_py.into_pyobject(py)?;
 
     // Run the compilation
-    match chunking_mode {
+    let compiled_output = match chunking_mode {
         None => call_compile(
             py,
             &bound_exp_py,
@@ -132,7 +133,7 @@ where
             match result {
                 Ok(result) => {
                     laboneq_log::info!("Auto-chunked sweep divided into {} chunks", chunk_count);
-                    return Ok(result);
+                    break Ok(result);
                 }
                 Err(LabOneQError::ResourceExhaustion(e)) => {
                     laboneq_log::debug!(
@@ -157,7 +158,10 @@ where
                 Err(e) => return Err(e),
             }
         },
-    }
+    }?;
+    let scheduled_experiment_py =
+        build_scheduled_experiment_py(py, compiled_output, &processed.device_setup_fingerprint)?;
+    Ok(scheduled_experiment_py)
 }
 
 fn create_compiler_settings_py<'py>(
@@ -193,7 +197,7 @@ fn call_compile<'py>(
     chunk_count: Option<u32>,
     device_class: usize,
     compiler_settings: &Bound<'_, PyAny>,
-) -> Result<Bound<'py, PyAny>, LabOneQError> {
+) -> Result<CompilationOutputPy<'py>, LabOneQError> {
     let compile_fn = py
         .import(intern!(py, "laboneq.compiler.workflow.compiler"))?
         .getattr(intern!(py, "compile_whole_or_with_chunks"))?;
@@ -207,7 +211,7 @@ fn call_compile<'py>(
     let result = compile_fn.call((), Some(&kwargs));
 
     match result {
-        Ok(result) => Ok(result),
+        Ok(result) => Ok(result.extract()?),
         Err(e) if e.is_instance(py, &ResourceLimitationError::type_object(py)) => {
             let usage: f64 = e
                 .value(py)
@@ -236,4 +240,46 @@ fn call_compile<'py>(
             Err(e.into())
         }
     }
+}
+
+/// The output of the Python function `compile_whole_or_with_chunks`.
+#[derive(FromPyObject, Debug)]
+struct CompilationOutputPy<'py> {
+    recipe: Bound<'py, PyAny>,
+    artifacts: Bound<'py, PyAny>,
+    schedule: Option<Bound<'py, PyAny>>,
+    execution: Bound<'py, PyAny>,
+    rt_loop_properties: Bound<'py, PyAny>,
+    result_shape_info: Bound<'py, PyAny>,
+}
+
+/// Builds the `ScheduledExperiment` Python object.
+fn build_scheduled_experiment_py<'py>(
+    py: Python<'py>,
+    compilation_output: CompilationOutputPy<'py>,
+    device_setup_fingerprint: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    let scheduled_experiment_class = py
+        .import(intern!(py, "laboneq.data.scheduled_experiment"))?
+        .getattr(intern!(py, "ScheduledExperiment"))?;
+
+    let kwargs = PyDict::new(py);
+    kwargs.set_item(
+        intern!(py, "device_setup_fingerprint"),
+        device_setup_fingerprint,
+    )?;
+    kwargs.set_item(intern!(py, "recipe"), compilation_output.recipe)?;
+    kwargs.set_item(intern!(py, "artifacts"), compilation_output.artifacts)?;
+    kwargs.set_item(intern!(py, "schedule"), compilation_output.schedule)?;
+    kwargs.set_item(intern!(py, "execution"), compilation_output.execution)?;
+    kwargs.set_item(
+        intern!(py, "rt_loop_properties"),
+        compilation_output.rt_loop_properties,
+    )?;
+    kwargs.set_item(
+        intern!(py, "result_shape_info"),
+        compilation_output.result_shape_info,
+    )?;
+    let scheduled_experiment = scheduled_experiment_class.call((), Some(&kwargs))?;
+    Ok(scheduled_experiment)
 }

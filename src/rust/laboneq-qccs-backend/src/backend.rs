@@ -45,6 +45,7 @@ impl CompilerBackend for QccsBackend {
             awg_index: s.awg_index,
             channels: s.channels.iter().map(|c| *c as u8).collect(),
             routed_output_channel_map: backend_data.routed_output_channel_map().clone(),
+            ppc_channel: s.ppc_channel,
         });
         let setup_desc = HardwareSetup {
             signals: additional_signals.collect(),
@@ -71,9 +72,13 @@ impl CompilerBackend for QccsBackend {
     fn feedback_calculator(
         &self,
         signals: &[SignalView],
-    ) -> Option<Box<dyn FeedbackCalculator<Error = CompilerError> + Send + Sync + 'static>> {
-        let model = QccsFeedbackCalculator::new(signals.iter().cloned()).ok()?;
-        Some(Box::new(model))
+        _compiler_settings: &CompilerSettings,
+    ) -> Result<
+        Option<Box<dyn FeedbackCalculator<Error = CompilerError> + Send + Sync + 'static>>,
+        CompilerError,
+    > {
+        let model = QccsFeedbackCalculator::new(signals.iter().cloned())?;
+        Ok(Some(Box::new(model)))
     }
 }
 

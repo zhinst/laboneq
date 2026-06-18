@@ -540,7 +540,6 @@ mod tests {
             }),
             signal_delay: 0,
             start_delay: 0,
-            automute: false,
         };
         Arc::new(sig)
     }
@@ -665,7 +664,6 @@ mod tests {
             oscillator: None,
             signal_delay: 0,
             start_delay: 0,
-            automute: false,
         };
         let signal = Arc::new(sig);
         let mut root = IrNode::new(NodeKind::Nop { length: 0 }, 0);
@@ -690,13 +688,12 @@ mod tests {
     mod handle_oscillator_sweeps {
         use super::*;
         use crate::ir::compilation_job::{
-            AwgCore, Device, DeviceKind, Oscillator, OscillatorKind, Signal, SignalKind,
+            AwgCoreBuilder, Device, DeviceKind, Oscillator, OscillatorKind, Signal, SignalKind,
         };
         use crate::ir::{
             LinearParameterInfo, Loop, LoopIteration, NodeKind, OscillatorFrequencySweepStep,
             SectionInfo, SetOscillatorFrequency, SignalFrequency,
         };
-        use laboneq_common::device_options::DeviceOptions;
         use std::sync::Arc;
 
         fn assert_set_oscillator_sweep(
@@ -725,7 +722,6 @@ mod tests {
                         }),
                         signal_delay: 0,
                         start_delay: 0,
-                        automute: false,
                     }),
                     frequency,
                 })
@@ -758,9 +754,13 @@ mod tests {
         /// Test that oscillator frequency sweeps are correctly calculated and replaced in the IR tree.
         #[test]
         fn test_osc_freq_sweep_parameter_calculator() {
-            let mut awg = AwgCore::new(
+            let mut builder = AwgCoreBuilder::new(
                 0,
-                vec![Arc::new(Signal {
+                Device::new("test_device".to_string().into(), DeviceKind::SHFSG).into(),
+                2e9,
+            );
+            builder.add_signal(
+                Signal {
                     uid: 0.into(),
                     kind: SignalKind::IQ,
                     channels: vec![],
@@ -771,18 +771,10 @@ mod tests {
                     }),
                     signal_delay: 0,
                     start_delay: 0,
-                    automute: false,
-                })],
-                1e9,
-                Arc::new(Device::new(
-                    "test_device".to_string().into(),
-                    DeviceKind::SHFSG,
-                )),
-                None,
-                DeviceOptions::default(),
-                HashMap::new(),
-                false,
+                }
+                .into(),
             );
+            let mut awg = builder.build();
             awg.add_oscillator_index(0.into(), 0);
 
             let n_iterations = 3;

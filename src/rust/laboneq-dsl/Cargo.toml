@@ -18,8 +18,5 @@ numeric-array = { workspace = true }
 laboneq-common = { workspace = true }
 laboneq-units = { workspace = true }
 
-[features]
-test_utils = ["laboneq-common/test_utils"]
-
 [lints]
 workspace = true

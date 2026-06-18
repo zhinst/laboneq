@@ -57,7 +57,7 @@ dependencies = [
   "uvicorn[standard] >= 0.40.0",
   "zhinst-comms >= 3.4",
   "zhinst-comms-schemas~=4.1.0",
-  "zhinst-core~=26.4.0",
+  "zhinst-core~=26.4.1",          # Do not specify the build (fourth) version component for this dependency 
   "zhinst-timing-models~=26.4.0",
   "zhinst-toolkit >=1.3.0",
   "zhinst-utils ==0.7.2",
@@ -289,8 +289,59 @@ module = [
   "uvicorn.*",
   "httpx",
   "httpx.*",
+  # No stubs available
+  "pygments",
+  "pygments.*",
+  "dateutil.*",
+  "networkx",
+  "networkx.*",
+  "lmfit.*",
+  "uncertainties.*",
+  "sklearn.*",
+  "zhinst.*",
 ]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Suppress modules with pervasive mypy errors that are not worth fixing now.
+# Each entry notes whether mypy is right in principle (real type issues, large
+# refactor needed) or fundamentally unable to understand the code pattern.
+module = [
+  # RIGHT IN PRINCIPLE: serializer code indexes JsonSerializableType
+  # (str | int | float | dict | list | None) without isinstance-narrowing;
+  # fixing requires guards or cast() throughout the whole serializer layer.
+  "laboneq.serializers.*",
+  # MIXED: most errors are mypy unable to follow visit_*-dispatch over AST
+  # node unions; a few real suspects (e.g. "section" vs "sections" attribute).
+  "laboneq.openqasm3.*",
+  # MIXED: bulk is mypy unable to prove float+ArrayLike arithmetic is valid;
+  # also contains a handful of real T=None annotation bugs (same pattern as
+  # phase-2 fixes) that should be cleaned up when the file is next touched.
+  "laboneq.simulator.wave_scroller",
+  # RIGHT IN PRINCIPLE: parameters typed ArrayLike (which includes str/bytes)
+  # but used in arithmetic without narrowing to ndarray; needs narrower
+  # signatures or np.asarray() calls throughout the curve-fitting module.
+  "laboneq.analysis.fitting",
+  # MIXED: mostly ArrayLike arithmetic noise; two real potential None
+  # dereferences on optional Experiment/DeviceSetup fields.
+  "laboneq.pulse_sheet_viewer.*",
+  # RIGHT IN PRINCIPLE: example-helper code has real issues (e.g.
+  # add_connections called with Sequence[str] instead of str) but is
+  # low-stakes non-core code.
+  "laboneq.contrib.*",
+  # RIGHT IN PRINCIPLE: tuple annotation says tuple[tuple[str]] but the
+  # actual gate-set value is a 24-element heterogeneous tuple; annotation is
+  # wrong but fixing it is cosmetic.
+  "laboneq.testing.experiments.*",
+  # MIXED: numpy arithmetic noise dominates, but AwgCodeGenerationResult
+  # missing result_length and an Iterator being indexed are real issues.
+  "laboneq.compiler.seqc.code_generator",
+  # MIXED: the 8 compiler_rs? errors are false positives from the optional
+  # Rust extension import; SetupDescription.data, a None dereference on
+  # DeviceInfo, and a None passed as frequency are real issues.
+  "laboneq.compiler.workflow.compat",
+]
+ignore_errors = true
 
 [tool.towncrier]
 name = "LabOne Q"

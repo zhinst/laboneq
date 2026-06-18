@@ -10,8 +10,8 @@ pub use experiment::{
     AcquirePulse, Case, FrameChange, FrequencySweepParameterInfo, InitAmplitudeRegister,
     InitialOscillatorFrequency, IrNode, LinearParameterInfo, Loop, LoopIteration, Match, NodeKind,
     NonLinearParameterInfo, OscillatorFrequencySweepStep, ParameterOperation, PhaseReset,
-    PlayAcquire, PlayHold, PlayPulse, PlayWave, PpcChannelKey, PpcSweepStep, PrngSample, PrngSetup,
-    QaEvent, ResetPrecompensationFilters, Section, SectionId, SectionInfo, SetOscillatorFrequency,
+    PlayAcquire, PlayHold, PlayPulse, PlayWave, PpcSweepStep, PrngSample, PrngSetup, QaEvent,
+    ResetPrecompensationFilters, Section, SectionId, SectionInfo, SetOscillatorFrequency,
     SetOscillatorFrequencySweep, SignalFrequency, TriggerBitData,
 };
 

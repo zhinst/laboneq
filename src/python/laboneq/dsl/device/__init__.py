@@ -19,7 +19,5 @@ __all__ = [
     "PhysicalChannelGroup",
     "Port",
     "Server",
-    "SetupDescription",
-    "SetupDescriptionQCCS",
     "create_connection",
 ]

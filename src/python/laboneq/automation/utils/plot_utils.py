@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import defaultdict
+from typing import Any
 
 import networkx as nx
 import numpy as np
@@ -18,7 +19,7 @@ def hierarchical_layout(graph: nx.DiGraph) -> dict[str, tuple[float, float]]:
         pos:
             A dictionary of positions keyed by node.
     """
-    counts = defaultdict(int)
+    counts: defaultdict[Any, int] = defaultdict(int)
     pos = {}
 
     # Initial distribution of nodes on a regular grid

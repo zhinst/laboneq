@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, Callable, overload
+from typing import TYPE_CHECKING, Any, Callable, overload
 
 from typing_extensions import ParamSpec
 
@@ -369,7 +369,7 @@ def _calibration_from_qubits(
     qubits: list[QuantumElement],
 ) -> dict[str,]:
     """Return the calibration objects from a list of qubits."""
-    calibration = {}
+    calibration: dict[str, Any] = {}
     for qubit in qubits:
         calibration.update(qubit.calibration())
     return calibration

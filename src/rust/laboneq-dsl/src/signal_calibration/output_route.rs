@@ -1,6 +1,8 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_common::uid::PhysicalChannelUid;
+
 use crate::types::ValueOrParameter;
 
 /// Output routing for SHFSG outputs.
@@ -11,7 +13,7 @@ use crate::types::ValueOrParameter;
 #[derive(Debug, Clone, PartialEq)]
 pub struct OutputRoute {
     /// Source channel on the source signal
-    pub source_channel: String,
+    pub source_channel: PhysicalChannelUid,
     pub amplitude_scaling: Option<ValueOrParameter<f64>>,
     pub phase_shift: Option<ValueOrParameter<f64>>,
 }

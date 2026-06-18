@@ -21,43 +21,39 @@ struct SignalCalibration {
   # Baseband oscillator UID reference for carrier modulation.
   # When set, applies modulation using the referenced oscillator.
   # Multiple signals can reference the same oscillator for phase coherence.
-  oscillator :union {
-    none @2 :Void;
-    value @3 :Common.Id;
-    # `DeviceSetup.oscillators` index.
-  }
+  oscillator @2 :Oscillator;
 
-  localOscillatorFrequency @4 :Common.Value;  
+  localOscillatorFrequency @3 :Common.Value;
   # LO frequency in Hz. Sweepable (near-time only).
 
-  portDelay @5 :Common.Value;                 
+  portDelay @4 :Common.Value;                 
   # Port delay in seconds. Sweepable (near-time only).
 
-  voltageOffset @6 :Common.Value;             
+  voltageOffset @5 :Common.Value;             
   # DC voltage offset. Sweepable (near-time only).
 
-  portMode @7 :PortMode;                     
+  portMode @6 :PortMode;                     
   # Port operating mode (RF or LF).
 
-  range @8 :SignalRange;             
+  range @7 :SignalRange;             
   # Output voltage range. Not sweepable.
 
-  automute @9 :Bool;                        
+  automute @8 :Bool;                        
   # Auto-mute: zero output between pulses.
 
-  mixerCalibration @10 :MixerCalibration;    
+  mixerCalibration @9 :MixerCalibration;    
   # IQ mixer calibration for sideband suppression.
 
-  precompensation @11 :Precompensation;     
+  precompensation @10 :Precompensation;     
   # Precompensation filter chain. Not sweepable.
 
-  threshold @12 :List(Float64);              
+  threshold @11 :List(Float64);              
   # Discrimination thresholds for state detection.
 
-  amplifierPump @13 :AmplifierPump;          
+  amplifierPump @12 :AmplifierPump;          
   # Parametric pump controller (SHFPPC) configuration.
 
-  addedOutputs @14 :List(OutputRoute);       
+  addedOutputs @13 :List(OutputRoute);       
   # Real-Time Routing output routes.
 }
 
@@ -171,9 +167,6 @@ struct FirCompensation {
 
   coefficients @0 :List(Float64);
   # FIR filter coefficients. Output is convolution with input.
-
-  strict @1 :Bool;
-  # When true, FIR tail overlap with adjacent waveforms raises an error instead of merging.
 }
 
 struct AmplifierPump {
@@ -182,51 +175,45 @@ struct AmplifierPump {
   # Configures a parametric pump amplifier.
   # Some fields are sweepable (near-time only); others are fixed at compile time.
 
-  deviceUid @0 :Text;
-  # SHFPPC device UID controlling this pump.
-
-  channel @1 :UInt16;
-  # SHFPPC pump channel index.
-
-  pumpFrequency @2 :Common.Value;           
+  pumpFrequency @0 :Common.Value;           
   # Pump frequency in Hz. Sweepable (near-time only).
 
-  pumpPower @3 :Common.Value;               
+  pumpPower @1 :Common.Value;               
   # Pump power in dBm. Sweepable (near-time only).
 
-  pumpOn @4 :Bool;                         
+  pumpOn @2 :Bool;                         
   # Whether the pump is enabled.
 
-  pumpFilterOn @5 :Bool;                   
+  pumpFilterOn @3 :Bool;                   
   # Whether the pump filter is enabled.
 
-  cancellationOn @6 :Bool;                 
+  cancellationOn @4 :Bool;                 
   # Whether cancellation is enabled.
 
-  cancellationPhase @7 :Common.Value;       
+  cancellationPhase @5 :Common.Value;       
   # Cancellation phase in radians. Sweepable (near-time only).
 
-  cancellationAttenuation @8 :Common.Value; 
+  cancellationAttenuation @6 :Common.Value; 
   # Cancellation attenuation in dB. Sweepable (near-time only).
 
-  cancellationSource @9 :CancellationSource;
+  cancellationSource @7 :CancellationSource;
 
   # Cancellation source frequency in Hz. Used when cancellationSource is external.
   cancellationSourceFrequency :union {
-    none @10 :Void;
-    value @11 :Float64;
+    none @8 :Void;
+    value @9 :Float64;
   }
 
-  alcOn @12 :Bool;                    
+  alcOn @10 :Bool;
   # Whether automatic level control (ALC) is enabled.
 
-  probeOn @13 :Bool;                  
+  probeOn @11 :Bool;                  
   # Whether the probe tone is enabled.
 
-  probeFrequency @14 :Common.Value;    
+  probeFrequency @12 :Common.Value;    
   # Probe frequency in Hz. Sweepable (near-time only).
 
-  probePower @15 :Common.Value;        
+  probePower @13 :Common.Value;        
   # Probe power in dBm. Sweepable (near-time only).
 }
 

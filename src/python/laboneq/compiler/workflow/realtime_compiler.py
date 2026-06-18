@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 def compile_realtime(
-    experiment: compiler_rs.Experiment,
+    experiment: compiler_rs.ProcessedExperiment,
     near_time_parameters: ParameterStore[str, float],
     device_class: int,
 ) -> RTCompilerOutputContainer:

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from io import StringIO
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from rich import box
 from rich.console import Console
@@ -78,8 +78,8 @@ class CompilationReportGenerator(NtCompilerExecutorDelegate):
         self._total: ReportEntry | None = None
         self._require_long_readout: str | None = None
 
-        self._pulse_waveform_count = {}
-        self._pulse_map = {}
+        self._pulse_waveform_count: dict[str, int] = {}
+        self._pulse_map: dict[str, Any] = {}
 
     def after_compilation_run(self, new: RTCompilerOutputContainer, indices: list[int]):
         self.update(new, indices)

@@ -33,6 +33,7 @@ class SeqCCompileItem:
     sequencer: str
     sampling_rate: float | None
     filename: str
+    pipeliner: bool
     code: str
     elf: bytes | None = None
 
@@ -49,6 +50,7 @@ def seqc_compile_one(item: SeqCCompileItem):
             sequencer=item.sequencer,
             filename=item.filename,
             samplerate=item.sampling_rate,
+            pipeliner=item.pipeliner,
         )
     except LabOneCoreError as exc:
         raise LabOneQException(
@@ -101,6 +103,13 @@ def _process_errors(messages: list[str], settings: CompilerSettings):
             ) is not None:
                 excess, max_capacity = float(match.group(1)), float(match.group(2))
                 hint = (max_capacity + excess) / max_capacity
+            elif (
+                match := re.search(
+                    r"total waveform memory is too large to fit into device memory - has (\d+) bytes, maximum is (\d+) bytes",
+                    msg_lower,
+                )
+            ) is not None:
+                hint = int(match.group(1)) / int(match.group(2))
 
             reserr_collector.add(msg, usage=hint)
         else:

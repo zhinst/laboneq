@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use laboneq_error::ContextualError;
+use laboneq_error::{ContextualError, bail, error};
 
 #[derive(Debug, Clone)]
 pub struct CompilerSettings {
@@ -21,6 +21,7 @@ pub struct CompilerSettings {
     pub uhfqa_min_playzero_hint: u16,
     pub use_amplitude_increment: bool,
     pub shf_output_mute_min_duration: f64,
+    pub zqcs_feedback_latency: Option<f64>,
     /// Whether to emit timing comments in the generated code. This can be useful for debugging and performance analysis, but may add overhead to the compilation process.
     pub emit_timing_comments: bool,
 
@@ -49,6 +50,7 @@ impl Default for CompilerSettings {
             uhfqa_min_playzero_hint: 64,
             use_amplitude_increment: true,
             shf_output_mute_min_duration: 280e-9,
+            zqcs_feedback_latency: None,
             emit_timing_comments: false,
             amplitude_resolution_bits: 24,
             phase_resolution_bits: 24,
@@ -79,6 +81,7 @@ impl CompilerSettings {
             "UHFQA_MIN_PLAYZERO_HINT",
             "USE_AMPLITUDE_INCREMENT",
             "SHF_OUTPUT_MUTE_MIN_DURATION",
+            "ZQCS_FEEDBACK_LATENCY",
             "EMIT_TIMING_COMMENTS",
             "PHASE_RESOLUTION_BITS",
             "AMPLITUDE_RESOLUTION_BITS",
@@ -102,137 +105,104 @@ impl CompilerSettings {
 
             match key_str {
                 "OUTPUT_EXTRAS" => {
-                    settings.output_extras =
-                        value_str.to_ascii_lowercase().parse().map_err(|_| {
-                            ContextualError::from_str(format!(
-                                "Invalid boolean for OUTPUT_EXTRAS: {}",
-                                value_str
-                            ))
-                        })?;
+                    settings.output_extras = value_str
+                        .to_ascii_lowercase()
+                        .parse()
+                        .map_err(|_| error!("Invalid boolean for OUTPUT_EXTRAS: {}", value_str))?;
                 }
                 "MAX_EVENTS_TO_PUBLISH" => {
                     settings.max_events_to_publish = value_str.parse().map_err(|_| {
-                        ContextualError::from_str(format!(
-                            "Invalid usize for MAX_EVENTS_TO_PUBLISH: {}",
-                            value_str
-                        ))
+                        error!("Invalid usize for MAX_EVENTS_TO_PUBLISH: {}", value_str)
                     })?;
                 }
                 "EXPAND_LOOPS_FOR_SCHEDULE" => {
                     settings.expand_loops_for_schedule =
                         value_str.to_ascii_lowercase().parse().map_err(|_| {
-                            ContextualError::from_str(format!(
+                            error!(
                                 "Invalid boolean for EXPAND_LOOPS_FOR_SCHEDULE: {}",
                                 value_str
-                            ))
+                            )
                         })?;
                 }
                 "HDAWG_MIN_PLAYWAVE_HINT" => {
                     settings.hdawg_min_playwave_hint = value_str.parse().map_err(|_| {
-                        ContextualError::from_str(format!(
-                            "Invalid u16 for HDAWG_MIN_PLAYWAVE_HINT: {}",
-                            value_str
-                        ))
+                        error!("Invalid u16 for HDAWG_MIN_PLAYWAVE_HINT: {}", value_str)
                     })?;
                 }
                 "HDAWG_MIN_PLAYZERO_HINT" => {
                     settings.hdawg_min_playzero_hint = value_str.parse().map_err(|_| {
-                        ContextualError::from_str(format!(
-                            "Invalid u16 for HDAWG_MIN_PLAYZERO_HINT: {}",
-                            value_str
-                        ))
+                        error!("Invalid u16 for HDAWG_MIN_PLAYZERO_HINT: {}", value_str)
                     })?;
                 }
                 "SHFSG_MIN_PLAYWAVE_HINT" => {
                     settings.shfsg_min_playwave_hint = value_str.parse().map_err(|_| {
-                        ContextualError::from_str(format!(
-                            "Invalid u16 for SHFSG_MIN_PLAYWAVE_HINT: {}",
-                            value_str
-                        ))
+                        error!("Invalid u16 for SHFSG_MIN_PLAYWAVE_HINT: {}", value_str)
                     })?;
                 }
                 "SHFSG_MIN_PLAYZERO_HINT" => {
                     settings.shfsg_min_playzero_hint = value_str.parse().map_err(|_| {
-                        ContextualError::from_str(format!(
-                            "Invalid u16 for SHFSG_MIN_PLAYZERO_HINT: {}",
-                            value_str
-                        ))
+                        error!("Invalid u16 for SHFSG_MIN_PLAYZERO_HINT: {}", value_str)
                     })?;
                 }
                 "UHFQA_MIN_PLAYWAVE_HINT" => {
                     settings.uhfqa_min_playwave_hint = value_str.parse().map_err(|_| {
-                        ContextualError::from_str(format!(
-                            "Invalid u16 for UHFQA_MIN_PLAYWAVE_HINT: {}",
-                            value_str
-                        ))
+                        error!("Invalid u16 for UHFQA_MIN_PLAYWAVE_HINT: {}", value_str)
                     })?;
                 }
                 "UHFQA_MIN_PLAYZERO_HINT" => {
                     settings.uhfqa_min_playzero_hint = value_str.parse().map_err(|_| {
-                        ContextualError::from_str(format!(
-                            "Invalid u16 for UHFQA_MIN_PLAYZERO_HINT: {}",
-                            value_str
-                        ))
+                        error!("Invalid u16 for UHFQA_MIN_PLAYZERO_HINT: {}", value_str)
                     })?;
                 }
                 "USE_AMPLITUDE_INCREMENT" => {
                     settings.use_amplitude_increment =
                         value_str.to_ascii_lowercase().parse().map_err(|_| {
-                            ContextualError::from_str(format!(
-                                "Invalid boolean for USE_AMPLITUDE_INCREMENT: {}",
-                                value_str
-                            ))
+                            error!("Invalid boolean for USE_AMPLITUDE_INCREMENT: {}", value_str)
                         })?;
                 }
                 "SHF_OUTPUT_MUTE_MIN_DURATION" => {
                     settings.shf_output_mute_min_duration = value_str.parse().map_err(|_| {
-                        ContextualError::from_str(format!(
+                        error!(
                             "Invalid f64 for SHF_OUTPUT_MUTE_MIN_DURATION: {}",
                             value_str
-                        ))
+                        )
                     })?;
+                }
+                "ZQCS_FEEDBACK_LATENCY" => {
+                    settings.zqcs_feedback_latency = Some(value_str.parse().map_err(|_| {
+                        error!("Invalid f64 for ZQCS_FEEDBACK_LATENCY: {}", value_str)
+                    })?);
                 }
                 "EMIT_TIMING_COMMENTS" => {
                     settings.emit_timing_comments =
                         value_str.to_ascii_lowercase().parse().map_err(|_| {
-                            ContextualError::from_str(format!(
-                                "Invalid boolean for EMIT_TIMING_COMMENTS: {}",
-                                value_str
-                            ))
+                            error!("Invalid boolean for EMIT_TIMING_COMMENTS: {}", value_str)
                         })?;
                 }
                 "PHASE_RESOLUTION_BITS" => {
                     settings.phase_resolution_bits = value_str.parse().map_err(|_| {
-                        ContextualError::from_str(format!(
-                            "Invalid u64 for PHASE_RESOLUTION_BITS: {}",
-                            value_str
-                        ))
+                        error!("Invalid u64 for PHASE_RESOLUTION_BITS: {}", value_str)
                     })?;
                 }
                 "AMPLITUDE_RESOLUTION_BITS" => {
                     settings.amplitude_resolution_bits = value_str.parse().map_err(|_| {
-                        ContextualError::from_str(format!(
-                            "Invalid u64 for AMPLITUDE_RESOLUTION_BITS: {}",
-                            value_str
-                        ))
+                        error!("Invalid u64 for AMPLITUDE_RESOLUTION_BITS: {}", value_str)
                     })?;
                 }
                 "IGNORE_RESOURCE_LIMITATION_ERRORS" => {
                     settings.ignore_resource_exhaustion =
                         value_str.to_ascii_lowercase().parse().map_err(|_| {
-                            ContextualError::from_str(format!(
+                            error!(
                                 "Invalid boolean for IGNORE_RESOURCE_LIMITATION_ERRORS: {}",
                                 value_str
-                            ))
+                            )
                         })?;
                 }
                 "LOG_REPORT" => {
-                    settings.log_report = value_str.to_ascii_lowercase().parse().map_err(|_| {
-                        ContextualError::from_str(format!(
-                            "Invalid boolean for LOG_REPORT: {}",
-                            value_str
-                        ))
-                    })?;
+                    settings.log_report = value_str
+                        .to_ascii_lowercase()
+                        .parse()
+                        .map_err(|_| error!("Invalid boolean for LOG_REPORT: {}", value_str))?;
                 }
                 _ => unreachable!("Key should have been validated above"),
             }
@@ -241,11 +211,11 @@ impl CompilerSettings {
         if !unsupported_keys.is_empty() {
             let mut sorted_supported: Vec<_> = supported_keys.into_iter().collect();
             sorted_supported.sort();
-            return Err(ContextualError::from_str(format!(
+            bail!(
                 "Unsupported compiler settings keys: {}. Supported keys are: {}",
                 unsupported_keys.join(", "),
                 sorted_supported.join(", ")
-            )));
+            );
         }
 
         Ok(settings)
@@ -287,6 +257,7 @@ impl CompilerSettings {
             phase_resolution_bits,
             ignore_resource_exhaustion,
             log_report,
+            zqcs_feedback_latency: None,
         }
     }
 }

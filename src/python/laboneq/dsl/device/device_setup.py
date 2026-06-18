@@ -79,7 +79,7 @@ class DeviceSetup:
 
     @_calibration_mediators.default
     def _initialize_mediators(self):
-        mediators = {}
+        mediators: dict[str, CalibrationMediator] = {}
         for group in self.logical_signal_groups.values():
             for logical_signal in group.logical_signals.values():
                 pc = logical_signal.physical_channel
@@ -331,11 +331,11 @@ class DeviceSetup:
         if path is not None:
             return self._get_calibration(path)
 
-        lsgs_calibration = dict()
+        lsgs_calibration: dict[str, Any] = dict()
         for lsg in self.logical_signal_groups.values():
             lsgs_calibration = {**lsgs_calibration, **lsg.get_calibration()}
 
-        pcgs_calibration = dict()
+        pcgs_calibration: dict[str, Any] = dict()
         for pcg in self.physical_channel_groups.values():
             pcgs_calibration = {**pcgs_calibration, **pcg.get_calibration()}
 

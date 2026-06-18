@@ -410,7 +410,9 @@ class SeqCLinker(ILinker):
         this.total_execution_time += previous.total_execution_time
 
     @staticmethod
-    def finalize(this: CombinedRTOutputSeqC, settings: CompilerSettings):
+    def finalize(
+        this: CombinedRTOutputSeqC, settings: CompilerSettings, uses_chunking: bool
+    ):
         seqc_items = [
             SeqCCompileItem(
                 dev_type=seqc_program.dev_type,
@@ -420,6 +422,7 @@ class SeqCLinker(ILinker):
                 sampling_rate=seqc_program.sampling_rate,
                 code=seqc_program.src,
                 filename=seqc_program.filename,
+                pipeliner=uses_chunking,
             )
             for seqc_program in this.src.values()
             if seqc_program.dev_type is not None
@@ -443,11 +446,9 @@ def _deep_compare(a: Any, b: Any) -> bool:
             return False
         return all([_deep_compare(_a, _b) for _a, _b in zip(a, b)])
     if isinstance(a, dict):
-        if len(a) != len(b):
+        if a.keys() != b.keys():
             return False
-        if not _deep_compare(list(a.keys()), list(b.keys())):
-            return False
-        return _deep_compare(list(a.values()), list(b.values()))
+        return all(_deep_compare(a[k], b[k]) for k in a)
     if isinstance(a, np.ndarray):
         return np.array_equal(a, b, equal_nan=True)
     return a == b

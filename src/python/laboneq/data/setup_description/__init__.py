@@ -8,7 +8,6 @@ from enum import Enum
 from typing import TYPE_CHECKING, Dict, List
 
 from laboneq.data import EnumReprMixin
-from laboneq.data.calibration import Calibration
 
 if TYPE_CHECKING:
     from laboneq.core.types.enums import (
@@ -16,6 +15,7 @@ if TYPE_CHECKING:
         PhysicalChannelType,
         ReferenceClockSource,
     )
+    from laboneq.data.calibration import SignalCalibration
     from laboneq.data.setup_descriptions import SetupDescription
 
 
@@ -49,6 +49,9 @@ class PortType(EnumReprMixin, Enum):
 class LogicalSignal:
     name: str
     group: str  # Needed for referencing
+
+    def path(self) -> str:
+        return f"{self.group}/{self.name}"
 
 
 @dataclass
@@ -116,12 +119,6 @@ class Instrument:
 
 
 @dataclass
-class LogicalSignalGroup:
-    uid: str = None
-    logical_signals: Dict[str, LogicalSignal] = field(default_factory=dict)
-
-
-@dataclass
 class SetupInternalConnection:
     """Connections between ports on two devices.
 
@@ -136,25 +133,12 @@ class SetupInternalConnection:
 
 
 @dataclass
-class QuantumElement:
-    uid: str = None
-    signals: List[LogicalSignal] = field(default_factory=list)
-    parameters: List = field(default_factory=list)
-
-
-@dataclass
-class Qubit(QuantumElement):
-    pass
-
-
-@dataclass
 class Setup:
     uid: str
     servers: Dict[str, Server] = field(default_factory=dict)
     instruments: List[Instrument] = field(default_factory=list)
-    logical_signal_groups: Dict[str, LogicalSignalGroup] = field(default_factory=dict)
     setup_internal_connections: List[SetupInternalConnection] = field(
         default_factory=list
     )
-    calibration: Calibration = field(default_factory=Calibration)
+    calibration: dict[str, SignalCalibration] = field(default_factory=dict)
     setup_description: SetupDescription | None = None

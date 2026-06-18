@@ -14,7 +14,7 @@ class NonQC(ZIStandardInstrument):
     """Class representing a ZI instrument that is of type not directly handled by
     LabOne Q."""
 
-    dev_type: str = None
+    dev_type: str | None = None
 
     def calc_options(self):
         return {**super().calc_options(), "dev_type": self.dev_type}

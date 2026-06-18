@@ -120,8 +120,6 @@ pub struct Signal {
     pub start_delay: Samples,
     // Additional delay on the signal
     pub signal_delay: Samples,
-    // The signal output can be automatically muted when no waveforms are played
-    pub automute: bool,
 }
 
 impl Signal {
@@ -235,6 +233,7 @@ pub struct AwgCore {
     oscillator_allocation: HashMap<SignalUid, u16>,
     signal_to_channel_mapping: HashMap<SignalUid, Vec<ChannelIndex>>,
     pub is_shfqc: bool,
+    pub output_mute_enable: bool,
 }
 
 impl AwgCore {
@@ -248,6 +247,7 @@ impl AwgCore {
         options: DeviceOptions,
         signal_to_channel_mapping: HashMap<SignalUid, Vec<ChannelIndex>>,
         is_shfqc: bool,
+        output_mute_enable: bool,
     ) -> Self {
         AwgCore {
             uid,
@@ -260,6 +260,7 @@ impl AwgCore {
             signal_to_channel_mapping,
             oscillator_allocation: HashMap::new(),
             is_shfqc,
+            output_mute_enable,
         }
     }
 
@@ -344,6 +345,7 @@ pub(crate) struct AwgCoreBuilder {
     options: DeviceOptions,
     signal_to_channel_mapping: HashMap<SignalUid, Vec<ChannelIndex>>,
     is_shfqc: bool,
+    output_mute_enable: bool,
 }
 
 impl AwgCoreBuilder {
@@ -357,6 +359,7 @@ impl AwgCoreBuilder {
             options: DeviceOptions::default(),
             signal_to_channel_mapping: HashMap::new(),
             is_shfqc: false,
+            output_mute_enable: false,
         }
     }
 
@@ -388,6 +391,11 @@ impl AwgCoreBuilder {
         self
     }
 
+    pub(crate) fn output_mute_enable(&mut self) -> &mut Self {
+        self.output_mute_enable = true;
+        self
+    }
+
     pub(crate) fn build(self) -> AwgCore {
         AwgCore::new(
             self.uid,
@@ -398,6 +406,7 @@ impl AwgCoreBuilder {
             self.options,
             self.signal_to_channel_mapping,
             self.is_shfqc,
+            self.output_mute_enable,
         )
     }
 }
@@ -540,4 +549,5 @@ pub(crate) struct InitialSignalProperties {
     pub range: Option<Quantity>,
     pub lo_frequency: Option<FixedValueOrParameter<f64>>,
     pub routed_outputs: Vec<RoutedOutput>,
+    pub oscillator_frequency: Option<FixedValueOrParameter<f64>>,
 }

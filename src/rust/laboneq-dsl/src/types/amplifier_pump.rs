@@ -3,12 +3,10 @@
 
 use std::str::FromStr;
 
-use crate::types::{DeviceUid, ValueOrParameter};
+use crate::types::ValueOrParameter;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct AmplifierPump {
-    pub device: DeviceUid,
-    pub channel: u16,
     pub alc_on: bool,
     pub pump_on: bool,
     pub pump_filter_on: bool,
@@ -57,30 +55,15 @@ impl FromStr for PumpCancellationSource {
     }
 }
 
+#[derive(Default)]
 pub struct AmplifierPumpBuilder {
     inner: AmplifierPump,
 }
 
 impl AmplifierPumpBuilder {
-    pub fn new(device: DeviceUid, channel: u16) -> Self {
+    pub fn new() -> Self {
         Self {
-            inner: AmplifierPump {
-                device,
-                channel,
-                pump_frequency: None,
-                pump_power: None,
-                probe_power: None,
-                probe_frequency: None,
-                cancellation_phase: None,
-                cancellation_attenuation: None,
-                cancellation_source: PumpCancellationSource::default(),
-                cancellation_source_frequency: None,
-                alc_on: false,
-                pump_on: false,
-                pump_filter_on: false,
-                probe_on: false,
-                cancellation_on: false,
-            },
+            inner: AmplifierPump::default(),
         }
     }
 

@@ -1,37 +1,28 @@
 # Copyright 2025 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Literal, TypedDict
+from enum import Enum
+from typing import Literal, Protocol, TypedDict
 
 from laboneq.compiler.common.iface_compiler_output import (
     CombinedOutput,
     RTCompilerOutput,
 )
 from laboneq.core.types.numpy_support import NumPyArray
+from laboneq.core.types.units import Quantity
 from laboneq.data.scheduled_experiment import ScheduledExperiment
-from laboneq.dsl.experiment import Experiment as DslExperiment
+from laboneq.dsl.experiment import Section
 from laboneq.dsl.parameter import Parameter
 
 def init_logging(level: int) -> None:
     """Initialize logging with the given Python log level."""
 
-class Experiment:
+class ProcessedExperiment:
     """Object containing the information about the experiment."""
 
     def device_lead_delay(self, device_uid: str) -> float: ...
     def signal_delay_compensation(self, signal_uid: str) -> float: ...
-    def signal_hw_oscillator(
-        self, signal_uid: str
-    ) -> tuple[str, float | None, str | None] | None:
-        """Return the hardware oscillator information for a signal, if it exists.
-
-        Returns:
-            A tuple of (oscillator_id, fixed frequency, parameter uid) if a hardware oscillator is associated with the signal, or None otherwise.
-
-                Either fixed frequency or parameter uid can be None, but not both.
-        """
-    def signal_precompensation(self, signal_uid: str) -> Precompensation | None: ...
-    def signal_automute(self, signal_uid: str) -> bool: ...
+    def signal_precompensation(self, signal_uid: str) -> dict[str, dict] | None: ...
     def get_result_shapes(
         self, combined_output: CombinedOutput
     ) -> list[HandleResultShape]: ...
@@ -61,108 +52,130 @@ class HandleResultShape:
     chunked_axis_index: int | None
     match_case_mask: dict[int, list[int]]
 
-class DeviceSetupBuilder:
-    def __init__(self): ...
-    def add_instrument(
-        self,
-        uid: str,
-        device_type: str,
-        options: list[str] | None = None,
-        reference_clock_source: str | None = None,
-    ) -> None: ...
-    def add_signal_with_calibration(
-        self,
-        uid: str,
-        ports: list[str],
-        instrument_uid: str,
-        channel_type: str,
-        amplitude: float | Parameter | None = None,
-        oscillator: OscillatorRef | None = None,
-        lo_frequency: float | Parameter | None = None,
-        voltage_offset: float | Parameter | None = None,
-        amplifier_pump: AmplifierPump | None = None,
-        port_mode: str | None = None,
-        automute: bool = False,
-        signal_delay: float = 0.0,
-        port_delay: float | Parameter | None = None,
-        range: tuple[float, str | None] | None = None,
-        precompensation: Precompensation | None = None,
-        added_outputs: list[OutputRoute] | None = None,
-        threshold: list[float] | None = None,
-        mixer_calibration: MixerCalibrationRef | None = None,
-    ) -> None: ...
-    def create_oscillator(
-        self,
-        uid: str,
-        frequency: float | Parameter,
-        modulation: str | None = None,
-    ) -> OscillatorRef: ...
-    def create_output_route(
-        self,
-        source_signal: str,
-        amplitude_scaling: float | Parameter | None = None,
-        phase_shift: float | Parameter | None = None,
-    ) -> OutputRoute: ...
-    def create_mixer_calibration(
-        self,
-        voltage_offsets: list,
-        correction_matrix: list[list],
-    ) -> MixerCalibrationRef: ...
+# ---------------------------------------------------------------------------
+# Input DTOs for serialize_experiment()
+# All types are structurally typed (duck-typed via FromPyObject in Rust).
+# SimpleNamespace or any object with matching attributes is accepted.
+# ---------------------------------------------------------------------------
 
-class OscillatorRef:
-    """Reference to a oscillator."""
+class Oscillator(Protocol):
+    uid: str
+    frequency: float | Parameter
+    modulation: Literal["AUTO", "HARDWARE", "SOFTWARE"] | None
 
-class MixerCalibrationRef:
-    """Reference to a mixer calibration configuration."""
+class AmplifierPump(Protocol):
+    device: str
+    channel: int
+    alc_on: bool
+    pump_on: bool
+    pump_filter_on: bool
+    pump_power: float | Parameter | None
+    pump_frequency: float | Parameter | None
+    probe_on: bool
+    probe_power: float | Parameter | None
+    probe_frequency: float | Parameter | None
+    cancellation_on: bool
+    cancellation_phase: float | Parameter | None
+    cancellation_attenuation: float | Parameter | None
+    cancellation_source: CancellationSource
+    cancellation_source_frequency: float | None
 
-class OutputRoute:
-    """A representation of an output route."""
+class CancellationSource(Enum):
+    INTERNAL = 0
+    EXTERNAL = 1
 
-class AmplifierPump:
-    def __init__(
-        self,
-        device: str,
-        channel: int,
-        alc_on: bool,
-        pump_on: bool,
-        pump_filter_on: bool,
-        pump_power: float | Parameter | None,
-        pump_frequency: float | Parameter | None,
-        probe_on: bool,
-        probe_power: float | Parameter | None,
-        probe_frequency: float | Parameter | None,
-        cancellation_on: bool,
-        cancellation_phase: float | Parameter | None,
-        cancellation_attenuation: float | Parameter | None,
-        cancellation_source: str,  # INTERNAL | EXTERNAL
-        cancellation_source_frequency: float | None = None,
-    ):
-        """A representation of an amplifier pump configuration."""
+class OutputRoute(Protocol):
+    source_signal: str
+    amplitude_scaling: float | Parameter | None
+    phase_shift: float | Parameter | None
 
-class Precompensation:
-    def __init__(
-        self,
-        high_pass: HighPassCompensation | None = None,
-        exponential: list[ExponentialCompensation] = [],
-        fir: FirCompensation | None = None,
-        bounce: BounceCompensation | None = None,
-    ): ...
+class HighPassCompensation(Protocol):
+    timeconstant: float
 
-class ExponentialCompensation:
-    def __init__(self, timeconstant: float, amplitude: float): ...
+class ExponentialCompensation(Protocol):
+    timeconstant: float
+    amplitude: float
 
-class HighPassCompensation:
-    def __init__(self, timeconstant: float): ...
+class FirCompensation(Protocol):
+    coefficients: list[float]
+    strict: bool
 
-class FirCompensation:
-    def __init__(self, coefficients: list[float]): ...
+class BounceCompensation(Protocol):
+    delay: float
+    amplitude: float
 
-class BounceCompensation:
-    def __init__(self, delay: float, amplitude: float): ...
+class Precompensation(Protocol):
+    high_pass: HighPassCompensation | None
+    exponential: list[ExponentialCompensation] | None
+    fir: FirCompensation | None
+    bounce: BounceCompensation | None
+
+class MixerCalibration(Protocol):
+    voltage_offsets: list[float | Parameter] | None
+    correction_matrix: list[list[float | Parameter]] | None
+
+class ExperimentSignal(Protocol):
+    # Experiment signal UID
+    uid: str
+    # The device signal UID this experiment signal maps to
+    maps_to: str
+
+    # Calibration
+    amplitude: float | Parameter | None
+    oscillator: Oscillator | None
+    lo_frequency: float | Parameter | None
+    voltage_offset: float | Parameter | None
+    amplifier_pump: AmplifierPump | None
+    port_mode: Literal["RF", "LF"] | None
+    automute: bool
+    delay_signal: float
+    port_delay: float | Parameter | None
+    range: Quantity | None
+    precompensation: Precompensation | None
+    added_outputs: list[OutputRoute]
+    threshold: list[float] | None
+    mixer_calibration: MixerCalibration | None
+
+class Instrument(Protocol):
+    uid: str
+    device_type: str
+    options: list[str]
+    reference_clock_source: str | None
+
+class DeviceSignal(Protocol):
+    uid: str
+    ports: list[str]
+    instrument_uid: str
+
+class SetupDescriptionQccs(Protocol):
+    instruments: list[Instrument]
+    signals: list[DeviceSignal]
+
+class ChannelConfig(Protocol):
+    geolocation: str
+    channel_type: ChannelType
+
+class ChannelType(Enum):
+    RF = 0
+    QA = 1
+    FLUX = 2
+
+class SetupDescriptionZqcs(Protocol):
+    uid: str
+    data: bytes
+    channels: list[ChannelConfig]
+
+class Experiment(Protocol):
+    uid: str | None
+    sections: list[Section]
+    experiment_signals: list[ExperimentSignal]
+
+class DeviceSetup(Protocol):
+    setup_description: SetupDescriptionQccs | SetupDescriptionZqcs
 
 def serialize_experiment(
-    experiment: DslExperiment,
-    device_setup: DeviceSetupBuilder,
+    experiment: Experiment,
+    device_setup: DeviceSetup,
     packed: bool = False,
 ) -> bytes:
     """Serialize an experiment to Cap'n Proto bytes."""
@@ -205,7 +218,7 @@ class RealTimeCompilerOutput:
     pulse_sheet_schedule: PulseSheetSchedule | None
 
 def compile_realtime(
-    experiment: Experiment,
+    experiment: ProcessedExperiment,
     parameters: dict[str, float],
     chunking_info: tuple[int, int] | None,
 ) -> RealTimeCompilerOutput:

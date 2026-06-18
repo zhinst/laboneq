@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, Iterator, cast
 
+from laboneq._rust.utils import device_setup_fingerprint
 from laboneq.controller.constants import DEFAULT_TIMEOUT_S
 from laboneq.controller.devices.async_support import (
     DataServerConnection,
@@ -23,7 +24,6 @@ from laboneq.controller.devices.device_utils import prepare_emulator_state
 from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.for_each import for_each
-from laboneq.implementation.utils.devices import target_setup_fingerprint
 
 if TYPE_CHECKING:
     from laboneq.controller.devices.node_control import (
@@ -57,7 +57,8 @@ class DeviceCollection:
             ignore_version_mismatch=ignore_version_mismatch,
             setup_caps=setup_caps,
         )
-        self._device_setup_fingerprint = target_setup_fingerprint(target_setup)
+
+        self._device_setup_fingerprint = device_setup_fingerprint(target_setup)
         if self._ds.has_uhf and self._ds.has_qhub:
             raise LabOneQControllerException("Gen1 setup with QHub is not supported.")
         self._emulator_state: EmulatorState | None = None

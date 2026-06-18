@@ -108,15 +108,14 @@ pub(crate) fn calculate_awg_delays(
 
 #[cfg(test)]
 mod tests {
-    use laboneq_common::device_options::DeviceOptions;
     use laboneq_common::device_traits::SHFQA_SAMPLING_RATE;
 
     use super::*;
     use crate::{
         device_traits::SHFQA_TRAITS,
-        ir::compilation_job::{AwgCore, Device, Signal, SignalKind},
+        ir::compilation_job::{AwgCore, AwgCoreBuilder, Device, Signal, SignalKind},
     };
-    use std::{collections::HashMap, sync::Arc};
+    use std::collections::HashMap;
 
     fn create_signal(uid: u32, kind: SignalKind, delay: Samples) -> Signal {
         Signal {
@@ -126,21 +125,19 @@ mod tests {
             start_delay: 0,
             channels: vec![],
             oscillator: None,
-            automute: false,
         }
     }
 
     fn create_awg_core(signals: Vec<Signal>) -> AwgCore {
-        AwgCore::new(
+        let mut builder = AwgCoreBuilder::new(
             0,
-            signals.iter().map(|s| Arc::new(s.clone())).collect(),
+            Device::new("".to_string().into(), DeviceKind::SHFQA).into(),
             2e9,
-            Arc::new(Device::new("".to_string().into(), DeviceKind::SHFQA)),
-            None,
-            DeviceOptions::default(),
-            HashMap::new(),
-            false,
-        )
+        );
+        for signal in signals.iter() {
+            builder.add_signal(signal.clone().into());
+        }
+        builder.build()
     }
 
     #[test]

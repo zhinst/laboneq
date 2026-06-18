@@ -129,7 +129,7 @@ class DeviceAttributesView:
     def resolve(
         self, keys: list[tuple[AttributeName, int]]
     ) -> tuple[list[float], bool]:
-        resolved = []
+        resolved: list[float | None] = []
         any_updated = False
         for key in keys:
             attr_key = AttributeKey(

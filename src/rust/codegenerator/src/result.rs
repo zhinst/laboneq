@@ -1,13 +1,13 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::num::NonZero;
-use std::{collections::HashMap, sync::Arc};
 
 use indexmap::IndexMap;
+use laboneq_common::types::ChannelKey;
 use laboneq_dsl::setup_description_qccs::AuxiliaryDevice;
 use laboneq_dsl::signal_calibration::PortMode;
-use laboneq_dsl::types::DeviceUid as DeviceUidCommon;
 use laboneq_dsl::types::{ParameterUid, PumpCancellationSource, Quantity};
 
 use laboneq_units::duration::{Duration, Second};
@@ -25,10 +25,8 @@ pub use crate::sampled_event_handler::SHFPPCSweeperConfig;
 pub use crate::sampled_event_handler::seqc_tracker::wave_index_tracker::SignalType;
 pub use crate::sampled_event_handler::seqc_tracker::wave_index_tracker::WaveIndex;
 
-use crate::{
-    ir::{PpcChannelKey, Samples},
-    sample_waveforms::SampleWaveforms,
-};
+use crate::ir::Samples;
+use crate::sample_waveforms::SampleWaveforms;
 
 pub struct SeqCGenOutput<T: SampleWaveforms> {
     pub device_properties: Vec<DeviceProperties>,
@@ -44,7 +42,8 @@ pub struct AwgCodeGenerationResult<T: SampleWaveforms> {
     pub seqc: SeqCProgram,
     pub wave_indices: IndexMap<String, (WaveIndex, SignalType)>,
     pub command_table: Option<CommandTable>,
-    pub(crate) shf_sweeper_config: Option<ShfPpcSweepJson>,
+    /// SHFPPC sweeper configuration JSON string, if applicable.
+    pub(crate) shf_sweeper_config: Option<String>,
     pub sampled_waveforms: Vec<SampledWaveform<T::Signature>>,
     pub integration_kernels: Vec<T::SampledIntegrationKernel>,
     pub integration_lengths: HashMap<SignalUid, SignalIntegrationInfo>,
@@ -110,16 +109,9 @@ pub struct DeviceProperties {
     pub sampling_rate: Option<f64>,
 }
 
-#[derive(Debug, Clone)]
-pub struct ShfPpcSweepJson {
-    pub ppc_device: Arc<PpcChannelKey>,
-    pub json: String,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct PpcSettings {
-    pub device: DeviceUidCommon,
-    pub channel: u16,
+    pub ppc_channel: ChannelKey,
 
     pub alc_on: bool,
     pub pump_on: bool,
@@ -193,7 +185,7 @@ pub struct ChannelProperties {
     pub signal: SignalUid,
     pub channel: ChannelIndex,
     pub marker_mode: Option<MarkerMode>,
-    pub hw_oscillator_index: Option<u16>,
+    pub oscillator: Option<ChannelOscillator>,
     /// Delay to apply to this channel.
     pub scheduler_delay: Duration<Second>,
     /// Near-time sweep values.
@@ -206,6 +198,14 @@ pub struct ChannelProperties {
     pub range: Option<Quantity>,
     pub lo_frequency: Option<FixedValueOrParameter<f64>>,
     pub routed_outputs: Vec<RoutedOutput>,
+    pub output_mute_enable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChannelOscillator {
+    pub uid: String,
+    pub index: u16,
+    pub frequency: FixedValueOrParameter<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -225,13 +225,13 @@ pub struct Gains {
 pub struct InputChannelProperties {
     pub signal: SignalUid,
     pub channel: ChannelIndex,
-    pub hw_oscillator_index: Option<u16>,
     /// Delay to apply to this channel.
     pub scheduler_delay: Duration<Second>,
     pub port_mode: Option<PortMode>,
     pub port_delay: Option<FixedValueOrParameter<Duration<Second>>>,
     pub range: Option<Quantity>,
     pub lo_frequency: Option<FixedValueOrParameter<f64>>,
+    pub oscillator: Option<ChannelOscillator>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

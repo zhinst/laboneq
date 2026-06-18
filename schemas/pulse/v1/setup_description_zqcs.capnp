@@ -3,12 +3,31 @@
 
 @0x9e24ab8bad80c970;
 
-# ZQCS setup description.
-#
-# The structured description lives in the `laboneq_zqcs` backend and is
-# threaded through the compiler as an opaque blob.
-
 struct SetupDescriptionZqcs {
+  # ZQCS setup description.
+
   data @0 :Data;
-  # Backend-defined BLOB; only the matching backend decodes it.
+  # The full description of the ZQCS system.
+
+  uid @1 :Text;
+  # Unique identifier of the system.
+
+  channels @2 :List(ChannelConfig);
+  # Channel configuration.
+}
+
+struct ChannelConfig {
+  # Channel configuration
+
+  geolocation @0 :Text;
+  # Channel geolocation, e.g. "1:2:3:4".
+  # The value can be mapped to ExperimentSignals.
+
+  channelType @1 :ChannelType;
+}
+
+enum ChannelType {
+  rf   @0;
+  qa   @1;
+  flux @2;
 }

@@ -8,6 +8,7 @@ using PulseDef = import "pulse.capnp";
 using Section = import "section.capnp";
 using Sweep = import "sweep.capnp";
 using DeviceSetup = import "device_setup.capnp";
+using Calibration = import "calibration.capnp";
 
 # Schema version. The schema is in 0.x development mode:
 # no compatibility guarantees exist between 0.x releases.
@@ -84,10 +85,15 @@ struct Metadata {
 
 struct ExperimentSignal {
   # Declares a logical signal used in the experiment.
-  #
-  # Experiment signals are abstract channels that operations reference by zero-based
-  # index. They are connected to physical hardware ports via device setup configuration.
+  # Experiment signals are channel abstractions referenced by operations via zero-based indexing 
+  # They are connected to hardware channels via `mapsTo`.
 
   uid @0 :Text;
   # Text UID, e.g. "q0_drive" or "q1_measure".
+
+  mapsTo @1 :Text;
+  # The hardware port this signal maps to.
+
+  calibration @2 :Calibration.SignalCalibration;
+  # Calibration of the signal.
 }

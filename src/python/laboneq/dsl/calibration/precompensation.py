@@ -106,15 +106,6 @@ class FIRCompensation:
             Default: `np.zeros(40)` (a zero kernel matching the HDAWG
             40-tap layout; ZQCS users should supply an explicit kernel of the
             desired length).
-        strict:
-            When `True`, an error is raised if the FIR tail of one waveform
-            would overlap with the next waveform in the same section, instead
-            of the default behavior of merging the two waveforms.
-            Default: `False`.
-
-            !!! note
-                Only meaningful for ZQCS software FIR. Setting `strict=True`
-                on an HDAWG signal raises an error at compile time.
 
     !!! note "HDAWG"
         Implemented in hardware DSP on the HDAWG precompensation (PC) option.
@@ -140,13 +131,10 @@ class FIRCompensation:
 
     # FIR filter coefficients
     coefficients: ArrayLike = validated_field(factory=lambda: np.zeros(40))
-    strict: bool = validated_field(default=False)
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, FIRCompensation):
-            return self.strict == other.strict and np.allclose(
-                self.coefficients, other.coefficients
-            )
+            return np.allclose(self.coefficients, other.coefficients)
         else:
             return NotImplemented
 

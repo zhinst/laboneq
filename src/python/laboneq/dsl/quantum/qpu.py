@@ -443,7 +443,7 @@ class QPU:
                 If one of the quantum objects passed is not found in the qpu.
                 If one of the parameters passed is not found in the quantum object.
         """
-        invalid_params = []
+        invalid_params: list[str] = []
         for key, params_dict in parameters.items():
             if not isinstance(key, str) and not (
                 isinstance(key, tuple)

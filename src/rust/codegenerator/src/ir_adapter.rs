@@ -5,9 +5,8 @@ use std::collections::HashMap;
 use std::num::NonZero;
 use std::sync::Arc;
 
-use laboneq_common::types::{AuxiliaryDeviceKind, AwgKey as AwgKeyCommon};
+use laboneq_common::types::{AuxiliaryDeviceKind, AwgKey as AwgKeyCommon, ChannelKey};
 use laboneq_dsl::setup_description_qccs::AuxiliaryDevice;
-use laboneq_dsl::types::AveragingMode;
 use laboneq_error::{bail, laboneq_error};
 use num_complex::Complex;
 
@@ -15,10 +14,10 @@ use codegenerator_utils::pulse_parameters::PulseParameterDeduplicator;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::types::SignalKind as SignalKindCommon;
 use laboneq_dsl::types::{
-    AcquisitionType as AcquisitionTypeCommon, ComplexOrFloat, DeviceUid, MarkerSelector,
+    AcquisitionType as AcquisitionTypeCommon, AveragingMode, ComplexOrFloat, MarkerSelector,
     Oscillator as OscillatorCommon, OscillatorKind as OscillatorKindCommon, OscillatorUid,
-    ParameterUid, PulseDef as PulseDefCommon, PulseKind as PulseKindCommon, PulseUid, SectionUid,
-    SignalUid, SweepParameter as SweepParameterCommon, ValueOrParameter,
+    ParameterUid, PhysicalChannelUid, PulseDef as PulseDefCommon, PulseKind as PulseKindCommon,
+    PulseUid, SectionUid, SignalUid, SweepParameter as SweepParameterCommon, ValueOrParameter,
 };
 use laboneq_ir::node::IrNode as HirNode;
 use laboneq_ir::signal::Signal as SignalCommon;
@@ -36,7 +35,7 @@ use crate::ir::compilation_job::{
 use crate::ir::experiment::{AcquisitionType, PulseParametersId, SweepCommand};
 use crate::ir::{
     AcquirePulse, Case, InitialOscillatorFrequency, IrNode, Loop, LoopIteration, Match, NodeKind,
-    PhaseReset, PlayPulse, PpcChannelKey, PpcSweepStep, PrngSetup, Section, SectionId, SectionInfo,
+    PhaseReset, PlayPulse, PpcSweepStep, PrngSetup, Section, SectionId, SectionInfo,
     SetOscillatorFrequency, SignalFrequency,
 };
 use crate::result::{DeviceProperties, FixedValueOrParameter, PpcSettings, RoutedOutput};
@@ -64,7 +63,8 @@ pub struct SignalChannelProperties {
     pub awg_key: AwgKeyCommon,
     pub awg_index: u16,
     pub channels: Vec<u8>,
-    pub routed_output_channel_map: HashMap<String, u8>,
+    pub routed_output_channel_map: HashMap<PhysicalChannelUid, u8>,
+    pub ppc_channel: Option<ChannelKey>,
 }
 
 /// Lower a IR into a codegenerator IR.
@@ -108,6 +108,10 @@ pub fn ir_to_codegen_ir(
 
         if let Some(awg_core) = awg_core_builders.get_mut(&additional_info.awg_key) {
             awg_core.add_signal(awg_signal.into());
+            if signal.automute {
+                // If any signal on the AWG has automute enabled, we enable output mute for the entire AWG.
+                awg_core.output_mute_enable();
+            }
         } else {
             let device = experiment
                 .device_setup
@@ -134,6 +138,10 @@ pub fn ir_to_codegen_ir(
             awg_core.trigger_mode(*trigger_modes.get(&awg_device_kind).unwrap());
             if device.is_shfqc() {
                 awg_core.is_shfqc();
+            }
+            if signal.automute {
+                // If any signal on the AWG has automute enabled, we enable output mute for the entire AWG.
+                awg_core.output_mute_enable();
             }
             awg_core.add_signal(awg_signal.into());
             awg_core_builders.insert(additional_info.awg_key, awg_core);
@@ -170,14 +178,6 @@ pub fn ir_to_codegen_ir(
     let device_properties = create_device_properties(experiment, id_store);
 
     let codegen_ir = transform_ir(&mut lowerer, &experiment.root, tiny_samples(0))?;
-    let routed_output_channel_map = additional_signal_map
-        .values()
-        .flat_map(|info| {
-            info.routed_output_channel_map
-                .iter()
-                .map(|(source_channel, channel)| (source_channel.clone(), *channel))
-        })
-        .collect();
 
     let result = CodegenIr {
         root: codegen_ir,
@@ -189,7 +189,7 @@ pub fn ir_to_codegen_ir(
         initial_signal_properties: experiment
             .device_setup
             .signals()
-            .map(|signal| create_initial_signal_properties(signal, &routed_output_channel_map))
+            .map(|signal| create_initial_signal_properties(signal, hardware_setup))
             .collect::<Result<Vec<_>>>()?,
         awg_devices: device_properties,
         auxiliary_devices: hardware_setup.auxiliary_devices.clone(),
@@ -251,8 +251,14 @@ fn validate_unique_oscillators(signals: &[&SignalCommon]) -> Result<()> {
 
 fn create_initial_signal_properties(
     signal: &SignalCommon,
-    routed_output_channel_map: &HashMap<String, u8>,
+    setup: &HardwareSetup,
 ) -> Result<InitialSignalProperties> {
+    let channel_properties = setup
+        .signals
+        .iter()
+        .find(|info| info.signal_uid == signal.uid)
+        .expect("Internal error: Expected to find signal properties for signal UID");
+
     Ok(InitialSignalProperties {
         uid: signal.uid,
         amplitude: signal.amplitude.map(value_or_parameter_to_fixed),
@@ -260,28 +266,37 @@ fn create_initial_signal_properties(
         mixer_calibration: signal.mixer_calibration.clone(),
         port_mode: signal.port_mode.clone(),
         port_delay: signal.port_delay.map(value_or_parameter_to_fixed),
-        ppc_settings: signal.amplifier_pump.as_ref().map(|pump| {
-            PpcSettings {
-                device: pump.device,
-                channel: pump.channel,
-                alc_on: pump.alc_on,
-                pump_on: pump.pump_on,
-                pump_filter_on: pump.pump_filter_on,
-                pump_power: pump.pump_power.map(value_or_parameter_to_fixed),
-                pump_frequency: pump.pump_frequency.map(value_or_parameter_to_fixed),
-                probe_on: pump.probe_on,
-                probe_power: pump.probe_power.map(value_or_parameter_to_fixed),
-                probe_frequency: pump.probe_frequency.map(value_or_parameter_to_fixed),
-                cancellation_on: pump.cancellation_on,
-                cancellation_phase: pump.cancellation_phase.map(value_or_parameter_to_fixed),
-                cancellation_attenuation: pump
-                    .cancellation_attenuation
-                    .map(value_or_parameter_to_fixed),
-                cancellation_source: pump.cancellation_source,
-                cancellation_source_frequency: pump.cancellation_source_frequency,
-                sweep_config: None, // Will be filled in later if this signal is used in a PPC sweep
-            }
-        }),
+        ppc_settings: signal
+            .amplifier_pump
+            .as_ref()
+            .map(|pump| -> Result<PpcSettings> {
+                let ppc_channel = channel_properties.ppc_channel.ok_or_else(|| {
+                    laboneq_error!(
+                        "Signal '{}' has amplifier_pump but no PPC channel assigned",
+                        signal.uid.0
+                    )
+                })?;
+                Ok(PpcSettings {
+                    ppc_channel,
+                    alc_on: pump.alc_on,
+                    pump_on: pump.pump_on,
+                    pump_filter_on: pump.pump_filter_on,
+                    pump_power: pump.pump_power.map(value_or_parameter_to_fixed),
+                    pump_frequency: pump.pump_frequency.map(value_or_parameter_to_fixed),
+                    probe_on: pump.probe_on,
+                    probe_power: pump.probe_power.map(value_or_parameter_to_fixed),
+                    probe_frequency: pump.probe_frequency.map(value_or_parameter_to_fixed),
+                    cancellation_on: pump.cancellation_on,
+                    cancellation_phase: pump.cancellation_phase.map(value_or_parameter_to_fixed),
+                    cancellation_attenuation: pump
+                        .cancellation_attenuation
+                        .map(value_or_parameter_to_fixed),
+                    cancellation_source: pump.cancellation_source,
+                    cancellation_source_frequency: pump.cancellation_source_frequency,
+                    sweep_config: None,
+                })
+            })
+            .transpose()?,
         voltage_offset: signal.voltage_offset.map(value_or_parameter_to_fixed),
         range: signal.range.clone(),
         lo_frequency: signal.lo_frequency.map(value_or_parameter_to_fixed),
@@ -290,13 +305,14 @@ fn create_initial_signal_properties(
             .iter()
             .map(|output| {
                 Ok(RoutedOutput {
-                    source_channel: routed_output_channel_map
+                    source_channel: channel_properties
+                        .routed_output_channel_map
                         .get(&output.source_channel)
                         .copied()
                         .ok_or_else(|| {
                             laboneq_error!(
                                 "Expected to find routed output channel for source channel '{}'",
-                                output.source_channel
+                                output.source_channel.0
                             )
                         })?,
                     amplitude_scaling: output.amplitude_scaling.map(value_or_parameter_to_fixed),
@@ -304,6 +320,11 @@ fn create_initial_signal_properties(
                 })
             })
             .collect::<Result<Vec<_>>>()?,
+        oscillator_frequency: signal
+            .oscillator
+            .as_ref()
+            .map(|osc| osc.frequency)
+            .map(value_or_parameter_to_fixed),
     })
 }
 
@@ -383,7 +404,6 @@ fn signal_to_codegen_signal(
         }),
         start_delay: length_to_samples(signal.start_delay.value(), signal.sampling_rate),
         signal_delay: length_to_samples(signal.signal_delay.value(), signal.sampling_rate),
-        automute: signal.automute,
     }
 }
 
@@ -512,7 +532,6 @@ struct IrToCodeIrLowerer<'a> {
     // These are populated during lowering for deduplication and cross-referencing
     pulse_parameter_deduplicator: PulseParameterDeduplicator,
     section_info: HashMap<SectionUid, Arc<SectionInfo>>,
-    ppc_devices: HashMap<SignalUid, Arc<PpcChannelKey>>,
     averaging_mode: AveragingMode,
     averaging_count: NonZero<u32>,
 }
@@ -543,7 +562,6 @@ impl<'a> IrToCodeIrLowerer<'a> {
             parameters: parameter_map,
             pulse_parameter_deduplicator: PulseParameterDeduplicator::new(),
             section_info: HashMap::new(),
-            ppc_devices: HashMap::new(),
             averaging_mode: AveragingMode::default(),
             averaging_count: 1.try_into().unwrap(),
         }
@@ -572,21 +590,6 @@ impl<'a> IrToCodeIrLowerer<'a> {
 
     fn get_sweep_parameter(&self, uid: &ParameterUid) -> Arc<SweepParameter> {
         Arc::clone(&self.parameters[uid])
-    }
-
-    fn get_or_create_ppc_device(
-        &mut self,
-        signal: &SignalUid,
-        device: DeviceUid,
-        channel: u16,
-    ) -> Arc<PpcChannelKey> {
-        if let Some(ppc_device) = self.ppc_devices.get(signal) {
-            Arc::clone(ppc_device)
-        } else {
-            let ppc = Arc::new(PpcChannelKey { device, channel });
-            self.ppc_devices.insert(*signal, Arc::clone(&ppc));
-            ppc
-        }
     }
 
     fn resolve_parametrized_phase(&self, param: &ValueOrParameter<f64>) -> f64 {
@@ -942,7 +945,6 @@ impl<'a> IrToCodeIrLowerer<'a> {
             signal: self.get_signal(&obj.signal),
             length: obj.trigger_duration.value(),
             sweep_command: command,
-            ppc_device: self.get_or_create_ppc_device(&obj.signal, obj.device, obj.channel),
         }
     }
 

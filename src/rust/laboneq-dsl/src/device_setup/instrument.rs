@@ -2,14 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use laboneq_common::device_options::DeviceOptions;
-use laboneq_common::types::{DeviceKind, PhysicalDeviceUid, ReferenceClock};
+use laboneq_common::types::{DeviceKind, ReferenceClock};
 
 use crate::types::DeviceUid;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instrument {
     pub uid: DeviceUid,
-    pub physical_device_uid: PhysicalDeviceUid,
     pub kind: InstrumentKind,
     pub options: DeviceOptions,
     pub reference_clock: Option<ReferenceClock>,

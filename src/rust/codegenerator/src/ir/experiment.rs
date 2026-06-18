@@ -1,7 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_dsl::types::{DeviceUid, SignalUid};
+use laboneq_dsl::types::SignalUid;
 use num_complex::Complex;
 
 use crate::node;
@@ -302,12 +302,6 @@ impl PlayAcquire {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Copy, Hash, Eq)]
-pub struct PpcChannelKey {
-    pub device: DeviceUid,
-    pub channel: u16,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct QaEvent {
     acquires: Vec<PlayAcquire>,
@@ -359,7 +353,6 @@ pub struct PpcSweepStep {
     pub signal: Arc<Signal>,
     pub length: Samples,
     pub sweep_command: SweepCommand,
-    pub ppc_device: Arc<PpcChannelKey>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -12,6 +12,8 @@ use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
+use crate::capnp_py_types::DeviceSetupCapnpPy;
+use crate::capnp_py_types::ExperimentCapnpPy;
 use crate::compiler::run_compilation;
 use crate::compiler_backend::CompilerBackend;
 use crate::compiler_backend::ExperimentView;
@@ -22,9 +24,7 @@ use crate::experiment_context::experiment_context_from_experiment;
 use crate::experiment_processor::process_experiment;
 use crate::experiment_validation::validate_experiment;
 use crate::parameter_store::create_parameter_store;
-use crate::py_device_setup_capnp::DeviceSetupCapnpBuilderPy;
 use crate::py_experiment::ExperimentPy;
-use crate::py_signal::AmplifierPumpPy;
 use crate::result_shape::ResultShapes;
 use crate::result_shape::extract_result_shapes;
 use crate::setup_processor::DelayRegistry;
@@ -58,15 +58,14 @@ mod experiment_validation;
 mod parameter_store;
 mod py_conversion;
 mod py_helpers;
-mod py_signal;
 mod qccs_feedback_calculator;
 mod signal_view;
 use signal_view::signal_views;
+mod capnp_py_types;
 mod chunking_mode;
 mod compiler;
 pub mod compiler_backend;
 mod execution;
-mod py_device_setup_capnp;
 mod py_execution;
 pub mod py_experiment;
 mod py_result_shape;
@@ -76,11 +75,12 @@ mod setup_processor;
 /// Serialize a Python experiment object to Cap'n Proto bytes.
 #[pyfunction(name = "serialize_experiment", signature = (experiment, device_setup, packed=false))]
 fn serialize_experiment_py(
-    experiment: &Bound<'_, PyAny>,
-    device_setup: Bound<'_, DeviceSetupCapnpBuilderPy>,
+    py: Python,
+    experiment: ExperimentCapnpPy,
+    device_setup: DeviceSetupCapnpPy,
     packed: bool,
 ) -> CompilerResult<Vec<u8>> {
-    capnp_serializer::serialize_experiment(experiment, device_setup, packed)
+    capnp_serializer::serialize_experiment(py, experiment, device_setup, packed)
 }
 
 /// Build an experiment from Cap'n Proto bytes plus device/signal configuration.
@@ -125,6 +125,7 @@ pub struct ProcessedExperiment<D> {
     delay_compensation: DelayRegistry,
     backend_data: D,
     result_shapes: ResultShapes,
+    device_setup_fingerprint: String,
 }
 
 /// Build an experiment from Cap'n Proto bytes plus device/signal configuration.
@@ -221,6 +222,7 @@ fn build_experiment_capnp<B: CompilerBackend>(
         delay_compensation: processed_setup.on_device_delays,
         backend_data: backend_processed.backend_data,
         result_shapes,
+        device_setup_fingerprint: backend_processed.device_setup_fingerprint,
     };
     Ok(res)
 }
@@ -271,7 +273,11 @@ fn compile_realtime_py_impl(
 
     let feedback_calculator = experiment
         .backend
-        .feedback_calculator(&views.values().cloned().collect::<Vec<_>>());
+        .feedback_calculator(
+            &views.values().cloned().collect::<Vec<_>>(),
+            compiler_settings,
+        )
+        .map_err(|e| laboneq_error::laboneq_error!("{e}"))?;
 
     let _t = laboneq_log::StageTiming::start("Schedule");
     let result = schedule_experiment(
@@ -441,25 +447,12 @@ fn init_logging_py(log_level: i64) -> PyResult<()> {
 }
 
 pub fn create_py_module<'py>(py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyModule>> {
-    use crate::py_signal::{
-        BounceCompensationPy, ExponentialCompensationPy, FirCompensationPy, HighPassCompensationPy,
-        PrecompensationPy,
-    };
     use laboneq_opentelemetry_python::span_buffer::SpanBufferPy;
-    use py_device_setup_capnp::DeviceSetupCapnpBuilderPy;
 
     let m = PyModule::new(py, name)?;
     m.add_function(wrap_pyfunction!(compile_realtime_py, &m)?)?;
     m.add_function(wrap_pyfunction!(serialize_experiment_py, &m)?)?;
     m.add_function(wrap_pyfunction!(init_logging_py, &m)?)?;
     m.add_class::<SpanBufferPy>()?;
-    // Intermediate migration objects, shall be removed later
-    m.add_class::<AmplifierPumpPy>()?;
-    m.add_class::<PrecompensationPy>()?;
-    m.add_class::<HighPassCompensationPy>()?;
-    m.add_class::<FirCompensationPy>()?;
-    m.add_class::<ExponentialCompensationPy>()?;
-    m.add_class::<BounceCompensationPy>()?;
-    m.add_class::<DeviceSetupCapnpBuilderPy>()?;
     Ok(m)
 }

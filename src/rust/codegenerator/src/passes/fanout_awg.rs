@@ -319,11 +319,10 @@ pub(crate) fn fanout_for_awg(node: &IrNode, awg: &AwgCore) -> IrNode {
 
 #[cfg(test)]
 mod tests {
-    use laboneq_common::device_options::DeviceOptions;
     use laboneq_common::named_id::NamedId;
 
     use super::*;
-    use crate::ir::compilation_job::{Device, DeviceKind, Signal, SignalKind};
+    use crate::ir::compilation_job::{AwgCoreBuilder, Device, DeviceKind, Signal, SignalKind};
     use crate::ir::{IrNode, Loop, NodeKind, Section, SectionInfo};
 
     struct IrBuilder {
@@ -402,16 +401,15 @@ mod tests {
     }
 
     fn create_awg_core(signals: Vec<Signal>, device_kind: DeviceKind) -> AwgCore {
-        AwgCore::new(
+        let mut builder = AwgCoreBuilder::new(
             0,
-            signals.iter().map(|s| Arc::new(s.clone())).collect(),
+            Device::new("test_device".to_string().into(), device_kind).into(),
             2e9,
-            Arc::new(Device::new("test_device".to_string().into(), device_kind)),
-            None,
-            DeviceOptions::default(),
-            HashMap::new(),
-            false,
-        )
+        );
+        for signal in signals.iter() {
+            builder.add_signal(signal.clone().into());
+        }
+        builder.build()
     }
 
     fn create_signal(uid: u32) -> Signal {
@@ -422,7 +420,6 @@ mod tests {
             start_delay: 0,
             channels: vec![],
             oscillator: None,
-            automute: false,
         }
     }
 

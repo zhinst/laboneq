@@ -13,7 +13,6 @@ use crate::handle_feedback_registers::calculate_feedback_register_layout;
 use crate::handle_feedback_registers::collect_feedback_config;
 use crate::integration_units::allocate_integration_units;
 use crate::ir::IrNode;
-use crate::ir::PpcChannelKey;
 use crate::ir::SignalUid;
 use crate::ir::compilation_job::AwgCore;
 use crate::ir::compilation_job::AwgKey;
@@ -33,6 +32,7 @@ use crate::passes::handle_result_shapes::AwgMeasurementShapes;
 use crate::passes::handle_result_shapes::calculate_measure_shapes;
 use crate::result::AwgCodeGenerationResult;
 use crate::result::AwgProperties;
+use crate::result::ChannelOscillator;
 use crate::result::ChannelProperties;
 use crate::result::CommandTable;
 use crate::result::FeedbackRegisterConfig;
@@ -47,7 +47,6 @@ use crate::result::SampledWaveform;
 use crate::result::SeqCGenOutput;
 use crate::result::SeqCProgram;
 use crate::result::SequencerType;
-use crate::result::ShfPpcSweepJson;
 use crate::result::SignalIntegrationInfo;
 use crate::sample_waveforms::SampledIntegrationKernel;
 use crate::sample_waveforms::{
@@ -60,6 +59,7 @@ use crate::sampled_event_handler::seqc_tracker::awg::Awg;
 use crate::tracing_utils::ParallelTraceContext;
 use crate::waveform_sampler::SampleWaveforms;
 
+use laboneq_common::types::ChannelKey;
 use laboneq_dsl::signal_calibration::MixerCalibration;
 use laboneq_error::LabOneQError;
 use laboneq_error::WithContext;
@@ -79,13 +79,17 @@ fn generate_output(
     awg: &AwgCore,
     wave_declarations: &[WaveDeclaration],
     qa_signals_by_handle: &HashMap<Handle, (SignalUid, AwgKey)>,
-    emit_timing_comments: bool,
-    shf_output_mute_min_duration: Option<f64>,
     has_readout_feedback: bool,
     feedback_register: &Option<FeedbackRegisterIndex>,
     ctx: &CodeGenContext,
 ) -> Result<SeqcResults> {
     let sampled_events = generate_event_list(node, awg, ctx)?;
+
+    let shf_output_mute_min_duration = if awg.output_mute_enable {
+        Some(ctx.settings.shf_output_mute_min_duration)
+    } else {
+        None
+    };
     let awg = Awg {
         signal_kind: awg.kind,
         awg_key: awg.key(),
@@ -106,7 +110,7 @@ fn generate_output(
         wave_declarations,
         *feedback_register,
         &ctx.feedback_register_layout,
-        emit_timing_comments,
+        ctx.settings.emit_timing_comments,
         has_readout_feedback,
         &ctx.acquisition_type,
     )?;
@@ -165,19 +169,11 @@ fn generate_code_for_awg<T: SampleWaveforms>(
         _ => None,
     };
 
-    let use_automute_playzeros = awg.signals.iter().any(|s| s.automute);
-    let shf_output_mute_min_duration = if use_automute_playzeros {
-        Some(ctx.settings.shf_output_mute_min_duration)
-    } else {
-        None
-    };
     let awg_events = generate_output(
         awg_node,
         awg,
         &wave_declarations,
         &qa_signals_by_handle,
-        ctx.settings.emit_timing_comments,
-        shf_output_mute_min_duration,
         awg_info.has_readout_feedback(),
         &global_feedback_register,
         ctx,
@@ -247,7 +243,6 @@ where
             .find(|s| s.uid == signal.uid)
             .unwrap();
 
-        let oscillator_index = awg.oscillator_index(&signal.uid);
         let awg_channels = awg.awg_channels_for_signal(&signal.uid).unwrap();
         let base_channel = awg_channels
             .iter()
@@ -275,7 +270,6 @@ where
                 signal: signal.uid,
                 channel: *channel,
                 marker_mode: awg_info.marker_modes.get(channel).cloned(),
-                hw_oscillator_index: oscillator_index,
                 scheduler_delay: measurement_info
                     .delays
                     .get(&signal.uid)
@@ -289,6 +283,17 @@ where
                 range: signal_properties.range.clone(),
                 lo_frequency: signal_properties.lo_frequency.clone(),
                 routed_outputs: signal_properties.routed_outputs.clone(),
+                output_mute_enable: awg.output_mute_enable,
+                oscillator: awg
+                    .oscillator_index(&signal.uid)
+                    .map(|index| ChannelOscillator {
+                        uid: signal.oscillator.as_ref().unwrap().uid.clone(),
+                        index,
+                        frequency: signal_properties
+                            .oscillator_frequency
+                            .clone()
+                            .expect("Expected a frequency for hardware oscillator"),
+                    }),
             });
         }
     }
@@ -301,13 +306,11 @@ where
             .find(|s| s.uid == signal.uid)
             .unwrap();
 
-        let oscillator_index = awg.oscillator_index(&signal.uid);
         let awg_channels = awg.awg_channels_for_signal(&signal.uid).unwrap();
         for channel in awg_channels.iter() {
             input_channel_properties.push(InputChannelProperties {
                 signal: signal.uid,
                 channel: *channel,
-                hw_oscillator_index: oscillator_index,
                 scheduler_delay: measurement_info
                     .delays
                     .get(&signal.uid)
@@ -317,6 +320,16 @@ where
                 port_delay: signal_properties.port_delay.clone(),
                 range: signal_properties.range.clone(),
                 lo_frequency: signal_properties.lo_frequency.clone(),
+                oscillator: awg
+                    .oscillator_index(&signal.uid)
+                    .map(|index| ChannelOscillator {
+                        uid: signal.oscillator.as_ref().unwrap().uid.clone(),
+                        index,
+                        frequency: signal_properties
+                            .oscillator_frequency
+                            .clone()
+                            .expect("Expected a frequency for hardware oscillator"),
+                    }),
             });
         }
     }
@@ -365,12 +378,7 @@ where
                 None
             }
         },
-        shf_sweeper_config: awg_events
-            .shf_sweeper_config
-            .map(|config_json| ShfPpcSweepJson {
-                ppc_device: awg_info.ppc_device().cloned().unwrap(),
-                json: config_json,
-            }),
+        shf_sweeper_config: awg_events.shf_sweeper_config,
         sampled_waveforms,
         integration_kernels: integration_weights,
         integration_lengths: measurement_info
@@ -597,7 +605,8 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
     // Result construction
     let total_execution_time = estimate_total_execution_time(root);
     let measurements = evaluate_measurement_per_device(&awg_results);
-    let ppc_settings = merge_ppc_steps(&mut awg_results, &mut ctx.initial_signal_properties)?;
+    let ppc_settings =
+        merge_ppc_steps(&awgs, &mut awg_results, &mut ctx.initial_signal_properties)?;
 
     let result = SeqCGenOutput {
         device_properties: codegen_ir.awg_devices,
@@ -610,46 +619,68 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
     Ok(result)
 }
 
+/// Merge the PPC steps across signals and AWGs, ensuring consistency of configurations for signals sharing a PPC channel.
+///
+/// Drains the PPC configurations from the AWG results and initial signal properties, and merges them based on the assigned PPC channels.
+/// Checks for consistency of configurations across signals sharing the same PPC channel, and returns an error if incompatible configurations are found.
 fn merge_ppc_steps(
+    awgs: &[AwgCore],
     awg_results: &mut [AwgCodeGenerationResult<impl SampleWaveforms>],
     initial_signal_properties: &mut [InitialSignalProperties],
 ) -> Result<Vec<PpcSettings>> {
+    let signal_to_ppc_channel = initial_signal_properties
+        .iter()
+        .filter_map(|signal| {
+            signal
+                .ppc_settings
+                .as_ref()
+                .map(|ppc| (signal.uid, ppc.ppc_channel))
+        })
+        .collect::<HashMap<_, _>>();
+
+    let mut awg_to_ppc_channel = HashMap::<AwgKey, ChannelKey>::new();
+    for awg in awgs.iter() {
+        for signal in awg.signals.iter() {
+            if let Some(ppc_channel) = signal_to_ppc_channel.get(&signal.uid) {
+                awg_to_ppc_channel.insert(awg.key(), *ppc_channel);
+            }
+        }
+    }
+
+    // Drain the PPC configurations from the AWG results (real-time) and merge them by their assigned PPC channels, checking for consistency.
     let mut config_by_channel =
         awg_results
             .iter_mut()
-            .filter_map(|awg| awg.shf_sweeper_config.take())
-            .try_fold(HashMap::<PpcChannelKey, String>::new(), |mut acc, config| {
+            .filter_map(|awg| {
+                awg.shf_sweeper_config.take().map(|ppc_config| (awg, ppc_config))
+            })
+            .try_fold(HashMap::<ChannelKey, String>::new(), |mut acc, (awg, ppc_config)| {
+                let ppc_channel = awg_to_ppc_channel.get(&awg.awg.key).ok_or_else(|| {
+                    laboneq_error!("Internal Error: Missing PPC channel assignment for AWG with SHFPPC config")
+                })?;
                 // Check for compatibility with existing config for this device, and merge if compatible.
-                if let Some(existing_config) = acc.get(&config.ppc_device) {
-                    if existing_config != &config.json {
-                        let msg = format!(
-                            "Incompatible configurations for PPC channel '{}/{}' across different signals.",
-                            config.ppc_device.device.0, config.ppc_device.channel
-                        );
-                        return Err(laboneq_error!("{}", msg));
+                if let Some(existing_config) = acc.get(ppc_channel) {
+                    if existing_config != &ppc_config {
+                        return Err(laboneq_error!("Incompatible configurations for PPC channel '{}' across different signals.", ppc_channel));
                     }
                 } else {
-                    acc.insert(*config.ppc_device, config.json);
+                    acc.insert(*ppc_channel, ppc_config);
                 }
                 Ok(acc)
             })?;
 
-    // Collect the ppc steps and check that initial signal properties are consistent across PPC channel
+    // Drain the PPC configurations from the signal properties (near-time) and merge them by their assigned PPC channels, checking for consistency.
     let ppc_settings = initial_signal_properties
         .iter_mut()
         .filter_map(|signal| signal.ppc_settings.take())
         .try_fold(HashMap::new(), |mut ppc_settings, ppc_config| {
-            let key = PpcChannelKey {
-                device: ppc_config.device,
-                channel: ppc_config.channel,
-            };
+            let key = ppc_config.ppc_channel;
             if let Some(existing_config) = ppc_settings.get(&key)
                 && existing_config != &ppc_config
             {
                 Err(laboneq_error!(
-                    "Incompatible configurations for PPC channel '{}/{}' across different signals.",
-                    key.device.0,
-                    key.channel
+                    "Incompatible configurations for PPC channel '{}' across different signals.",
+                    key
                 ))
             } else {
                 ppc_settings.insert(key, ppc_config);
@@ -667,7 +698,7 @@ fn merge_ppc_steps(
         .collect();
 
     // Sorted for output consistency
-    ppc_settings.sort_by_key(|a| a.channel);
+    ppc_settings.sort_by_key(|settings| settings.ppc_channel);
     Ok(ppc_settings)
 }
 

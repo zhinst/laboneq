@@ -17,8 +17,8 @@ use laboneq_units::duration::{Duration, Second};
 use codegenerator::ir::compilation_job::ChannelIndex;
 use codegenerator::ir::compilation_job::DeviceUid;
 use codegenerator::ir::{Samples, compilation_job::AwgKind};
-use codegenerator::result::SignalType;
 use codegenerator::result::{AwgCodeGenerationResult, MarkerMode};
+use codegenerator::result::{ChannelOscillator, SignalType};
 use codegenerator::result::{FixedValueOrParameter, ParameterPhaseIncrement};
 use codegenerator::result::{PpcSettings, RoutedOutput, SeqCGenOutput};
 
@@ -387,7 +387,6 @@ impl AwgCodeGenerationResultPy {
                         MarkerMode::Trigger => "TRIGGER".to_string(),
                         MarkerMode::Marker => "MARKER".to_string(),
                     }),
-                    hw_oscillator_index: output.hw_oscillator_index,
                     amplitude: output.amplitude.map(|amp| {
                         fixed_value_or_parameterf64_to_pyany(py, &amp, id_store).unwrap()
                     }),
@@ -430,6 +429,11 @@ impl AwgCodeGenerationResultPy {
                         .map(|o| routed_output_to_py(py, o, id_store).unwrap())
                         .collect(),
                     scheduler_delay: output.scheduler_delay.into(),
+                    output_mute_enable: output.output_mute_enable,
+                    hardware_oscillator: output
+                        .oscillator
+                        .as_ref()
+                        .map(|osc| oscillator_to_py(py, osc, id_store).unwrap()),
                 }
                 .into_pyobject(py)
                 .unwrap()
@@ -443,11 +447,10 @@ impl AwgCodeGenerationResultPy {
                     signal: id_store.resolve(properties.signal).unwrap().to_string(),
                     channel: properties.channel,
                     direction: "IN".to_string(),
-                    marker_mode: None, // Input channels don't have marker modes
-                    hw_oscillator_index: properties.hw_oscillator_index,
-                    amplitude: None, // Input channels don't have amplitude settings
+                    marker_mode: None,    // Input channels don't have marker modes
+                    amplitude: None,      // Input channels don't have amplitude settings
                     voltage_offset: None, // Input channels don't have voltage offset
-                    gains: None,     // Input channels don't have gain settings
+                    gains: None,          // Input channels don't have gain settings
                     port_mode: properties
                         .port_mode
                         .map(|pm| PortModePy::from(pm).into_pyobject(py).unwrap().unbind()),
@@ -460,6 +463,11 @@ impl AwgCodeGenerationResultPy {
                         .map(|lf| fixed_value_or_parameterf64_to_pyany(py, &lf, id_store).unwrap()),
                     routed_outputs: Vec::new(), // Input channels don't have routed outputs
                     scheduler_delay: properties.scheduler_delay.into(),
+                    output_mute_enable: false, // Input channels don't have output mute
+                    hardware_oscillator: properties
+                        .oscillator
+                        .as_ref()
+                        .map(|osc| oscillator_to_py(py, osc, id_store).unwrap()),
                 }
                 .into_pyobject(py)
                 .unwrap()
@@ -527,6 +535,19 @@ impl AwgCodeGenerationResultPy {
         };
         Ok(output)
     }
+}
+
+fn oscillator_to_py(
+    py: Python,
+    oscillator: &ChannelOscillator,
+    id_store: &NamedIdStore,
+) -> PyResult<Py<HardwareOscillatorPy>> {
+    let hw_oscillator_py = HardwareOscillatorPy {
+        uid: oscillator.uid.clone(),
+        index: oscillator.index,
+        frequency: fixed_value_or_parameterf64_to_pyany(py, &oscillator.frequency, id_store)?,
+    };
+    Py::new(py, hw_oscillator_py)
 }
 
 fn routed_output_to_py(
@@ -717,8 +738,11 @@ fn convert_ppc_settings(
         .into_iter()
         .map(|s| {
             let ppc_settings_py = PpcSettingsPy {
-                device: id_store.resolve(s.device).unwrap().to_string(),
-                channel: s.channel,
+                device: id_store
+                    .resolve(s.ppc_channel.device_uid())
+                    .unwrap()
+                    .to_string(),
+                channel: s.ppc_channel.channel(),
                 alc_on: s.alc_on,
                 pump_on: s.pump_on,
                 pump_filter_on: s.pump_filter_on,
@@ -822,8 +846,6 @@ pub(crate) struct ChannelPropertiesPy {
     #[pyo3(get)]
     pub marker_mode: Option<String>,
     #[pyo3(get)]
-    pub hw_oscillator_index: Option<u16>,
-    #[pyo3(get)]
     pub amplitude: Option<Py<PyAny>>, // Can be either a float or a parameter reference (string)
     #[pyo3(get)]
     pub voltage_offset: Option<Py<PyAny>>, // Can be either a float or a parameter reference (string)
@@ -841,6 +863,10 @@ pub(crate) struct ChannelPropertiesPy {
     pub routed_outputs: Vec<Py<RoutedOutputPy>>,
     #[pyo3(get)]
     pub scheduler_delay: f64,
+    #[pyo3(get)]
+    output_mute_enable: bool,
+    #[pyo3(get)]
+    hardware_oscillator: Option<Py<HardwareOscillatorPy>>,
 }
 
 #[pyclass(name = "Gains", skip_from_py_object)]
@@ -878,4 +904,15 @@ pub(crate) struct IntegrationWeightPy {
     pub basename: String,
     #[pyo3(get)]
     pub downsampling_factor: u8,
+}
+
+#[pyclass(name = "Oscillator", skip_from_py_object)]
+#[derive(Debug)]
+pub(crate) struct HardwareOscillatorPy {
+    #[pyo3(get)]
+    pub uid: String,
+    #[pyo3(get)]
+    pub index: u16,
+    #[pyo3(get)]
+    pub frequency: Py<PyAny>, // Can be either a float or a parameter reference (string)
 }

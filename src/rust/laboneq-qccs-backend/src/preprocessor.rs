@@ -12,6 +12,7 @@ use laboneq_common::device_traits;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::named_id::resolve_ids;
 use laboneq_common::types::AuxiliaryDeviceKind;
+use laboneq_common::types::ChannelKey;
 use laboneq_common::types::ReferenceClock;
 use laboneq_common::types::SignalKind;
 use laboneq_compiler_py::compiler_backend::DeviceSignal;
@@ -21,6 +22,7 @@ use laboneq_dsl::device_setup::InstrumentKind;
 use laboneq_dsl::setup_description_qccs::AuxiliaryDevice;
 
 use laboneq_dsl::signal_calibration::SignalCalibration;
+use laboneq_dsl::types::PhysicalChannelUid;
 use laboneq_units::duration::Duration;
 use laboneq_units::duration::Frequency;
 use laboneq_units::duration::Hertz;
@@ -42,6 +44,7 @@ use crate::experiment_view::ExperimentSignal;
 use crate::experiment_view::ExperimentViewWrapper;
 use crate::output_routing::process_output_routing;
 use crate::ports::{IoDirection, Port, parse_port};
+use crate::ppc_connections::resolve_ppc_connections;
 use crate::precompensation::{SignalPrecompensation, process_precompensation};
 use crate::setup_processor::create_awg_devices;
 
@@ -50,7 +53,7 @@ pub struct QccsBackendPreprocessedData {
     signals: Vec<BackendSignal>,
     signal_indices: HashMap<SignalUid, usize>,
     lead_delays: HashMap<DeviceUid, Duration<Second>>,
-    routed_output_channel_map: HashMap<String, u8>,
+    routed_output_channel_map: HashMap<PhysicalChannelUid, u8>,
 }
 
 impl QccsBackendPreprocessedData {
@@ -58,7 +61,7 @@ impl QccsBackendPreprocessedData {
         signals: Vec<BackendSignal>,
         auxiliary_devices: Vec<AuxiliaryDevice>,
         lead_delays: HashMap<DeviceUid, Duration<Second>>,
-        routed_output_channel_map: HashMap<String, u8>,
+        routed_output_channel_map: HashMap<PhysicalChannelUid, u8>,
     ) -> Self {
         let signal_indices = signals
             .iter()
@@ -88,7 +91,7 @@ impl QccsBackendPreprocessedData {
         self.signals.iter()
     }
 
-    pub(crate) fn routed_output_channel_map(&self) -> &HashMap<String, u8> {
+    pub(crate) fn routed_output_channel_map(&self) -> &HashMap<PhysicalChannelUid, u8> {
         &self.routed_output_channel_map
     }
 }
@@ -99,6 +102,7 @@ pub struct BackendSignal {
     pub channels: SmallVec<[u16; 4]>,
     pub awg_key: AwgKey,
     pub awg_index: u16,
+    pub ppc_channel: Option<ChannelKey>,
 }
 
 impl PreprocessedBackendData for QccsBackendPreprocessedData {
@@ -132,9 +136,11 @@ pub(crate) fn preprocess_experiment(
     experiment: ExperimentView,
 ) -> CompilerBackendResult<PreprocessOutput<QccsBackendPreprocessedData>> {
     let mut experiment = ExperimentViewWrapper::from_experiment_view(experiment)?;
+    let setup_fingerprint = experiment.device_setup_fingerprint.clone();
     fill_missing_device_options(&mut experiment);
     validate_setup(&experiment)?;
     let routed_outputs = process_output_routing(&experiment)?;
+    let ppc_connections = resolve_ppc_connections(&experiment)?;
 
     let hdawg_triggering_signal = create_uhfqa_hdawg_triggering_signal(&mut experiment);
     let (awg_devices, reassigned_signals) = create_awg_devices(&mut experiment)?;
@@ -222,6 +228,7 @@ pub(crate) fn preprocess_experiment(
             channels,
             awg_key,
             awg_index,
+            ppc_channel: ppc_connections.get(&signal.uid).copied(),
         });
 
         let signal_kind = signal_kind(&signal.ports, device.kind())?;
@@ -249,6 +256,7 @@ pub(crate) fn preprocess_experiment(
         ),
         device_signals,
         awg_device_map.into_values().collect(),
+        setup_fingerprint,
     ))
 }
 

@@ -437,7 +437,7 @@ class AutomationLayer(ABC):
 class RootLayer(AutomationLayer):
     """Root layer class."""
 
-    function: Callable = None
+    function: Callable | None = None
     node_keys: list[NodeKey] = attrs.field(factory=lambda: ["root"])
     key: str = "root"
     depends_on: set[str] = attrs.field(factory=set)

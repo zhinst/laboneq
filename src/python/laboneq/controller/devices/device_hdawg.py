@@ -287,11 +287,14 @@ class DeviceHDAWG(DeviceBase):
     async def _apply_initialization(self, device_recipe_data: DeviceRecipeData):
         nc = NodeCollector(base=f"/{self.serial}/")
 
-        # Resetting synchronization for all cores to ensue unused cores are
-        # not blocking the start trigger.
+        # Resetting synchronization for all cores to ensure unused cores are
+        # not blocking the start trigger, then re-enabling on used cores.
         # TODO(2K): This node can’t be pipelined. Setting it here as a hotfix
         # for HBAR-2434. Later, load dummy programs on unused cores instead.
         nc.add("awgs/*/synchronization/enable", 0)
+        if self.is_leader() or self.is_standalone():
+            for core_index in device_recipe_data.hdawgcores:
+                nc.add(f"awgs/{core_index}/synchronization/enable", 1)
 
         # Configure DIO/ZSync at init (previously was after AWG loading).
         # This is a prerequisite for passing AWG checks in FW on the pipeliner commit.

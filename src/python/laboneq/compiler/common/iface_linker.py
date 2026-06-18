@@ -28,5 +28,5 @@ class ILinker(abc.ABC):
 
     @staticmethod
     @abc.abstractmethod
-    def finalize(this, settings: CompilerSettings):
+    def finalize(this, settings: CompilerSettings, uses_chunking: bool):
         raise NotImplementedError

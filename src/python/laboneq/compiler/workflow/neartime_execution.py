@@ -94,7 +94,7 @@ class NtCompilerExecutor(ExecutorBase):
 
     def __init__(
         self,
-        experiment: compiler_rs.Experiment,
+        experiment: compiler_rs.ProcessedExperiment,
         settings: CompilerSettings,
         chunk_count: int | None = None,
         device_class: int = 0,
@@ -248,4 +248,7 @@ class NtCompilerExecutor(ExecutorBase):
         if self._combined_compiler_output is not None:
             for delegate in self._delegates:
                 delegate.after_final_run(self._combined_compiler_output)
-            rt_linker.finalize(self._combined_compiler_output, self._settings)
+            uses_chunking = self._chunk_count is not None and self._chunk_count > 1
+            rt_linker.finalize(
+                self._combined_compiler_output, self._settings, uses_chunking
+            )

@@ -37,10 +37,28 @@ pub fn parse_port(port: &str, device: InstrumentKind) -> Result<Port> {
         InstrumentKind::Shfqc => parse_shfqa_port(port)
             .or_else(|| parse_shfsg_port(port))
             .ok_or_else(|| laboneq_error!("Invalid SHFQC port '{}'", port)),
+        InstrumentKind::Shfppc => {
+            parse_shfppc_port(port).ok_or_else(|| laboneq_error!("Invalid SHFPPC port '{}'", port))
+        }
         device => Err(laboneq_error!(
             "Unsupported device: '{device:?}' for port parsing"
         )),
     }
+}
+
+/// Expect exactly one port in the given slice, returning an error if there are zero or multiple ports.
+pub(crate) fn expect_one_port(ports: &[Port]) -> Result<&Port> {
+    if ports.len() != 1 {
+        return Err(laboneq_error!(
+            "Expected exactly one port, found '{}'",
+            ports
+                .iter()
+                .map(|p| p.path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    Ok(&ports[0])
 }
 
 /// Parse SHFSG channel from a string.
@@ -117,6 +135,23 @@ fn parse_uhfqa_port(port: &str) -> Option<Port> {
         });
     }
     if let Some(channel) = port.strip_prefix("SIGOUTS/").and_then(|s| s.parse().ok())
+        && channel < MAX_CHANNEL
+    {
+        return Some(Port {
+            path: port.to_string(),
+            channel,
+            direction: IoDirection::Output,
+        });
+    }
+    None
+}
+
+fn parse_shfppc_port(port: &str) -> Option<Port> {
+    const MAX_CHANNEL: u8 = 4;
+
+    if let Some(channel) = port
+        .strip_prefix("PPCHANNELS/")
+        .and_then(|s| s.parse().ok())
         && channel < MAX_CHANNEL
     {
         return Some(Port {
