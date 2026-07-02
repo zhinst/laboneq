@@ -6,6 +6,7 @@
 import re
 from importlib.metadata import version
 from pathlib import Path
+from urllib.parse import urlparse
 
 from flask import (
     Blueprint,
@@ -21,8 +22,19 @@ from flask import (
 from laboneq.automation.web_viewer.app.utils import export_graph_to_json
 
 _SAFE_COMPONENT_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+_SAFE_METHODS = {"GET", "HEAD"}
 
 bp = Blueprint("viewer", __name__)
+
+
+@bp.before_request
+def _csrf_protect() -> None:
+    """Reject cross-origin state-changing requests."""
+    if request.method in _SAFE_METHODS:
+        return
+    source = request.headers.get("Origin") or request.headers.get("Referer")
+    if not source or urlparse(source).netloc != request.host:
+        abort(403)
 
 
 @bp.route("/graph")

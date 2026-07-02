@@ -39,9 +39,9 @@ class TargetDeviceType(EnumReprMixin, Enum):
 #
 @dataclass
 class TargetServer:
-    uid: str = None
-    host: str = None
-    port: int = None
+    uid: str | None = None
+    host: str | None = None
+    port: int | None = None
 
 
 class TargetChannelType(EnumReprMixin, Enum):
@@ -78,21 +78,23 @@ class TargetDevice:
 
 @dataclass
 class SourceCode:
-    uid: str = None
-    file_name: str = None  # TODO(2K): This field currently acts as the uid, not requiring a separate file name if the uid is explicit.
-    source_text: str = None
+    uid: str | None = None
+    file_name: str | None = (
+        None  # TODO(2K): This field currently acts as the uid, not requiring a separate file name if the uid is explicit.
+    )
+    source_text: str | None = None
 
 
 @dataclass
 class WaveForm:
-    uid: str = None
-    sampling_rate: float = None
-    length_samples: int = None
-    samples: ArrayLike = None
+    uid: str | None = None
+    sampling_rate: float | None = None
+    length_samples: int | None = None
+    samples: ArrayLike | None = None
 
 
 @dataclass
 class TargetSetup:
-    uid: str = None
+    uid: str | None = None
     servers: list[TargetServer] = field(default_factory=list)
     devices: list[TargetDevice] = field(default_factory=list)

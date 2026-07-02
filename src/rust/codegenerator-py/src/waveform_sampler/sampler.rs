@@ -2,62 +2,43 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use codegenerator::ir::SignalUid;
+use codegenerator::pulse_map::{PulseInstance, PulseWaveform};
+use codegenerator::result::WaveformSignatureString;
 use codegenerator_utils::pulse_parameters::PulseParameterDeduplicator;
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_dsl::types::{ExternalParameterUid, PulseDef};
+use laboneq_dsl::types::{ComplexOrFloat, ExternalParameterUid, PulseDef, PulseUid};
 use laboneq_error::{LabOneQError, PyErrorWithContext, WithContext, bail};
 use laboneq_py_utils::py_export::pulse_def_to_py;
 use laboneq_py_utils::py_object_interner::PyObjectInterner;
+use num_complex::Complex64;
+use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
+use pyo3::exceptions::PyTypeError;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use pyo3::types::{PyList, PyTuple};
 use pyo3::{IntoPyObjectExt, intern, prelude::*};
 
-use crate::common_types::{DeviceTypePy, MixerTypePy, SignalTypePy};
+use crate::common_types::{DeviceTypePy, SignalTypePy};
+use crate::utils::mixer_type_to_py;
 use codegenerator::ir::compilation_job::{
     AwgCore, AwgKind, DeviceKind, MixerType, OscillatorKind, Signal, SignalKind,
 };
 use codegenerator::ir::experiment::{AcquisitionType, PulseParametersId};
-use codegenerator::signature::{SamplesSignatureID, Uid, WaveformSignature};
+use codegenerator::signature::WaveformSignature;
 use codegenerator::waveform_sampler::{
-    CompressedWaveformPart, IntegrationKernel, SampleWaveforms, SampledIntegrationKernel,
-    SampledWaveformCollection, SampledWaveformSignature, WaveformSamplingCandidate,
+    CompressedWaveformPart, IntegrationKernel, SampleBuffer, SampleIntegrationKernels,
+    SampleWaveforms, SampledIntegrationKernel, SampledWaveformCollection, SampledWaveformSignature,
+    WaveCompression, WaveIdentifier, WaveKey, Waveform, WaveformSamplingCandidate,
 };
 use codegenerator::{Result, ir::Samples};
 
 use super::pulse_parameters::{PulseParametersPy, pulse_parameters_to_py};
 use super::signature::create_waveform_description;
 
-/// Represents a sampled waveform signature that is returned by the Python sampler.
-///
-/// Some information is read and stored from the Python signature to avoid the
-/// need to access the Python object every time we need to check for markers.
-#[derive(Debug)]
-pub struct SampledWaveformSignaturePy {
-    /// The Python signature of the sampled waveform (i.e. SampledWaveformSignature)
-    pub signature: Arc<Py<PyAny>>,
-    /// Whether the sampled waveform has marker 1.
-    pub has_markers1: bool,
-    /// Whether the sampled waveform has marker 2.
-    pub has_markers2: bool,
-}
-
-impl SampledWaveformSignature for SampledWaveformSignaturePy {
-    type Inner = Arc<Py<PyAny>>;
-
-    fn has_marker1(&self) -> bool {
-        self.has_markers1
-    }
-
-    fn has_marker2(&self) -> bool {
-        self.has_markers2
-    }
-
-    fn signature(&self) -> Arc<Py<PyAny>> {
-        Arc::clone(&self.signature)
-    }
-}
+// This is used as a workaround for the SHFQA requiring that for sampled pulses, abs(s) < 1.0 must hold
+// to be able to play pulses with an amplitude of 1.0, we scale complex pulses by this factor
+const SHFQA_COMPLEX_SAMPLE_SCALING: f64 = 1.0 - 1e-10;
 
 #[pyclass(name = "PlayHold")]
 pub struct PlayHoldPy {
@@ -77,12 +58,6 @@ impl PlayHoldPy {
 pub struct PlaySamplesPy {
     offset: Samples,
     length: Samples,
-    uid: Uid,
-    label: String,
-    has_i: bool,
-    has_q: bool,
-    has_marker1: bool,
-    has_marker2: bool,
     signature: Py<PyAny>,
 }
 
@@ -90,51 +65,12 @@ pub struct PlaySamplesPy {
 impl PlaySamplesPy {
     #[new]
     #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        offset: Samples,
-        length: Samples,
-        uid: Uid,
-        label: String,
-        has_i: bool,
-        has_q: bool,
-        has_marker1: bool,
-        has_marker2: bool,
-        signature: Py<PyAny>,
-    ) -> Self {
+    pub fn new(offset: Samples, length: Samples, signature: Py<PyAny>) -> Self {
         PlaySamplesPy {
             offset,
             length,
-            uid,
-            label,
-            has_i,
-            has_q,
-            has_marker1,
-            has_marker2,
             signature,
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct IntegrationWeight {
-    pub signals: Vec<SignalUid>,
-    pub samples_i: Py<PyAny>,
-    pub samples_q: Py<PyAny>,
-    pub downsampling_factor: Option<u8>,
-    pub basename: String,
-}
-
-impl SampledIntegrationKernel for IntegrationWeight {
-    fn signals(&self) -> &[SignalUid] {
-        &self.signals
-    }
-
-    fn basename(&self) -> &str {
-        &self.basename
-    }
-
-    fn downsampling_factor(&self) -> Option<u8> {
-        self.downsampling_factor
     }
 }
 
@@ -144,11 +80,13 @@ impl SampledIntegrationKernel for IntegrationWeight {
 ///
 /// This way we avoid arbitrary Python code execution (pulse definitions) in the Rust code and also avoid
 /// handling of `numpy` arrays in Rust at this point.
-pub struct WaveformSamplerPy<'a> {
+pub(crate) struct WaveformSamplerPy<'a> {
     acquisition_type: AcquisitionType,
     pulse_parameters: HashMap<PulseParametersId, Py<PulseParametersPy>>,
     pulse_defs: HashMap<String, Py<PyAny>>,
     id_store: &'a NamedIdStore,
+    py_object_store: &'a PyObjectInterner<ExternalParameterUid>,
+    deduplicator: &'a PulseParameterDeduplicator,
 }
 
 struct SamplingInfo {
@@ -156,16 +94,17 @@ struct SamplingInfo {
     rf_signal: bool,
     signal_map: HashMap<SignalUid, Arc<Signal>>,
     mixer_type: Option<MixerType>,
-    signal_kind: SignalKind,
+    signal_type: SignalKind,
+    device_kind: DeviceKind,
 }
 
 impl WaveformSamplerPy<'_> {
-    pub fn new<'a>(
+    pub(crate) fn new<'a>(
         py: Python,
         pulse_defs: &[PulseDef],
         acquisition_type: AcquisitionType,
-        dedup: &PulseParameterDeduplicator,
-        py_object_store: &PyObjectInterner<ExternalParameterUid>,
+        dedup: &'a PulseParameterDeduplicator,
+        py_object_store: &'a PyObjectInterner<ExternalParameterUid>,
         id_store: &'a NamedIdStore,
     ) -> WaveformSamplerPy<'a> {
         let pulse_defs = pulse_defs
@@ -190,6 +129,8 @@ impl WaveformSamplerPy<'_> {
             pulse_parameters,
             pulse_defs,
             id_store,
+            py_object_store,
+            deduplicator: dedup,
         }
     }
 
@@ -234,7 +175,8 @@ impl WaveformSamplerPy<'_> {
             rf_signal,
             signal_map,
             mixer_type: mixer_types.into_iter().next().unwrap(),
-            signal_kind: ref_signal.kind.clone(),
+            signal_type: ref_signal.kind,
+            device_kind: *awg.device_kind(),
         }
     }
 
@@ -252,11 +194,30 @@ impl WaveformSamplerPy<'_> {
             Some(MixerType::IQ)
         }
     }
+
+    pub(crate) fn pulse_parameters_to_py<'py>(
+        &self,
+        py: Python<'py>,
+        pulse_parameters_id: PulseParametersId,
+    ) -> PyResult<Bound<'py, PulseParametersPy>> {
+        self.deduplicator
+            .resolve(&pulse_parameters_id.0)
+            .map(|pp| {
+                pulse_parameters_to_py(py, pp, self.id_store, self.py_object_store)
+                    .into_pyobject(py)
+            })
+            .expect("Internal error: Pulse parameters not found")
+    }
+
+    pub(crate) fn pulse_def_py(&self, py: Python, pulse_uid: &str) -> Py<PyAny> {
+        self.pulse_defs
+            .get(pulse_uid)
+            .map(|pd| pd.clone_ref(py))
+            .expect("Internal error: Pulse definition not found")
+    }
 }
 
 impl SampleWaveforms for WaveformSamplerPy<'_> {
-    type Signature = SampledWaveformSignaturePy;
-    type SampledIntegrationKernel = IntegrationWeight;
     type PulseParameters = PulseParametersPy;
 
     fn supports_waveform_sampling(awg: &AwgCore) -> bool {
@@ -269,24 +230,29 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
         &self,
         awg: &AwgCore,
         waveforms: &[WaveformSamplingCandidate],
-    ) -> Result<SampledWaveformCollection<SampledWaveformSignaturePy>, LabOneQError> {
+    ) -> Result<SampledWaveformCollection, LabOneQError> {
         let sampling_info = Self::make_awg_info(awg);
         let sampling_rate = sampling_info.sampling_rate;
         let rf_signal = sampling_info.rf_signal;
-        let mut sampled_waveforms: SampledWaveformCollection<SampledWaveformSignaturePy> =
-            SampledWaveformCollection::new();
+        let mut sampled_waveforms: SampledWaveformCollection = SampledWaveformCollection::new();
+
+        let ctx = WaveformConversionContext {
+            device_kind: sampling_info.device_kind,
+            awg_type: awg.kind,
+            id_store: self.id_store,
+            dedup: self.deduplicator,
+        };
+
         Python::attach(|py| -> Result<(), PyErrorWithContext> {
             let device_type: Bound<'_, DeviceTypePy> =
                 DeviceTypePy::from_device_kind(awg.device_kind())
                     .into_pyobject(py)
                     .expect("Internal Error: Failed to convert DeviceType");
-            let mixer_type = sampling_info.mixer_type.map(|mixer| {
-                let mixer_type_py: MixerTypePy = mixer.into();
-                mixer_type_py
-                    .into_pyobject(py)
-                    .expect("Internal Error: Failed to convert MixerType")
-            });
-            let signal_type = SignalTypePy::from_signal_kind(&sampling_info.signal_kind)
+            let mixer_type = sampling_info
+                .mixer_type
+                .map(|mixer| mixer_type_to_py(py, &mixer))
+                .transpose()?;
+            let signal_type = SignalTypePy::from_signal_kind(&sampling_info.signal_type)
                 .into_pyobject(py)
                 .expect("Internal Error: Failed to convert SignalType");
             for waveform in waveforms {
@@ -324,8 +290,7 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
                         rf_signal,
                         mixer_type.as_ref(),
                         &signal_type,
-                        &self.pulse_parameters,
-                        &self.pulse_defs,
+                        self,
                     )
                 } else {
                     sample_and_compress(
@@ -337,8 +302,7 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
                         rf_signal,
                         mixer_type.as_ref(),
                         &signal_type,
-                        &self.pulse_parameters,
-                        &self.pulse_defs,
+                        self,
                     )
                 };
                 let output = output.with_context(|| {
@@ -367,16 +331,31 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
                         continue;
                     }
                     let output = output.bind(py);
+
+                    let signals = &waveform.signals.iter().cloned().collect::<Vec<_>>();
+                    let signature_string = &waveform.waveform.signature_string().into();
+
                     if !output.is_instance_of::<PyList>() {
                         // If the output is not a list, it means that waveform was only sampled
-                        let sampled_signature = convert_sampled_waveform_signature(output)
-                            .expect("Internal error: Failed to create SampledWaveformSignature");
-                        sampled_waveforms
-                            .insert_sampled_signature(waveform.waveform, sampled_signature);
+                        let sampled_s = sampled_waveform_to_signature(
+                            output
+                                .extract()
+                                .expect("Internal error: Failed to bind waveform"),
+                            signals,
+                            signature_string,
+                            &ctx,
+                        )
+                        .expect("Internal error: Failed to convert sampled waveform signature");
+                        sampled_waveforms.insert_sampled_signature(waveform.waveform, sampled_s);
                     }
                     if let Ok(compressed_parts) = output.cast::<PyList>() {
-                        let compressed_parts = convert_compressed_waveform_parts(compressed_parts)
-                            .expect("Internal error: Failed to convert compressed parts");
+                        let compressed_parts = convert_compressed_waveform_parts(
+                            compressed_parts,
+                            signals,
+                            signature_string,
+                            &ctx,
+                        )
+                        .expect("Internal error: Failed to convert compressed parts");
                         sampled_waveforms
                             .insert_compressed_parts(waveform.waveform, compressed_parts);
                     }
@@ -386,6 +365,10 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
         })?;
         Ok(sampled_waveforms)
     }
+}
+
+impl SampleIntegrationKernels for WaveformSamplerPy<'_> {
+    type PulseParameters = PulseParametersPy;
 
     /// Samples integration weights for the given kernels using the Python sampler.
     ///
@@ -394,7 +377,7 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
         &self,
         awg: &AwgCore,
         kernels: Vec<IntegrationKernel<'_>>,
-    ) -> Result<Vec<Self::SampledIntegrationKernel>> {
+    ) -> Result<Vec<SampledIntegrationKernel>> {
         let integration_signals = awg
             .signals
             .iter()
@@ -409,12 +392,9 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
             return Ok(vec![]);
         };
         Python::attach(|py| {
-            let mixer_type = mixer_type.map(|mixer| {
-                let mixer_type_py: MixerTypePy = mixer.into();
-                mixer_type_py
-                    .into_pyobject(py)
-                    .expect("Internal Error: Failed to convert MixerType")
-            });
+            let mixer_type = mixer_type
+                .map(|mixer| mixer_type_to_py(py, &mixer))
+                .transpose()?;
             let mut bound_weights: Vec<BoundIntegrationWeight<'_>> =
                 Vec::with_capacity(kernels.len());
             let sampler = sample_integration_weight_py(py)?;
@@ -454,51 +434,279 @@ impl SampleWaveforms for WaveformSamplerPy<'_> {
     }
 }
 
-// Code to convert a Python sampled waveform signature to a Rust representation.
-fn convert_sampled_waveform_signature(
-    signature: &Bound<'_, PyAny>,
-) -> PyResult<SampledWaveformSignaturePy> {
-    let py = signature.py();
-    let m1 = signature
-        .getattr(intern!(py, "samples_marker1"))?
-        .extract::<Option<Py<PyAny>>>()?
-        .is_some();
-    let m2 = signature
-        .getattr(intern!(py, "samples_marker2"))?
-        .extract::<Option<Py<PyAny>>>()?
-        .is_some();
-    let signature = SampledWaveformSignaturePy {
-        signature: Arc::new(signature.into_pyobject(py).unwrap().into()),
-        has_markers1: m1,
-        has_markers2: m2,
+struct WaveformConversionContext<'a> {
+    device_kind: DeviceKind,
+    awg_type: AwgKind,
+
+    id_store: &'a NamedIdStore,
+    dedup: &'a PulseParameterDeduplicator,
+}
+
+// --- Expected outputs from the Python sampler when sampling a waveform signature ---
+
+#[derive(FromPyObject)]
+struct BoundSampledWaveformSignaturePy<'py> {
+    samples: BoundSamplesSignaturePy<'py>,
+    pulse_map: HashMap<String, BoundPulseWaveformPy>,
+
+    hold_index_length: Option<(usize, usize)>,
+    compressed: bool,
+}
+
+#[derive(FromPyObject)]
+struct BoundSamplesSignaturePy<'py> {
+    samples_i: Bound<'py, PyAny>,
+    samples_q: Option<Bound<'py, PyAny>>,
+    samples_marker1: Option<Bound<'py, PyAny>>,
+    samples_marker2: Option<Bound<'py, PyAny>>,
+}
+
+#[derive(FromPyObject)]
+struct BoundPulseWaveformPy {
+    sampling_rate: f64,
+    length_samples: usize,
+    iq_modulation: bool,
+    #[pyo3(from_py_with = mixer_type_from_py)]
+    mixer_type: Option<MixerType>,
+    instances: Vec<BoundPulseInstancePy>,
+}
+
+fn mixer_type_from_py(value: &Bound<PyAny>) -> PyResult<Option<MixerType>> {
+    if value.is_none() {
+        Ok(None)
+    } else {
+        let mixer_type_str: String = value.getattr("name")?.extract()?;
+        match mixer_type_str.as_str() {
+            "IQ" => Ok(Some(MixerType::IQ)),
+            "UHFQA_ENVELOPE" => Ok(Some(MixerType::UhfqaEnvelope)),
+            _ => Err(PyTypeError::new_err(format!(
+                "Invalid mixer type: {mixer_type_str}"
+            ))),
+        }
+    }
+}
+
+#[derive(FromPyObject)]
+struct BoundPulseInstancePy {
+    offset_samples: usize,
+    #[pyo3(from_py_with = complex_or_float_from_py)]
+    amplitude: Option<ComplexOrFloat>,
+    length: Option<f64>,
+    iq_phase: Option<f64>,
+    modulation_frequency: Option<f64>,
+    channel: Option<usize>,
+    needs_conjugate: bool,
+    parameters_id: Option<u64>,
+    has_marker1: bool,
+    has_marker2: bool,
+    can_compress: bool,
+}
+
+fn complex_or_float_from_py(value: &Bound<PyAny>) -> PyResult<Option<ComplexOrFloat>> {
+    if let Ok(f) = value.extract::<Complex64>() {
+        Ok(Some(ComplexOrFloat::Complex(f)))
+    } else if let Ok(c) = value.extract::<f64>() {
+        Ok(Some(ComplexOrFloat::Float(c)))
+    } else {
+        Err(PyTypeError::new_err("Expected a complex or float value"))
+    }
+}
+
+fn sampled_waveform_to_signature(
+    sampled_signature: BoundSampledWaveformSignaturePy,
+    signals: &[SignalUid],
+    signature: &WaveformSignatureString,
+    ctx: &WaveformConversionContext,
+) -> Result<SampledWaveformSignature> {
+    let compression = convert_compression(&sampled_signature);
+    let pulse_map = convert_pulse_map(
+        sampled_signature.pulse_map,
+        compression.is_some(),
+        ctx.id_store,
+        ctx.dedup,
+    );
+    let waveforms = samples_to_waveform(sampled_signature.samples, signature, ctx)?;
+
+    let wave = SampledWaveformSignature {
+        waveforms,
+        pulse_map,
+        compression,
+        signals: signals.to_vec(),
     };
-    Ok(signature)
+    Ok(wave)
+}
+
+fn samples_to_waveform(
+    samples: BoundSamplesSignaturePy,
+    signature: &WaveformSignatureString,
+    ctx: &WaveformConversionContext,
+) -> PyResult<Vec<Waveform>> {
+    if matches!(ctx.device_kind, DeviceKind::SHFQA) {
+        let samples = scale_samples(
+            samples
+                .samples_i
+                .cast::<PyArray1<f64>>()
+                .map_err(|e| laboneq_error::laboneq_error!("{e}"))?
+                .readonly(),
+            samples
+                .samples_q
+                .expect("Expected Q-component for SHFQA waveforms")
+                .cast::<PyArray1<f64>>()
+                .map_err(|e| laboneq_error::laboneq_error!("{e}"))?
+                .readonly(),
+            SHFQA_COMPLEX_SAMPLE_SCALING,
+        )?;
+        let wave = Waveform {
+            key: WaveKey {
+                signature: Arc::clone(signature),
+                identifier: None,
+            },
+            samples,
+        };
+        return Ok(vec![wave]);
+    }
+
+    let mut waveforms = Vec::with_capacity(2); // Expect most of the time to have I and Q components.
+
+    let single = matches!(ctx.awg_type, AwgKind::SINGLE);
+
+    let wave_i = Waveform {
+        key: WaveKey {
+            signature: Arc::clone(signature),
+            identifier: if !single {
+                Some(WaveIdentifier::I)
+            } else {
+                None
+            },
+        },
+        samples: SampleBuffer::Float64(samples.samples_i.extract::<Vec<f64>>()?),
+    };
+    waveforms.push(wave_i);
+
+    if !single && let Some(samples_q) = samples.samples_q {
+        let wave_q = Waveform {
+            key: WaveKey {
+                signature: Arc::clone(signature),
+                identifier: Some(WaveIdentifier::Q),
+            },
+            samples: SampleBuffer::Float64(samples_q.extract::<Vec<f64>>()?),
+        };
+        waveforms.push(wave_q);
+    }
+
+    if let Some(samples_marker1) = samples.samples_marker1 {
+        let wave_marker1 = Waveform {
+            key: WaveKey {
+                signature: Arc::clone(signature),
+                identifier: Some(WaveIdentifier::M1),
+            },
+            samples: SampleBuffer::U8(samples_marker1.extract::<Vec<u8>>()?),
+        };
+        waveforms.push(wave_marker1);
+    }
+
+    if let Some(samples_marker2) = samples.samples_marker2 {
+        let wave_marker2 = Waveform {
+            key: WaveKey {
+                signature: Arc::clone(signature),
+                identifier: Some(WaveIdentifier::M2),
+            },
+            samples: SampleBuffer::U8(samples_marker2.extract::<Vec<u8>>()?),
+        };
+        waveforms.push(wave_marker2);
+    }
+    Ok(waveforms)
+}
+
+fn convert_pulse_map(
+    pulse_map: HashMap<String, BoundPulseWaveformPy>,
+    compressed: bool,
+    id_store: &NamedIdStore,
+    dedup: &PulseParameterDeduplicator,
+) -> HashMap<PulseUid, PulseWaveform> {
+    pulse_map
+        .into_iter()
+        .map(|(name, pulse)| {
+            let pulse_uid = id_store
+                .get(name)
+                .expect("Internal error: Failed to resolve pulse UID");
+
+            let pulse_waveform = PulseWaveform {
+                sampling_rate: pulse.sampling_rate,
+                length_samples: pulse.length_samples,
+                iq_modulation: pulse.iq_modulation,
+                mixer_type: pulse.mixer_type,
+                compressed,
+                instances: pulse
+                    .instances
+                    .into_iter()
+                    .map(|instance| {
+                        let parameters = instance.parameters_id.and_then(|id| dedup.resolve(&(id)));
+                        let op_parameters = parameters.map(|p| p.play_parameters.clone());
+                        let pulse_parameters = parameters.map(|p| p.pulse_parameters.clone());
+
+                        PulseInstance {
+                            offset_samples: instance.offset_samples,
+                            amplitude: instance.amplitude,
+                            length: instance.length,
+                            iq_phase: instance.iq_phase,
+                            modulation_frequency: instance.modulation_frequency,
+                            channel: instance.channel,
+                            needs_conjugate: instance.needs_conjugate,
+                            pulse_parameters: pulse_parameters.unwrap_or_default(),
+                            parameters: op_parameters.unwrap_or_default(),
+                            has_marker1: instance.has_marker1,
+                            has_marker2: instance.has_marker2,
+                            can_compress: instance.can_compress,
+                        }
+                    })
+                    .collect(),
+            };
+            (pulse_uid.into(), pulse_waveform)
+        })
+        .collect()
+}
+
+fn convert_compression(waveform: &BoundSampledWaveformSignaturePy) -> Option<WaveCompression> {
+    if let Some((hold_index, hold_length)) = waveform.hold_index_length {
+        Some(WaveCompression::HoldWave {
+            start_index: hold_index,
+            length: hold_length,
+        })
+    } else if waveform.compressed {
+        Some(WaveCompression::Compressed)
+    } else {
+        None
+    }
 }
 
 /// Converts a list of compressed waveform parts from Python to Rust representation.
 fn convert_compressed_waveform_parts(
     compressed_parts: &Bound<'_, PyList>,
-) -> Result<Vec<CompressedWaveformPart<SampledWaveformSignaturePy>>> {
+    signals: &[SignalUid],
+    signature: &WaveformSignatureString,
+    ctx: &WaveformConversionContext,
+) -> Result<Vec<CompressedWaveformPart>> {
     let py = compressed_parts.py();
     let mut out_parts = Vec::with_capacity(compressed_parts.len());
     for result in compressed_parts.iter() {
         if let Ok(ps) = result.cast::<PlaySamplesPy>() {
             let ps = ps.borrow();
-            let samples_id = SamplesSignatureID {
-                uid: ps.uid,
-                label: ps.label.clone(),
-                has_i: ps.has_i,
-                has_q: ps.has_q,
-                has_marker1: ps.has_marker1,
-                has_marker2: ps.has_marker2,
-            };
-            let signature = convert_sampled_waveform_signature(ps.signature.bind(py))
-                .expect("Internal error: Failed to create SampledWaveformSignature");
+            let signature = sampled_waveform_to_signature(
+                ps.signature
+                    .bind(py)
+                    .extract()
+                    .expect("Internal error: Failed to bind waveform"),
+                signals,
+                signature,
+                ctx,
+            )
+            .expect("Internal error: Failed to convert sampled waveform signature");
             let obj = CompressedWaveformPart::PlaySamples {
                 offset: ps.offset,
                 waveform: WaveformSignature::Samples {
                     length: ps.length,
-                    samples_id,
+                    samples_id: signature.samples_uid(),
                 },
                 signature,
             };
@@ -532,23 +740,14 @@ fn sample_only(
     sampling_rate: f64,
     device_type: &Bound<'_, DeviceTypePy>,
     rf_signal: bool,
-    mixer_type: Option<&Bound<'_, MixerTypePy>>,
+    mixer_type: Option<&Bound<'_, PyAny>>,
     signal_type: &Bound<'_, SignalTypePy>,
-    pulse_parameters: &HashMap<PulseParametersId, Py<PulseParametersPy>>,
-    pulse_defs: &HashMap<String, Py<PyAny>>,
+    sampler: &WaveformSamplerPy<'_>,
 ) -> Result<Option<Py<PyAny>>, PyErrorWithContext> {
     if !should_sample_waveform(waveform) {
         return Ok(None);
     }
-    let waveform_desc = create_waveform_description(
-        py,
-        waveform,
-        pulse_defs,
-        &pulse_parameters
-            .iter()
-            .map(|(id, pp)| (*id, pp.clone_ref(py)))
-            .collect(),
-    );
+    let waveform_desc = create_waveform_description(py, waveform, sampler);
     let sample_and_compress_py_func = sample_waveform_py(py)?;
     let sampled_signature = sample_and_compress_py_func.call(
         (
@@ -577,24 +776,15 @@ fn sample_and_compress(
     sampling_rate: f64,
     device_type: &Bound<'_, DeviceTypePy>,
     rf_signal: bool,
-    mixer_type: Option<&Bound<'_, MixerTypePy>>,
+    mixer_type: Option<&Bound<'_, PyAny>>,
     signal_type: &Bound<'_, SignalTypePy>,
-    pulse_parameters: &HashMap<PulseParametersId, Py<PulseParametersPy>>,
-    pulse_defs: &HashMap<String, Py<PyAny>>,
+    sampler: &WaveformSamplerPy<'_>,
 ) -> Result<Option<Py<PyAny>>, PyErrorWithContext> {
     if !should_sample_waveform(waveform) {
         // If the waveform does not need to be sampled, skip the sampling process
         return Ok(None);
     }
-    let waveform_desc = create_waveform_description(
-        py,
-        waveform,
-        pulse_defs,
-        &pulse_parameters
-            .iter()
-            .map(|(id, pp)| (*id, pp.clone_ref(py)))
-            .collect(),
-    );
+    let waveform_desc = create_waveform_description(py, waveform, sampler);
     let sample_and_compress_py_func = sample_and_compress_py(py)?;
     let sampled_signature = sample_and_compress_py_func.call(
         (
@@ -662,7 +852,6 @@ fn calculate_wave_name(
 struct BoundIntegrationWeight<'py> {
     samples_i: NumpyArray<'py>,
     samples_q: NumpyArray<'py>,
-    basename: String,
     signals: Vec<SignalUid>,
 }
 
@@ -674,11 +863,9 @@ impl<'py> BoundIntegrationWeight<'py> {
     ) -> PyResult<Self> {
         let samples_i = NumpyArray { arr: samples_i };
         let samples_q = NumpyArray { arr: samples_q };
-        let basename = calculate_wave_name(&samples_i.tobytes()?, &samples_q.tobytes()?)?;
         Ok(BoundIntegrationWeight {
             samples_i,
             samples_q,
-            basename,
             signals,
         })
     }
@@ -692,39 +879,92 @@ fn create_integration_weights(
     py: Python,
     bound_weights: Vec<BoundIntegrationWeight<'_>>,
     device: &DeviceKind,
-) -> Result<Vec<IntegrationWeight>> {
+) -> Result<Vec<SampledIntegrationKernel>> {
     let common_downsampling_factor = eval_common_downsampling_factor(&bound_weights, device)?;
-    let mut integration_weights: Vec<IntegrationWeight> = Vec::with_capacity(bound_weights.len());
-    if let Some(downsampling_factor) = common_downsampling_factor {
-        for weight in bound_weights.into_iter() {
-            let (samples_i, samples_q) = downsample_samples(
+    let mut integration_weights: Vec<SampledIntegrationKernel> =
+        Vec::with_capacity(bound_weights.len());
+
+    for weight in bound_weights.into_iter() {
+        let basename = Arc::new(calculate_wave_name(
+            &weight.samples_i.tobytes()?,
+            &weight.samples_q.tobytes()?,
+        )?);
+        let (samples_i, samples_q) = if let Some(downsampling_factor) = common_downsampling_factor {
+            downsample_samples(
                 py,
                 weight.samples_i,
                 weight.samples_q,
                 downsampling_factor as usize,
+            )?
+        } else {
+            (weight.samples_i, weight.samples_q)
+        };
+        if matches!(device, DeviceKind::SHFQA) {
+            let samples = scale_samples(
+                samples_i
+                    .arr
+                    .cast::<PyArray1<f64>>()
+                    .map_err(|e| laboneq_error::laboneq_error!("{e}"))?
+                    .readonly(),
+                samples_q
+                    .arr
+                    .cast::<PyArray1<f64>>()
+                    .map_err(|e| laboneq_error::laboneq_error!("{e}"))?
+                    .readonly(),
+                SHFQA_COMPLEX_SAMPLE_SCALING,
             )?;
-            let integration_weight = IntegrationWeight {
-                signals: weight.signals,
-                samples_i: samples_i.arr.unbind(),
-                samples_q: samples_q.arr.unbind(),
-                downsampling_factor: Some(downsampling_factor),
-                basename: weight.basename,
+            let key = WaveKey {
+                signature: Arc::clone(&basename),
+                identifier: None,
             };
+            let waveform = Waveform {
+                key,
+                samples: samples.clone(),
+            };
+            let integration_weight = SampledIntegrationKernel::new(
+                weight.signals,
+                common_downsampling_factor,
+                vec![waveform],
+            );
             integration_weights.push(integration_weight);
-        }
-    } else {
-        for weight in bound_weights.into_iter() {
-            let integration_weight = IntegrationWeight {
-                signals: weight.signals,
-                samples_i: weight.samples_i.arr.unbind(),
-                samples_q: weight.samples_q.arr.unbind(),
-                downsampling_factor: None,
-                basename: weight.basename,
+        } else {
+            let wave_i = Waveform {
+                key: WaveKey {
+                    signature: Arc::clone(&basename),
+                    identifier: Some(WaveIdentifier::I),
+                },
+                samples: SampleBuffer::Float64(samples_i.arr.extract::<Vec<f64>>()?),
             };
+            let wave_q = Waveform {
+                key: WaveKey {
+                    signature: Arc::clone(&basename),
+                    identifier: Some(WaveIdentifier::Q),
+                },
+                samples: SampleBuffer::Float64(samples_q.arr.extract::<Vec<f64>>()?),
+            };
+            let integration_weight =
+                SampledIntegrationKernel::new(weight.signals.clone(), None, vec![wave_i, wave_q]);
             integration_weights.push(integration_weight);
         }
     }
     Ok(integration_weights)
+}
+
+fn scale_samples<'py>(
+    samples_i: PyReadonlyArray1<'py, f64>,
+    samples_q: PyReadonlyArray1<'py, f64>,
+    scaling_factor: f64,
+) -> PyResult<SampleBuffer> {
+    let i = samples_i.as_array();
+    let q = samples_q.as_array();
+    let combined: Vec<Complex64> = i
+        .iter()
+        .zip(q.iter())
+        .map(|(&i_val, &q_val)| {
+            Complex64::new(i_val * scaling_factor + 0.0, -q_val * scaling_factor + 0.0)
+        }) // Convert -0.0 to +0.0
+        .collect();
+    Ok(SampleBuffer::Complex64(combined))
 }
 
 fn downsample_samples<'py>(

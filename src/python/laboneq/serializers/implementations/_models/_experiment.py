@@ -582,6 +582,7 @@ _operation_types = [
     PlayPulseModel,
     ReserveModel,
     SetNodeModel,
+    ResetOscillatorPhaseModel,
 ]
 _operation_types_target_class = {cl._target_class.__name__ for cl in _operation_types}
 OperationModel = Union[
@@ -591,6 +592,7 @@ OperationModel = Union[
     PlayPulseModel,
     ReserveModel,
     SetNodeModel,
+    ResetOscillatorPhaseModel,
 ]
 
 

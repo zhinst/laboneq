@@ -1,8 +1,22 @@
+# LabOne Q 26.7.0b5 (2026-07-02)
+
+## Features
+
+- The automation web viewer now implements CSRF protection by rejecting state-changing requests (non-GET/HEAD) whose Origin or Referer header does not match the request host, and rejecting those sending neither.
+
+## Bug Fixes
+
+- Fixed a bug where deserialization of compiled experiments that use an SHFPCC device
+  with null amplifier pump parameters would fail.
+- Fixed a bug where attempting to serialize an experiment containing `reset_oscillator_phase` would raise an error. `ResetOscillatorPhase` operations are now correctly serialized and deserialized.
+- Fixed a bug where a single-shot result of the form `np.array(X + jY)` was deserialized as `np.array([X + jY])`.
+- Fixed a bug where a compiler error occurred in experiments with near-time sweeps and a static SHFPPC configuration.
+- Fixed a bug where runtime type validation for FIR precompensation coefficients failed with NumPy 2.5.
+
 # LabOne Q 26.7.0b4 (2026-06-18)
 
 ## Features
 
-- Removed `FIRCompensation.strict`. When waveform memory is exhausted and pulse merging occurred (due to FIR precompensation tail or overlapping pulses), the error now includes a note identifying the merged pulses and their combined size.
 - Added an option for the caller of a quantum operation to override the pulse name used by create_pulse.
 
   The create_pulse function used inside many quantum operations allows the implementation of the quantum operation to directly supply a pulse name, which is used to identify the kind of pulse and as part of the pulse UID.

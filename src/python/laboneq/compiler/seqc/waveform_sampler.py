@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import logging
 from collections import namedtuple
 from dataclasses import dataclass, field
@@ -20,139 +19,71 @@ from laboneq.compiler.seqc.wave_compressor import (
     compress_wave,
 )
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums.mixer_type import MixerType
 from laboneq.core.utilities.pulse_sampler import (
     length_to_samples,
     sample_pulse,
     verify_amplitude_no_clipping,
 )
-from laboneq.data.scheduled_experiment import (
-    PulseInstance,
-    PulseWaveformMap,
-)
 
 if TYPE_CHECKING:
     import numpy.typing as npt
 
+    from laboneq.core.types.enums.mixer_type import MixerType
     from laboneq.data.compilation_job import PulseDef
 
 _logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True, unsafe_hash=True)
-class SamplesSignatureID:
-    """An identifier for collection of compressed `WaveformSignature` samples.
+@dataclass
+class _PulseInstance:
+    offset_samples: int
+    amplitude: float | complex | None = None
+    length: float | None = None
+    iq_phase: float | None = None
+    modulation_frequency: float | None = None
+    channel: int | None = None
+    needs_conjugate: bool = False
+    parameters_id: int | None = None
 
-    See also docstring of `WaveformSignature`.
-    This class is used to uniquely identify a set of samples that can be used in a waveform.
-    It is used to avoid uploading the same samples multiple times to the device.
-    It is created from the samples themselves, so it is guaranteed to be unique for a given set of samples `per AWG`.
-
-    Attributes:
-        uid: Unique identifier of the samples.
-        label: Sample label.
-        samples_i: Flag whether the samples has I-component.
-        samples_q: Flag whether the samples has Q-component.
-        samples_marker1: Flag whether the samples has marker 1.
-        samples_marker2: Flag whether the samples has marker 2.
-    """
-
-    uid: int
-    label: str
-    has_i: bool
-    has_q: bool = False
     has_marker1: bool = False
     has_marker2: bool = False
+    can_compress: bool = False
 
 
-@dataclass(frozen=True)
+@dataclass
+class _PulseWaveformMap:
+    sampling_rate: float
+    length_samples: int
+    iq_modulation: bool
+    mixer_type: MixerType | None = None
+    instances: list[_PulseInstance] = field(default_factory=list)
+
+
+@dataclass
 class SamplesSignature:
-    """Samples signature.
-
-    The underlying promise is that two keys with the same values are guaranteed to resolve to the same samples
-    across a single AWG."""
+    """Samples of an individual waveform."""
 
     samples_i: np.ndarray
     samples_q: np.ndarray | None = None
     samples_marker1: np.ndarray | None = None
     samples_marker2: np.ndarray | None = None
 
-    @staticmethod
-    def _compare_maybe_arrays(one: np.ndarray | None, other: np.ndarray | None) -> bool:
-        """Compare two arrays or None."""
-        if one is None and other is None:
-            return True
-        if one is None or other is None:
-            return False
-        return np.array_equal(one, other)
-
-    def uid(self) -> int:
-        """Return a stable unique identifier for the samples."""
-        return hash(self)
-
-    def __eq__(self, other: SamplesSignature):
-        if not isinstance(other, SamplesSignature):
-            return NotImplemented
-        return (
-            np.array_equal(self.samples_i, other.samples_i)
-            and self._compare_maybe_arrays(self.samples_q, other.samples_q)
-            and self._compare_maybe_arrays(self.samples_marker1, other.samples_marker1)
-            and self._compare_maybe_arrays(self.samples_marker2, other.samples_marker2)
-        )
-
-    def __hash__(self):
-        def arr_to_bytes(arr: np.ndarray | None) -> bytes:
-            return arr.tobytes() if arr is not None else b""
-
-        h = hashlib.md5()
-        h.update(arr_to_bytes(self.samples_i))
-        h.update(arr_to_bytes(self.samples_q))
-        h.update(arr_to_bytes(self.samples_marker1))
-        h.update(arr_to_bytes(self.samples_marker2))
-        for arr in (
-            self.samples_i,
-            self.samples_q,
-            self.samples_marker1,
-            self.samples_marker2,
-        ):
-            if arr is not None:
-                h.update(str(arr.shape).encode())
-                h.update(str(arr.dtype).encode())
-        return int.from_bytes(h.digest()[:8], "big", signed=False)
-
-
-def generate_sampled_waveform_signature(
-    samples_i: np.ndarray,
-    samples_q: np.ndarray | None = None,
-    samples_marker1: np.ndarray | None = None,
-    samples_marker2: np.ndarray | None = None,
-) -> tuple[SamplesSignatureID, SampledWaveformSignature]:
-    """Generate a `SamplesSignatureID` and `SampledSignature` from the provided samples."""
-    label = "compr"
-    signature = SamplesSignature(
-        samples_i=samples_i,
-        samples_q=samples_q,
-        samples_marker1=samples_marker1,
-        samples_marker2=samples_marker2,
-    )
-    return SamplesSignatureID(
-        label=label,
-        uid=signature.uid(),
-        has_i=signature.samples_i is not None,
-        has_q=signature.samples_q is not None,
-        has_marker1=signature.samples_marker1 is not None,
-        has_marker2=signature.samples_marker2 is not None,
-    ), signature
+    def __post_init__(self):
+        # -0.0 + 0.0 = +0.0 per IEEE 754, normalising negative zeros for stable hashing.
+        # Markers are integer arrays and cannot contain -0.0.
+        self.samples_i = self.samples_i + 0.0
+        if self.samples_q is not None:
+            self.samples_q = self.samples_q + 0.0
 
 
 @dataclass
 class SampledWaveformSignature:
     samples: SamplesSignature
     # Waveform per pulse def
-    pulse_map: dict[str, PulseWaveformMap] = field(default_factory=dict)
+    pulse_map: dict[str, _PulseWaveformMap] = field(default_factory=dict)
     # Compression parameters
-    hold_start: int | None = None
-    hold_length: int | None = None
+    hold_index_length: tuple[int, int] | None = None
+    compressed: bool = False
 
     @property
     def samples_i(self) -> np.ndarray:
@@ -191,23 +122,13 @@ def convert_device_type(device_type: codegen_rs.DeviceType) -> DeviceType:
     raise RuntimeError(f"Unsupported device type {device_type}. ")
 
 
-def convert_mixer_type(mixer_type: codegen_rs.MixerType | None) -> MixerType | None:
-    if mixer_type == codegen_rs.MixerType.IQ:
-        return MixerType.IQ
-    if mixer_type == codegen_rs.MixerType.UHFQA_ENVELOPE:
-        return MixerType.UHFQA_ENVELOPE
-    if mixer_type is None:
-        return None
-    raise RuntimeError(f"Unsupported mixer type {mixer_type}.")
-
-
 def sample_and_compress(
     waveform: codegen_rs.WaveformSamplingDesc,
     signals: tuple[str],
     sampling_rate: float,
     signal_type: codegen_rs.SignalType,
     device_type: codegen_rs.DeviceType,
-    mixer_type: codegen_rs.MixerType | None,
+    mixer_type: MixerType | None,
     rf_signal=False,
 ) -> (
     SampledWaveformSignature | list[codegen_rs.PlayHold | codegen_rs.PlaySamples] | None
@@ -236,11 +157,10 @@ def sample_integration_weight(
     oscillator_frequency: float,
     signals: set[str],
     sampling_rate: float,
-    mixer_type: codegen_rs.MixerType | None,
+    mixer_type: MixerType | None,
 ) -> tuple[npt.ArrayLike, npt.ArrayLike]:
     pulse_parameters = pulse_parameters.parameters if pulse_parameters else {}
     pulse_def = pulse_id
-    mixer_type = convert_mixer_type(mixer_type)
     samples = pulse_def.samples
     amplitude: float = pulse_def.amplitude
     length = pulse_def.length
@@ -275,20 +195,20 @@ def sample_waveform(
     sampling_rate: float,
     signal_type: str,
     device_type: DeviceType,
-    mixer_type: codegen_rs.MixerType | None,
+    mixer_type: MixerType | None,
     rf_signal=False,
 ) -> SampledWaveformSignature:
     """Sample a single waveform signature."""
     signal_type = "iq" if signal_type == codegen_rs.SignalType.IQ else "single"
+    iq_modulation = signal_type == "iq"
     device_type = convert_device_type(device_type)
-    mixer_type = convert_mixer_type(mixer_type)
     length = waveform.length
     pulses = waveform.pulses
     if length % device_type.sample_multiple != 0:
         raise Exception(
             f"Length of waveform {[x.pulse for x in pulses]} is not divisible by {device_type.sample_multiple}, which it needs to be for {device_type.value}"
         )
-    signature_pulse_map: dict[str, PulseWaveformMap] = {}
+    signature_pulse_map: dict[str, _PulseWaveformMap] = {}
     samples_i = np.zeros(length)
     samples_q = np.zeros(length)
     samples_marker1 = np.zeros(length, dtype=np.int16)
@@ -307,18 +227,15 @@ def sample_waveform(
         used_oscillator_frequency = pulse_part.oscillator_frequency
 
         iq_phase = pulse_part.phase
+        pulse_parameters_uid = None
         if pulse_part.pulse_parameters is not None:
+            pulse_parameters_uid = pulse_part.pulse_parameters.parameters_id
             pulse_params = pulse_part.pulse_parameters
-            params_pulse_pulse = pulse_params.pulse_parameters or {}
-            params_pulse_play = pulse_params.play_parameters or {}
             params_pulse_combined = pulse_params.parameters
         else:
-            params_pulse_pulse = {}
-            params_pulse_play = {}
             params_pulse_combined = None
-        sampling_signal_type = signal_type if signal_type == "iq" else None
         sampled_pulse = sample_pulse(
-            signal_type=sampling_signal_type,
+            signal_type=signal_type,
             sampling_rate=sampling_rate,
             amplitude=amplitude,
             length=pulse_part.length / sampling_rate,
@@ -415,10 +332,10 @@ def sample_waveform(
 
         pm = signature_pulse_map.get(pulse_def.uid)
         if pm is None:
-            pm = PulseWaveformMap(
+            pm = _PulseWaveformMap(
                 sampling_rate=sampling_rate,
                 length_samples=pulse_part.length,
-                signal_type=sampling_signal_type,
+                iq_modulation=iq_modulation,
                 mixer_type=mixer_type,
             )
             signature_pulse_map[pulse_def.uid] = pm
@@ -426,7 +343,7 @@ def sample_waveform(
         pulse_amplitude = pulse_def.amplitude
         amplitude_multiplier = amplitude / pulse_amplitude if pulse_amplitude else 0.0
         pm.instances.append(
-            PulseInstance(
+            _PulseInstance(
                 offset_samples=pulse_part.start,
                 amplitude=amplitude_multiplier,
                 length=pulse_part.length,
@@ -434,8 +351,7 @@ def sample_waveform(
                 iq_phase=iq_phase,
                 channel=pulse_part.channel,
                 needs_conjugate=device_type == DeviceType.SHFSG,
-                play_pulse_parameters=params_pulse_play,
-                pulse_pulse_parameters=params_pulse_pulse,
+                parameters_id=pulse_parameters_uid,
                 has_marker1=has_marker1,
                 has_marker2=has_marker2,
                 can_compress=pulse_def.can_compress,
@@ -555,9 +471,11 @@ def _compress_qa_waveform(sampled_signature: SampledWaveformSignature) -> None:
             samples_marker2=None,
         )
         sampled_signature.samples = new_samples_signature
-        sampled_signature.hold_start = len(new_events[0].samples["i"])
+        hold_start = len(new_events[0].samples["i"])
         assert new_events[1].num_samples >= 12  # Ensured by previous conditions
-        sampled_signature.hold_length = new_events[1].num_samples - 4
+        hold_length = new_events[1].num_samples - 4
+        sampled_signature.hold_index_length = (hold_start, hold_length)
+        sampled_signature.compressed = True
         return None
     raise LabOneQException(
         "Unexpected SHFQA long measure pulse: only a single const region is allowed."
@@ -655,39 +573,26 @@ def _emit_new_awg_events(
             new_parts.append(new_part)
             time += new_event.num_samples
         if isinstance(new_event, PlaySamples):
-            samples_signature_id, samples_signature = (
-                generate_sampled_waveform_signature(
-                    samples_i=new_event.samples.get("samples_i"),
-                    samples_q=new_event.samples.get("samples_q"),
-                    samples_marker1=new_event.samples.get("samples_marker1"),
-                    samples_marker2=new_event.samples.get("samples_marker2"),
-                )
-            )
-            new_length = len(samples_signature.samples_i)
-            offset = time
             sampled_signature_new = copy.deepcopy(source_signature)
-            sampled_signature_new.samples = samples_signature
+            sampled_signature_new.samples = SamplesSignature(
+                samples_i=new_event.samples.get("samples_i"),
+                samples_q=new_event.samples.get("samples_q"),
+                samples_marker1=new_event.samples.get("samples_marker1"),
+                samples_marker2=new_event.samples.get("samples_marker2"),
+            )
+            new_length = len(sampled_signature_new.samples.samples_i)
             # update 3 things in samples signatures
             #   - name of pulses that have been compressed
             #   - length_samples entry in signature pulse map
             #   - length entry in the instances stored in the signature pulse map
-            pulse_map = sampled_signature_new.pulse_map
-            for pulse_name in list(pulse_map.keys()):
-                compressed_name = pulse_name + "_compr_"
-                pulse_map[compressed_name] = pulse_map.pop(pulse_name)
-            for sp_map in pulse_map.values():
+            sampled_signature_new.compressed = True
+            for sp_map in sampled_signature_new.pulse_map.values():
                 sp_map.length_samples = new_length
                 for signature in sp_map.instances:
                     signature.length = new_length
             new_part = codegen_rs.PlaySamples(
-                offset=offset,
+                offset=time,
                 length=new_length,
-                uid=samples_signature_id.uid,
-                label=samples_signature_id.label,
-                has_i=samples_signature_id.has_i,
-                has_q=samples_signature_id.has_q,
-                has_marker1=samples_signature_id.has_marker1,
-                has_marker2=samples_signature_id.has_marker2,
                 signature=sampled_signature_new,
             )
             new_parts.append(new_part)

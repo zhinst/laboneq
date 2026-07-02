@@ -19,33 +19,36 @@ use crate::ir::compilation_job::ChannelIndex;
 use crate::ir::compilation_job::DeviceUid;
 use crate::ir::compilation_job::{AwgKey, DeviceKind};
 use crate::ir::experiment::Handle;
-pub use crate::sample_waveforms::SampledWaveform;
+use crate::pulse_map::PulseMap;
 pub use crate::sampled_event_handler::ParameterPhaseIncrement;
 pub use crate::sampled_event_handler::SHFPPCSweeperConfig;
 pub use crate::sampled_event_handler::seqc_tracker::wave_index_tracker::SignalType;
 pub use crate::sampled_event_handler::seqc_tracker::wave_index_tracker::WaveIndex;
 
 use crate::ir::Samples;
-use crate::sample_waveforms::SampleWaveforms;
+pub use crate::waveform::CodegenWaveform;
+pub use crate::waveform::WaveformSignatureString;
+pub use crate::waveform::WaveformStore;
 
-pub struct SeqCGenOutput<T: SampleWaveforms> {
+pub struct SeqCGenOutput {
     pub device_properties: Vec<DeviceProperties>,
     pub auxiliary_device_properties: Vec<AuxiliaryDevice>,
-    pub awg_results: Vec<AwgCodeGenerationResult<T>>,
+    pub awg_results: Vec<AwgCodeGenerationResult>,
     pub total_execution_time: f64,
     pub measurements: Vec<Measurement>,
     pub ppc_settings: Vec<PpcSettings>,
+    pub waveforms: Vec<CodegenWaveform>,
+    pub waveform_store: WaveformStore,
+    pub pulse_map: PulseMap,
 }
 
-pub struct AwgCodeGenerationResult<T: SampleWaveforms> {
+pub struct AwgCodeGenerationResult {
     pub awg: AwgProperties,
     pub seqc: SeqCProgram,
     pub wave_indices: IndexMap<String, (WaveIndex, SignalType)>,
     pub command_table: Option<CommandTable>,
     /// SHFPPC sweeper configuration JSON string, if applicable.
     pub(crate) shf_sweeper_config: Option<String>,
-    pub sampled_waveforms: Vec<SampledWaveform<T::Signature>>,
-    pub integration_kernels: Vec<T::SampledIntegrationKernel>,
     pub integration_lengths: HashMap<SignalUid, SignalIntegrationInfo>,
     pub feedback_register_config: FeedbackRegisterConfig,
     pub output_channel_properties: Vec<ChannelProperties>,
@@ -54,6 +57,9 @@ pub struct AwgCodeGenerationResult<T: SampleWaveforms> {
     pub integrator_allocations: Vec<IntegratorAllocation>,
     pub result_length: Option<usize>,
     pub result_handle_maps: HashMap<ResultSource, Vec<Vec<Handle>>>,
+    pub(crate) waveforms: Vec<CodegenWaveform>,
+    pub(crate) waveform_store: WaveformStore,
+    pub(crate) pulse_map: PulseMap,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -199,6 +205,7 @@ pub struct ChannelProperties {
     pub lo_frequency: Option<FixedValueOrParameter<f64>>,
     pub routed_outputs: Vec<RoutedOutput>,
     pub output_mute_enable: bool,
+    pub requires_long_readout: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -232,6 +239,7 @@ pub struct InputChannelProperties {
     pub range: Option<Quantity>,
     pub lo_frequency: Option<FixedValueOrParameter<f64>>,
     pub oscillator: Option<ChannelOscillator>,
+    pub requires_long_readout: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

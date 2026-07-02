@@ -43,7 +43,6 @@ use crate::utils::length_to_samples;
 
 pub struct CodegenIr {
     pub(crate) root: IrNode,
-    pub pulse_parameters: PulseParameterDeduplicator,
     pub acquisition_type: AcquisitionType,
     pub(crate) averaging_mode: AveragingMode,
     pub(crate) averaging_count: NonZero<u32>,
@@ -71,7 +70,7 @@ pub struct SignalChannelProperties {
 pub fn ir_to_codegen_ir(
     experiment: &ExperimentIr,
     hardware_setup: &HardwareSetup,
-) -> Result<CodegenIr> {
+) -> Result<(CodegenIr, PulseParameterDeduplicator)> {
     let ir_signals = experiment.device_setup.signals().collect::<Vec<_>>();
     let id_store = &experiment.id_store;
 
@@ -178,10 +177,10 @@ pub fn ir_to_codegen_ir(
     let device_properties = create_device_properties(experiment, id_store);
 
     let codegen_ir = transform_ir(&mut lowerer, &experiment.root, tiny_samples(0))?;
+    let dedup = lowerer.pulse_parameter_deduplicator;
 
     let result = CodegenIr {
         root: codegen_ir,
-        pulse_parameters: lowerer.pulse_parameter_deduplicator,
         acquisition_type: convert_acquisition_type(&experiment.acquisition_type),
         averaging_mode: lowerer.averaging_mode,
         averaging_count: lowerer.averaging_count,
@@ -194,7 +193,7 @@ pub fn ir_to_codegen_ir(
         awg_devices: device_properties,
         auxiliary_devices: hardware_setup.auxiliary_devices.clone(),
     };
-    Ok(result)
+    Ok((result, dedup))
 }
 
 fn create_device_properties(

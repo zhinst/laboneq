@@ -30,6 +30,17 @@ pub struct GeoLocation {
     pub port: u16,
 }
 
+impl From<[u16; 4]> for GeoLocation {
+    fn from([shelf, slot, frontend, port]: [u16; 4]) -> Self {
+        Self {
+            shelf,
+            slot,
+            frontend,
+            port,
+        }
+    }
+}
+
 impl std::str::FromStr for GeoLocation {
     type Err = String;
 

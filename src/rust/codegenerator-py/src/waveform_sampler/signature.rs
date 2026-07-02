@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use codegenerator::ir::compilation_job::Marker;
-use codegenerator::ir::experiment::PulseParametersId;
 use codegenerator::signature::{PulseSignature, WaveformSignature};
 use pyo3::prelude::*;
-use std::collections::HashMap;
+
+use crate::waveform_sampler::WaveformSamplerPy;
 
 use super::pulse_parameters::PulseParametersPy;
 
@@ -56,15 +56,13 @@ pub(crate) struct MarkerSamplingDescPy {
 pub(crate) fn create_waveform_description(
     py: Python,
     waveform: &WaveformSignature,
-    pulse_defs: &HashMap<String, Py<PyAny>>,
-    pulse_parameters: &HashMap<PulseParametersId, Py<PulseParametersPy>>,
+    sampler: &WaveformSamplerPy<'_>,
 ) -> WaveformSamplingDescPy {
     let pulses = if let WaveformSignature::Pulses { pulses, .. } = waveform {
         pulses
             .iter()
             .filter_map(|sig| {
-                create_pulse_description(py, sig, pulse_defs, pulse_parameters)
-                    .map(|desc| Py::new(py, desc).unwrap())
+                create_pulse_description(py, sig, sampler).map(|desc| Py::new(py, desc).unwrap())
             })
             .collect()
     } else {
@@ -79,8 +77,7 @@ pub(crate) fn create_waveform_description(
 fn create_pulse_description(
     py: Python,
     pulse: &PulseSignature,
-    pulse_defs: &HashMap<String, Py<PyAny>>,
-    pulse_parameters: &HashMap<PulseParametersId, Py<PulseParametersPy>>,
+    sampler: &WaveformSamplerPy<'_>,
 ) -> Option<PulseSamplingDescPy> {
     // If there is no pulse associated with the signature, no sampling needed
     let pulse_uid = if let Some(p) = &pulse.pulse {
@@ -89,17 +86,20 @@ fn create_pulse_description(
         return None;
     };
     PulseSamplingDescPy {
-        pulse: pulse_defs.get(pulse_uid.as_str()).unwrap().clone_ref(py),
+        pulse: sampler.pulse_def_py(py, pulse_uid),
         start: pulse.start,
         length: pulse.length,
         amplitude: pulse.amplitude.unwrap_or(0.0),
         oscillator_frequency: pulse.oscillator_frequency,
         phase: pulse.phase,
         channel: pulse.channel,
-        markers: create_marker_description(py, &pulse.markers, pulse_defs),
-        pulse_parameters: pulse
-            .id_pulse_params
-            .map(|uid| pulse_parameters.get(&uid).unwrap().clone_ref(py)),
+        markers: create_marker_description(py, &pulse.markers, sampler),
+        pulse_parameters: pulse.id_pulse_params.map(|uid| {
+            sampler
+                .pulse_parameters_to_py(py, uid)
+                .expect("Internal error: Failed to resolve pulse parameters.")
+                .unbind()
+        }),
     }
     .into()
 }
@@ -107,7 +107,7 @@ fn create_pulse_description(
 fn create_marker_description(
     py: Python,
     markers: &[Marker],
-    pulse_defs: &HashMap<String, Py<PyAny>>,
+    sampler: &WaveformSamplerPy<'_>,
 ) -> Vec<Py<MarkerSamplingDescPy>> {
     markers
         .iter()
@@ -117,7 +117,7 @@ fn create_marker_description(
                 enable: m.enable,
                 start: m.start,
                 length: m.length,
-                pulse: m.pulse_id.as_ref().map(|pid| pulse_defs[pid].clone_ref(py)),
+                pulse: m.pulse_id.as_ref().map(|pid| sampler.pulse_def_py(py, pid)),
             };
             Py::new(py, desc_py).unwrap()
         })

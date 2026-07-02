@@ -6,24 +6,32 @@
 //! This module defines the [`AwgCodeGenerationResultPy`] class, which is used to
 //! represent the result of the code generation process for an AWG.
 
-use pyo3::{IntoPyObjectExt, prelude::*};
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use codegenerator::pulse_map::PulseMap;
+use laboneq_py_utils::py_export::{complex_or_float_to_py, pulse_parameters_to_py_dict};
+use laboneq_py_utils::py_object_interner::PyObjectInterner;
+use numpy::PyArray1;
+use pyo3::types::{PyDict, PyList};
+use pyo3::{IntoPyObjectExt, intern, prelude::*};
+use std::collections::HashMap;
 
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_dsl::types::{PumpCancellationSource, Quantity, Unit};
+use laboneq_dsl::types::{ExternalParameterUid, PumpCancellationSource, Quantity, Unit};
 use laboneq_units::duration::{Duration, Second};
 
 use codegenerator::ir::compilation_job::ChannelIndex;
 use codegenerator::ir::compilation_job::DeviceUid;
 use codegenerator::ir::{Samples, compilation_job::AwgKind};
 use codegenerator::result::{AwgCodeGenerationResult, MarkerMode};
-use codegenerator::result::{ChannelOscillator, SignalType};
+use codegenerator::result::{ChannelOscillator, CodegenWaveform, SignalType};
 use codegenerator::result::{FixedValueOrParameter, ParameterPhaseIncrement};
 use codegenerator::result::{PpcSettings, RoutedOutput, SeqCGenOutput};
+use codegenerator::waveform_sampler::{SampleBuffer, WaveformStore};
 
 use crate::common_types::PortModePy;
-use crate::waveform_sampler::WaveformSamplerPy;
+use crate::utils::mixer_type_to_py;
+
+type DeviceUidString = String;
+type SignalUidString = String;
 
 #[pyo3::pyclass(name = "FeedbackRegisterConfig", skip_from_py_object)]
 #[derive(Debug, Clone)]
@@ -58,57 +66,6 @@ impl FeedbackRegisterConfigPy {
             && self.target_feedback_register == other.target_feedback_register
     }
 }
-
-#[pyclass(name = "SampledWaveform")]
-#[derive(Debug)]
-pub struct SampledWaveformPy {
-    #[pyo3(get)]
-    signals: HashSet<String>,
-    signature_string: Arc<String>,
-    signature: Arc<Py<PyAny>>,
-}
-
-// SAFETY: Safe to Send/Sync across threads.
-// - Py<T> fields use PyO3's delayed reference count mechanism for thread-safe drops
-// - Other fields (HashSet<String>, Arc<String>) are inherently Send/Sync
-// - No thread-local storage or thread-specific state
-unsafe impl Send for SampledWaveformPy {}
-unsafe impl Sync for SampledWaveformPy {}
-
-#[pymethods]
-impl SampledWaveformPy {
-    #[getter]
-    pub fn signature_string(&self) -> &str {
-        &self.signature_string
-    }
-
-    #[getter]
-    pub fn signature(&self) -> &Py<PyAny> {
-        &self.signature
-    }
-}
-
-#[pyclass(name = "IntegrationKernel")]
-#[derive(Debug)]
-pub(crate) struct IntegrationKernelPy {
-    #[pyo3(get)]
-    pub signals: Vec<String>,
-    #[pyo3(get)]
-    pub samples_i: Py<PyAny>,
-    #[pyo3(get)]
-    pub samples_q: Py<PyAny>,
-    #[pyo3(get)]
-    pub downsampling_factor: Option<u8>,
-    #[pyo3(get)]
-    pub basename: String,
-}
-
-// SAFETY: Safe to Send/Sync across threads.
-// - Py<PyAny> fields (samples_i, samples_q) use PyO3's thread-safe drop mechanism
-// - Other fields (HashSet, String, Option<usize>) are inherently Send/Sync
-// - No thread-local storage or thread-specific state
-unsafe impl Send for IntegrationKernelPy {}
-unsafe impl Sync for IntegrationKernelPy {}
 
 #[pyclass(name = "SignalIntegrationInfo")]
 #[derive(Debug)]
@@ -160,6 +117,46 @@ struct PpcSettingsPy {
     sweep_config: Option<String>,
 }
 
+/// Compare two optional Python values for equality, honouring their Python
+/// `__eq__` semantics.
+fn py_opt_eq<T>(py: Python<'_>, a: &Option<Py<T>>, b: &Option<Py<T>>) -> PyResult<bool> {
+    match (a, b) {
+        (None, None) => Ok(true),
+        (Some(a), Some(b)) => a.bind(py).as_any().eq(b.bind(py).as_any()),
+        _ => Ok(false),
+    }
+}
+
+#[pymethods]
+impl PpcSettingsPy {
+    // The linker compares PPC settings across real-time iterations to ensure
+    // they are static. Without an explicit `__eq__`, distinct instances would
+    // compare unequal by identity, so identical configurations across
+    // near-time steps would spuriously fail compilation.
+    fn __eq__(&self, py: Python<'_>, other: &PpcSettingsPy) -> PyResult<bool> {
+        Ok(self.device == other.device
+            && self.channel == other.channel
+            && self.alc_on == other.alc_on
+            && self.pump_on == other.pump_on
+            && self.pump_filter_on == other.pump_filter_on
+            && py_opt_eq(py, &self.pump_power, &other.pump_power)?
+            && py_opt_eq(py, &self.pump_frequency, &other.pump_frequency)?
+            && self.probe_on == other.probe_on
+            && py_opt_eq(py, &self.probe_power, &other.probe_power)?
+            && py_opt_eq(py, &self.probe_frequency, &other.probe_frequency)?
+            && self.cancellation_on == other.cancellation_on
+            && py_opt_eq(py, &self.cancellation_phase, &other.cancellation_phase)?
+            && py_opt_eq(
+                py,
+                &self.cancellation_attenuation,
+                &other.cancellation_attenuation,
+            )?
+            && self.cancellation_source == other.cancellation_source
+            && self.cancellation_source_frequency == other.cancellation_source_frequency
+            && self.sweep_config == other.sweep_config)
+    }
+}
+
 /// Result structure for single AWG code generation.
 #[pyclass(name = "AwgCodeGenerationResult", frozen)]
 pub(crate) struct AwgCodeGenerationResultPy {
@@ -171,10 +168,6 @@ pub(crate) struct AwgCodeGenerationResultPy {
     wave_indices: Vec<(String, (u32, String))>,
     #[pyo3(get)]
     command_table: Option<String>,
-    #[pyo3(get)]
-    sampled_waveforms: Vec<Py<SampledWaveformPy>>,
-    #[pyo3(get)]
-    integration_kernels: Vec<Py<IntegrationKernelPy>>,
     #[pyo3(get)]
     integration_lengths: HashMap<String, Py<SignalIntegrationInfoPy>>,
     #[pyo3(get)]
@@ -210,7 +203,7 @@ pub struct AwgPropertiesPy {
     kind: AwgKind,
 }
 
-#[pyclass(name = "QuantityPy", skip_from_py_object)]
+#[pyclass(name = "QuantityPy", eq, skip_from_py_object)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct QuantityPy {
     #[pyo3(get)]
@@ -231,6 +224,15 @@ pub(crate) struct RoutedOutputPy {
 }
 
 #[pymethods]
+impl RoutedOutputPy {
+    fn __eq__(&self, py: Python<'_>, other: &RoutedOutputPy) -> PyResult<bool> {
+        Ok(self.source_channel == other.source_channel
+            && py_opt_eq(py, &self.amplitude_scaling, &other.amplitude_scaling)?
+            && py_opt_eq(py, &self.phase_shift, &other.phase_shift)?)
+    }
+}
+
+#[pymethods]
 impl AwgPropertiesPy {
     #[getter]
     fn key(&self) -> (&str, i64) {
@@ -247,62 +249,12 @@ impl AwgPropertiesPy {
     }
 }
 
-// SAFETY: Safe to Send/Sync across threads.
-// - All Py<T> fields rely on PyO3's delayed reference count mechanism for safe
-//   cross-thread drops (see https://docs.rs/pyo3/0.28.0/pyo3/struct.Py.html#impl-Drop-for-Py%3CT%3E)
-// - SampledWaveformPy and IntegrationKernelPy are themselves Send/Sync
-// - All other fields are standard Send/Sync types (String, Vec, HashMap, Option, etc.)
-// - No thread-local storage or thread-specific state
-// This enables passing compiled results to async executors and background threads.
-unsafe impl Send for AwgCodeGenerationResultPy {}
-unsafe impl Sync for AwgCodeGenerationResultPy {}
-
 impl AwgCodeGenerationResultPy {
     pub(crate) fn create(
         py: Python,
-        mut result: AwgCodeGenerationResult<WaveformSamplerPy>,
+        mut result: AwgCodeGenerationResult,
         id_store: &NamedIdStore,
     ) -> PyResult<Self> {
-        let sampled_waveforms: Vec<Py<SampledWaveformPy>> = result
-            .sampled_waveforms
-            .into_iter()
-            .map(|sampled| {
-                Py::new(
-                    py,
-                    SampledWaveformPy {
-                        signals: sampled
-                            .signals
-                            .iter()
-                            .map(|s| id_store.resolve_unchecked(*s).to_string())
-                            .collect(),
-                        signature_string: Arc::clone(&sampled.signature_string),
-                        signature: sampled.signature.signature,
-                    },
-                )
-                .unwrap()
-            })
-            .collect();
-        let integration_kernels: Vec<Py<IntegrationKernelPy>> = result
-            .integration_kernels
-            .into_iter()
-            .map(|weight| {
-                Py::new(
-                    py,
-                    IntegrationKernelPy {
-                        signals: weight
-                            .signals
-                            .iter()
-                            .map(|s| id_store.resolve_unchecked(*s).to_string())
-                            .collect(),
-                        samples_i: weight.samples_i,
-                        samples_q: weight.samples_q,
-                        downsampling_factor: weight.downsampling_factor,
-                        basename: weight.basename,
-                    },
-                )
-                .unwrap()
-            })
-            .collect();
         let integration_lengths = result
             .integration_lengths
             .into_iter()
@@ -515,8 +467,6 @@ impl AwgCodeGenerationResultPy {
             },
             wave_indices,
             command_table,
-            sampled_waveforms,
-            integration_kernels,
             integration_lengths,
             parameter_phase_increment_map,
             feedback_register_config,
@@ -627,14 +577,22 @@ pub struct SeqCGenOutputPy {
     measurements: Vec<MeasurementPy>,
     #[pyo3(get)]
     ppc_settings: Vec<Py<PpcSettingsPy>>,
+    /// Map of device ID to list of signals that require long readout
+    #[pyo3(get)]
+    requires_long_readout: Py<PyDict>,
+    #[pyo3(get)]
+    waves: Py<PyDict>,
+    #[pyo3(get)]
+    pulse_map: Py<PyDict>,
 }
 
 impl SeqCGenOutputPy {
     pub fn new(
         py: Python,
-        mut results: SeqCGenOutput<WaveformSamplerPy>,
+        mut results: SeqCGenOutput,
         id_store: &NamedIdStore,
-    ) -> Self {
+        py_object_store: &PyObjectInterner<ExternalParameterUid>,
+    ) -> PyResult<Self> {
         let result_handle_maps = results
             .awg_results
             .iter()
@@ -658,6 +616,7 @@ impl SeqCGenOutputPy {
                 })
             })
             .collect();
+        let requires_long_readout = collect_requires_long_readout(py, &results, id_store)?;
 
         let awg_results: Vec<Py<AwgCodeGenerationResultPy>> = results
             .awg_results
@@ -683,20 +642,62 @@ impl SeqCGenOutputPy {
 
         let device_properties = create_device_properties(py, &results, id_store);
 
-        SeqCGenOutputPy {
+        let output = SeqCGenOutputPy {
             device_properties,
             awg_results,
             total_execution_time: results.total_execution_time,
             result_handle_maps,
             measurements,
             ppc_settings: convert_ppc_settings(py, results.ppc_settings, id_store),
+            requires_long_readout: requires_long_readout.into(),
+            waves: create_waves(py, results.waveforms, results.waveform_store).unwrap(),
+            pulse_map: pulse_map_to_py(py, results.pulse_map, id_store, py_object_store)?.unbind(),
+        };
+        Ok(output)
+    }
+}
+
+fn collect_requires_long_readout<'py>(
+    py: Python<'py>,
+    results: &SeqCGenOutput,
+    id_store: &NamedIdStore,
+) -> PyResult<Bound<'py, PyDict>> {
+    fn insert_to_mapping(
+        mapping: &Bound<'_, PyDict>,
+        signal: &str,
+        device_uid: &str,
+    ) -> PyResult<()> {
+        if let Some(signals) = mapping.get_item(device_uid)? {
+            signals.cast_into::<PyList>()?.append(signal)?;
+        } else {
+            mapping.set_item(device_uid, vec![signal])?;
+        }
+        Ok(())
+    }
+
+    // Build directly into a PyDict to preserve order of devices
+    let mapping = PyDict::new(py);
+    for result in &results.awg_results {
+        let device_id = result.awg.key.device_name().to_string();
+        for ch in &result.output_channel_properties {
+            if ch.requires_long_readout {
+                let signal = id_store.resolve(ch.signal).unwrap().to_string();
+                insert_to_mapping(&mapping, &signal, &device_id)?;
+            }
+        }
+        for ch in &result.input_channel_properties {
+            if ch.requires_long_readout {
+                let signal = id_store.resolve(ch.signal).unwrap().to_string();
+                insert_to_mapping(&mapping, &signal, &device_id)?;
+            }
         }
     }
+    Ok(mapping)
 }
 
 fn create_device_properties(
     py: Python,
-    output: &SeqCGenOutput<WaveformSamplerPy>,
+    output: &SeqCGenOutput,
     id_store: &NamedIdStore,
 ) -> Vec<Py<DevicePropertiesPy>> {
     let mut devices = output
@@ -808,7 +809,7 @@ impl MeasurementPy {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ResultSourcePy {
     #[pyo3(get)]
-    pub device_id: String,
+    pub device_id: DeviceUidString,
     #[pyo3(get)]
     pub awg_id: u16,
     #[pyo3(get)]
@@ -825,7 +826,7 @@ pub(crate) struct ResultSourcePy {
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub(crate) struct IntegrationUnitAllocationPy {
     #[pyo3(get)]
-    pub signal: String,
+    pub signal: SignalUidString,
     #[pyo3(get)]
     pub integration_units: Vec<u16>,
     #[pyo3(get)]
@@ -838,7 +839,7 @@ pub(crate) struct IntegrationUnitAllocationPy {
 #[derive(Debug)]
 pub(crate) struct ChannelPropertiesPy {
     #[pyo3(get)]
-    pub signal: String,
+    pub signal: SignalUidString,
     #[pyo3(get)]
     pub channel: ChannelIndex,
     #[pyo3(get)]
@@ -869,6 +870,34 @@ pub(crate) struct ChannelPropertiesPy {
     hardware_oscillator: Option<Py<HardwareOscillatorPy>>,
 }
 
+#[pymethods]
+impl ChannelPropertiesPy {
+    fn __eq__(&self, py: Python<'_>, other: &ChannelPropertiesPy) -> PyResult<bool> {
+        if self.routed_outputs.len() != other.routed_outputs.len() {
+            return Ok(false);
+        }
+        for (a, b) in self.routed_outputs.iter().zip(other.routed_outputs.iter()) {
+            if !a.bind(py).as_any().eq(b.bind(py).as_any())? {
+                return Ok(false);
+            }
+        }
+        Ok(self.signal == other.signal
+            && self.channel == other.channel
+            && self.direction == other.direction
+            && self.marker_mode == other.marker_mode
+            && py_opt_eq(py, &self.amplitude, &other.amplitude)?
+            && py_opt_eq(py, &self.voltage_offset, &other.voltage_offset)?
+            && py_opt_eq(py, &self.gains, &other.gains)?
+            && py_opt_eq(py, &self.port_mode, &other.port_mode)?
+            && py_opt_eq(py, &self.port_delay, &other.port_delay)?
+            && py_opt_eq(py, &self.range, &other.range)?
+            && py_opt_eq(py, &self.lo_frequency, &other.lo_frequency)?
+            && self.scheduler_delay == other.scheduler_delay
+            && self.output_mute_enable == other.output_mute_enable
+            && py_opt_eq(py, &self.hardware_oscillator, &other.hardware_oscillator)?)
+    }
+}
+
 #[pyclass(name = "Gains", skip_from_py_object)]
 #[derive(Debug)]
 pub(crate) struct Gains {
@@ -876,6 +905,14 @@ pub(crate) struct Gains {
     pub diagonal: Py<PyAny>, // Can be either a float or a parameter reference (string)
     #[pyo3(get)]
     pub off_diagonal: Py<PyAny>, // Can be either a float or a parameter reference (string)
+}
+
+#[pymethods]
+impl Gains {
+    fn __eq__(&self, py: Python<'_>, other: &Gains) -> PyResult<bool> {
+        Ok(self.diagonal.bind(py).eq(other.diagonal.bind(py))?
+            && self.off_diagonal.bind(py).eq(other.off_diagonal.bind(py))?)
+    }
 }
 
 #[pyclass(name = "SeqCProgram", skip_from_py_object)]
@@ -915,4 +952,194 @@ pub(crate) struct HardwareOscillatorPy {
     pub index: u16,
     #[pyo3(get)]
     pub frequency: Py<PyAny>, // Can be either a float or a parameter reference (string)
+}
+
+#[pymethods]
+impl HardwareOscillatorPy {
+    fn __eq__(&self, py: Python<'_>, other: &HardwareOscillatorPy) -> PyResult<bool> {
+        Ok(self.uid == other.uid
+            && self.index == other.index
+            && self.frequency.bind(py).eq(other.frequency.bind(py))?)
+    }
+}
+
+fn create_waves(
+    py: Python,
+    waveforms: Vec<CodegenWaveform>,
+    store: WaveformStore,
+) -> PyResult<Py<PyDict>> {
+    let waves_dict = PyDict::new(py);
+    for waveform in waveforms.into_iter() {
+        let key = waveform.filename();
+        let buffer = store
+            .get(waveform.wave_key())
+            .expect("WaveformStore missing entry for CodegenWaveform key");
+        let py_waveform = waveform_to_py(py, waveform, buffer)?;
+        waves_dict.set_item(key, py_waveform)?;
+    }
+    Ok(waves_dict.into())
+}
+
+fn waveform_to_py(
+    py: Python,
+    waveform: CodegenWaveform,
+    buffer: &SampleBuffer,
+) -> PyResult<Py<PyAny>> {
+    let py_class = py
+        .import(intern!(py, "laboneq.data.scheduled_experiment"))?
+        .getattr(intern!(py, "CodegenWaveform"))?;
+
+    let kwargs = PyDict::new(py);
+    if let Some(compression_properties) = &waveform.compression_properties {
+        kwargs.set_item(intern!(py, "hold_start"), compression_properties.hold_start)?;
+        kwargs.set_item(
+            intern!(py, "hold_length"),
+            compression_properties.hold_length,
+        )?;
+    }
+    kwargs.set_item(
+        intern!(py, "downsampling_factor"),
+        waveform.downsampling_factor,
+    )?;
+    kwargs.set_item(intern!(py, "samples"), samples_to_py(py, buffer)?)?;
+    Ok(py_class.call((), Some(&kwargs))?.into())
+}
+
+fn samples_to_py(py: Python, samples: &SampleBuffer) -> PyResult<Py<PyAny>> {
+    match samples {
+        SampleBuffer::Float64(v) => PyArray1::from_slice(py, v).into_py_any(py),
+        SampleBuffer::Complex64(v) => PyArray1::from_slice(py, v).into_py_any(py),
+        SampleBuffer::U8(v) => PyArray1::from_slice(py, v).into_py_any(py),
+    }
+}
+
+fn pulse_map_to_py<'py>(
+    py: Python<'py>,
+    pulse_map: PulseMap,
+    id_store: &NamedIdStore,
+    py_object_store: &PyObjectInterner<ExternalParameterUid>,
+) -> PyResult<Bound<'py, PyDict>> {
+    let pulse_map_entry_cls = py
+        .import(intern!(py, "laboneq.data.scheduled_experiment"))?
+        .getattr(intern!(py, "PulseMapEntry"))?;
+
+    let pulse_waveform_map_cls = py
+        .import(intern!(py, "laboneq.data.scheduled_experiment"))?
+        .getattr(intern!(py, "PulseWaveformMap"))?;
+
+    let pulse_instance_cls = py
+        .import(intern!(py, "laboneq.data.scheduled_experiment"))?
+        .getattr(intern!(py, "PulseInstance"))?;
+
+    let dict = PyDict::new(py);
+
+    let pulse_map = pulse_map.into_map();
+    for (entry_id, entry) in pulse_map {
+        let pulse_uid = id_store
+            .resolve(entry_id)
+            .expect("Internal error: Failed to resolve pulse UID");
+        let waveforms = PyDict::new(py);
+        let waveforms_compressed = PyDict::new(py);
+
+        for (waveform_signature, pulse_waveform_map) in entry {
+            let pulse_waveform_map_kwargs = PyDict::new(py);
+
+            pulse_waveform_map_kwargs.set_item(
+                intern!(py, "sampling_rate"),
+                pulse_waveform_map.sampling_rate,
+            )?;
+            pulse_waveform_map_kwargs.set_item(
+                intern!(py, "length_samples"),
+                pulse_waveform_map.length_samples,
+            )?;
+            pulse_waveform_map_kwargs.set_item(
+                intern!(py, "signal_type"),
+                if pulse_waveform_map.iq_modulation {
+                    "iq"
+                } else {
+                    "single"
+                },
+            )?;
+            pulse_waveform_map_kwargs.set_item(
+                intern!(py, "mixer_type"),
+                pulse_waveform_map
+                    .mixer_type
+                    .as_ref()
+                    .map(|mixer| mixer_type_to_py(py, mixer))
+                    .transpose()?,
+            )?;
+
+            let instances = pulse_waveform_map
+                .instances
+                .into_iter()
+                .map(|instance| {
+                    let kwargs = PyDict::new(py);
+                    kwargs.set_item(intern!(py, "offset_samples"), instance.offset_samples)?;
+                    kwargs.set_item(
+                        intern!(py, "amplitude"),
+                        instance
+                            .amplitude
+                            .map(|amp| complex_or_float_to_py(py, &amp))
+                            .transpose()?,
+                    )?;
+                    kwargs.set_item(intern!(py, "length"), instance.length)?;
+                    kwargs.set_item(intern!(py, "iq_phase"), instance.iq_phase)?;
+                    kwargs.set_item(
+                        intern!(py, "modulation_frequency"),
+                        instance.modulation_frequency,
+                    )?;
+                    kwargs.set_item(intern!(py, "channel"), instance.channel)?;
+                    kwargs.set_item(intern!(py, "needs_conjugate"), instance.needs_conjugate)?;
+
+                    let play_pulse_parameters = pulse_parameters_to_py_dict(
+                        py,
+                        &instance.parameters,
+                        id_store,
+                        py_object_store,
+                    )?;
+                    let pulse_pulse_parameters = pulse_parameters_to_py_dict(
+                        py,
+                        &instance.pulse_parameters,
+                        id_store,
+                        py_object_store,
+                    )?;
+
+                    kwargs.set_item(intern!(py, "play_pulse_parameters"), play_pulse_parameters)?;
+                    kwargs.set_item(
+                        intern!(py, "pulse_pulse_parameters"),
+                        pulse_pulse_parameters,
+                    )?;
+
+                    kwargs.set_item(intern!(py, "has_marker1"), instance.has_marker1)?;
+                    kwargs.set_item(intern!(py, "has_marker2"), instance.has_marker2)?;
+                    kwargs.set_item(intern!(py, "can_compress"), instance.can_compress)?;
+                    pulse_instance_cls.call((), Some(&kwargs))
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+
+            pulse_waveform_map_kwargs.set_item(intern!(py, "instances"), instances)?;
+
+            let is_compressed = pulse_waveform_map.compressed;
+            let pulse_waveform_map =
+                pulse_waveform_map_cls.call((), Some(&pulse_waveform_map_kwargs))?;
+            if is_compressed {
+                waveforms_compressed
+                    .set_item(waveform_signature.to_string(), pulse_waveform_map)?;
+            } else {
+                waveforms.set_item(waveform_signature.to_string(), pulse_waveform_map)?;
+            }
+        }
+
+        if !waveforms.is_empty() {
+            let pulse_map_entry = pulse_map_entry_cls.call1((waveforms,))?;
+            dict.set_item(pulse_uid, pulse_map_entry)?;
+        }
+
+        if !waveforms_compressed.is_empty() {
+            let pulse_map_entry = pulse_map_entry_cls.call1((waveforms_compressed,))?;
+            // let pulse_uid = format!("{}_compr_", pulse_uid);
+            dict.set_item(pulse_uid, pulse_map_entry)?;
+        }
+    }
+    Ok(dict)
 }

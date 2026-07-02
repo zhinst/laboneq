@@ -108,6 +108,15 @@ class Automation:
             add_note(err, f"Element {elem_id!r} is not in the automation framework.")
             raise err
 
+    def __repr__(self) -> str:
+        return (
+            f"<{type(self).__qualname__}"
+            f" name={self.name}"
+            f" timestamp={self.timestamp}"
+            f" status={self.status}"
+            f">"
+        )
+
     @property
     def status(self) -> Status:
         """Get the automation status from its layer statuses.

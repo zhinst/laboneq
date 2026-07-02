@@ -10,6 +10,7 @@ import numpy.typing as npt
 
 from laboneq.compiler.seqc.waveform_sampler import SampledWaveformSignature
 from laboneq.data.compilation_job import PulseDef
+from laboneq.data.scheduled_experiment import CodegenWaveform, PulseMapEntry
 
 class SignalType(Enum):
     IQ = auto()
@@ -22,15 +23,12 @@ class DeviceType(Enum):
     SHFSG = auto()
     UHFQA = auto()
 
-class MixerType(Enum):
-    IQ = auto()
-    UhfqaEnvelope = auto()
-
 class PortMode(Enum):
     RF = auto()
     LF = auto()
 
 class PulseParameters:
+    parameters_id: int
     parameters: dict
     pulse_parameters: dict
     play_parameters: dict
@@ -62,22 +60,11 @@ class PlaySamples:
         self,
         offset: int,
         length: int,
-        uid: int,
-        label: str,
-        has_i: bool,
-        has_q: bool,
-        has_marker1: bool,
-        has_marker2: bool,
         signature: SampledWaveformSignature,
     ) -> None: ...
 
 class PlayHold:
     def __init__(self, offset: int, length: int) -> None: ...
-
-class SampledWaveform:
-    signals: set[str]
-    signature: SampledWaveformSignature
-    signature_string: str
 
 class IntegrationKernel:
     basename: str
@@ -181,7 +168,6 @@ class AwgCodeGenerationResult:
     seqc: SeqCProgram
     wave_indices: list[tuple[str, tuple[int, str]]]
     command_table: str | None
-    sampled_waveforms: list[SampledWaveform]
     integration_kernels: list[IntegrationKernel]
     # Signal integration lengths in seconds
     # This is a mapping from signal name to SignalIntegrationInfo
@@ -226,6 +212,9 @@ class SeqCGenOutput:
                            acquire handles corresponding to incoming stream of data.
         measurements: List of Measurement objects.
         ppc_settings: List of PpcSettings objects.
+        device_properties: List of DeviceProperties objects.
+        requires_long_readout: Mapping from device UID to list of signal names that require long readout.
+        waves: Mapping from waveform filename to CodegenWaveform object.
     """
 
     awg_results: list[AwgCodeGenerationResult]
@@ -234,3 +223,6 @@ class SeqCGenOutput:
     measurements: list[Measurement]
     ppc_settings: list[PpcSettings]
     device_properties: list[DeviceProperties]
+    requires_long_readout: dict[str, list[str]]
+    waves: dict[str, CodegenWaveform]
+    pulse_map: dict[str, PulseMapEntry]

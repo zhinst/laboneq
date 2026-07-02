@@ -1,7 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use codegenerator::ir::compilation_job::{DeviceKind, MixerType, SignalKind};
+use codegenerator::ir::compilation_job::{DeviceKind, SignalKind};
 use laboneq_dsl::signal_calibration::PortMode;
 use pyo3::prelude::*;
 
@@ -41,26 +41,6 @@ impl DeviceTypePy {
             DeviceKind::SHFQA => DeviceTypePy::SHFQA,
             DeviceKind::SHFSG => DeviceTypePy::SHFSG,
             DeviceKind::UHFQA => DeviceTypePy::UHFQA,
-        }
-    }
-}
-
-#[allow(clippy::upper_case_acronyms)]
-#[pyclass(name = "MixerType", eq, skip_from_py_object)]
-#[derive(PartialEq, Clone)]
-pub(crate) enum MixerTypePy {
-    /// Mixer performs full complex modulation
-    IQ,
-    /// Mixer only performs envelope modulation (UHFQA-style)
-    #[pyo3(name = "UHFQA_ENVELOPE")]
-    UhfqaEnvelope,
-}
-
-impl From<MixerType> for MixerTypePy {
-    fn from(mixer_type: MixerType) -> Self {
-        match mixer_type {
-            MixerType::IQ => MixerTypePy::IQ,
-            MixerType::UhfqaEnvelope => MixerTypePy::UhfqaEnvelope,
         }
     }
 }

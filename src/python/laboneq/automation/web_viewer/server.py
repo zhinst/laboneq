@@ -64,6 +64,11 @@ class AutomationViewer:
         if self.log_path is None and active_folder_stores:
             self.log_path = active_folder_stores[-1].folder
 
+    def __repr__(self) -> str:
+        return (
+            f"<{type(self).__qualname__} url={self.url} automation={self.automation}>"
+        )
+
     def _build_app(self) -> Flask:
         """Configure and return the Flask app."""
         app = Flask(

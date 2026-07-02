@@ -102,7 +102,7 @@ pub struct Oscillator {
     pub frequency: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Copy)]
 pub enum SignalKind {
     IQ,
     SINGLE,

@@ -12,10 +12,12 @@ from laboneq.dsl.result.results import Results
 from laboneq.serializers._legacy.classic import LabOneQClassicSerializer
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.core import from_dict, to_dict
+from laboneq.serializers.implementations.numpy_array import NumpyArraySerializer
 from laboneq.serializers.serializer_registry import serializer
 
 if TYPE_CHECKING:
     from numpy import typing as npt
+    from numpy.typing import NDArray
 
     from laboneq.serializers.types import (
         DeserializationOptions,
@@ -56,30 +58,35 @@ def _acquired_axis_to_ndarrays(
 @serializer(types=Results, public=True)
 class ResultsSerializer(VersionedClassSerializer[Results]):
     SERIALIZER_ID = "laboneq.serializers.implementations.ResultsSerializer"
-    VERSION = 2
+    VERSION = 3
 
     @classmethod
     def _acquired_data_to_dict(
         cls, data: npt.NDArray[Any] | np.complex128
-    ) -> dict[str, list[float] | float]:
+    ) -> dict[str, JsonSerializableType | np.complexfloating]:
         """Return a dictionary describing the acquired data."""
-        if np.isscalar(data):
-            data_real = np.real(data)
-            data_imag = np.imag(data)
-        elif isinstance(data, np.ndarray):
-            data_real = np.ascontiguousarray(np.real(data))
-            data_imag = np.ascontiguousarray(np.imag(data))
-        else:
-            raise TypeError(
-                "AcquiredResult .data must be either a scalar or NumPy ndarray."
-            )
+        is_scalar = np.isscalar(data)
+        serialized_data = NumpyArraySerializer.to_dict(np.asarray(data))
         return {
-            "data.real": data_real,
-            "data.imag": data_imag,
+            "data": serialized_data,
+            "is_scalar": is_scalar,
         }
 
     @classmethod
-    def _acquired_data_from_dict(
+    def _acquired_data_from_dict_v3(
+        cls, data: list | str | NDArray, is_scalar: bool | np.bool
+    ) -> npt.NDArray[Any] | np.complex128:
+        """Return the acquired data."""
+        if not isinstance(data, np.ndarray):
+            data = NumpyArraySerializer.from_dict(data)
+
+        if is_scalar:
+            return data[()]
+
+        return data
+
+    @classmethod
+    def _acquired_data_from_dict_v2(
         cls, data_real: list[float] | float, data_imag: list[float] | float
     ) -> npt.NDArray[Any] | np.complex128:
         """Return the acquired data."""
@@ -118,6 +125,46 @@ class ResultsSerializer(VersionedClassSerializer[Results]):
         }
 
     @classmethod
+    def from_dict_v3(
+        cls,
+        serialized_data: JsonSerializableType,
+        options: DeserializationOptions | None = None,
+    ) -> Results:
+        data = serialized_data["__data__"]
+        acquired_results = {
+            k: AcquiredResult(
+                handle=v["handle"],
+                axis_name=v["axis_name"],
+                axis=_acquired_axis_to_ndarrays(v["axis"]),
+                data=cls._acquired_data_from_dict_v3(v["data"], v["is_scalar"]),
+                last_nt_step=v["last_nt_step"],
+            )
+            for k, v in data["acquired_results"].items()
+        }
+
+        if "device_setup" in data:
+            device_setup = from_dict(data["device_setup"])
+        else:
+            device_setup = None
+        if "experiment" in data:
+            experiment = from_dict(data["experiment"])
+        else:
+            experiment = None
+
+        # Ensure tuple->list->tuple in JSON serialization round-trip
+        if data["execution_errors"]:
+            data["execution_errors"] = [tuple(e) for e in data["execution_errors"]]
+
+        return Results(
+            acquired_results=acquired_results,
+            neartime_callback_results=data["neartime_callback_results"],
+            execution_errors=data["execution_errors"],
+            pipeline_jobs_timestamps=data["pipeline_jobs_timestamps"],
+            device_setup=device_setup,
+            experiment=experiment,
+        )
+
+    @classmethod
     def from_dict_v2(
         cls,
         serialized_data: JsonSerializableType,
@@ -129,7 +176,7 @@ class ResultsSerializer(VersionedClassSerializer[Results]):
                 handle=v["handle"],
                 axis_name=v["axis_name"],
                 axis=_acquired_axis_to_ndarrays(v["axis"]),
-                data=cls._acquired_data_from_dict(v["data.real"], v["data.imag"]),
+                data=cls._acquired_data_from_dict_v2(v["data.real"], v["data.imag"]),
                 last_nt_step=v["last_nt_step"],
             )
             for k, v in data["acquired_results"].items()

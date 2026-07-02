@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 @dataclass(init=True, repr=True, order=True)
 class SignalIntegrationInfo:
     is_play: bool = False
-    length_in_samples: int = None
+    length_in_samples: int | None = None
 
 
 @dataclass(init=True, repr=True, order=True)

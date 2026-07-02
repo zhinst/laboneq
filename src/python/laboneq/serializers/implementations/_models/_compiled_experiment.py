@@ -155,7 +155,7 @@ class InitializationModel:
     measurements: list[MeasurementModel]
 
     # assume ppchannels is a list of dictionaries with simple values
-    ppchannels: list[dict[str, str | int | float | bool]]
+    ppchannels: list[dict[str, str | int | float | bool | None]]
     _target_class: ClassVar[Type] = Initialization
 
 

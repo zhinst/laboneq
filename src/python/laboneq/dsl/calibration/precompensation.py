@@ -15,6 +15,22 @@ from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 precompensation_id = 0
 
 
+def _validate_fir_coefficients(
+    instance: object, attribute: attrs.Attribute, value: object
+) -> None:
+    """Validate that FIR coefficients convert to a real numeric array."""
+    error_message = (
+        f"{attribute.name} must be of type {attribute.type} but received: {value!r}"
+    )
+    try:
+        dtype = np.asarray(value).dtype
+    except (TypeError, ValueError) as err:
+        raise TypeError(error_message) from err
+
+    if dtype.kind not in "iuf":
+        raise TypeError(error_message)
+
+
 def precompensation_id_generator():
     global precompensation_id
     retval = f"pc{precompensation_id}"
@@ -130,7 +146,9 @@ class FIRCompensation:
     """
 
     # FIR filter coefficients
-    coefficients: ArrayLike = validated_field(factory=lambda: np.zeros(40))
+    coefficients: ArrayLike = attrs.field(
+        factory=lambda: np.zeros(40), validator=_validate_fir_coefficients
+    )
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, FIRCompensation):

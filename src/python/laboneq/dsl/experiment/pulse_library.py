@@ -90,14 +90,13 @@ def register_pulse_functional(sampler: Callable, name: str | None = None):
         can_compress=False,
         **pulse_parameters: Any,
     ):
-        if pulse_parameters == {}:
-            pulse_parameters = None
+        params: dict[str, Any] | None = pulse_parameters or None
         if uid is None:
             return PulseFunctional(
                 function=function_name,
                 length=length,
                 amplitude=amplitude,
-                pulse_parameters=pulse_parameters,
+                pulse_parameters=params,
                 can_compress=can_compress,
             )
         else:
@@ -106,7 +105,7 @@ def register_pulse_functional(sampler: Callable, name: str | None = None):
                 uid=uid,
                 length=length,
                 amplitude=amplitude,
-                pulse_parameters=pulse_parameters,
+                pulse_parameters=params,
                 can_compress=can_compress,
             )
 

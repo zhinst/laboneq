@@ -321,10 +321,10 @@ class SeqCDescriptor:
     sample_multiple: int
     sampling_rate: float
     output_port_delay: float
-    source: str = None
-    channels: list[int] = None
-    wave_index: dict[int, dict[str, str | WaveType]] = None
-    command_table: list[Any] = None
+    source: str | None = None
+    channels: list[int] | None = None
+    wave_index: dict[int, dict[str, str | WaveType]] | None = None
+    command_table: list[Any] | None = None
     feedback_command_table_offset: int = 0
 
 
@@ -351,7 +351,7 @@ class SeqCEvent:
 class WaveRefInfo:
     assigned_index: int = -1
     wave_data_idx: list[int] = field(default_factory=list)
-    length_samples: int = None
+    length_samples: int | None = None
 
 
 @dataclass
@@ -530,7 +530,7 @@ class SimpleRuntime:
         self._oscillator_sweep_config: dict[int, dict[str, float]] = {}
         self._oscillator_sweep_params: dict[str, dict[int, float]] = {}
         self._command_table_by_index = {
-            ct["index"]: ct for ct in self.descriptor.command_table
+            ct["index"]: ct for ct in (self.descriptor.command_table or [])
         }
         self._prng = PRNG()
 
@@ -660,7 +660,7 @@ class SimpleRuntime:
                     if wave is not None
                 )
             )
-            length_samples = known_wave.length_samples
+            length_samples = known_wave.length_samples or 0
             wave_data_indices = known_wave.wave_data_idx
         else:
             uses_marker_1 = False

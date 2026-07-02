@@ -23,7 +23,8 @@ use crate::result::FeedbackRegisterConfigPy;
 use crate::result::MeasurementPy;
 use crate::result::ResultSourcePy;
 use crate::waveform_sampler::WaveformSamplerPy;
-use result::{AwgCodeGenerationResultPy, SampledWaveformPy, SeqCGenOutputPy};
+use result::{AwgCodeGenerationResultPy, SeqCGenOutputPy};
+mod utils;
 mod waveform_sampler;
 
 // Re-export types from codegenerator that are needed in the preprocessor and backend for the convenience.
@@ -37,26 +38,27 @@ pub fn generate_code_py<'py>(
     py_object_store: &PyObjectInterner<ExternalParameterUid>,
 ) -> Result<Bound<'py, PyAny>, LabOneQError> {
     let id_store = &experiment.id_store;
-    let codegen_ir = ir_to_codegen_ir(&experiment, setup_description)?;
+    let (codegen_ir, dedup) = ir_to_codegen_ir(&experiment, setup_description)?;
     let sampler = WaveformSamplerPy::new(
         py,
         &experiment.pulses,
         codegen_ir.acquisition_type.clone(),
-        &codegen_ir.pulse_parameters,
+        &dedup,
         py_object_store,
         &experiment.id_store,
     );
     let settings = compiler_setting_to_codegenerator_settings(compiler_settings);
     let result = py.detach(|| generate_code(codegen_ir, &sampler, settings))?;
-    convert_to_py_output(py, result, id_store)
+    convert_to_py_output(py, result, id_store, py_object_store)
 }
 
 fn convert_to_py_output<'py>(
     py: Python<'py>,
-    result: SeqCGenOutput<WaveformSamplerPy<'_>>,
+    result: SeqCGenOutput,
     id_store: &NamedIdStore,
+    py_object_store: &PyObjectInterner<ExternalParameterUid>,
 ) -> Result<Bound<'py, PyAny>, LabOneQError> {
-    let result = SeqCGenOutputPy::new(py, result, id_store);
+    let result = SeqCGenOutputPy::new(py, result, id_store, py_object_store)?;
     let parameter_py: Bound<'_, PyAny> = py
         .import(intern!(py, "laboneq.compiler.seqc.code_generator"))?
         .getattr(intern!(py, "generate_output"))?;
@@ -91,12 +93,10 @@ pub fn create_py_module<'a>(py: Python<'a>, name: &str) -> PyResult<Bound<'a, Py
     // Move up the compiler stack as we need the common types
     m.add_class::<common_types::SignalTypePy>()?;
     m.add_class::<common_types::DeviceTypePy>()?;
-    m.add_class::<common_types::MixerTypePy>()?;
     m.add_class::<common_types::PortModePy>()?;
     // Waveform sampling
     m.add_class::<PlaySamplesPy>()?;
     m.add_class::<PlayHoldPy>()?;
-    m.add_class::<SampledWaveformPy>()?;
     // Result
     m.add_class::<AwgCodeGenerationResultPy>()?;
     m.add_class::<FeedbackRegisterConfigPy>()?;

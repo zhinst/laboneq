@@ -21,11 +21,14 @@ mod context;
 mod context_validation;
 mod event_list;
 mod generator;
+mod integration_kernels;
 mod integration_units;
 mod ir_adapter;
+pub mod pulse_map;
 pub mod result;
 mod tracing_utils;
 mod triggers;
+mod waveform;
 
 pub use generator::generate_code;
 // Public for Python layer, not intended for external use
@@ -39,9 +42,13 @@ pub use crate::sampled_event_handler::SingleFeedbackRegisterLayoutItem;
 
 pub mod waveform_sampler {
     pub use crate::sample_waveforms::{
-        CompressedWaveformPart, IntegrationKernel, SampleWaveforms, SampledIntegrationKernel,
-        SampledWaveformCollection, SampledWaveformSignature, WaveformSamplingCandidate,
+        CompressedWaveformPart, SampleWaveforms, SampledWaveformCollection,
+        SampledWaveformSignature, WaveCompression, WaveformSamplingCandidate,
     };
-}
 
+    pub use crate::integration_kernels::{
+        IntegrationKernel, SampleIntegrationKernels, SampledIntegrationKernel,
+    };
+    pub use crate::waveform::{SampleBuffer, WaveIdentifier, WaveKey, Waveform, WaveformStore};
+}
 pub type Result<T, E = LabOneQError> = std::result::Result<T, E>;

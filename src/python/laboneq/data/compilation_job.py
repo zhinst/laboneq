@@ -29,9 +29,9 @@ class DeviceInfo:
 
 @dataclass
 class PulseDef:
-    uid: str = None
+    uid: str | None = None
     function: str | None = None
-    length: float = None
+    length: float | None = None
     amplitude: float = 1.0
     can_compress: bool = False
     samples: ArrayLike | None = None

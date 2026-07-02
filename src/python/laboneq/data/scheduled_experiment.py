@@ -25,11 +25,11 @@ if TYPE_CHECKING:
 @dataclass
 class PulseInstance:
     offset_samples: int
-    amplitude: float = None  # instance (final) amplitude
-    length: float = None  # instance (final) length
-    iq_phase: float = None
-    modulation_frequency: float = None
-    channel: int = None  # The AWG channel for rf_signals
+    amplitude: float | None = None  # instance (final) amplitude
+    length: float | None = None  # instance (final) length
+    iq_phase: float | None = None
+    modulation_frequency: float | None = None
+    channel: int | None = None  # The AWG channel for rf_signals
     needs_conjugate: bool = False  # SHF devices need that for now
     play_pulse_parameters: dict[str, Any] = field(default_factory=dict)
     pulse_pulse_parameters: dict[str, Any] = field(default_factory=dict)

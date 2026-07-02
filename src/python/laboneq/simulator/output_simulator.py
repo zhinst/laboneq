@@ -23,10 +23,10 @@ if TYPE_CHECKING:
 @dataclass
 class OutputData:
     time: ArrayLike
-    wave: ArrayLike = None
-    trigger: ArrayLike = None
-    marker: ArrayLike = None
-    frequency: ArrayLike = None
+    wave: ArrayLike | None = None
+    trigger: ArrayLike | None = None
+    marker: ArrayLike | None = None
+    frequency: ArrayLike | None = None
 
 
 @dataclass

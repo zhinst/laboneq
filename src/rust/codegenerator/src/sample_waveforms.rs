@@ -1,28 +1,84 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
+use std::hash::{DefaultHasher, Hasher};
 use std::sync::Arc;
 
 use crate::Result;
 use crate::ir::compilation_job::{AwgCore, DeviceKind, Signal};
-use crate::ir::experiment::PulseParametersId;
-use crate::ir::{IrNode, NodeKind, PlayAcquire, PlayHold, Samples, SignalUid};
-use crate::signature::{Uid, WaveformSignature};
-use indexmap::{IndexMap, IndexSet};
+use crate::ir::{IrNode, NodeKind, PlayHold, Samples, SignalUid};
+use crate::pulse_map::{PulseMap, PulseWaveform};
+use crate::result::{CodegenWaveform, WaveformSignatureString, WaveformStore};
+use crate::signature::{SamplesSignatureID, Uid, WaveformSignature};
+use crate::waveform::{CompressionProperties, WaveIdentifier, Waveform, hash_sample_buffer};
+use laboneq_dsl::types::PulseUid;
 use laboneq_error::bail;
 
-/// A trait that defines the signature of a sampled waveform.
-///
-/// This trait is used to represent the properties of a sampled waveform,
-/// including whether it has specific markers and the inner signature type.
-pub trait SampledWaveformSignature {
-    type Inner;
+pub enum WaveCompression {
+    Compressed,
+    HoldWave { start_index: usize, length: usize },
+}
 
-    fn has_marker1(&self) -> bool;
-    fn has_marker2(&self) -> bool;
-    fn signature(&self) -> Self::Inner;
+pub struct SampledWaveformSignature {
+    pub signals: Vec<SignalUid>,
+    pub waveforms: Vec<Waveform>,
+    pub pulse_map: HashMap<PulseUid, PulseWaveform>,
+    pub compression: Option<WaveCompression>,
+}
+
+impl SampledWaveformSignature {
+    pub(crate) fn has_marker1(&self) -> bool {
+        self.waveforms
+            .iter()
+            .any(|w| w.key.identifier == Some(WaveIdentifier::M1))
+    }
+
+    pub(crate) fn has_marker2(&self) -> bool {
+        self.waveforms
+            .iter()
+            .any(|w| w.key.identifier == Some(WaveIdentifier::M2))
+    }
+
+    fn signature(&self) -> WaveformSignatureString {
+        // We can assume that all waveforms in the same sampled waveform have the same signature string, since they are generated from the same original waveform.
+        self.waveforms
+            .first()
+            .map(|w| Arc::clone(&w.key.signature))
+            .unwrap_or_else(|| Arc::new("".to_string()))
+    }
+
+    /// Generates a unique identifier for the sampled waveform signature, based on the waveforms and their properties.
+    ///
+    /// This is an expensive operation, as it requires hashing the waveform samples. It should be used sparingly, and the result should be cached if possible.
+    pub fn samples_uid(&self) -> SamplesSignatureID {
+        SamplesSignatureID {
+            uid: generate_samples_uid(&self.waveforms),
+            compressed: self.compression.is_some(),
+            has_i: self
+                .waveforms
+                .iter()
+                .any(|w| w.key.identifier == Some(WaveIdentifier::I)),
+            has_q: self
+                .waveforms
+                .iter()
+                .any(|w| w.key.identifier == Some(WaveIdentifier::Q)),
+            has_marker1: self.has_marker1(),
+            has_marker2: self.has_marker2(),
+        }
+    }
+}
+
+/// Generates a unique identifier for a set of waveforms, based on their samples.
+fn generate_samples_uid(waveforms: &[Waveform]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    let mut sorted: Vec<&Waveform> = waveforms.iter().collect();
+    sorted.sort_by_key(|w| w.key.identifier);
+    for wf in sorted {
+        hash_sample_buffer(&wf.samples, &mut hasher);
+    }
+    hasher.finish()
 }
 
 /// Represents a part of a compressed waveform.
@@ -31,8 +87,7 @@ pub trait SampledWaveformSignature {
 /// either as a hold or as a set of samples.
 ///
 /// The `offset` is the relative position in the waveform where this part starts.
-#[derive(Clone, Debug)]
-pub enum CompressedWaveformPart<T: SampledWaveformSignature> {
+pub enum CompressedWaveformPart {
     PlayHold {
         offset: Samples,
         length: Samples,
@@ -40,145 +95,64 @@ pub enum CompressedWaveformPart<T: SampledWaveformSignature> {
     PlaySamples {
         offset: Samples,
         waveform: WaveformSignature,
-        signature: T,
+        signature: SampledWaveformSignature,
     },
-}
-
-/// Properties of integration weights for a pulse.
-///
-/// NOTE: The properties will result in unique integration weights
-/// per device type.
-#[derive(Clone, Debug)]
-struct KernelProperties<'a> {
-    pulse_id: &'a str,
-    pulse_parameters_id: Option<PulseParametersId>,
-    oscillator_frequency: f64,
-}
-
-impl Eq for KernelProperties<'_> {}
-
-impl PartialEq for KernelProperties<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.pulse_id == other.pulse_id
-            && self.pulse_parameters_id == other.pulse_parameters_id
-            && crate::utils::normalize_f64(self.oscillator_frequency)
-                == crate::utils::normalize_f64(other.oscillator_frequency)
-    }
-}
-
-impl Hash for KernelProperties<'_> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.pulse_id.hash(state);
-        self.pulse_parameters_id.hash(state);
-        crate::utils::normalize_f64(self.oscillator_frequency).hash(state);
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct IntegrationKernel<'a> {
-    properties: KernelProperties<'a>,
-    signals: Vec<SignalUid>,
-}
-
-impl<'a> IntegrationKernel<'a> {
-    fn new(mut signals: Vec<SignalUid>, properties: KernelProperties<'a>) -> Self {
-        signals.sort(); // Ensure deterministic order of signals for testing and code generation
-        Self {
-            properties,
-            signals,
-        }
-    }
-
-    pub fn pulse_id(&self) -> &str {
-        self.properties.pulse_id
-    }
-
-    pub fn pulse_parameters_id(&self) -> Option<PulseParametersId> {
-        self.properties.pulse_parameters_id
-    }
-
-    pub fn oscillator_frequency(&self) -> f64 {
-        self.properties.oscillator_frequency
-    }
-
-    pub fn signals(&self) -> &[SignalUid] {
-        &self.signals
-    }
-}
-
-pub trait SampledIntegrationKernel: Send + Sync {
-    fn signals(&self) -> &[SignalUid];
-    fn basename(&self) -> &str;
-    fn downsampling_factor(&self) -> Option<u8>;
 }
 
 /// A trait for sampling waveforms.
 pub trait SampleWaveforms {
-    type Signature: SampledWaveformSignature + Send + Sync;
-    type SampledIntegrationKernel: SampledIntegrationKernel;
     type PulseParameters: Sync;
 
     fn supports_waveform_sampling(awg: &AwgCore) -> bool;
-
-    /// Calculates integration weights for a batch of integration kernels.
-    fn sample_integration_kernels(
-        &self,
-        awg: &AwgCore,
-        kernels: Vec<IntegrationKernel<'_>>,
-    ) -> Result<Vec<Self::SampledIntegrationKernel>>;
 
     /// Samples and compresses a batch of waveform candidates.
     fn batch_sample_and_compress(
         &self,
         awg: &AwgCore,
         waveforms: &[WaveformSamplingCandidate],
-    ) -> Result<SampledWaveformCollection<Self::Signature>>;
-}
-
-/// Represents output of an AWG waveform sampling.
-#[derive(Debug)]
-pub struct SampledWaveform<T: SampledWaveformSignature> {
-    pub signals: HashSet<SignalUid>,
-    pub signature_string: Arc<String>,
-    pub signature: T,
+    ) -> Result<SampledWaveformCollection>;
 }
 
 /// Represents a SeqC declaration of a waveform.
 #[derive(Debug)]
 pub(crate) struct WaveDeclaration {
     pub length: i64,
-    pub signature_string: Arc<String>,
+    pub signature_string: WaveformSignatureString,
     pub has_marker1: bool,
     pub has_marker2: bool,
 }
 
 /// This enum represents a sampled waveform that can either be a direct sample or a compressed version.
-enum SampledWaveformType<T: SampledWaveformSignature> {
+enum SampledWaveformType {
     /// Represents a sampled waveform with its signature.
-    Sampled(T),
+    Sampled(SampledWaveformSignature),
     /// Represents a compressed waveform that consists of multiple parts.
-    Compressed(Vec<CompressedWaveformPart<T>>),
+    Compressed(Vec<CompressedWaveformPart>),
 }
 
-pub struct SampledWaveformCollection<T: SampledWaveformSignature> {
+pub struct SampledWaveformCollection {
     // A mapping from waveform UID to sampled waveform type.
-    samples: HashMap<Uid, SampledWaveformType<T>>,
+    samples: IndexMap<Uid, SampledWaveformType>,
 }
 
-impl<T: SampledWaveformSignature> Default for SampledWaveformCollection<T> {
+impl Default for SampledWaveformCollection {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T: SampledWaveformSignature> SampledWaveformCollection<T> {
+impl SampledWaveformCollection {
     pub fn new() -> Self {
         SampledWaveformCollection {
-            samples: HashMap::new(),
+            samples: IndexMap::new(),
         }
     }
 
-    pub fn insert_sampled_signature(&mut self, waveform: &WaveformSignature, signature: T) {
+    pub fn insert_sampled_signature(
+        &mut self,
+        waveform: &WaveformSignature,
+        signature: SampledWaveformSignature,
+    ) {
         self.samples
             .insert(waveform.uid(), SampledWaveformType::Sampled(signature));
     }
@@ -186,7 +160,7 @@ impl<T: SampledWaveformSignature> SampledWaveformCollection<T> {
     pub fn insert_compressed_parts(
         &mut self,
         waveform: &WaveformSignature,
-        parts: Vec<CompressedWaveformPart<T>>,
+        parts: Vec<CompressedWaveformPart>,
     ) {
         self.samples
             .insert(waveform.uid(), SampledWaveformType::Compressed(parts));
@@ -195,7 +169,7 @@ impl<T: SampledWaveformSignature> SampledWaveformCollection<T> {
     fn get_sampled_waveform_signature(
         &self,
         waveform: &WaveformSignature,
-    ) -> Option<&SampledWaveformType<T>> {
+    ) -> Option<&SampledWaveformType> {
         self.samples.get(&waveform.uid())
     }
 }
@@ -253,33 +227,22 @@ pub(crate) fn collect_waveforms_for_sampling<'a>(
     Ok(sampling_candidates.into_values().collect())
 }
 
-pub(crate) struct AwgWaveforms<T: SampledWaveformSignature> {
-    sampled_waveforms: Vec<SampledWaveform<T>>,
-    wave_declarations: Vec<WaveDeclaration>,
-}
-
-impl<T: SampledWaveformSignature> Default for AwgWaveforms<T> {
-    fn default() -> Self {
-        AwgWaveforms {
-            sampled_waveforms: vec![],
-            wave_declarations: vec![],
-        }
-    }
-}
-
-impl<T: SampledWaveformSignature> AwgWaveforms<T> {
-    pub(crate) fn into_inner(self) -> (Vec<SampledWaveform<T>>, Vec<WaveDeclaration>) {
-        (self.sampled_waveforms, self.wave_declarations)
-    }
+#[derive(Default)]
+pub(crate) struct ProcessedWaveforms {
+    pub waveforms: Vec<CodegenWaveform>,
+    pub waveform_store: WaveformStore,
+    pub wave_declarations: Vec<WaveDeclaration>,
+    pub long_readout_signals: HashSet<SignalUid>,
+    pub pulse_map: PulseMap,
 }
 
 /// Split waveform nodes that have been compressed.
 ///
 /// This function traverses the IR tree, looking for waveform nodes that are compressed.
 /// Compressed play wave nodes are replaced with [`NodeKind::PlayHold`] and [`NodeKind::PlayWave`] nodes.
-fn split_compressed_waveforms<T: SampledWaveformSignature>(
+fn split_compressed_waveforms(
     node: &mut IrNode,
-    sampled_waveform_signatures: &SampledWaveformCollection<T>,
+    sampled_waveform_signatures: &SampledWaveformCollection,
 ) -> Result<Vec<IrNode>> {
     match node.data() {
         NodeKind::PlayWave(ob) => {
@@ -345,9 +308,9 @@ fn split_compressed_waveforms<T: SampledWaveformSignature>(
 /// Collect sampled signatures from the waveform sampling result.
 ///
 /// Waveforms that were compressed are omitted from the output.
-fn collect_sampled_signatures<T: SampledWaveformSignature>(
-    sampled_waveform_signatures: SampledWaveformCollection<T>,
-) -> HashMap<Uid, T> {
+fn collect_sampled_signatures(
+    sampled_waveform_signatures: SampledWaveformCollection,
+) -> HashMap<Uid, SampledWaveformSignature> {
     let mut sampled_signatures = HashMap::new();
     for (waveform_uid, sampled_waveform) in sampled_waveform_signatures.samples {
         match sampled_waveform {
@@ -372,41 +335,29 @@ fn collect_sampled_signatures<T: SampledWaveformSignature>(
     sampled_signatures
 }
 
-struct PassContext<T: SampledWaveformSignature> {
-    sampled_waveform_signatures: HashMap<Uid, T>,
+struct PassContext {
+    sampled_waveform_signatures: HashMap<Uid, SampledWaveformSignature>,
     // Collect output into vectors to keep track of the order of waveforms.
     // The output should be deterministic, so we use a vector instead of a hash map.
-    // Alternative way would be to insert timestamp into the output structs and sort them later.
-    sampled_waveforms: Vec<SampledWaveform<T>>,
+    sampled_waveforms: Vec<SampledWaveformSignature>,
     wave_declarations: Vec<WaveDeclaration>,
-    waveforms_handled_to_index: HashMap<Uid, usize>,
 }
 
-impl<T: SampledWaveformSignature> PassContext<T> {
-    fn new(sampled_waveform_signatures: HashMap<Uid, T>) -> Self {
+impl PassContext {
+    fn new(sampled_waveform_signatures: HashMap<Uid, SampledWaveformSignature>) -> Self {
         PassContext {
             sampled_waveform_signatures,
             sampled_waveforms: vec![],
             wave_declarations: vec![],
-            waveforms_handled_to_index: HashMap::new(),
         }
     }
 
-    fn register_waveform(&mut self, waveform: &WaveformSignature, signals: &[Arc<Signal>]) {
+    fn register_waveform(&mut self, waveform: &WaveformSignature) {
         let waveform_uid = waveform.uid();
-        if let Some(wave_index) = self.waveforms_handled_to_index.get(&waveform_uid) {
-            // If the waveform has already been processed, we only update the signals.
-            let sampled_waveform = &mut self.sampled_waveforms[*wave_index];
-            sampled_waveform
-                .signals
-                .extend(signals.iter().map(|s| s.uid));
-            return;
-        }
-        let sampled_waveform = self.sampled_waveform_signatures.remove(&waveform_uid);
+
         // Split waveform signature into sampled waveform and wave declaration.
-        if let Some(sampled_waveform) = sampled_waveform {
+        if let Some(mut sampled_waveform) = self.sampled_waveform_signatures.remove(&waveform_uid) {
             let signature_string = Arc::new(waveform.signature_string());
-            let signals: HashSet<SignalUid> = signals.iter().map(|s| s.uid).collect();
 
             let wave_declaration = WaveDeclaration {
                 length: waveform.length(),
@@ -414,27 +365,25 @@ impl<T: SampledWaveformSignature> PassContext<T> {
                 has_marker1: sampled_waveform.has_marker1(),
                 has_marker2: sampled_waveform.has_marker2(),
             };
-            let sampled_waveform_data = SampledWaveform {
-                signals,
-                signature_string: Arc::clone(&signature_string),
-                signature: sampled_waveform,
-            };
-            self.sampled_waveforms.push(sampled_waveform_data);
+            // Update the signature string for all waveforms in the sampled waveform.
+            // This is needed for compressed waveforms, where the original waveform is replaced with multiple new waveforms that all share the same signature string.
+            for waveform in sampled_waveform.waveforms.iter_mut() {
+                waveform.key.signature = Arc::clone(&signature_string);
+            }
+            self.sampled_waveforms.push(sampled_waveform);
             self.wave_declarations.push(wave_declaration);
-            self.waveforms_handled_to_index
-                .insert(waveform_uid, self.sampled_waveforms.len() - 1);
         }
     }
 }
 
-fn collect_waveform_info<T: SampledWaveformSignature>(node: &IrNode, ctx: &mut PassContext<T>) {
+fn collect_waveform_info(node: &IrNode, ctx: &mut PassContext) {
     match node.data() {
         NodeKind::PlayWave(ob) => {
-            ctx.register_waveform(&ob.waveform, &ob.signals);
+            ctx.register_waveform(&ob.waveform);
         }
         NodeKind::QaEvent(ob) => {
             for play_wave in ob.play_waves() {
-                ctx.register_waveform(&play_wave.waveform, &play_wave.signals);
+                ctx.register_waveform(&play_wave.waveform);
             }
         }
         _ => {
@@ -445,10 +394,10 @@ fn collect_waveform_info<T: SampledWaveformSignature>(node: &IrNode, ctx: &mut P
     }
 }
 
-fn generate_output<T: SampledWaveformSignature>(
+fn generate_output(
     node: &IrNode,
-    sampled_waveform_signatures: HashMap<Uid, T>,
-) -> (Vec<SampledWaveform<T>>, Vec<WaveDeclaration>) {
+    sampled_waveform_signatures: HashMap<Uid, SampledWaveformSignature>,
+) -> (Vec<SampledWaveformSignature>, Vec<WaveDeclaration>) {
     let mut ctx = PassContext::new(sampled_waveform_signatures);
     collect_waveform_info(node, &mut ctx);
     (ctx.sampled_waveforms, ctx.wave_declarations)
@@ -491,18 +440,21 @@ fn validate_waveforms(waveforms: &[&WaveformSamplingCandidate<'_>], awg: &AwgCor
 
 /// Transformation pass to collect and finalize waveforms based on sampled waveform signatures.
 ///
-/// This function collects waveforms from the IR node, samples them using the provided [`WaveformSampler`],
+/// This function collects waveforms from the IR node, samples them using the provided [`SampleWaveforms`],
 /// splits compressed waveforms, and generates the final output containing sampled waveforms and their declarations.
 ///
 /// # Returns
 ///
-/// A result containing an [`AwgWaveforms`] struct, which includes the sampled waveforms and their declarations that
+/// A result containing an [`ProcessedWaveforms`] struct, which includes the sampled waveforms and their declarations that
 /// exists in the IR node after the transformation pass.
 pub(crate) fn collect_and_finalize_waveforms<T: SampleWaveforms>(
     node: &mut IrNode,
     waveform_sampler: &T,
     awg: &AwgCore,
-) -> Result<AwgWaveforms<T::Signature>> {
+) -> Result<ProcessedWaveforms> {
+    if !T::supports_waveform_sampling(awg) {
+        return Ok(ProcessedWaveforms::default());
+    }
     let waveforms = collect_waveforms_for_sampling(node)?;
     validate_waveforms(&waveforms.iter().collect::<Vec<_>>(), awg)?;
     let sampled_waveform_signatures =
@@ -511,112 +463,55 @@ pub(crate) fn collect_and_finalize_waveforms<T: SampleWaveforms>(
     let sampled_waveforms_signatures = collect_sampled_signatures(sampled_waveform_signatures);
     let (sampled_waveforms, wave_declarations) =
         generate_output(node, sampled_waveforms_signatures);
-    let out = AwgWaveforms {
-        sampled_waveforms,
+    let output = create_output(sampled_waveforms, wave_declarations)?;
+    Ok(output)
+}
+
+fn create_output(
+    sampled_waveforms: Vec<SampledWaveformSignature>,
+    wave_declarations: Vec<WaveDeclaration>,
+) -> Result<ProcessedWaveforms> {
+    let mut waveform_store = WaveformStore::default();
+    let mut codegen_waveforms =
+        Vec::with_capacity(sampled_waveforms.len() + wave_declarations.len());
+    let mut pulse_map = PulseMap::with_capacity(sampled_waveforms.len());
+    let mut long_readout_signals = HashSet::new();
+
+    for sampled_waveform in sampled_waveforms.into_iter() {
+        let signature = sampled_waveform.signature();
+        for (pulse_uid, waveform_map) in sampled_waveform.pulse_map {
+            pulse_map.insert(pulse_uid, Arc::clone(&signature), waveform_map);
+        }
+
+        for wave in sampled_waveform.waveforms {
+            if let Some(WaveCompression::HoldWave { .. }) = sampled_waveform.compression {
+                long_readout_signals.extend(sampled_waveform.signals.iter());
+            }
+            let waveform = CodegenWaveform {
+                key: wave.key.clone(),
+                compression_properties: match sampled_waveform.compression {
+                    Some(WaveCompression::Compressed) => None,
+                    Some(WaveCompression::HoldWave {
+                        start_index,
+                        length,
+                    }) => Some(CompressionProperties {
+                        hold_start: start_index,
+                        hold_length: length,
+                    }),
+                    None => Default::default(),
+                },
+                downsampling_factor: None,
+            };
+            codegen_waveforms.push(waveform);
+            waveform_store.insert(wave.key.clone(), wave.samples)?;
+        }
+    }
+    let output = ProcessedWaveforms {
+        waveforms: codegen_waveforms,
+        waveform_store,
         wave_declarations,
+        long_readout_signals,
+        pulse_map,
     };
-    Ok(out)
-}
-
-fn collect_kernel_properties(event: &PlayAcquire) -> IndexSet<KernelProperties<'_>> {
-    let mut properties = IndexSet::with_capacity(event.pulse_defs().len());
-    for (pulse_def, pulse_parameters_id) in event
-        .pulse_defs()
-        .iter()
-        .zip(event.id_pulse_params().iter())
-    {
-        if pulse_def.pulse_type.is_none() {
-            // Skip pulses without a type, they do not contribute to integration weights
-            continue;
-        }
-        let kernel = KernelProperties {
-            pulse_id: pulse_def.uid.as_str(),
-            pulse_parameters_id: *pulse_parameters_id,
-            oscillator_frequency: event.oscillator_frequency(),
-        };
-        properties.insert(kernel);
-    }
-    properties
-}
-
-fn update_kernel_properties<'a>(
-    properties: &mut IndexMap<SignalUid, IndexSet<KernelProperties<'a>>>,
-    key: SignalUid,
-    weights: IndexSet<KernelProperties<'a>>,
-) -> Result<()> {
-    if let Some(weight_properties) = properties.get_mut(&key) {
-        if weight_properties != &weights {
-            bail!(
-                "Using different integration kernels on a single signal '{}' is unsupported. They either differ on the pulse definitions or on the oscillator frequency.",
-                key.0
-            );
-        }
-    } else {
-        properties.insert(key, weights);
-    }
-    Ok(())
-}
-
-fn collect_integration_weights_properties<'a>(
-    node: &'a IrNode,
-    properties: &mut IndexMap<SignalUid, IndexSet<KernelProperties<'a>>>,
-) -> Result<()> {
-    match node.data() {
-        NodeKind::Acquire(ob) => {
-            let weights: IndexSet<KernelProperties<'_>> = collect_kernel_properties(ob);
-            update_kernel_properties(properties, ob.signal().uid, weights)?;
-        }
-        NodeKind::QaEvent(ob) => {
-            for acquire in ob.acquires() {
-                let weights = collect_kernel_properties(acquire);
-                update_kernel_properties(properties, acquire.signal().uid, weights)?;
-            }
-        }
-        _ => {
-            for child in node.iter_children() {
-                collect_integration_weights_properties(child, properties)?;
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Collect integration kernels from the IR.
-///
-/// Integration kernels are deduplicated across all signals on the given AWG.
-pub(crate) fn collect_integration_kernels<'a>(
-    node: &'a IrNode,
-    awg: &AwgCore,
-) -> Result<Vec<IntegrationKernel<'a>>> {
-    let has_integration_signals = awg.signals.iter().any(|s| !s.is_output());
-    if !has_integration_signals {
-        // No integration signals, no need to collect integration weights
-        return Ok(vec![]);
-    }
-    let mut weight_collection = IndexMap::new();
-    collect_integration_weights_properties(node, &mut weight_collection)?;
-    // Deduplicate the integration weight properties
-    let mut unique_weights = IndexMap::new();
-    for (signal_uid, weight_properties) in weight_collection {
-        // Group weights by pulse definition
-        let mut unique_pulse_ids = IndexSet::new();
-        for weight in weight_properties {
-            if unique_pulse_ids.contains(weight.pulse_id) {
-                bail!(
-                    "Using different integration kernels on a single signal '{}' is unsupported. They either differ on the pulse definitions or on the oscillator frequency.",
-                    signal_uid.0
-                );
-            }
-            unique_pulse_ids.insert(weight.pulse_id);
-            unique_weights
-                .entry(weight)
-                .or_insert_with(Vec::new)
-                .push(signal_uid);
-        }
-    }
-    let kernels = unique_weights
-        .into_iter()
-        .map(|(properties, signals)| IntegrationKernel::new(signals, properties))
-        .collect();
-    Ok(kernels)
+    Ok(output)
 }

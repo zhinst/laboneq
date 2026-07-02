@@ -1,6 +1,8 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use indexmap::IndexMap;
+
 use crate::CodeGeneratorSettings;
 use crate::CodegenIr;
 use crate::Result;
@@ -11,6 +13,9 @@ use crate::generate_awg_events::transform_ir_to_awg_events;
 use crate::handle_feedback_registers::FeedbackRegisterAllocation;
 use crate::handle_feedback_registers::calculate_feedback_register_layout;
 use crate::handle_feedback_registers::collect_feedback_config;
+use crate::integration_kernels::ProcessedKernels;
+use crate::integration_kernels::SampleIntegrationKernels;
+use crate::integration_kernels::collect_and_process_integration_kernels;
 use crate::integration_units::allocate_integration_units;
 use crate::ir::IrNode;
 use crate::ir::SignalUid;
@@ -30,6 +35,7 @@ use crate::passes::analyze_measurements;
 use crate::passes::fanout_awg::fanout_for_awg;
 use crate::passes::handle_result_shapes::AwgMeasurementShapes;
 use crate::passes::handle_result_shapes::calculate_measure_shapes;
+use crate::pulse_map::PulseMap;
 use crate::result::AwgCodeGenerationResult;
 use crate::result::AwgProperties;
 use crate::result::ChannelOscillator;
@@ -39,24 +45,23 @@ use crate::result::FeedbackRegisterConfig;
 use crate::result::FixedValueOrParameter;
 use crate::result::Gains;
 use crate::result::InputChannelProperties;
-use crate::result::IntegrationWeight;
 use crate::result::IntegratorAllocation;
 use crate::result::Measurement;
 use crate::result::PpcSettings;
-use crate::result::SampledWaveform;
 use crate::result::SeqCGenOutput;
 use crate::result::SeqCProgram;
 use crate::result::SequencerType;
 use crate::result::SignalIntegrationInfo;
-use crate::sample_waveforms::SampledIntegrationKernel;
-use crate::sample_waveforms::{
-    AwgWaveforms, WaveDeclaration, collect_and_finalize_waveforms, collect_integration_kernels,
-};
+use crate::sample_waveforms::ProcessedWaveforms;
+use crate::sample_waveforms::{WaveDeclaration, collect_and_finalize_waveforms};
 use crate::sampled_event_handler::SeqcResults;
 use crate::sampled_event_handler::handle_sampled_events;
 use crate::sampled_event_handler::seqc_tracker::FeedbackRegisterIndex;
 use crate::sampled_event_handler::seqc_tracker::awg::Awg;
 use crate::tracing_utils::ParallelTraceContext;
+use crate::waveform::CodegenWaveform;
+use crate::waveform::WaveKey;
+use crate::waveform::WaveformStore;
 use crate::waveform_sampler::SampleWaveforms;
 
 use laboneq_common::types::ChannelKey;
@@ -117,12 +122,12 @@ fn generate_output(
     Ok(seqc_results)
 }
 
-fn generate_code_for_awg<T: SampleWaveforms>(
+fn generate_code_for_awg<T: SampleWaveforms + SampleIntegrationKernels>(
     root: &IrNode,
     awg: &AwgCore,
     ctx: &CodeGenContext,
     sampler: &T,
-) -> Result<AwgCodeGenerationResult<T>> {
+) -> Result<AwgCodeGenerationResult> {
     let root = fanout_for_awg(root, awg);
     let awg_info = analyze_awg_ir(&root, awg)?;
     let measurement_info = analyze_measurements(&root, awg.device_kind(), awg.sampling_rate)?;
@@ -138,13 +143,8 @@ fn generate_code_for_awg<T: SampleWaveforms>(
             .map(|(signal, delay)| (*signal, delay.delay_sequencer()))
             .collect(),
     )?;
-    let waveforms = if T::supports_waveform_sampling(awg) {
-        collect_and_finalize_waveforms(&mut awg_node, sampler, awg)
-    } else {
-        Ok(AwgWaveforms::default())
-    }?;
-    let integration_kernels = collect_integration_kernels(&awg_node, awg)?;
-    let integration_weights = sampler.sample_integration_kernels(awg, integration_kernels)?;
+    let waveforms = collect_and_finalize_waveforms(&mut awg_node, sampler, awg)?;
+    let processed_kernels = collect_and_process_integration_kernels(&awg_node, awg, sampler, ctx)?;
     let qa_signals_by_handle: HashMap<Handle, (SignalUid, AwgKey)> = ctx
         .feedback_config
         .handles()
@@ -160,8 +160,6 @@ fn generate_code_for_awg<T: SampleWaveforms>(
         })
         .collect();
 
-    let (sampled_waveforms, wave_declarations) = waveforms.into_inner();
-
     // Feedback registers
     let target_feedback_register = ctx.feedback_config.target_feedback_register(&awg.key());
     let global_feedback_register = match target_feedback_register {
@@ -172,7 +170,7 @@ fn generate_code_for_awg<T: SampleWaveforms>(
     let awg_events = generate_output(
         awg_node,
         awg,
-        &wave_declarations,
+        &waveforms.wave_declarations,
         &qa_signals_by_handle,
         awg_info.has_readout_feedback(),
         &global_feedback_register,
@@ -181,8 +179,8 @@ fn generate_code_for_awg<T: SampleWaveforms>(
     let output = construct_awg_result(
         awg,
         awg_events,
-        sampled_waveforms,
-        integration_weights,
+        waveforms,
+        processed_kernels,
         measurement_info,
         measurement_shapes,
         &awg_info,
@@ -192,19 +190,16 @@ fn generate_code_for_awg<T: SampleWaveforms>(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn construct_awg_result<T>(
+fn construct_awg_result(
     awg: &AwgCore,
     awg_events: SeqcResults,
-    sampled_waveforms: Vec<SampledWaveform<T::Signature>>,
-    integration_weights: Vec<T::SampledIntegrationKernel>,
+    processed_waveforms: ProcessedWaveforms,
+    processed_kernels: ProcessedKernels,
     measurement_info: MeasurementAnalysis,
     measurement_shapes: Option<AwgMeasurementShapes>,
     awg_info: &AwgCompilationInfo,
     ctx: &CodeGenContext,
-) -> Result<AwgCodeGenerationResult<T>>
-where
-    T: SampleWaveforms,
-{
+) -> Result<AwgCodeGenerationResult> {
     let target_feedback_register = ctx.feedback_config.target_feedback_register(&awg.key());
     let feedback_register = match target_feedback_register {
         Some(FeedbackRegisterAllocation::Global { register }) => (*register as i64).into(),
@@ -221,6 +216,18 @@ where
     } else {
         None
     };
+
+    let waveform_store = WaveformStore::merge([
+        processed_kernels.waveform_store,
+        processed_waveforms.waveform_store,
+    ])?;
+
+    let pulse_map = processed_waveforms.pulse_map;
+    let mut waveforms = processed_kernels.waveforms;
+    waveforms.extend(processed_waveforms.waveforms);
+
+    let mut long_readout_signals = processed_kernels.long_readout_signals;
+    long_readout_signals.extend(processed_waveforms.long_readout_signals);
 
     // Construct channel properties
     let this_awg_initial_properties = awg
@@ -248,6 +255,7 @@ where
             .iter()
             .min()
             .expect("Internal error: Signal has no channels");
+        let requires_long_readout = long_readout_signals.contains(&signal.uid);
 
         for channel in awg_channels.iter() {
             let relative_channel = channel - base_channel;
@@ -294,6 +302,7 @@ where
                             .clone()
                             .expect("Expected a frequency for hardware oscillator"),
                     }),
+                requires_long_readout,
             });
         }
     }
@@ -307,6 +316,8 @@ where
             .unwrap();
 
         let awg_channels = awg.awg_channels_for_signal(&signal.uid).unwrap();
+        let requires_long_readout = long_readout_signals.contains(&signal.uid);
+
         for channel in awg_channels.iter() {
             input_channel_properties.push(InputChannelProperties {
                 signal: signal.uid,
@@ -330,32 +341,13 @@ where
                             .clone()
                             .expect("Expected a frequency for hardware oscillator"),
                     }),
+                requires_long_readout,
             });
         }
     }
 
     // Post process channel properties
     resolve_port_mode(awg, &mut channel_properties, &mut input_channel_properties)?;
-
-    // Create integration weights by their associated integration channels and sort by channels for output consistency
-    let mut integration_weight_infos = integration_weights
-        .iter()
-        .flat_map(|w| {
-            w.signals().iter().map(|signal_uid| {
-                ctx.integration_units_for_signal(*signal_uid).map(|units| {
-                    let mut sorted_units = units.to_vec();
-                    sorted_units.sort();
-                    IntegrationWeight {
-                        integration_units: sorted_units,
-                        basename: w.basename().to_string(),
-                        downsampling_factor: w.downsampling_factor().unwrap_or(1),
-                    }
-                })
-            })
-        })
-        .flatten()
-        .collect::<Vec<_>>();
-    integration_weight_infos.sort_by(|a, b| a.integration_units.cmp(&b.integration_units));
 
     let awg_properties = AwgProperties {
         key: awg.key(),
@@ -379,8 +371,6 @@ where
             }
         },
         shf_sweeper_config: awg_events.shf_sweeper_config,
-        sampled_waveforms,
-        integration_kernels: integration_weights,
         integration_lengths: measurement_info
             .integration_lengths
             .into_iter()
@@ -411,7 +401,10 @@ where
         },
         output_channel_properties: channel_properties,
         input_channel_properties,
-        integration_weights: integration_weight_infos,
+        integration_weights: processed_kernels.weights,
+        waveforms,
+        waveform_store,
+        pulse_map,
         integrator_allocations: construct_integration_allocations(awg, ctx),
         result_length: measurement_shapes
             .as_ref()
@@ -523,16 +516,16 @@ fn calculate_mixer_properties(
     }
 }
 
-fn generate_code_for_multiple_awgs<T: SampleWaveforms + Sync + Send>(
+fn generate_code_for_multiple_awgs<T: SampleWaveforms + SampleIntegrationKernels + Sync + Send>(
     root: &IrNode,
     awgs: &[AwgCore],
     ctx: &CodeGenContext,
     waveform_sampler: &T,
-) -> Result<Vec<AwgCodeGenerationResult<T>>> {
+) -> Result<Vec<AwgCodeGenerationResult>> {
     let trace_ctx = ParallelTraceContext::new();
-    let awg_results: Vec<Result<AwgCodeGenerationResult<T>>> = awgs
+    let awg_results: Vec<Result<AwgCodeGenerationResult>> = awgs
         .par_iter()
-        .map(|awg| -> Result<AwgCodeGenerationResult<T>> {
+        .map(|awg| -> Result<AwgCodeGenerationResult> {
             par_trace!(trace_ctx, "generate_code_for_awg", {
                 generate_code_for_awg(root, awg, ctx, waveform_sampler).with_context(|| {
                     format!(
@@ -555,11 +548,11 @@ fn estimate_total_execution_time(root: &IrNode) -> f64 {
 }
 
 #[instrument(name = "laboneq.compiler.generate-code-rs", skip_all)] // Named with `-rs` suffix to distinguish from Python wrapper function
-pub fn generate_code<T: SampleWaveforms + Sync + Send>(
+pub fn generate_code<T: SampleWaveforms + SampleIntegrationKernels + Sync + Send>(
     codegen_ir: CodegenIr,
     sampler: &T,
     mut settings: CodeGeneratorSettings,
-) -> Result<SeqCGenOutput<T>> {
+) -> Result<SeqCGenOutput> {
     validate_codegen_ir(&codegen_ir)?;
 
     let root = &codegen_ir.root;
@@ -607,6 +600,8 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
     let measurements = evaluate_measurement_per_device(&awg_results);
     let ppc_settings =
         merge_ppc_steps(&awgs, &mut awg_results, &mut ctx.initial_signal_properties)?;
+    let (waveforms, waveform_store) = merge_waveforms(&mut awg_results)?;
+    let pulse_map = merge_pulse_maps(&mut awg_results);
 
     let result = SeqCGenOutput {
         device_properties: codegen_ir.awg_devices,
@@ -615,17 +610,60 @@ pub fn generate_code<T: SampleWaveforms + Sync + Send>(
         total_execution_time,
         measurements,
         ppc_settings,
+        waveforms,
+        waveform_store,
+        pulse_map,
     };
     Ok(result)
+}
+
+fn merge_pulse_maps(awg_results: &mut [AwgCodeGenerationResult]) -> PulseMap {
+    let pulse_maps = awg_results
+        .iter_mut()
+        .map(|awg_result| std::mem::take(&mut awg_result.pulse_map))
+        .collect::<Vec<_>>();
+    PulseMap::merge(pulse_maps)
+}
+
+/// Merge waveforms across AWGs.
+///
+/// Drains the waveforms from the AWG results and merges them based on their key.
+/// Checks for consistency of waveforms with the same key across different AWGs, and returns an error if inconsistent waveforms are found. Otherwise, returns a unique set of waveforms for output.
+fn merge_waveforms(
+    awg_results: &mut [AwgCodeGenerationResult],
+) -> Result<(Vec<CodegenWaveform>, WaveformStore)> {
+    let stores = awg_results
+        .iter_mut()
+        .map(|r| std::mem::take(&mut r.waveform_store));
+    let waveform_store = WaveformStore::merge(stores)?;
+
+    let mut waveform_map: IndexMap<WaveKey, CodegenWaveform> =
+        IndexMap::with_capacity(awg_results.len());
+    for awg_result in awg_results.iter_mut() {
+        for waveform in awg_result.waveforms.drain(..) {
+            if let Some(existing_waveform) = waveform_map.get(waveform.wave_key()) {
+                if existing_waveform != &waveform {
+                    return Err(laboneq_error!(
+                        "Internal error: Inconsistent waveforms with the same key '{}' across different AWGs.",
+                        waveform.wave_key().signature
+                    ));
+                }
+            } else {
+                waveform_map.insert(waveform.wave_key().clone(), waveform);
+            }
+        }
+    }
+    Ok((waveform_map.into_values().collect(), waveform_store))
 }
 
 /// Merge the PPC steps across signals and AWGs, ensuring consistency of configurations for signals sharing a PPC channel.
 ///
 /// Drains the PPC configurations from the AWG results and initial signal properties, and merges them based on the assigned PPC channels.
 /// Checks for consistency of configurations across signals sharing the same PPC channel, and returns an error if incompatible configurations are found.
+/// Merge waveforms across AWGs by their keys, ensuring consistency for waveforms with the same key, and return a unique set of waveforms for output.
 fn merge_ppc_steps(
     awgs: &[AwgCore],
-    awg_results: &mut [AwgCodeGenerationResult<impl SampleWaveforms>],
+    awg_results: &mut [AwgCodeGenerationResult],
     initial_signal_properties: &mut [InitialSignalProperties],
 ) -> Result<Vec<PpcSettings>> {
     let signal_to_ppc_channel = initial_signal_properties
@@ -706,9 +744,7 @@ fn merge_ppc_steps(
 ///
 /// The measurements are grouped by device and channel, and the maximum length
 /// of the measurements is taken for each channel.
-fn evaluate_measurement_per_device(
-    awg_results: &[AwgCodeGenerationResult<impl SampleWaveforms>],
-) -> Vec<Measurement> {
+fn evaluate_measurement_per_device(awg_results: &[AwgCodeGenerationResult]) -> Vec<Measurement> {
     let mut measurements_by_awg: HashMap<AwgKey, Vec<Measurement>> = HashMap::new();
     for result in awg_results.iter() {
         if result.integration_lengths.is_empty() {
@@ -750,7 +786,7 @@ fn evaluate_measurement_per_device(
 }
 
 fn evaluate_resource_usage(
-    awg_results: &[AwgCodeGenerationResult<impl SampleWaveforms>],
+    awg_results: &[AwgCodeGenerationResult],
 ) -> impl Iterator<Item = Result<(), LabOneQError>> + '_ {
     awg_results.iter().map(|result| {
         if let Some(ct) = &result.command_table {

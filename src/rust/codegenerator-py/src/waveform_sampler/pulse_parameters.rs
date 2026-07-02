@@ -27,6 +27,11 @@ pub struct PulseParametersPy {
 #[pymethods]
 impl PulseParametersPy {
     #[getter]
+    pub fn parameters_id(&self) -> u64 {
+        self.id.0
+    }
+
+    #[getter]
     pub fn parameters(&self) -> &Py<PyAny> {
         &self.parameters
     }

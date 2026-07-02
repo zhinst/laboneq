@@ -537,10 +537,11 @@ class QPUTopology:
             )
             raise err from None
 
+        quantum_element: QuantumElement | None
         if edge_dictionary["quantum_element"] is not None:
             quantum_element = self._node_lookup[edge_dictionary["quantum_element"]]
         else:
-            quantum_element = edge_dictionary["quantum_element"]
+            quantum_element = None
 
         return TopologyEdge(
             tag=tag,

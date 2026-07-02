@@ -130,8 +130,7 @@ def _are_results_compatible(
 def _zqcs_emulate_results(results: Results) -> None:
     """Transform ZQCS emulated results.
 
-    Replaces NaNs in results with a sentinel value (42 + 1j), which conforms with the
-    convention for PQSC.
+    Replaces NaNs in results with complex numbers.
 
     !!! note
         This is a temporary solution and is intended to be removed in the future.
@@ -139,13 +138,15 @@ def _zqcs_emulate_results(results: Results) -> None:
     Arguments:
         results: The results to transform.
     """
-    for acq in results.acquired_results.values():
+    for i, acq in enumerate(results.acquired_results.values()):
         nan_mask = np.isnan(acq.data)
-        if np.ndim(acq.data) == 0:
-            if nan_mask:
-                acq.data = np.complex128(42 + 1j)
-        else:
-            acq.data[nan_mask] = 42 + 1j
+        if nan_mask.any():
+            idx_array = np.arange(acq.data.size, dtype=np.float64).reshape(
+                acq.data.shape
+            )
+            acq.data = np.where(
+                nan_mask, np.complex128(42 + i) + 1j * idx_array, acq.data
+            )
 
 
 def _zqcs_average_results(

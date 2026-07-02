@@ -175,8 +175,8 @@ impl Serialize for PulseSignature {
 pub struct SamplesSignatureID {
     /// The unique ID of the waveform samples
     pub uid: Uid,
-    /// The name of the waveform samples
-    pub label: String,
+    /// Flag whether the waveform samples are compressed
+    pub compressed: bool,
     /// Flag whether the samples has I-component
     pub has_i: bool,
     /// Flag whether the samples has Q-component
@@ -270,6 +270,8 @@ impl WaveformSignature {
     const MAX_LEN_HASH_PARTS: usize = 8;
     /// The maximum length of the waveform property parts in the signature string.
     const MAX_LEN_PROPERTY_PARTS: usize = 56;
+    /// Const compressed pulse
+    const COMPRESSED_PULSE: &str = "_compr_";
 
     fn try_write_limited(buf: &mut String, args: std::fmt::Arguments) -> bool {
         use std::fmt::Write;
@@ -292,7 +294,13 @@ impl WaveformSignature {
         // Estimate the length of the pulse UID part
         // to avoid exceeding the maximum length.
         let estimated_pulse_part_length = match self {
-            WaveformSignature::Samples { samples_id, .. } => samples_id.label.len(),
+            WaveformSignature::Samples { samples_id, .. } => {
+                if samples_id.compressed {
+                    WaveformSignature::COMPRESSED_PULSE.len()
+                } else {
+                    0
+                }
+            }
             WaveformSignature::Pulses { pulses, .. } => {
                 // Calculate the maximum length of the pulse UIDs
                 // to ensure we do not exceed the maximum length.
@@ -387,24 +395,26 @@ impl WaveformSignature {
                 }
                 retval.push_str(shorthand);
             }
-            retval.push('_');
-            retval.push_str(&samples_id.label);
-            retval.push('_');
+            if samples_id.compressed {
+                retval.push_str(WaveformSignature::COMPRESSED_PULSE);
+            }
         }
 
-        let retval = crate::utils::string_sanitize(&retval);
+        let mut retval = crate::utils::string_sanitize(&retval);
 
         // End the signature string with a hash of the waveform to ensure uniqueness
         // as the parts of the formatted fields may not be unique.
         let serialized = serde_json::to_string(self).expect("Internal error: Waveform signature serialization failed while generating signature string");
         let mut hasher = Sha1::new();
         hasher.update(serialized.as_bytes());
-        let hash = hasher.finalize();
-        format!(
-            "{}_{}",
-            retval,
-            &format!("{hash:x}")[..WaveformSignature::MAX_LEN_HASH_PARTS - 1]
-        )
+        let mut hash = hasher.finalize().into_iter();
+        retval.push('_');
+        for _ in 0..Self::MAX_LEN_HASH_PARTS / 2 - 1 {
+            write!(retval, "{:02x}", hash.next().unwrap()).unwrap();
+        }
+        write!(retval, "{:x}", hash.next().unwrap() >> 4).unwrap();
+
+        retval
     }
 }
 
