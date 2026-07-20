@@ -18,7 +18,6 @@ use crate::experiment::DeviceSignal;
 use crate::experiment_context::ExperimentContext;
 use crate::setup_processor::DelayRegistry;
 use crate::setup_processor::delays::{SignalDelayProperties, compute_signal_delays};
-use crate::setup_processor::precompensation::{AssignedPrecompensation, adapt_precompensations};
 
 pub(crate) struct SetupProperties {
     pub signals: Vec<DeviceSignal>,
@@ -55,9 +54,6 @@ pub(crate) fn process_setup(
         id_store,
         backend_processed,
     )?;
-
-    // Adapt precompensation before computing the delays, as the presence of precompensation can affect the delay calculations.
-    adapt_precompensation_on_signals(&mut signals, &device_map, backend_processed, id_store)?;
 
     // Compute the on-device delays based on the signal properties and device information.
     let delays = compute_delays(&signals, &device_map, backend_processed).map_err(Error::new)?;
@@ -262,73 +258,6 @@ fn process_signals(
     Ok(signals)
 }
 
-/// Adapt precompensation on HDAWG signals if needed, and check for unsupported precompensation usage on other devices.
-///
-/// The precompensation settings must be adapted for HDAWG devices when multiple signals are present on the same AWG.
-/// This ensures all the signals on that AWG have the delay introduced by the precompensation correctly applied,
-/// even if only some of them have precompensation explicitly set.
-fn adapt_precompensation_on_signals(
-    signals: &mut [DeviceSignal],
-    devices: &HashMap<DeviceUid, &AwgDevice>,
-    backend_processed: &impl PreprocessedBackendData,
-    id_store: &NamedIdStore,
-) -> Result<()> {
-    // Find AWGs that may need precompensation adaptation
-    let should_adapt_pc: Vec<_> = signals
-        .iter()
-        .filter_map(|s| {
-            let device = devices.get(&s.device_uid).unwrap();
-            if s.calibration.precompensation.is_some() && !device.traits().supports_precompensation
-            {
-                return Some(Err(Error::new(format!(
-                    "Precompensation is not supported on device '{}'.",
-                    device.kind(),
-                ))));
-            }
-            if s.calibration.precompensation.is_some() && device.kind() == DeviceKind::Hdawg {
-                Some(Ok(backend_processed
-                    .awg_key(s.uid)
-                    .expect("Expected AWG key")))
-            } else {
-                None
-            }
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    // Extract precompensations for adaptation
-    let mut pcs = Vec::new();
-    for signal in signals.iter_mut() {
-        let awg_key = &backend_processed.awg_key(signal.uid)?;
-        if !should_adapt_pc.contains(awg_key) {
-            continue;
-        }
-        if let Some(precomp) = signal.calibration.precompensation.take() {
-            pcs.push(AssignedPrecompensation {
-                signal_uid: signal.uid,
-                awg: *awg_key,
-                precompensation: Some(precomp),
-            });
-        } else {
-            // Placeholder for signal without precompensation, to ensure it gets adapted if needed
-            pcs.push(AssignedPrecompensation {
-                signal_uid: signal.uid,
-                awg: *awg_key,
-                precompensation: None,
-            });
-        }
-    }
-
-    adapt_precompensations(&mut pcs, id_store)?;
-
-    // Apply adapted precompensations back to signals
-    for pc in pcs {
-        if let Some(signal) = signals.iter_mut().find(|s| s.uid == pc.signal_uid) {
-            signal.calibration.precompensation = pc.precompensation;
-        }
-    }
-    Ok(())
-}
-
 fn round_signal_delay(
     delay: Duration<Second>,
     sampling_rate: f64,
@@ -391,7 +320,7 @@ fn compute_delays(
 ) -> Result<DelayRegistry> {
     let signal_delay_props = signals
         .iter()
-        .map(|s| -> Result<SignalDelayProperties> {
+        .map(|s| {
             let device = devices.get(&s.device_uid).unwrap();
             SignalDelayProperties::new(
                 s.uid,
@@ -399,12 +328,10 @@ fn compute_delays(
                 device.uid(),
                 device.kind(),
                 s.delay_signal,
-                s.calibration.precompensation.as_ref(),
                 backend_processed.lead_delay(s.uid),
             )
-            .map_err(Error::new)
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
 
     let delays = compute_signal_delays(&signal_delay_props);
     Ok(delays)

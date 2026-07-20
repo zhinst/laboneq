@@ -97,6 +97,7 @@ class CombinedRTOutputSeqC(CombinedOutput):
             pulse_map=self.pulse_map,
             integration_weights=self.integration_weights,
             parameter_phase_increment_map=self.parameter_phase_increment_map,
+            result_handle_maps=self.result_handle_maps,
         )
 
     def get_raw_acquire_length(

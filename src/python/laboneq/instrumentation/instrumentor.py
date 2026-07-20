@@ -199,7 +199,11 @@ class ControllerInstrumentor(_BaseLabOneQInstrumentor):
 class LabOneQInstrumentor(BaseInstrumentor):
     """Opentelemetry instrumentor for LabOne Q."""
 
-    _instrumentors = [SessionInstrumentor, CompilerInstrumentor, ControllerInstrumentor]
+    _instrumentors = [
+        SessionInstrumentor,
+        CompilerInstrumentor,
+        ControllerInstrumentor,
+    ]
 
     @classmethod
     def register_instrumentor(cls, instrumentor_class: type) -> None:

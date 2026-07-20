@@ -36,7 +36,7 @@ from laboneq.controller.recipe_processor import (
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.for_each import for_each, for_each_sync
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
-from laboneq.data.scheduled_experiment import ResultSource
+from laboneq.data.scheduled_experiment import ArtifactsCodegen, ResultSource
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -911,11 +911,15 @@ class DeviceBase(DeviceZI):
                 acquires=awg_config.result_length,
                 timeout_s=timeout_s,
             )
+            result_handle_maps = recipe_data.get_artifacts(
+                ArtifactsCodegen
+            ).result_handle_maps
+            result_source = ResultSource(awg_key.device_uid, awg_key.awg_index, None)
             # Raw data is per physical port, and is the same for all logical signals of the AWG
             results_builder.add_acquired_data(
                 nt_step=nt_step,
                 chunk_index=None,
-                result_source=ResultSource(awg_key.device_uid, awg_key.awg_index, None),
+                mapping=result_handle_maps.get(result_source, []),
                 acquired_data=raw_results.vector,
             )
         else:
@@ -946,6 +950,9 @@ class DeviceBase(DeviceZI):
             num_results=awg_config.result_length,
             hw_averages=effective_averages,
         )
+        result_handle_maps = recipe_data.get_artifacts(
+            ArtifactsCodegen
+        ).result_handle_maps
 
         for signal in awg_config.acquire_signals:
             integrator_allocation = next(
@@ -965,14 +972,15 @@ class DeviceBase(DeviceZI):
                 integrators=integrator_allocation.channels,
                 rt_execution_info=rt_execution_info,
             )
+            result_source = ResultSource(
+                integrator_allocation.device_id,
+                integrator_allocation.awg,
+                integrator_allocation.channels[0],
+            )
             results_builder.add_acquired_data(
                 nt_step=nt_step,
                 chunk_index=None,
-                result_source=ResultSource(
-                    integrator_allocation.device_id,
-                    integrator_allocation.awg,
-                    integrator_allocation.channels[0],
-                ),
+                mapping=result_handle_maps.get(result_source, []),
                 acquired_data=raw_readout.vector,
             )
 

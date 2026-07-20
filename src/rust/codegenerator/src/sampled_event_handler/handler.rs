@@ -1641,7 +1641,7 @@ impl<'a> SampledEventHandler<'a> {
     }
 
     pub(crate) fn handle_sampled_events(&mut self, awg_events: &'a AwgEventList) -> Result<()> {
-        for (_, awg_event_list) in awg_events.iter() {
+        for awg_event_list in awg_events.values() {
             self.last_phase_reset = find_last_phase_reset(awg_event_list);
             for awg_event in awg_event_list.iter() {
                 self.handle_sampled_event(awg_event)?;
@@ -1746,7 +1746,7 @@ pub(crate) fn handle_sampled_events(
         acquisition_type,
     )?;
     let mut awg_events = awg_events;
-    for (_, event_list) in awg_events.iter_mut() {
+    for event_list in awg_events.values_mut() {
         sort_events(event_list);
     }
     handler.handle_declarations(wave_declarations)?;

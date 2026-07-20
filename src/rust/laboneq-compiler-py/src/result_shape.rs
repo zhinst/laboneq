@@ -202,7 +202,6 @@ fn merge_shapes(shapes: Vec<HandleResultShape>) -> Result<HandleResultShape> {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct HandleResultShape {
     pub(crate) handle: HandleUid,
-    pub(crate) signal: SignalUid,
     pub(crate) shape: Vec<usize>,
     pub(crate) axis_names: Vec<Vec<NamedId>>,
     pub(crate) axis_values: Vec<Vec<AxisValues>>,
@@ -210,6 +209,8 @@ pub(crate) struct HandleResultShape {
     // For each loop depth, if the acquisition is within a match statement that is conditional on a sweep parameter, store the case indices of the match statement.
     pub(crate) match_case_mask: IndexMap<usize, Vec<usize>>,
 
+    // The signal associated with the handle.
+    signal: SignalUid,
     // Each handle is associated with at most one match statement, so we can store the match context here.
     match_context_uid: Option<usize>,
 }
@@ -504,7 +505,7 @@ fn sort_match_cases_to_parameter<'a>(
             Error::new(format!(
                 "Using a match statement for sweep parameter must cover all values.
         Match statement for parameter '{}' is missing a case for value '{}'.",
-                sweep_parameter.uid.0, &sweep_value,
+                sweep_parameter.uid.0, sweep_value,
             ))
         })?;
         Ok(nodes[*target_idx])

@@ -51,7 +51,8 @@ def laboneq_tracing(span_exporter: InMemorySpanExporter):
 
     try:
         with _temporary_env_vars(
-            LABONEQ_TRACING_ENABLE="1", LABONEQ_TRACING_IN_MEMORY_EXPORTER="1"
+            LABONEQ_TRACING_ENABLE="1",
+            LABONEQ_TRACING_IN_MEMORY_EXPORTER="1",
         ):
             yield
     finally:

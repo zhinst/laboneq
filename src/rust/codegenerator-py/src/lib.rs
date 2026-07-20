@@ -30,14 +30,13 @@ mod waveform_sampler;
 // Re-export types from codegenerator that are needed in the preprocessor and backend for the convenience.
 pub use codegenerator::{HardwareSetup, SignalChannelProperties};
 
-pub fn generate_code_py<'py>(
-    py: Python<'py>,
+pub fn generate_code_py(
+    py: Python<'_>,
     experiment: ExperimentIr,
     setup_description: &HardwareSetup,
     compiler_settings: &CompilerSettings,
     py_object_store: &PyObjectInterner<ExternalParameterUid>,
-) -> Result<Bound<'py, PyAny>, LabOneQError> {
-    let id_store = &experiment.id_store;
+) -> Result<SeqCGenOutput, LabOneQError> {
     let (codegen_ir, dedup) = ir_to_codegen_ir(&experiment, setup_description)?;
     let sampler = WaveformSamplerPy::new(
         py,
@@ -45,14 +44,14 @@ pub fn generate_code_py<'py>(
         codegen_ir.acquisition_type.clone(),
         &dedup,
         py_object_store,
-        &experiment.id_store,
+        experiment.id_store,
     );
     let settings = compiler_setting_to_codegenerator_settings(compiler_settings);
     let result = py.detach(|| generate_code(codegen_ir, &sampler, settings))?;
-    convert_to_py_output(py, result, id_store, py_object_store)
+    Ok(result)
 }
 
-fn convert_to_py_output<'py>(
+pub fn artifacts_to_py<'py>(
     py: Python<'py>,
     result: SeqCGenOutput,
     id_store: &NamedIdStore,

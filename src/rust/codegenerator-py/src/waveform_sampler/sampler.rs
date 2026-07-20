@@ -497,8 +497,6 @@ struct BoundPulseInstancePy {
     channel: Option<usize>,
     needs_conjugate: bool,
     parameters_id: Option<u64>,
-    has_marker1: bool,
-    has_marker2: bool,
     can_compress: bool,
 }
 
@@ -655,8 +653,6 @@ fn convert_pulse_map(
                             needs_conjugate: instance.needs_conjugate,
                             pulse_parameters: pulse_parameters.unwrap_or_default(),
                             parameters: op_parameters.unwrap_or_default(),
-                            has_marker1: instance.has_marker1,
-                            has_marker2: instance.has_marker2,
                             can_compress: instance.can_compress,
                         }
                     })

@@ -34,8 +34,6 @@ class PulseInstance:
     play_pulse_parameters: dict[str, Any] = field(default_factory=dict)
     pulse_pulse_parameters: dict[str, Any] = field(default_factory=dict)
 
-    has_marker1: bool = False
-    has_marker2: bool = False
     can_compress: bool = False
 
 
@@ -138,10 +136,14 @@ class ArtifactsCodegen(CompilerArtifact):
     # Data structure for referencing the waveforms used as integration kernels.
     integration_weights: dict[str, AwgWeights] = field(default_factory=dict)
 
+    # For each result source, contains a map representing the info about which index
+    # in the result corresponds to which handle(s). See `CombinedOutput` for a detailed
+    # description of the semantics.
+    result_handle_maps: dict[ResultSource, list[set[str]]] = field(default_factory=dict)
+
 
 @dataclass(frozen=True)
 class HandleResultShape:
-    signal: str
     shape: tuple[int, ...]
     axis_names: list[str | list[str]]
     axis_values: list[NumPyArray | list[NumPyArray]]
@@ -157,13 +159,11 @@ class HandleResultShape:
             return False
 
         return (
-            self.signal,
             self.shape,
             self.axis_names,
             self.chunked_axis_index,
             self.match_case_mask,
         ) == (
-            self.signal,
             other.shape,
             other.axis_names,
             other.chunked_axis_index,
@@ -175,7 +175,11 @@ class HandleResultShape:
 class ResultSource:
     device_id: str
     awg_id: int | str
-    integrator_idx: int | None  # None for RAW acquisition
+    # The first integration unit allocated to the signal on this AWG. Acts as a stable
+    # per-signal routing key; unique by construction (see `allocate_integration_units`
+    # in the Rust code generator, which hands out non-overlapping unit ranges per AWG).
+    # None for RAW acquisition, where results are per physical port rather than per integrator.
+    integrator_idx: int | None
 
 
 @dataclass
@@ -190,7 +194,6 @@ class RtLoopProperties:
 @dataclass(frozen=True)
 class ResultShapeInfo:
     shapes: dict[str, HandleResultShape]
-    result_handle_maps: dict[ResultSource, list[set[str]]]
 
 
 @dataclass

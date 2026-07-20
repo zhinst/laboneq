@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from laboneq.data.recipe import NtStepKey
-    from laboneq.data.scheduled_experiment import CompilerArtifact, ResultSource
+    from laboneq.data.scheduled_experiment import CompilerArtifact
 
 
 class NeartimeStepBase:
@@ -23,6 +23,11 @@ class RTCompilerOutput:
 class CombinedOutput(abc.ABC):
     """Base class for compiler output _after_ linking individual runs of the code
     generation backend.
+
+    Each concrete subclass owns a `result_handle_maps` field, which is later exposed on the
+    corresponding `CompilerArtifact` via `get_artifacts()`. The key type is backend-specific;
+    it only needs to be hashable and consistent between the map built here and the key the
+    controller looks up at acquisition time.
 
     result_handle_maps: For each result source, contains a map representing the info about which index
                         in the result corresponds to which handle(s). If experiment is single shot, these maps
@@ -38,7 +43,6 @@ class CombinedOutput(abc.ABC):
     """
 
     neartime_steps: list[NeartimeStepBase]
-    result_handle_maps: dict[ResultSource, list[set[str]]]
 
     @abc.abstractmethod
     def get_artifacts(self) -> CompilerArtifact:

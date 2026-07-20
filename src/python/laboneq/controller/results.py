@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from laboneq.core.types.enums import AveragingMode
 from laboneq.data.experiment_results import AcquiredResult, ExperimentResults
 
 if TYPE_CHECKING:
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
     from laboneq.data.recipe import NtStepKey
     from laboneq.data.scheduled_experiment import (
         HandleResultShape,
-        ResultSource,
+        RtLoopProperties,
         ScheduledExperiment,
     )
 
@@ -24,12 +25,10 @@ class ResultsBuilder:
     def __init__(
         self,
         shapes: dict[str, HandleResultShape],
-        result_handle_maps: dict[ResultSource, list[set[str]]],
-        chunk_count: int | None,
+        rt_loop_properties: RtLoopProperties,
     ):
         self._shapes = shapes
-        self._result_handle_maps = result_handle_maps
-        self._chunk_count = chunk_count
+        self._rt_loop_properties = rt_loop_properties
 
         self._results = ResultsBuilder._init_empty_result_by_shape(shapes)
 
@@ -42,9 +41,8 @@ class ResultsBuilder:
         scheduled_experiment: ScheduledExperiment,
     ) -> ResultsBuilder:
         result_shape_info = scheduled_experiment.result_shape_info
-        chunk_count = scheduled_experiment.rt_loop_properties.chunk_count
         return ResultsBuilder(
-            result_shape_info.shapes, result_shape_info.result_handle_maps, chunk_count
+            result_shape_info.shapes, scheduled_experiment.rt_loop_properties
         )
 
     @staticmethod
@@ -88,15 +86,15 @@ class ResultsBuilder:
 
             if shape_info.chunked_axis_index == i and chunk_index is not None:
                 # slice the dimension further, to account for a single chunk only
-                assert self._chunk_count is not None
+                assert self._rt_loop_properties.chunk_count is not None
                 if isinstance(slc, list):
-                    chunk_len = len(slc) // self._chunk_count
+                    chunk_len = len(slc) // self._rt_loop_properties.chunk_count
                     slc = slc[chunk_index * chunk_len : (chunk_index + 1) * chunk_len]
                 else:
                     start, stop = slc.start or 0, slc.stop
                     assert stop is not None
                     assert slc.step is None
-                    chunk_len = (stop - start) // self._chunk_count
+                    chunk_len = (stop - start) // self._rt_loop_properties.chunk_count
                     slc = slice(
                         start + chunk_index * chunk_len,
                         start + (chunk_index + 1) * chunk_len,
@@ -108,8 +106,9 @@ class ResultsBuilder:
         self,
         nt_step: NtStepKey,
         chunk_index: int | None,
-        result_source: ResultSource,
+        mapping: list[set[str]],
         acquired_data: NumPyArray,
+        unaveraged: bool = False,
     ):
         """Add data acquired from a single full (i.e. all chunks) RT execution, or a single chunk (chunk_index not None).
 
@@ -122,8 +121,14 @@ class ResultsBuilder:
         execution of one chunk errored out.
         For each handle, the buffer is a multi-dimensional numpy array. This function determines the slices of this array where
         the incoming data should go, and populates accordingly.
+
+        Arguments:
+            nt_step: The near-time step for which the data was acquired
+            chunk_index: The index of the chunk for which the data was acquired, if chunking is used
+            mapping: Represents the info about which index in `acquired_data` corresponds to which handle(s)
+            acquired_data: 1D array containing results acquired during the execution of a portion (NT step, chunk) of an experiment
+            unaveraged: Whether the acquired data should be averaged over shots
         """
-        mapping = self._result_handle_maps.get(result_source, [])
         unique_handles = set(h for m in mapping for h in m)
         for handle in unique_handles:
             result_for_handle = self._results.acquired_results[handle]
@@ -143,6 +148,31 @@ class ResultsBuilder:
             slices = self._determine_slices(nt_step, chunk_index, handle)
             sliced_shape = result_for_handle.data[slices].shape
 
+            if unaveraged:
+                shots = self._rt_loop_properties.shots
+                assert acquired_data_for_handle.size == shots * np.prod(sliced_shape), (
+                    "Results do not have the correct size to be averaged in the "
+                    "controller"
+                )
+
+                averaging_mode = self._rt_loop_properties.averaging_mode
+                assert averaging_mode in (
+                    AveragingMode.CYCLIC,
+                    AveragingMode.SEQUENTIAL,
+                ), (
+                    "Results averaging in the controller is only supported for CYCLIC "
+                    "and SEQUENTIAL averaging modes"
+                )
+
+                if averaging_mode is AveragingMode.CYCLIC:
+                    acquired_data_for_handle = acquired_data_for_handle.reshape(
+                        (shots, *sliced_shape)
+                    ).mean(axis=0)
+                else:  # AveragingMode.SEQUENTIAL
+                    acquired_data_for_handle = acquired_data_for_handle.reshape(
+                        (*sliced_shape, shots)
+                    ).mean(axis=-1)
+
             if (acquired_len := np.prod(acquired_data_for_handle.shape)) != (
                 expected_len := np.prod(sliced_shape)
             ):
@@ -158,7 +188,7 @@ class ResultsBuilder:
                     :, :truncation_index
                 ]
 
-            if self._chunk_count is None or chunk_index is not None:
+            if self._rt_loop_properties.chunk_count is None or chunk_index is not None:
                 # if chunking is not used, or used and the incomming
                 # data is for a single chunk only
 
@@ -173,17 +203,19 @@ class ResultsBuilder:
                 chunked_axis_index = handle_shape_info.chunked_axis_index
                 assert chunked_axis_index is not None
                 assert chunk_index is None
-                assert self._chunk_count is not None
+                assert self._rt_loop_properties.chunk_count is not None
 
                 chunk_shape = tuple(
-                    dim if i != chunked_axis_index else dim // self._chunk_count
+                    dim
+                    if i != chunked_axis_index
+                    else dim // self._rt_loop_properties.chunk_count
                     for i, dim in enumerate(sliced_shape)
                 )
                 # rearrange the data as if it came from a non-chunked experiment
                 shaped_acquired_data_for_handle = np.concatenate(
                     np.reshape(
                         acquired_data_for_handle,
-                        (self._chunk_count, *chunk_shape),
+                        (self._rt_loop_properties.chunk_count, *chunk_shape),
                         copy=False,
                     ),
                     axis=chunked_axis_index,

@@ -18,17 +18,16 @@ from laboneq.data.scheduled_experiment import (
 
 if typing.TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment
-    from laboneq.data.scheduled_experiment import ScheduledExperiment
+    from laboneq.data.scheduled_experiment import CompilerArtifact
     from laboneq.dsl.parameter import Parameter
 
 
 def calc_ct_replacement(
-    scheduled_experiment: ScheduledExperiment,
+    artifacts: CompilerArtifact,
     parameter_uid: str,
     new_value: int | float,
     in_place=False,
 ) -> list[dict[str, Any]]:
-    artifacts = scheduled_experiment.artifacts
     assert isinstance(artifacts, ArtifactsCodegen)
     try:
         phase_increment_map = artifacts.parameter_phase_increment_map[parameter_uid]
@@ -97,5 +96,5 @@ def replace_phase_increment(
     if not isinstance(parameter, str):
         parameter = parameter.uid
 
-    scheduled_experiment = target.scheduled_experiment
-    calc_ct_replacement(scheduled_experiment, parameter, new_value, in_place=True)
+    artifacts = target.scheduled_experiment.artifacts
+    calc_ct_replacement(artifacts, parameter, new_value, in_place=True)

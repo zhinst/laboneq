@@ -13,8 +13,6 @@ pub(crate) struct HandleResultShapePy {
     #[pyo3(get)]
     handle: String,
     #[pyo3(get)]
-    signal: String,
-    #[pyo3(get)]
     shape: Vec<usize>,
     #[pyo3(get)]
     axis_names: Vec<Vec<String>>,
@@ -34,7 +32,6 @@ pub(crate) fn create_result_shape_py(
     use numpy::PyArray1;
     use pyo3::IntoPyObjectExt;
 
-    let signal = id_store.resolve(result_shape.signal).unwrap().to_string();
     let shape = result_shape.shape;
     let axis_names = result_shape
         .axis_names
@@ -73,7 +70,6 @@ pub(crate) fn create_result_shape_py(
 
     let result_shape_py = HandleResultShapePy {
         handle: id_store.resolve(result_shape.handle).unwrap().to_string(),
-        signal,
         shape,
         axis_names,
         axis_values,

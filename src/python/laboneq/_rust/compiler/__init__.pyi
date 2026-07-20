@@ -45,7 +45,6 @@ class RtLoopProperties:
 
 class HandleResultShape:
     handle: str
-    signal: str
     shape: list[int]
     axis_names: list[list[str]]
     axis_values: list[list[NumPyArray]]

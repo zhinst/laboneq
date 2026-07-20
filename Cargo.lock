@@ -70,15 +70,15 @@ checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
 name = "bytes"
-version = "1.12.0"
+version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ae3f5d315924270530207e2a68396c3cc547f6dca3fbdca317cfb1a51edb593"
+checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "capnp"
-version = "0.26.0"
+version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71338171543626713e427635f7de390328d9e85828a816a0c88d959032b34a2f"
+checksum = "58ddce707ad9fb2ae92770523cd0e17a0cf34e79b66a9ca4db2dd993535fe718"
 dependencies = [
  "embedded-io",
 ]
@@ -100,9 +100,10 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "codegenerator"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "codegenerator-utils",
+ "crossbeam-epoch",
  "derive_more",
  "indexmap",
  "interval-calculator",
@@ -126,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-py"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "codegenerator",
  "codegenerator-utils",
@@ -147,7 +148,7 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-utils"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "laboneq-common",
  "laboneq-dsl",
@@ -171,9 +172,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-deque"
-version = "0.8.6"
+version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9dd111b7b7f7d55b72c0a6ae361660ee5853c9af73f70c3c2ef6858b950e2e51"
+checksum = "5181e0de7b61eb03a81e347d6dd8797bae9da5146707b51077e2d71a54ec0ceb"
 dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
@@ -181,18 +182,18 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.18"
+version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
 dependencies = [
  "crossbeam-utils",
 ]
 
 [[package]]
 name = "crossbeam-utils"
-version = "0.8.21"
+version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
+checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 
 [[package]]
 name = "crypto-common"
@@ -386,7 +387,7 @@ dependencies = [
 
 [[package]]
 name = "interval-calculator"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "anyhow",
  "thiserror",
@@ -420,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-capnp"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "capnp",
  "capnpc",
@@ -428,7 +429,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-common"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "laboneq-error",
  "laboneq-units",
@@ -441,7 +442,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-compiler-py"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "anyhow",
  "approx",
@@ -471,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-dsl"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "itertools",
  "laboneq-common",
@@ -483,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-error"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "laboneq-log",
  "pyo3",
@@ -492,7 +493,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-ir"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "laboneq-common",
  "laboneq-dsl",
@@ -507,14 +508,14 @@ dependencies = [
 
 [[package]]
 name = "laboneq-log"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "laboneq-opentelemetry-python"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "laboneq-tracing",
  "opentelemetry",
@@ -525,7 +526,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-py-utils"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "laboneq-common",
  "laboneq-dsl",
@@ -540,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-qccs-backend"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "approx",
  "codegenerator-py",
@@ -559,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-rust"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "codegenerator-py",
  "laboneq-compiler-py",
@@ -571,7 +572,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-scheduler"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "anyhow",
  "itertools",
@@ -591,7 +592,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-tracing"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -603,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-units"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "derive_more",
  "num-integer",
@@ -640,15 +641,15 @@ dependencies = [
 
 [[package]]
 name = "md5"
-version = "0.8.0"
+version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae960838283323069879657ca3de837e9f7bbb4c7bf6ea7f1b290d5e9476d2e0"
+checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
 
 [[package]]
 name = "memchr"
-version = "2.8.2"
+version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
+checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "ndarray"
@@ -694,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "numeric-array"
-version = "26.7.0-b5"
+version = "26.7.0-b6"
 dependencies = [
  "approx",
  "num-complex",
@@ -947,9 +948,9 @@ checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "rand"
-version = "0.9.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
+checksum = "b9ef1d0d795eb7d84685bca4f72f3649f064e6641543d3a8c415898726a57b41"
 dependencies = [
  "rand_chacha",
  "rand_core",
@@ -1001,14 +1002,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "rccow"
-version = "26.7.0-b5"
-
-[[package]]
 name = "regex"
-version = "1.12.4"
+version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1292b7759ae1cb9ec195452d1390a074f0cd8541ab7a5a8c31cd6db45d4a6ba"
+checksum = "2a0e75113e14dc5acb068cd0786884f214f1312650a3d36d269f5c4f3cdee8a2"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -1018,9 +1015,9 @@ dependencies = [
 
 [[package]]
 name = "regex-automata"
-version = "0.4.14"
+version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e1dd4122fc1595e8162618945476892eefca7b88c52820e74af6262213cae8f"
+checksum = "1f388202e4b80542a0921078cc23b6333bcf1409c1e3f86404cae4766a6131db"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -1035,9 +1032,9 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rustc-hash"
-version = "2.1.2"
+version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "94300abf3f1ae2e2b8ffb7b58043de3d399c73fa6f4b73826402a5c457614dbe"
+checksum = "6b1e7f9a428571be2dc5bc0505c13fb6bf936822b894ec87abf8a08a4e51742d"
 
 [[package]]
 name = "rustc_version"
@@ -1050,9 +1047,9 @@ dependencies = [
 
 [[package]]
 name = "rustversion"
-version = "1.0.22"
+version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
+checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "semver"
@@ -1185,9 +1182,9 @@ dependencies = [
 
 [[package]]
 name = "thread_local"
-version = "1.1.9"
+version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
+checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
 dependencies = [
  "cfg-if",
 ]
@@ -1339,18 +1336,18 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "zerocopy"
-version = "0.8.52"
+version = "0.8.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce1022995ff5ff5d841ad7d994facc23098cd40152f2c1d11cd607c6f530653f"
+checksum = "b7cbbc0a705a0fd05cc3676525980d2bf5a9bc4adac6d6475209a7887cf59d19"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.52"
+version = "0.8.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1ae7f38b72ec2a254e2b87ef277cf2cd4fb97cbebf944faa6f33354da0867930"
+checksum = "e2e817b7b52d0c7358d3246da9d69935ebb18116b2b102b4230dac079b4862f5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1359,6 +1356,6 @@ dependencies = [
 
 [[package]]
 name = "zmij"
-version = "1.0.21"
+version = "1.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+checksum = "bd2f034a4bebf216c9e4b7083603e024cf930873fd67830cfb083c9fa33129d9"

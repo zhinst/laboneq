@@ -530,7 +530,7 @@ fn generate_code_for_multiple_awgs<T: SampleWaveforms + SampleIntegrationKernels
                 generate_code_for_awg(root, awg, ctx, waveform_sampler).with_context(|| {
                     format!(
                         "Error while generating code for signals: {}",
-                        &awg.signals
+                        awg.signals
                             .iter()
                             .map(|s| s.uid.0.to_string())
                             .collect::<Vec<_>>()

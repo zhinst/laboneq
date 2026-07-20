@@ -208,16 +208,30 @@ pub struct LoopInfo<'a> {
 }
 
 impl Operation {
-    pub fn signals(&self) -> Vec<SignalUid> {
-        match self {
-            Operation::PlayPulse(p) => vec![p.signal],
-            Operation::Acquire(a) => vec![a.signal],
-            Operation::Delay(d) => vec![d.signal],
-            Operation::ResetOscillatorPhase(r) => r.signals.to_vec(),
-            Operation::Reserve(r) => vec![r.signal],
-            Operation::Section(obj) => obj.triggers.iter().map(|t| t.signal).collect(),
-            _ => vec![],
-        }
+    pub fn signals(&self) -> impl Iterator<Item = SignalUid> + '_ {
+        // The implementation of this function may look weird - it goes to great
+        // lengths to make returning an iterator possible without any Vec alloc.
+        // This is why it does not just consist of a single match block that returns
+        // the corresponding thing in each branch.
+        let single = match self {
+            Operation::PlayPulse(p) => Some(p.signal),
+            Operation::Acquire(a) => Some(a.signal),
+            Operation::Delay(d) => Some(d.signal),
+            Operation::Reserve(r) => Some(r.signal),
+            _ => None,
+        };
+        let reset_signals: &[SignalUid] = match self {
+            Operation::ResetOscillatorPhase(r) => &r.signals,
+            _ => &[],
+        };
+        let trigger_signals: &[Trigger] = match self {
+            Operation::Section(obj) => &obj.triggers,
+            _ => &[],
+        };
+        single
+            .into_iter()
+            .chain(reset_signals.iter().copied())
+            .chain(trigger_signals.iter().map(|t| t.signal))
     }
 
     pub fn section_info<'a>(self: &'a Operation) -> Option<SectionInfo<'a>> {

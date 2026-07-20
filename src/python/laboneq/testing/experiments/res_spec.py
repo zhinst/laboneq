@@ -269,6 +269,12 @@ class ResonatorSpectroscopyBuilder:
                     frequency=qa_if_freq_param, modulation_type=modulation_type
                 ),
                 local_oscillator=Oscillator(frequency=flo_qa),
+            )
+            exp_cal[f"{qubit_id}_acquire"] = SignalCalibration(
+                oscillator=Oscillator(
+                    frequency=qa_if_freq_param, modulation_type=modulation_type
+                ),
+                local_oscillator=Oscillator(frequency=flo_qa),
                 delay_signal=acquire_delay,
             )
 

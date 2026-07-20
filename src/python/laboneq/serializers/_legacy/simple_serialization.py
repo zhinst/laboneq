@@ -21,6 +21,7 @@ from typing_extensions import deprecated
 
 from laboneq._version import get_version
 from laboneq.serializers._legacy.custom_serializers import (
+    ArtifactsCodegenDeserializer,
     ResultShapeInfoDeserializer,
     serialize_to_string,
 )
@@ -276,7 +277,7 @@ def construct_object(content, mapped_class):
         return mapped_class(content)
     if _issubclass(mapped_class, XarrayDatasetDeserializer):
         return mapped_class(content)
-    if mapped_class is ResultShapeInfoDeserializer:
+    if mapped_class in (ResultShapeInfoDeserializer, ArtifactsCodegenDeserializer):
         return mapped_class.deserialize(content)
     arg_names = class_argnames(mapped_class)
     has_kwargs = "kwargs" in arg_names
@@ -712,6 +713,7 @@ def deserialize_from_dict_with_ref(data, class_mapping, entity_classes, entity_m
     class_mapping[XarrayDataArrayDeserializer._type_] = XarrayDataArrayDeserializer
     class_mapping[XarrayDatasetDeserializer._type_] = XarrayDatasetDeserializer
     class_mapping[ResultShapeInfoDeserializer._type_] = ResultShapeInfoDeserializer
+    class_mapping[ArtifactsCodegenDeserializer._type_] = ArtifactsCodegenDeserializer
     entity_pool = {}
 
     for entity_list in data.get("entities", {}).values():

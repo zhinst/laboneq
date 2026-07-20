@@ -33,7 +33,9 @@ use laboneq_capnp::pulse::v1::{
 };
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyComplex, PyDict, PyList, PyString};
+use pyo3::types::{PyBytes, PyComplex, PyDict, PyFloat, PyList, PyString};
+
+use tracing::instrument;
 
 // === Intermediate types for collecting parameters and pulses ===
 
@@ -488,9 +490,8 @@ impl<'py> Serializer<'py> {
         let uid_str: &str = uid_obj.extract()?;
         builder.set_name(uid_str);
 
-        let is_sweep = obj
-            .get_type()
-            .is(self.dsl_types.laboneq_type(DslType::Sweep));
+        let kind = obj.get_type();
+        let is_sweep = kind.is(self.dsl_types.laboneq_type(DslType::Sweep));
 
         // For Sweep sections, we intentionally process children first so that any
         // derived sweep parameters referenced in child operations are collected
@@ -1954,6 +1955,7 @@ impl<'py> Serializer<'py> {
 /// Serializes a Python experiment object tree to Cap'n Proto bytes.
 ///
 /// Returns the serialized bytes as a `Vec<u8>`.
+#[instrument(level = "debug", name = "laboneq.compiler.serialize_capnp", skip_all)]
 pub(crate) fn serialize_experiment(
     py: Python,
     experiment: ExperimentCapnpPy,
@@ -2256,6 +2258,13 @@ fn set_sweep_value_from_py(
     if obj.is_none() {
         return Ok(());
     }
+    // Floats are the most common values, so check them first.
+    // This does not cast ints to float so this can stay before
+    // the int extraction.
+    if let Ok(f) = obj.cast::<PyFloat>() {
+        builder.reborrow().init_constant().set_real(f.value());
+        return Ok(());
+    }
     if let Ok(v) = obj.extract::<i64>() {
         builder.reborrow().init_constant().set_integer(v);
         return Ok(());
@@ -2265,10 +2274,6 @@ fn set_sweep_value_from_py(
         let mut cv = builder.reborrow().init_constant().init_complex();
         cv.set_real(c.re);
         cv.set_imag(c.im);
-        return Ok(());
-    }
-    if let Ok(v) = obj.extract::<f64>() {
-        builder.reborrow().init_constant().set_real(v);
         return Ok(());
     }
     if let Ok(v) = obj.extract::<&str>() {

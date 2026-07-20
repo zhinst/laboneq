@@ -7,10 +7,6 @@
 //! Tracing can be enabled and configured via environment variables, allowing for flexible integration with different tracing backends and exporters.
 //! The crate currently supports exporting spans to an OTLP collector over HTTP, as well as buffering spans in memory and exporting them as JSON.
 //!
-//! The tracing configuration is controlled via environment variables:
-//!
-//! - `LABONEQ_TRACING_ENABLE`: If set to "1", enables tracing. Otherwise, tracing is disabled by default.
-//! - `LABONEQ_TRACING_IN_MEMORY_EXPORTER`: If set to "1", enables the in-memory exporter. This is disabled by default.
 //! - OTLP HTTP exporter can be configured via standard OpenTelemetry environment variables, such as `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`.
 
 pub mod opentelemetry_in_memory_exporter;
@@ -22,6 +18,7 @@ use tracing::{Dispatch, dispatcher};
 use opentelemetry::trace::TracerProvider;
 use opentelemetry_provider::ExporterType;
 use tracing_subscriber::Registry;
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 
 /// Configuration
@@ -29,8 +26,14 @@ use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 ///
 /// - `LABONEQ_TRACING_ENABLE`: If set to "1" or "true" (case-insensitive), enables tracing. Otherwise, tracing is disabled by default.
 /// - `LABONEQ_TRACING_IN_MEMORY_EXPORTER`: If set to "1" or "true" (case-insensitive), enables the in-memory exporter. This is disabled by default.
+/// - `_LABONEQ_DEV_TRACING_LEVEL`: The verbosity of the captured spans, analogous to a log level. Possible values: "off", "error", "warn", "info",
+///   "debug", "trace", or not set which is equivalent to "info".
+///   This variable is deliberately not set by the user facing tracing helpers - it is supposed to be used as a debug tool by LabOne Q developers.
 const ENV_VAR_ENABLE: &str = "LABONEQ_TRACING_ENABLE";
 const ENV_VAR_IN_MEMORY_EXPORTER: &str = "LABONEQ_TRACING_IN_MEMORY_EXPORTER";
+const ENV_VAR_LEVEL: &str = "_LABONEQ_DEV_TRACING_LEVEL";
+
+const DEFAULT_LEVEL: LevelFilter = LevelFilter::INFO;
 
 /// Checks if tracing is enabled by reading the `LABONEQ_TRACING_ENABLE` environment variable.
 pub fn tracing_is_enabled() -> bool {
@@ -41,6 +44,21 @@ fn env_var_is_true(var_name: &str) -> bool {
     env::var(var_name)
         .map(|v| v == "1" || v.to_lowercase() == "true")
         .unwrap_or(false)
+}
+
+fn tracing_level() -> LevelFilter {
+    match env::var(ENV_VAR_LEVEL) {
+        Ok(value) => {
+            let value = value.trim();
+            // An empty string parses to `LevelFilter::ERROR`, which is a surprising result for an
+            // unset-but-present variable (e.g. `LABONEQ_TRACING_LEVEL=`), so treat it as the default.
+            if value.is_empty() {
+                return DEFAULT_LEVEL;
+            }
+            value.parse().unwrap_or(DEFAULT_LEVEL)
+        }
+        Err(_) => DEFAULT_LEVEL,
+    }
 }
 
 /// Configures tracing for the duration of the provided closure.
@@ -73,12 +91,15 @@ struct TracingConfig {
     opentelemetry_exporters: Vec<ExporterType>,
     /// Whether to force flush the tracer provider at the end of the scope.
     force_flush: bool,
+    /// Maximum verbosity of the spans that are captured.
+    level: LevelFilter,
 }
 
 fn build_settings() -> Option<TracingConfig> {
     if !tracing_is_enabled() {
         return None;
     }
+    let level = tracing_level();
     // Currently we always enable the OTLP exporter if tracing is enabled,
     // unless an in-memory exporter is explicitly configured.
     // For now we do not support configuring both exporters at the same time.
@@ -86,11 +107,13 @@ fn build_settings() -> Option<TracingConfig> {
         TracingConfig {
             opentelemetry_exporters: vec![ExporterType::InMemory],
             force_flush: true,
+            level,
         }
     } else {
         TracingConfig {
             opentelemetry_exporters: vec![ExporterType::OtlpHttp],
             force_flush: false,
+            level,
         }
     };
     Some(config)
@@ -121,7 +144,7 @@ fn init_dispatcher(config: TracingConfig) -> TracingState {
         .with_location(false);
     // To add more layers, extend the `with` chain. Make sure each layer is boxed and optional.
     // TODO: Add log interoperability layer
-    let registry = Registry::default().with(otel_layer);
+    let registry = Registry::default().with(config.level).with(otel_layer);
     let dispatch = Dispatch::new(registry);
     TracingState {
         dispatch,

@@ -96,7 +96,7 @@ def process_replacements(
             "Cannot apply near-time artifact replacements for chunked experiment."
         )
 
-    artifacts = recipe_data.scheduled_experiment.artifacts
+    artifacts = recipe_data.artifacts
     process_replacements_impl(artifacts, recipe_data, devices, nt_step, replacements)
 
 
@@ -215,7 +215,7 @@ def _process_phase_increment_replacements(
     with replacements.phase_increments() as phase_increments:
         for parameter_uid, replacement in phase_increments.items():
             ct_replacements = calc_ct_replacement(
-                recipe_data.scheduled_experiment, parameter_uid, replacement
+                recipe_data.artifacts, parameter_uid, replacement
             )
             for repl in ct_replacements:
                 seqc_name = repl["seqc"]

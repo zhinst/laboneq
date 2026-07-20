@@ -5,11 +5,12 @@
 
 pub mod error;
 
+use laboneq_dsl::types::NumericLiteral;
+use laboneq_dsl::types::ParameterUid;
 use laboneq_error::LabOneQError;
 use pyo3::types::PyDict;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use crate::capnp_py_types::DeviceSetupCapnpPy;
@@ -23,10 +24,11 @@ use crate::experiment_context::ExperimentContext;
 use crate::experiment_context::experiment_context_from_experiment;
 use crate::experiment_processor::process_experiment;
 use crate::experiment_validation::validate_experiment;
-use crate::parameter_store::create_parameter_store;
 use crate::py_experiment::ExperimentPy;
 use crate::result_shape::ResultShapes;
 use crate::result_shape::extract_result_shapes;
+use crate::rt_compiler::RealTimeCompilerInput;
+use crate::rt_compiler::compile_realtime;
 use crate::setup_processor::DelayRegistry;
 use crate::setup_processor::SetupProperties;
 use crate::setup_processor::process_setup;
@@ -41,36 +43,36 @@ use laboneq_ir::ExperimentIr;
 use laboneq_ir::pulse_sheet_schedule::PulseSheetSchedule;
 use laboneq_ir::system::DeviceSetup;
 use laboneq_py_utils::py_object_interner::PyObjectInterner;
-use laboneq_scheduler::{ChunkingInfo, ExperimentContext as SchedulerContext, schedule_experiment};
 
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
+
+use tracing::instrument;
 
 #[cfg(test)]
 mod test_py;
 
 pub(crate) mod capnp_deserializer;
-pub(crate) mod capnp_serializer;
-pub(crate) mod experiment;
-mod experiment_context;
-mod experiment_processor;
-mod experiment_validation;
-mod parameter_store;
-mod py_conversion;
-mod py_helpers;
-mod qccs_feedback_calculator;
-mod signal_view;
-use signal_view::signal_views;
 mod capnp_py_types;
+pub(crate) mod capnp_serializer;
 mod chunking_mode;
 mod compiler;
 pub mod compiler_backend;
 mod execution;
+pub(crate) mod experiment;
+mod experiment_context;
+mod experiment_processor;
+mod experiment_validation;
+mod py_conversion;
 mod py_execution;
 pub mod py_experiment;
+mod py_helpers;
 mod py_result_shape;
+mod qccs_feedback_calculator;
 mod result_shape;
+mod rt_compiler;
 mod setup_processor;
+mod signal_view;
 
 /// Serialize a Python experiment object to Cap'n Proto bytes.
 #[pyfunction(name = "serialize_experiment", signature = (experiment, device_setup, packed=false))]
@@ -80,7 +82,10 @@ fn serialize_experiment_py(
     device_setup: DeviceSetupCapnpPy,
     packed: bool,
 ) -> CompilerResult<Vec<u8>> {
-    capnp_serializer::serialize_experiment(py, experiment, device_setup, packed)
+    let _context_guard = tracing_is_enabled()
+        .then(|| attach_otel_context(py))
+        .transpose()?;
+    with_tracing(|| capnp_serializer::serialize_experiment(py, experiment, device_setup, packed))
 }
 
 /// Build an experiment from Cap'n Proto bytes plus device/signal configuration.
@@ -129,6 +134,11 @@ pub struct ProcessedExperiment<D> {
 }
 
 /// Build an experiment from Cap'n Proto bytes plus device/signal configuration.
+#[instrument(
+    level = "debug",
+    name = "laboneq.compiler.build_experiment_capnp",
+    skip_all
+)]
 fn build_experiment_capnp<B: CompilerBackend>(
     py: Python<'_>,
     capnp_data: &[u8],
@@ -228,14 +238,20 @@ fn build_experiment_capnp<B: CompilerBackend>(
 }
 
 #[pyclass(name = "RealTimeCompilerOutput", frozen)]
-struct RealTimeCompilerOutput {
+struct RealTimeCompilerOutputPy {
     /// Parameters used in the experiment
     #[pyo3(get)]
     used_parameters: HashSet<String>,
     #[pyo3(get)]
-    code_gen_output: Py<PyAny>,
-    #[pyo3(get)]
     pulse_sheet_schedule: Option<Py<PyAny>>,
+    codegen_output: Py<PyAny>,
+}
+
+#[pymethods]
+impl RealTimeCompilerOutputPy {
+    fn codegen_output<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        Ok(self.codegen_output.bind(py).into())
+    }
 }
 
 #[pyfunction(name = "compile_realtime")]
@@ -244,93 +260,44 @@ fn compile_realtime_py(
     experiment: &ExperimentPy,
     parameters: HashMap<String, f64>,
     chunking_info: Option<(usize, usize)>, // Current chunk index, total chunk count
-) -> PyResult<RealTimeCompilerOutput> {
-    compile_realtime_py_impl(py, experiment, parameters, chunking_info)
-}
-
-fn compile_realtime_py_impl(
-    py: Python,
-    experiment: &ExperimentPy,
-    parameters: HashMap<String, f64>,
-    chunking_info: Option<(usize, usize)>, // Current chunk index, total chunk count
-) -> PyResult<RealTimeCompilerOutput> {
-    // The NT / RT boundaries should have been resolved at this point.
-    // This means only 1 NT root.
-    let chunking_info = if let Some((index, count)) = chunking_info {
-        let count = NonZeroU32::new(count as u32).ok_or_else(|| {
-            laboneq_error::laboneq_error!("Chunk count must be a positive integer")
-        })?;
-        Some(ChunkingInfo { index, count })
-    } else {
-        None
-    };
-    let compiler_settings = &experiment.compiler_settings;
-    let context = &experiment.context;
-    let device_setup = &experiment.device_setup;
-    let inner_experiment = &experiment.inner;
-    let mut parameter_store = create_parameter_store(parameters, &inner_experiment.id_store);
-    let views = signal_views(device_setup);
-
-    let feedback_calculator = experiment
-        .backend
-        .feedback_calculator(
-            &views.values().cloned().collect::<Vec<_>>(),
-            compiler_settings,
-        )
-        .map_err(|e| laboneq_error::laboneq_error!("{e}"))?;
-
-    let _t = laboneq_log::StageTiming::start("Schedule");
-    let result = schedule_experiment(
-        &inner_experiment.root,
-        SchedulerContext {
-            id_store: &inner_experiment.id_store,
-            parameters: inner_experiment.parameters.clone(),
-            signals: &views,
-            handle_to_signal: context.handle_to_signal(),
-        },
-        &parameter_store,
+) -> PyResult<RealTimeCompilerOutputPy> {
+    let rt_input = RealTimeCompilerInput {
+        experiment: &experiment.inner,
+        parameters: parameters
+            .into_iter()
+            .map(|(k, v)| {
+                let uid = experiment.inner.id_store.get(&k).ok_or_else(|| {
+                    laboneq_error::laboneq_error!("Parameter {k} not found in experiment ID store")
+                })?;
+                Ok((ParameterUid(uid), NumericLiteral::Float(v)))
+            })
+            .collect::<Result<HashMap<ParameterUid, NumericLiteral>, LabOneQError>>()?,
         chunking_info,
-        feedback_calculator.as_ref(),
-    )
-    .map_err(|e| laboneq_error::laboneq_error!("{e}"))?;
-    drop(_t);
-
-    let ir = ExperimentIr {
-        root: result.root,
-        parameters: result.parameters.values().cloned().collect(),
-        pulses: inner_experiment.pulses.values().cloned().collect(),
-        acquisition_type: *context.acquisition_type(),
-        id_store: Arc::clone(&inner_experiment.id_store),
-        device_setup: Arc::clone(device_setup),
+        context: &experiment.context,
+        backend: experiment.backend.as_ref(),
+        backend_data: experiment.backend_data.as_ref(),
+        device_setup: &experiment.device_setup,
+        compiler_settings: &experiment.compiler_settings,
     };
-    let pulse_sheet_schedule = prepare_schedule(&ir, compiler_settings);
 
-    let _t = laboneq_log::StageTiming::start("Code generation");
-    let code_gen_output = experiment.backend.generate_code_dyn(
-        ir,
-        compiler_settings,
-        &experiment.inner.py_object_store,
-        experiment.backend_data.as_ref(),
-    )?;
-    drop(_t);
+    let result = compile_realtime(rt_input)?;
 
-    let out = RealTimeCompilerOutput {
-        code_gen_output: code_gen_output
-            .to_python(py)
-            .map_err(|e| laboneq_error::laboneq_error!("{e}"))?,
-        used_parameters: parameter_store
-            .empty_queries()
+    let result_py = RealTimeCompilerOutputPy {
+        used_parameters: result
+            .used_parameters
             .iter()
-            .map(|p| inner_experiment.id_store.resolve(p.0).unwrap().to_string())
+            .map(|p| experiment.inner.id_store.resolve(p.0).unwrap().to_string())
             .collect(),
-        pulse_sheet_schedule: pulse_sheet_schedule
+        pulse_sheet_schedule: result
+            .pulse_sheet_schedule
             .as_ref()
             .map(|s| schedule_to_py(py, s))
             .transpose()
             .map_err(|e| laboneq_error::laboneq_error!("{e}"))?
             .map(|s| s.unbind()),
+        codegen_output: result.codegen_output.to_python(py)?.into(),
     };
-    Ok(out)
+    Ok(result_py)
 }
 
 /// Generate a schedule (event list + metadata) from an IR tree.
@@ -357,7 +324,7 @@ fn prepare_schedule(
             .collect(),
         compiler_settings.expand_loops_for_schedule,
         compiler_settings.max_events_to_publish,
-        &ir.id_store,
+        ir.id_store,
     );
     Some(out)
 }

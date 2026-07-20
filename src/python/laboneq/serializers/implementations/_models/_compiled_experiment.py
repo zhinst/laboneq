@@ -29,7 +29,6 @@ from laboneq.data.recipe import (
     OscillatorParam,
     RealtimeExecutionInit,
     Recipe,
-    RefClkType,
     RoutedOutput,
     SoftwareVersions,
 )
@@ -61,12 +60,6 @@ class AWGSignalTypeModel(Enum):
     SINGLE = "single"
     DOUBLE = "double"
     _target_class = AWGSignalType
-
-
-class RefClkTypeModel(Enum):
-    _10MHZ = 10_000_000
-    _100MHZ = 100_000_000
-    _target_class = RefClkType
 
 
 @attrs.define
@@ -107,7 +100,6 @@ class IOModel:
     port_mode: PortMode | None
     port_delay: Any
     scheduler_port_delay: float
-    delay_signal: float | None
     marker_mode: str | None
     amplitude: Any
     routed_outputs: list[RoutedOutputModel]
@@ -213,14 +205,12 @@ class RtLoopPropertiesModel:
 
 @attrs.define
 class SoftwareVersionsModel:
-    target_labone: str
     laboneq: str
     _target_class: ClassVar[Type] = SoftwareVersions
 
 
 @attrs.define
 class HandleResultShapeModel:
-    signal: str
     shape: tuple[int, ...]
     axis_names: list[str | list[str]]
     axis_values: list[numpy.ndarray | list[numpy.ndarray]]
@@ -233,7 +223,6 @@ class HandleResultShapeModel:
 @attrs.define
 class ResultShapeInfoModel:
     shapes: dict[str, HandleResultShapeModel]
-    result_handle_maps: dict[ResultSource, list[set[str]]]
 
     _target_class: ClassVar[Type] = ResultShapeInfo
 

@@ -195,9 +195,10 @@ class Experiment:
         """
         if not self.is_experiment_signal(experiment_signal_uid):
             raise LabOneQException(
-                f"Unknown experiment signal: {experiment_signal_uid}. Call experiment.experiment_signals to get a "
-                f"list of experiment signals defined in this experiment. Call experiment.add_signal() to add a signal "
-                f"prior to connect id to a LogicalSignal. "
+                f"Unknown experiment signal: {experiment_signal_uid}. Call "
+                f"experiment.list_experiment_signals() to get a list of experiment "
+                f"signals defined in this experiment. Call experiment.add_signal() to "
+                f"add a signal prior to connecting an id to a LogicalSignal. "
             )
 
         self.signals[experiment_signal_uid].map(logical_signal)

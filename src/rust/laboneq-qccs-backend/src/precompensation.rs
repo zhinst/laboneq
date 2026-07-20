@@ -1,13 +1,44 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::HashMap;
 use std::fmt;
 
-use laboneq_dsl::signal_calibration::Precompensation;
+use laboneq_common::named_id::NamedIdStore;
+use laboneq_common::types::{AwgKey, DeviceKind};
+use laboneq_dsl::signal_calibration::{
+    BounceCompensation, ExponentialCompensation, FirCompensation, Precompensation,
+};
 use laboneq_dsl::types::SignalUid;
 use laboneq_error::{WithContext, bail};
+use laboneq_log::warn;
 
 use crate::Result;
+
+// --- Delays introduced by precompensation settings on HDAWG ---
+const PRECOMPENSATION_BASE_DELAY_SAMPLES: i64 = 72;
+const PRECOMPENSATION_EXPONENTIAL_DELAY_SAMPLES: i64 = 88;
+const PRECOMPENSATION_HIGH_PASS_DELAY_SAMPLES: i64 = 96;
+const PRECOMPENSATION_BOUNCE_DELAY_SAMPLES: i64 = 32;
+const PRECOMPENSATION_FIR_DELAY_SAMPLES: i64 = 136;
+
+fn precompensation_delay_samples(precompensation: &Precompensation) -> i64 {
+    if !precompensation_is_active(precompensation) {
+        return 0;
+    }
+    let mut delay = PRECOMPENSATION_BASE_DELAY_SAMPLES;
+    delay += PRECOMPENSATION_EXPONENTIAL_DELAY_SAMPLES * precompensation.exponential.len() as i64;
+    if precompensation.high_pass.is_some() {
+        delay += PRECOMPENSATION_HIGH_PASS_DELAY_SAMPLES;
+    }
+    if precompensation.bounce.is_some() {
+        delay += PRECOMPENSATION_BOUNCE_DELAY_SAMPLES;
+    }
+    if precompensation.fir.is_some() {
+        delay += PRECOMPENSATION_FIR_DELAY_SAMPLES;
+    }
+    delay
+}
 
 const DSP_OUTCOMP_BSHIFT_W: u32 = 2;
 const DSP_OUTCOMP_BSHIFT_C: u32 = 4;
@@ -32,42 +63,244 @@ impl fmt::Display for PrecompensationWarning {
 }
 
 #[derive(Debug)]
-pub(crate) struct SignalPrecompensation<'a> {
+pub(crate) struct SignalPrecompensation {
     pub signal_uid: SignalUid,
+    pub awg_key: AwgKey,
+    pub device_kind: DeviceKind,
     pub sampling_rate: f64,
-    pub precompensation: &'a Precompensation,
+    pub precompensation: Option<Precompensation>,
 }
 
 pub(crate) struct PrecompensationProcessingResult {
     pub warnings: Vec<PrecompensationWarning>,
+    /// Adapted precompensations for all HDAWG signals, to be written back to device signals.
+    pub adapted: HashMap<SignalUid, Option<Precompensation>>,
+    /// Hardware delay in samples introduced by the precompensation DSP for each signal.
+    pub delays: HashMap<SignalUid, i64>,
+}
+
+#[derive(Debug)]
+struct AssignedPrecompensation {
+    signal_uid: SignalUid,
+    awg: AwgKey,
+    precompensation: Option<Precompensation>,
 }
 
 /// Process the precompensation configuration for the given signals.
 ///
-/// Returns a list of warnings for any parameters that were out of range and will be clamped, or an error for hard limit violations.
+/// Validates that precompensation is only used on HDAWG signals, adapts HDAWG signals
+/// sharing the same AWG so they have compatible settings, and verifies parameter ranges.
+/// Returns warnings for out-of-range values that will be clamped, an error for hard limit
+/// violations, and the adapted precompensations to write back.
 pub(crate) fn process_precompensation(
     precompensations: Vec<SignalPrecompensation>,
+    id_store: &NamedIdStore,
 ) -> Result<PrecompensationProcessingResult> {
-    let mut collected_warnings = Vec::new();
-    for precomp in &precompensations {
-        let warnings =
-            verify_precompensation_parameters(Some(precomp.precompensation), precomp.sampling_rate)
-                .with_context(|| {
-                    format!(
-                        "Invalid precompensation for signal: '{}'",
-                        precomp.signal_uid.0
-                    )
-                })?;
-        warnings.into_iter().for_each(|w| {
-            collected_warnings.push(PrecompensationWarning {
-                signal_uid: precomp.signal_uid,
-                warning: w,
-            })
-        });
+    for p in &precompensations {
+        if p.precompensation.is_some() && p.device_kind != DeviceKind::Hdawg {
+            bail!(
+                "Precompensation is not supported on device '{}'.",
+                p.device_kind
+            );
+        }
     }
+
+    let sampling_rates: HashMap<SignalUid, f64> = precompensations
+        .iter()
+        .map(|p| (p.signal_uid, p.sampling_rate))
+        .collect();
+
+    let mut to_adapt: Vec<AssignedPrecompensation> = precompensations
+        .into_iter()
+        .filter(|p| p.device_kind == DeviceKind::Hdawg)
+        .map(|p| AssignedPrecompensation {
+            signal_uid: p.signal_uid,
+            awg: p.awg_key,
+            precompensation: p.precompensation,
+        })
+        .collect();
+
+    adapt_precompensations(&mut to_adapt, id_store)?;
+
+    let mut collected_warnings = Vec::new();
+    for adapted_pc in &to_adapt {
+        let sr = sampling_rates[&adapted_pc.signal_uid];
+        let warnings = verify_precompensation_parameters(adapted_pc.precompensation.as_ref(), sr)
+            .with_context(|| {
+            format!(
+                "Invalid precompensation for signal: '{}'",
+                id_store.resolve(adapted_pc.signal_uid).unwrap_or_default()
+            )
+        })?;
+        for w in warnings {
+            collected_warnings.push(PrecompensationWarning {
+                signal_uid: adapted_pc.signal_uid,
+                warning: w,
+            });
+        }
+    }
+
+    let delays = to_adapt
+        .iter()
+        .map(|p| {
+            let delay = p
+                .precompensation
+                .as_ref()
+                .map_or(0, precompensation_delay_samples);
+            (p.signal_uid, delay)
+        })
+        .collect();
+
+    let adapted = to_adapt
+        .into_iter()
+        .map(|p| (p.signal_uid, p.precompensation))
+        .collect();
+
     Ok(PrecompensationProcessingResult {
         warnings: collected_warnings,
+        adapted,
+        delays,
     })
+}
+
+fn precompensation_is_active(precompensation: &Precompensation) -> bool {
+    precompensation.bounce.is_some()
+        || !precompensation.exponential.is_empty()
+        || precompensation.fir.is_some()
+        || precompensation.high_pass.is_some()
+}
+
+/// Adapt precompensations for HDAWG to ensure that signals sharing the same AWG have
+/// compatible precompensation settings.
+fn adapt_precompensations(
+    precompensations: &mut [AssignedPrecompensation],
+    id_store: &NamedIdStore,
+) -> Result<()> {
+    for precomp in precompensations.iter() {
+        if let Some(pc) = &precomp.precompensation
+            && let Some(fir) = &pc.fir
+            && !fir.coefficients.is_empty()
+            && fir.coefficients.iter().all(|&c| c == 0.0)
+        {
+            warn!(
+                "FIR coefficients for signal '{}' are all zero: the output signal will be silenced. \
+                         Use a non-zero kernel (e.g. starting with 1.0 for identity).",
+                id_store
+                    .resolve(precomp.signal_uid)
+                    .expect("BUG: signal_uid not in id_store")
+            );
+        }
+    }
+
+    let mut by_awg: HashMap<AwgKey, Vec<&mut AssignedPrecompensation>> = precompensations
+        .iter_mut()
+        .fold(HashMap::new(), |mut acc, assigned| {
+            if assigned
+                .precompensation
+                .as_ref()
+                .is_some_and(|p| !precompensation_is_active(p))
+            {
+                assigned.precompensation = None;
+            }
+            acc.entry(assigned.awg).or_default().push(assigned);
+            acc
+        });
+
+    for precomps in by_awg.values_mut() {
+        if precomps.len() < 2 {
+            continue;
+        }
+        if precomps.iter().all(|p| p.precompensation.is_none()) {
+            continue;
+        }
+        adapt_awg_precompensation(precomps)?;
+    }
+    Ok(())
+}
+
+fn adapt_awg_precompensation(precompensations: &mut [&mut AssignedPrecompensation]) -> Result<()> {
+    let has_high_pass: Vec<_> = precompensations
+        .iter()
+        .filter_map(|p| {
+            if let Some(precomp) = &p.precompensation {
+                precomp.high_pass.is_some().then_some(())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if !has_high_pass.is_empty() && has_high_pass.len() != precompensations.len() {
+        bail!(
+            "All precompensation settings for the same AWG must have the high pass filter \
+             enabled or disabled: '{}'.",
+            precompensations
+                .iter()
+                .map(|p| p.signal_uid.0.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    let mut n_exponentials = 0;
+    let mut has_fir = false;
+    let mut has_bounce = false;
+    for precomp in precompensations.iter() {
+        if let Some(precomp) = &precomp.precompensation {
+            n_exponentials = n_exponentials.max(precomp.exponential.len());
+            if precomp.fir.is_some() {
+                has_fir = true;
+            }
+            if precomp.bounce.is_some() {
+                has_bounce = true;
+            }
+        }
+    }
+
+    for precomp in precompensations.iter_mut() {
+        if precomp.precompensation.is_none() {
+            precomp.precompensation = Some(Precompensation::default());
+        }
+        let current_len = precomp.precompensation.as_ref().unwrap().exponential.len();
+        if current_len < n_exponentials {
+            let to_add = n_exponentials - current_len;
+            precomp
+                .precompensation
+                .as_mut()
+                .unwrap()
+                .exponential
+                .extend(default_exponential_settings(to_add));
+        }
+        if has_fir && precomp.precompensation.as_ref().unwrap().fir.is_none() {
+            precomp.precompensation.as_mut().unwrap().fir = default_fir_settings().into();
+        }
+        if has_bounce && precomp.precompensation.as_ref().unwrap().bounce.is_none() {
+            precomp.precompensation.as_mut().unwrap().bounce = default_bounce_settings().into();
+        }
+    }
+    Ok(())
+}
+
+fn default_fir_settings() -> FirCompensation {
+    FirCompensation {
+        coefficients: vec![1.0],
+    }
+}
+
+fn default_bounce_settings() -> BounceCompensation {
+    BounceCompensation {
+        delay: 10e-9,
+        amplitude: 0.0,
+    }
+}
+
+fn default_exponential_settings(n: usize) -> Vec<ExponentialCompensation> {
+    vec![
+        ExponentialCompensation {
+            timeconstant: 10e-9,
+            amplitude: 0.0,
+        };
+        n
+    ]
 }
 
 /// Validate precompensation parameters, returning warnings for
@@ -397,5 +630,54 @@ mod tests {
             assert_abs_diff_eq!(tc_clamped, tc_exp, epsilon = 0.01e-9);
             assert_abs_diff_eq!(amp_clamped, amp_exp, epsilon = 100.0);
         }
+    }
+}
+
+#[cfg(test)]
+mod precompensation_delay_samples_tests {
+    use super::*;
+    use laboneq_dsl::signal_calibration::{
+        BounceCompensation, ExponentialCompensation, FirCompensation, HighPassCompensation,
+        Precompensation,
+    };
+
+    #[test]
+    fn test_precompensation_delay_samples() {
+        let precomp = Precompensation {
+            exponential: vec![
+                ExponentialCompensation {
+                    timeconstant: 0.0,
+                    amplitude: 0.0,
+                },
+                ExponentialCompensation {
+                    timeconstant: 0.0,
+                    amplitude: 0.0,
+                },
+            ],
+            high_pass: HighPassCompensation { timeconstant: 0.0 }.into(),
+            bounce: BounceCompensation {
+                delay: 0.0,
+                amplitude: 0.0,
+            }
+            .into(),
+            fir: FirCompensation {
+                coefficients: vec![0.0],
+            }
+            .into(),
+        };
+        assert_eq!(
+            precompensation_delay_samples(&precomp),
+            PRECOMPENSATION_BASE_DELAY_SAMPLES
+                + PRECOMPENSATION_EXPONENTIAL_DELAY_SAMPLES * 2
+                + PRECOMPENSATION_HIGH_PASS_DELAY_SAMPLES
+                + PRECOMPENSATION_BOUNCE_DELAY_SAMPLES
+                + PRECOMPENSATION_FIR_DELAY_SAMPLES
+        );
+    }
+
+    #[test]
+    fn test_precompensation_delay_samples_no_precomp() {
+        let precomp = Precompensation::default();
+        assert_eq!(precompensation_delay_samples(&precomp), 0);
     }
 }

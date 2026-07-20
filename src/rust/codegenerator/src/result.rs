@@ -169,6 +169,10 @@ pub struct Measurement {
 pub struct ResultSource {
     pub device_id: DeviceUid,
     pub awg_id: u16,
+    /// The first integration unit allocated to the signal on this AWG.
+    /// Acts as a stable per-signal routing key; unique by construction because
+    /// `allocate_integration_units` hands out non-overlapping unit ranges per AWG.
+    /// None for RAW acquisition, where results are per physical port rather than per integrator.
     pub integrator_idx: Option<u8>,
 }
 

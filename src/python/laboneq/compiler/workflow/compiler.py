@@ -100,7 +100,7 @@ def compile_whole_or_with_chunks(
     combined_output = combined_compiler_output.get_first_combined_output()
     if combined_output is None:
         recipe = Recipe()
-        result_shape_info = ResultShapeInfo({}, {})
+        result_shape_info = ResultShapeInfo({})
     else:
         generate_recipe_args = GenerateRecipeArgs(
             experiment_rs=experiment,
@@ -109,7 +109,6 @@ def compile_whole_or_with_chunks(
         recipe = get_compiler_hooks(device_class).generate_recipe(generate_recipe_args)
         shapes = {
             shape.handle: HandleResultShape(
-                signal=shape.signal,
                 shape=tuple(shape.shape),
                 axis_names=[
                     axis_names[0] if len(axis_names) == 1 else axis_names
@@ -124,9 +123,7 @@ def compile_whole_or_with_chunks(
             )
             for shape in experiment.get_result_shapes(combined_output)
         }
-        result_shape_info = ResultShapeInfo(
-            shapes=shapes, result_handle_maps=combined_output.result_handle_maps
-        )
+        result_shape_info = ResultShapeInfo(shapes=shapes)
 
     rt_loop_properties = experiment.rt_loop_properties()
     return CompiledOutput(

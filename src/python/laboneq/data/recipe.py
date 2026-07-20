@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
 from typing_extensions import TypeAlias
@@ -14,11 +13,6 @@ if TYPE_CHECKING:
     from laboneq.core.types.enums.port_mode import PortMode
 
 ParameterUID: TypeAlias = str
-
-
-class RefClkType(Enum):
-    _10MHZ = 10_000_000
-    _100MHZ = 100_000_000
 
 
 @dataclass(frozen=True)
@@ -60,7 +54,6 @@ class IO:
     port_mode: PortMode | None = None
     port_delay: Any = None
     scheduler_port_delay: float = 0.0
-    delay_signal: float | None = None
     marker_mode: str | None = None
     amplitude: Any = None
     routed_outputs: list[RoutedOutput] = field(default_factory=list)
@@ -151,7 +144,6 @@ class RealtimeExecutionInit:
 
 @dataclass
 class SoftwareVersions:
-    target_labone: str
     laboneq: str
 
 
@@ -164,4 +156,4 @@ class Recipe:
     acquire_lengths: list[AcquireLength] = field(default_factory=list)
     total_execution_time: float = 0.0
     max_step_execution_time: float = 0.0
-    versions: SoftwareVersions = field(default_factory=lambda: SoftwareVersions("", ""))
+    versions: SoftwareVersions = field(default_factory=lambda: SoftwareVersions(""))

@@ -1110,8 +1110,6 @@ fn pulse_map_to_py<'py>(
                         pulse_pulse_parameters,
                     )?;
 
-                    kwargs.set_item(intern!(py, "has_marker1"), instance.has_marker1)?;
-                    kwargs.set_item(intern!(py, "has_marker2"), instance.has_marker2)?;
                     kwargs.set_item(intern!(py, "can_compress"), instance.can_compress)?;
                     pulse_instance_cls.call((), Some(&kwargs))
                 })

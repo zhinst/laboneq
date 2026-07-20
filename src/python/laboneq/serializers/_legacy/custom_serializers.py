@@ -4,6 +4,7 @@
 import re
 
 from laboneq.data.scheduled_experiment import (
+    ArtifactsCodegen,
     ResultShapeInfo,
     ResultSource,
 )
@@ -14,11 +15,20 @@ class ResultShapeInfoDeserializer:
 
     @staticmethod
     def deserialize(mapping: dict) -> ResultShapeInfo:
-        result_handle_maps = {
+        return ResultShapeInfo(mapping["shapes"])
+
+
+class ArtifactsCodegenDeserializer:
+    _type_ = "ArtifactsCodegen"
+
+    @staticmethod
+    def deserialize(mapping: dict) -> ArtifactsCodegen:
+        mapping = dict(mapping)
+        mapping["result_handle_maps"] = {
             _deserialize_result_source(k): v
-            for k, v in mapping["result_handle_maps"].items()
+            for k, v in mapping.get("result_handle_maps", {}).items()
         }
-        return ResultShapeInfo(mapping["shapes"], result_handle_maps)
+        return ArtifactsCodegen(**mapping)
 
 
 def serialize_to_string(obj) -> str:

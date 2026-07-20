@@ -55,6 +55,7 @@ if TYPE_CHECKING:
     from laboneq.data.scheduled_experiment import (
         ArtifactsCodegen,
         CodegenWaveform,
+        CompilerArtifact,
         ScheduledExperiment,
         WeightInfo,
     )
@@ -338,7 +339,7 @@ def get_elf(artifacts: ArtifactsCodegen, seqc_ref: str | None) -> bytes | None:
 
 @dataclass
 class RecipeData:
-    scheduled_experiment: ScheduledExperiment
+    artifacts: CompilerArtifact
     recipe: Recipe
     execution: Statement
     rt_execution_info: RtExecutionInfo
@@ -354,7 +355,7 @@ class RecipeData:
         return Initialization(device_uid=device_uid)
 
     def get_artifacts(self, artifacts_class: type[T]) -> T:
-        return get_artifacts(self.scheduled_experiment.artifacts, artifacts_class)
+        return get_artifacts(self.artifacts, artifacts_class)
 
     def awgs_producing_results(self) -> Iterator[tuple[AwgKey, AwgConfig]]:
         for awg_key, awg_config in self.awg_configs.items():
@@ -899,7 +900,7 @@ def pre_process_compiled(
         )
 
     recipe_data = RecipeData(
-        scheduled_experiment=scheduled_experiment,
+        artifacts=scheduled_experiment.artifacts,
         recipe=recipe,
         execution=scheduled_experiment.execution,
         rt_execution_info=rt_execution_info,

@@ -45,8 +45,6 @@ class _PulseInstance:
     needs_conjugate: bool = False
     parameters_id: int | None = None
 
-    has_marker1: bool = False
-    has_marker2: bool = False
     can_compress: bool = False
 
 
@@ -352,8 +350,6 @@ def sample_waveform(
                 channel=pulse_part.channel,
                 needs_conjugate=device_type == DeviceType.SHFSG,
                 parameters_id=pulse_parameters_uid,
-                has_marker1=has_marker1,
-                has_marker2=has_marker2,
                 can_compress=pulse_def.can_compress,
             )
         )

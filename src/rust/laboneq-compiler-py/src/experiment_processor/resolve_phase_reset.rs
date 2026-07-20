@@ -51,7 +51,7 @@ fn resolve_phase_reset_impl(
                 }
             }
             _ => {
-                this_signals.extend(child.kind.signals().iter().cloned());
+                this_signals.extend(child.kind.signals());
                 resolve_phase_reset_impl(child.make_mut(), &mut this_signals, signals)?;
             }
         }

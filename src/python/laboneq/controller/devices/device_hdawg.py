@@ -293,6 +293,8 @@ class DeviceHDAWG(DeviceBase):
         # for HBAR-2434. Later, load dummy programs on unused cores instead.
         nc.add("awgs/*/synchronization/enable", 0)
         if self.is_leader() or self.is_standalone():
+            # Barrier: the wildcard disable must complete before per-core
+            nc.barrier()
             for core_index in device_recipe_data.hdawgcores:
                 nc.add(f"awgs/{core_index}/synchronization/enable", 1)
 

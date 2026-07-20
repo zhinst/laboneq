@@ -18,6 +18,7 @@ use crate::experiment_validation::{
     ExperimentContext, ParamsContext, ValidationContext, validate_parameters::*,
     validate_pulses::*, validate_signals::*,
 };
+use crate::signal_view::SignalView;
 
 /// Validates [Operation] variants in an experiment.
 pub(super) fn validate_experiment_operations(ctx: &ExperimentContext) -> Result<()> {
@@ -74,12 +75,16 @@ fn visit_node<'a>(
 
     match &node.kind {
         Operation::PlayPulse(op) => {
+            let signal = ctx
+                .signals
+                .get(&op.signal)
+                .ok_or_else(|| Error::new("Signal not found."))?;
             validate_play_pulse(op, ctx, ctx_validator)?;
-            shfqa_unique_measure_pulse(op, ctx, ctx_validator)?;
-            check_no_play_on_acquire_line(op, ctx, ctx_validator)?;
-            check_arbitrary_marker_is_valid(op, ctx, ctx_validator)?;
-            check_phase_on_rf_signal_support(op, ctx, ctx_validator)?;
-            check_markers(op, ctx, ctx_validator)?;
+            shfqa_unique_measure_pulse(op, signal, ctx_validator)?;
+            check_no_play_on_acquire_line(signal, ctx_validator)?;
+            check_arbitrary_marker_is_valid(op, signal, ctx, ctx_validator)?;
+            check_phase_on_rf_signal_support(op, signal, ctx, ctx_validator)?;
+            check_markers(op, signal, ctx_validator)?;
         }
         Operation::Acquire(op) => {
             check_acquire_only_on_acquire_line(op, ctx, ctx_validator)?;
@@ -137,14 +142,9 @@ fn visit_node<'a>(
 
 fn shfqa_unique_measure_pulse(
     pulse: &PlayPulse,
-    ctx: &ExperimentContext,
+    signal: &SignalView,
     ctx_validator: &mut ValidationContext,
 ) -> Result<()> {
-    let signal = ctx
-        .signals
-        .get(&pulse.signal)
-        .ok_or_else(|| Error::new("Signal not found."))?;
-
     let Some(pulse_uid) = pulse.pulse.as_ref() else {
         return Ok(());
     };
@@ -180,13 +180,9 @@ fn shfqa_unique_measure_pulse(
 
 fn check_markers(
     pulse: &PlayPulse,
-    ctx: &ExperimentContext,
+    signal: &SignalView,
     ctx_validator: &mut ValidationContext,
 ) -> Result<()> {
-    let signal = ctx
-        .signals
-        .get(&pulse.signal)
-        .expect("Expected signal to exist.");
     let Some(pulse_uid) = pulse.pulse.as_ref() else {
         return Ok(());
     };
@@ -194,7 +190,7 @@ fn check_markers(
     let section_uid = ctx_validator
         .section_uid
         .as_ref()
-        .ok_or(Error::new("Internal error: section not found."))?;
+        .ok_or_else(|| Error::new("Internal error: section not found."))?;
     if matches!(signal.device_kind(), DeviceKind::Hdawg)
         && matches!(signal.signal_kind(), SignalKind::Rf)
         && pulse
@@ -232,14 +228,10 @@ fn check_markers(
 
 fn check_phase_on_rf_signal_support(
     pulse: &PlayPulse,
+    signal: &SignalView,
     ctx: &ExperimentContext,
     ctx_validator: &mut ValidationContext,
 ) -> Result<()> {
-    let signal = ctx
-        .signals
-        .get(&pulse.signal)
-        .expect("Expected signal to exist.");
-
     if !matches!(signal.signal_kind(), SignalKind::Rf)
         || !signal.is_hardware_modulated()
         || matches!(signal.device_kind(), DeviceKind::Zqcs)
@@ -258,7 +250,7 @@ fn check_phase_on_rf_signal_support(
         let section_uid = ctx_validator
             .section_uid
             .as_ref()
-            .ok_or(Error::new("Internal error: section not found."))?;
+            .ok_or_else(|| Error::new("Internal error: section not found."))?;
         let err_msg = format!(
             "In section '{}', signal '{}': baseband phase modulation \
             not possible for RF signal with HW oscillator.",
@@ -283,7 +275,7 @@ fn check_acquire_only_on_acquire_line(
         let section_uid = ctx_validator
             .section_uid
             .as_ref()
-            .ok_or(Error::new("Internal error: section not found."))?;
+            .ok_or_else(|| Error::new("Internal error: section not found."))?;
         let err_msg = format!(
             "In section '{}', an acquire statement is issued on \
             signal '{}'. `acquire` is only allowed on acquire lines.",
@@ -296,21 +288,15 @@ fn check_acquire_only_on_acquire_line(
 }
 
 fn check_no_play_on_acquire_line(
-    pulse: &PlayPulse,
-    ctx: &ExperimentContext,
+    signal: &SignalView,
     ctx_validator: &mut ValidationContext,
 ) -> Result<()> {
-    let signal = ctx
-        .signals
-        .get(&pulse.signal)
-        .expect("Expected signal to exist.");
-
-    let section_uid = ctx_validator
-        .section_uid
-        .as_ref()
-        .ok_or(Error::new("Internal error: section not found."))?;
     match signal.signal_kind() {
         SignalKind::Integration => {
+            let section_uid = ctx_validator
+                .section_uid
+                .as_ref()
+                .ok_or_else(|| Error::new("Internal error: section not found."))?;
             let err_msg = format!(
                 "In section {}, a play statement is issued on \
                 signal {}. `play` is not allowed on acquire lines.",
@@ -333,17 +319,17 @@ fn all_zero_or_one_samples(samples: &NumericArray) -> Result<bool> {
 
 fn check_arbitrary_marker_is_valid(
     pulse: &PlayPulse,
+    signal: &SignalView,
     ctx: &ExperimentContext,
     ctx_validator: &mut ValidationContext,
 ) -> Result<()> {
-    let signal = ctx
-        .signals
-        .get(&pulse.signal)
-        .expect("Expected signal to exist.");
+    if pulse.markers.is_empty() {
+        return Ok(());
+    }
     let section_uid = ctx_validator
         .section_uid
         .as_ref()
-        .ok_or(Error::new("Internal error: section not found."))?;
+        .ok_or_else(|| Error::new("Internal error: section not found."))?;
 
     for marker in pulse.markers.iter() {
         let Some(pulse_id) = marker.pulse_id.as_ref() else {
@@ -353,7 +339,7 @@ fn check_arbitrary_marker_is_valid(
         let marker_pulse = ctx
             .pulses
             .get(pulse_id)
-            .ok_or(Error::new("Internal error: pulse not found."))?;
+            .ok_or_else(|| Error::new("Internal error: pulse not found."))?;
         match &marker_pulse.kind {
             // TODO: should this case be moved to waveform_sampler ?
             PulseKind::Sampled(p) => {

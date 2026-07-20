@@ -3,7 +3,6 @@
 
 mod calculator;
 mod on_device;
-mod precompensation;
 
 #[cfg(test)]
 mod tests;

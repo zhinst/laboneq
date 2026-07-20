@@ -53,16 +53,19 @@ pub(crate) fn allocate_integration_units(
 
     let mut integration_unit_alloc: HashMap<AwgKey, Vec<(SignalUid, Vec<ChannelIndex>)>> =
         HashMap::new();
+    // Tracks how many integration units have already been handed out per AWG, so that
+    // each signal's block starts right after the previous one's, regardless of whether
+    // block sizes are uniform across signals on the same AWG.
+    let mut next_free_unit: HashMap<AwgKey, u8> = HashMap::new();
     for signal in integration_signals.iter() {
         let awg_key = awg_by_signal[&signal.uid].key();
-        let num_acquire_signals = integration_unit_alloc
-            .get(&awg_key)
-            .map_or(0, |v| v.len() as u8);
+        let start = *next_free_unit.get(&awg_key).unwrap_or(&0);
         let integrators_per_signal =
             integrators_per_signal(awg_by_signal[&signal.uid].device_kind(), acquisition_type)?;
         let unit_alloc = (0..integrators_per_signal)
-            .map(|i| integrators_per_signal * num_acquire_signals + i)
+            .map(|i| start + i)
             .collect::<Vec<_>>();
+        next_free_unit.insert(awg_key.clone(), start + integrators_per_signal);
         integration_unit_alloc
             .entry(awg_key)
             .or_default()

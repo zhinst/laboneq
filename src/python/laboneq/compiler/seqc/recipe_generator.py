@@ -6,8 +6,6 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from zhinst.core import __version__ as zhinst_version
-
 from laboneq._rust import codegenerator as codegen_rs
 from laboneq._version import get_version
 from laboneq.core.exceptions import LabOneQException
@@ -47,7 +45,6 @@ _PORT_MODE = {
 class RecipeGenerator:
     def __init__(self):
         self._recipe = Recipe()
-        self._recipe.versions.target_labone = zhinst_version
         self._recipe.versions.laboneq = get_version()
 
     def add_oscillator_params(

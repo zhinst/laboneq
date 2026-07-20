@@ -122,6 +122,8 @@ tools = [
 [tool.uv]
 default-groups = ["dev", "tools"]
 exclude-newer = "7 days"
+# Avoid fallback to Python versions on a developer's machine.
+python-preference = "only-managed"
 cache-keys = [
   { file = "Cargo.toml" },
   { file = "pyproject.toml" },

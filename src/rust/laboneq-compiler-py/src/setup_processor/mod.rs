@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 mod delays;
-mod precompensation;
 mod processor;
 
 pub(crate) use crate::setup_processor::delays::DelayRegistry;

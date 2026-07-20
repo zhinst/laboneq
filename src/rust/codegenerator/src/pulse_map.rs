@@ -30,8 +30,6 @@ pub struct PulseInstance {
     pub needs_conjugate: bool,
     pub parameters: HashMap<PulseParameterUid, ExternalOrValue>,
     pub pulse_parameters: HashMap<PulseParameterUid, ExternalOrValue>,
-    pub has_marker1: bool,
-    pub has_marker2: bool,
     pub can_compress: bool,
 }
 

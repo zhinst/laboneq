@@ -1,10 +1,9 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_error::LabOneQError;
 use pyo3::prelude::*;
 
-use codegenerator_py::{HardwareSetup, SignalChannelProperties, generate_code_py};
+use codegenerator_py::{HardwareSetup, SignalChannelProperties, artifacts_to_py, generate_code_py};
 use laboneq_common::compiler_settings::CompilerSettings;
 use laboneq_compiler_py::compiler_backend::{
     CodeGenArtifact, CompilerBackend, Error as CompilerError, ExperimentView, FeedbackCalculator,
@@ -12,6 +11,7 @@ use laboneq_compiler_py::compiler_backend::{
 };
 use laboneq_compiler_py::compiler_backend::{CompilerBackendResult, PreprocessOutput};
 use laboneq_dsl::types::ExternalParameterUid;
+use laboneq_error::LabOneQError;
 use laboneq_ir::ExperimentIr;
 use laboneq_py_utils::py_object_interner::PyObjectInterner;
 
@@ -52,17 +52,20 @@ impl CompilerBackend for QccsBackend {
             auxiliary_devices: backend_data.auxiliary_devices().to_vec(),
         };
 
+        let id_store = &experiment.id_store;
+
         let out = Python::attach(|py| -> Result<Py<PyAny>, LabOneQError> {
-            Ok(generate_code_py(
+            let artifacts = generate_code_py(
                 py,
                 experiment,
                 &setup_desc,
                 compiler_settings,
                 py_object_store,
-            )?
-            .unbind())
+            )?;
+            let artifacts_py = artifacts_to_py(py, artifacts, id_store, py_object_store)?;
+            Ok(artifacts_py.into())
         })?;
-        Ok(CodeGenArtifactQccs { code: out })
+        Ok(CodeGenArtifactQccs { inner: out })
     }
 
     fn device_class(&self) -> usize {
@@ -83,11 +86,11 @@ impl CompilerBackend for QccsBackend {
 }
 
 pub struct CodeGenArtifactQccs {
-    code: Py<PyAny>,
+    inner: Py<PyAny>,
 }
 
 impl CodeGenArtifact for CodeGenArtifactQccs {
-    fn to_python(&self, py: Python) -> PyResult<Py<PyAny>> {
-        Ok(self.code.clone_ref(py))
+    fn to_python<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        Ok(self.inner.bind(py).into())
     }
 }

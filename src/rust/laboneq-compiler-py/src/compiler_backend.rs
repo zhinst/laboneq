@@ -154,7 +154,7 @@ impl<T: PreprocessedBackendData> PreprocessOutput<T> {
 /// A code generation artifact produced by a [`CompilerBackend`].
 pub trait CodeGenArtifact {
     /// Convert the artifact to a Python object for returning to the user.
-    fn to_python(&self, py: Python) -> PyResult<Py<PyAny>>;
+    fn to_python<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>;
 }
 
 /// Object-safe version of [`CompilerBackend`] for storage in `ExperimentPy`.

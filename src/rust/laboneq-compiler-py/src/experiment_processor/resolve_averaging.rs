@@ -109,8 +109,7 @@ fn insert_to_innermost_sweep(
         let msg = format!(
             "Section {} has multiple children. \
             With sequential averaging, the section graph from acquire loop to inner-most sweep must be a linear chain, with only a single subsection at each level.",
-            &node
-                .kind
+            node.kind
                 .section_info()
                 .map(|info| info.uid.0)
                 .expect("Internal error: Section must have a UID")

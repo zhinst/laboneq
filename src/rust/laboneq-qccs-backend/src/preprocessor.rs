@@ -9,7 +9,6 @@ use indexmap::IndexMap;
 
 use laboneq_common::device_options::DeviceOptions;
 use laboneq_common::device_traits;
-use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::named_id::resolve_ids;
 use laboneq_common::types::AuxiliaryDeviceKind;
 use laboneq_common::types::ChannelKey;
@@ -99,6 +98,7 @@ impl QccsBackendPreprocessedData {
 pub struct BackendSignal {
     pub uid: SignalUid,
     pub device_uid: DeviceUid,
+    pub device_kind: DeviceKind,
     pub channels: SmallVec<[u16; 4]>,
     pub awg_key: AwgKey,
     pub awg_index: u16,
@@ -170,8 +170,6 @@ pub(crate) fn preprocess_experiment(
 
     let device_sampling_rates = eval_sampling_rates(&awg_device_map.values().collect::<Vec<_>>())?;
 
-    process_precompensations(&experiment, &device_sampling_rates, experiment.id_store)?;
-
     let mut backend_signals = Vec::with_capacity(experiment.signals.len());
     let mut device_signals = Vec::with_capacity(experiment.signals.len());
     let mut awg_cores: HashMap<(u16, DeviceUid), AwgKey> = HashMap::new();
@@ -225,6 +223,7 @@ pub(crate) fn preprocess_experiment(
         backend_signals.push(BackendSignal {
             uid: signal.uid,
             device_uid: signal.device_uid,
+            device_kind: device.kind(),
             channels,
             awg_key,
             awg_index,
@@ -247,6 +246,8 @@ pub(crate) fn preprocess_experiment(
         });
     }
 
+    process_precompensations(&backend_signals, &mut device_signals, experiment.id_store)?;
+
     Ok(PreprocessOutput::new(
         QccsBackendPreprocessedData::new(
             backend_signals,
@@ -258,6 +259,35 @@ pub(crate) fn preprocess_experiment(
         awg_device_map.into_values().collect(),
         setup_fingerprint,
     ))
+}
+
+fn process_precompensations(
+    backend_signals: &[BackendSignal],
+    device_signals: &mut [DeviceSignal],
+    id_store: &laboneq_common::named_id::NamedIdStore,
+) -> Result<()> {
+    let precompensations: Vec<SignalPrecompensation> = backend_signals
+        .iter()
+        .zip(device_signals.iter_mut())
+        .map(|(bs, ds)| SignalPrecompensation {
+            signal_uid: bs.uid,
+            awg_key: bs.awg_key,
+            device_kind: bs.device_kind,
+            sampling_rate: ds.sampling_rate.value(),
+            precompensation: ds.calibration.precompensation.take(),
+        })
+        .collect();
+    let result = process_precompensation(precompensations, id_store)?;
+    for warning in result.warnings {
+        laboneq_log::warn!("{}", resolve_ids(&warning.to_string(), id_store));
+    }
+    for (uid, precompensation) in result.adapted {
+        if let Some(signal) = device_signals.iter_mut().find(|s| s.uid == uid) {
+            signal.delay_signal += result.delays.get(&uid).copied().unwrap_or(0);
+            signal.calibration.precompensation = precompensation;
+        }
+    }
+    Ok(())
 }
 
 fn eval_awg_number(channel: u16, device: &AwgDevice) -> u16 {
@@ -520,30 +550,4 @@ fn eval_sampling_rates(devices: &[&AwgDevice]) -> Result<HashMap<DeviceUid, Freq
             Ok((device.uid(), sampling_rate))
         })
         .collect::<Result<HashMap<_, _>>>()
-}
-
-fn process_precompensations(
-    experiment: &ExperimentViewWrapper,
-    sampling_rates: &HashMap<DeviceUid, Frequency<Hertz>>,
-    id_store: &NamedIdStore,
-) -> Result<()> {
-    let precompensations = experiment
-        .signals
-        .iter()
-        .filter_map(|s| {
-            s.calibration
-                .precompensation
-                .as_ref()
-                .map(|p| SignalPrecompensation {
-                    signal_uid: s.uid,
-                    precompensation: p,
-                    sampling_rate: sampling_rates[&s.device_uid].value(),
-                })
-        })
-        .collect::<Vec<_>>();
-    let result = process_precompensation(precompensations)?;
-    for warning in result.warnings {
-        laboneq_log::warn!("{}", resolve_ids(&warning.to_string(), id_store));
-    }
-    Ok(())
 }

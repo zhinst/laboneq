@@ -9,15 +9,11 @@ import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-import numpy as np
-
 from laboneq import (
     serializers,
     workflow,
 )
-from laboneq.core.types.enums.averaging_mode import AveragingMode
 from laboneq.core.utilities.attribute_wrapper import AttributeWrapper  # noqa: F401
-from laboneq.dsl.device.instruments import ZQCS
 
 # Import of AcquiredResult and AttributeWrapper is to support
 # laboneq_applications/analysis/plotting_helpers which imports
@@ -125,67 +121,6 @@ def _are_results_compatible(
         == target_results.acquired_results[key].data.shape
         for key in results_to_validate.acquired_results
     )
-
-
-def _zqcs_emulate_results(results: Results) -> None:
-    """Transform ZQCS emulated results.
-
-    Replaces NaNs in results with complex numbers.
-
-    !!! note
-        This is a temporary solution and is intended to be removed in the future.
-
-    Arguments:
-        results: The results to transform.
-    """
-    for i, acq in enumerate(results.acquired_results.values()):
-        nan_mask = np.isnan(acq.data)
-        if nan_mask.any():
-            idx_array = np.arange(acq.data.size, dtype=np.float64).reshape(
-                acq.data.shape
-            )
-            acq.data = np.where(
-                nan_mask, np.complex128(42 + i) + 1j * idx_array, acq.data
-            )
-
-
-def _zqcs_average_results(
-    results: Results, compiled_experiment: CompiledExperiment
-) -> None:
-    """Perform results averaging for ZQCS.
-
-    If the averaging mode is not SINGLE_SHOT, the results are averaged over the axis
-    corresponding to the acquire_loop_rt loop.
-
-    !!! note
-        This is a temporary solution and is intended to be removed in the future.
-
-    Arguments:
-        results: The results to average.
-        compiled_experiment: The compiled experiment.
-
-    Raises:
-        ValueError: If the averaging mode is unknown.
-    """
-    zqcs_requested_averaging_mode = getattr(
-        compiled_experiment, "_zqcs_requested_averaging_mode", None
-    )
-    if zqcs_requested_averaging_mode in (AveragingMode.SINGLE_SHOT, None):
-        pass
-    elif zqcs_requested_averaging_mode in (
-        AveragingMode.CYCLIC,
-        AveragingMode.SEQUENTIAL,
-    ):
-        rt_uid = compiled_experiment.scheduled_experiment.rt_loop_properties.uid
-        for acq in results.acquired_results.values():
-            # Find the axis corresponding to the acquire loop and average over it
-            axis_idx = acq.axis_name.index(rt_uid)
-            acq.data = np.mean(acq.data, axis=axis_idx)
-            # Remove the averaged dimension from the metadata
-            del acq.axis_name[axis_idx]
-            del acq.axis[axis_idx]
-    else:
-        raise ValueError(f"Unknown averaging mode: {zqcs_requested_averaging_mode}")
 
 
 @workflow.task_options
@@ -329,11 +264,5 @@ def run_experiment(
             raise ValueError(warn_string)
 
         results = injected_results
-
-    if session._connection_state.emulated and any(
-        isinstance(x, ZQCS) for x in session.device_setup.instruments
-    ):
-        _zqcs_emulate_results(results)
-    _zqcs_average_results(results, compiled_experiment)
 
     return results

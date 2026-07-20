@@ -49,7 +49,7 @@ def compile_realtime(
 
     return RTCompilerOutputContainer(
         device_class=device_class,
-        codegen_output=result.code_gen_output,
+        codegen_output=result.codegen_output(),
         schedule=pulse_sheet_schedule,
     )
 
