@@ -4,33 +4,26 @@
 use std::collections::HashMap;
 
 use laboneq_common::device_traits::DeviceTraits;
-use laboneq_common::types::{AwgKey, DeviceKind, SignalKind};
-use laboneq_dsl::signal_calibration::PortMode;
+use laboneq_common::types::{AwgKey, PhysicalDeviceUid, SignalKind};
 use laboneq_dsl::types::{
     AmplifierPump, DeviceUid, Oscillator, OscillatorKind, SignalUid, ValueOrParameter,
 };
 use laboneq_ir::signal::Signal;
-use laboneq_ir::system::{AwgDevice, DeviceSetup};
 use laboneq_scheduler::SignalInfo;
 
 use laboneq_units::duration::{Duration, Frequency, Hertz, Second};
 
-/// A view over a signal and its associated device.
+/// A view over a signal.
 ///
 /// Provides convenient access to signal and device properties.
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub struct SignalView<'a> {
-    device: &'a AwgDevice,
     signal: &'a Signal,
 }
 
 impl SignalView<'_> {
-    pub(crate) fn new<'a>(device: &'a AwgDevice, signal: &'a Signal) -> SignalView<'a> {
-        SignalView { device, signal }
-    }
-
-    pub fn device(&self) -> &AwgDevice {
-        self.device
+    pub(crate) fn new(signal: &Signal) -> SignalView<'_> {
+        SignalView { signal }
     }
 
     pub fn uid(&self) -> SignalUid {
@@ -45,24 +38,23 @@ impl SignalView<'_> {
         self.signal.automute
     }
 
-    pub fn device_kind(&self) -> DeviceKind {
-        self.device.kind()
-    }
-
     pub fn device_uid(&self) -> DeviceUid {
-        self.device.uid()
+        self.signal.device_uid
     }
 
-    fn device_traits(&self) -> &'static DeviceTraits {
-        DeviceTraits::from_device_kind(&self.device_kind())
+    /// Physical device this signal's device maps to.
+    /// This UID is used to group virtual devices that share the same
+    /// physical hardware, enabling proper device detection.
+    pub fn physical_device_uid(&self) -> PhysicalDeviceUid {
+        self.signal.physical_device_uid
+    }
+
+    pub fn device_traits(&self) -> &'static DeviceTraits {
+        self.signal.traits
     }
 
     pub fn sampling_rate(&self) -> f64 {
         self.signal.sampling_rate
-    }
-
-    pub(crate) fn port_mode(&self) -> Option<&PortMode> {
-        self.signal.port_mode.as_ref()
     }
 
     pub(crate) fn oscillator(&self) -> Option<&Oscillator> {
@@ -90,10 +82,6 @@ impl SignalView<'_> {
             .oscillator
             .as_ref()
             .is_some_and(|osc| matches!(osc.kind, OscillatorKind::Hardware))
-    }
-
-    pub(crate) fn has_option(&self, opt: &str) -> bool {
-        self.device.has_option(opt)
     }
 
     pub fn signal_delay(&self) -> Duration<Second> {
@@ -147,7 +135,7 @@ impl SignalInfo for SignalView<'_> {
     }
 
     fn supports_initial_oscillator_frequency(&self) -> bool {
-        DeviceTraits::from_device_kind(&self.device_kind()).device_class != 0
+        self.device_traits().supports_initial_oscillator_frequency
     }
 
     fn voltage_offset(&self) -> Option<&ValueOrParameter<f64>> {
@@ -155,7 +143,7 @@ impl SignalInfo for SignalView<'_> {
     }
 
     fn supports_initial_voltage_offset(&self) -> bool {
-        DeviceTraits::from_device_kind(&self.device_kind()).device_class != 0
+        self.device_traits().supports_initial_voltage_offset
     }
 
     fn amplifier_pump(&self) -> Option<&AmplifierPump> {
@@ -163,29 +151,14 @@ impl SignalInfo for SignalView<'_> {
     }
 
     fn supports_multiple_acquisition_lengths(&self) -> bool {
-        matches!(self.device_kind(), DeviceKind::Zqcs)
+        self.device_traits().supports_multiple_acquisition_lengths
     }
 }
 
-/// Build signal views for all signals in the device setup.
-///
-/// This function will panic if any signal or device is not found.
-pub(crate) fn signal_views<'a>(
-    device_setup: &'a DeviceSetup,
-) -> HashMap<SignalUid, SignalView<'a>> {
-    device_setup
-        .signals()
-        .map(|signal| (signal.uid, build_signal_view(device_setup, &signal.uid)))
+/// Build signal views for all signals of the setup.
+pub(crate) fn signal_views(signals: &[Signal]) -> HashMap<SignalUid, SignalView<'_>> {
+    signals
+        .iter()
+        .map(|signal| (signal.uid, SignalView::new(signal)))
         .collect()
-}
-
-fn build_signal_view<'a>(device_setup: &'a DeviceSetup, signal_uid: &SignalUid) -> SignalView<'a> {
-    let signal = device_setup
-        .signals()
-        .find(|s| &s.uid == signal_uid)
-        .expect("Signal not found");
-    let device = device_setup
-        .device_by_uid(&signal.device_uid)
-        .expect("Device not found");
-    SignalView::new(device, signal)
 }

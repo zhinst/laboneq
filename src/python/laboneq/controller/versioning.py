@@ -52,7 +52,7 @@ RECOMMENDED_MINIMUM_LABONE_VERSION = LabOneVersion(year=26, month=7, patch=1, bu
 
 @dataclass
 class SetupCaps:
-    client_version: LabOneVersion
+    client_version: LabOneVersion | None
     server_version: LabOneVersion | None = None
 
     def for_server(self, server_version: LabOneVersion) -> SetupCaps:

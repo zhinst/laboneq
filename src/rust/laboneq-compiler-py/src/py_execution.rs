@@ -112,7 +112,7 @@ impl<'py> PyStatementBuilder<'py, '_> {
                 ExternalOrValue::ExternalParameter(uid) => {
                     let py_obj = self
                         .py_objects
-                        .resolve(uid)
+                        .resolve_to_python(uid)
                         .expect("Internal Error: External parameter not found");
                     dict.set_item(key, py_obj)?;
                 }

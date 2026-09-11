@@ -20,16 +20,6 @@ from sortedcontainers import SortedDict
 from typing_extensions import deprecated
 
 from laboneq._version import get_version
-from laboneq.serializers._legacy.custom_serializers import (
-    ArtifactsCodegenDeserializer,
-    ResultShapeInfoDeserializer,
-    serialize_to_string,
-)
-from laboneq.serializers._legacy.externals import (
-    XarrayDataArrayDeserializer,
-    XarrayDatasetDeserializer,
-    serialize_maybe_xarray,
-)
 
 _logger = logging.getLogger(__name__)
 
@@ -273,12 +263,6 @@ def class_argnames(cls):
 def construct_object(content, mapped_class):
     if len(content.keys()) == 1 and _issubclass(mapped_class, Enum):
         return mapped_class(list(content.values())[0])
-    if _issubclass(mapped_class, XarrayDataArrayDeserializer):
-        return mapped_class(content)
-    if _issubclass(mapped_class, XarrayDatasetDeserializer):
-        return mapped_class(content)
-    if mapped_class in (ResultShapeInfoDeserializer, ArtifactsCodegenDeserializer):
-        return mapped_class.deserialize(content)
     arg_names = class_argnames(mapped_class)
     has_kwargs = "kwargs" in arg_names
     filtered_args = {}
@@ -408,17 +392,6 @@ def serialize_to_dict_with_entities(
             "data": base64.b64encode(to_serialize).decode("ascii"),
         }
 
-    # Optional dependency `xarray` object serialization
-    if (
-        xarr := serialize_maybe_xarray(
-            obj=to_serialize,
-            serializer_function=serialize_to_dict_with_entities,
-            entity_classes=entity_classes,
-            **serialize_kwargs,
-        )
-    ) is not None:
-        return xarr
-
     mapping = {}
     sub_dict = {}
     dir_list = _dir(to_serialize.__class__)
@@ -460,8 +433,6 @@ def serialize_to_dict_with_entities(
                 outvalue = getattr(to_serialize, outkey)
             else:
                 continue
-        else:
-            outkey = serialize_to_string(k)
         if item_class in (bool, int, float, str) or v is None:
             sub_dict[outkey] = outvalue
             continue
@@ -710,10 +681,6 @@ def deserialize_from_dict_with_ref_recursor(
 )
 def deserialize_from_dict_with_ref(data, class_mapping, entity_classes, entity_map):
     class_mapping[NumpyArrayRepr.__name__] = NumpyArrayRepr
-    class_mapping[XarrayDataArrayDeserializer._type_] = XarrayDataArrayDeserializer
-    class_mapping[XarrayDatasetDeserializer._type_] = XarrayDatasetDeserializer
-    class_mapping[ResultShapeInfoDeserializer._type_] = ResultShapeInfoDeserializer
-    class_mapping[ArtifactsCodegenDeserializer._type_] = ArtifactsCodegenDeserializer
     entity_pool = {}
 
     for entity_list in data.get("entities", {}).values():

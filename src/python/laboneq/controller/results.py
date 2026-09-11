@@ -9,11 +9,16 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from laboneq.core.types.enums import AveragingMode
-from laboneq.data.experiment_results import AcquiredResult, ExperimentResults
+from laboneq.data.experiment_results import (
+    AcquiredResult,
+    AcquiredResults,
+    ExperimentResults,
+)
 
 if TYPE_CHECKING:
     from laboneq.core.types.numpy_support import NumPyArray
     from laboneq.data.nt_step_key import NtStepKey
+    from laboneq.data.result_selector import ResultSelector
     from laboneq.data.scheduled_experiment import (
         HandleResultShape,
         RtLoopProperties,
@@ -233,3 +238,37 @@ class ResultsBuilder:
 
     def add_execution_error(self, error: tuple[list[int], str, str]):
         self._results.execution_errors.append(error)
+
+
+def slice_results(
+    results: AcquiredResults, selector: ResultSelector
+) -> AcquiredResults:
+    """Return the acquired results restricted to selector."""
+    handle_names = selector.handles if selector.handles is not None else tuple(results)
+    sliced = AcquiredResults()
+    for handle in handle_names:
+        acquired = results[handle]
+        if selector.nt == "all":
+            sliced[handle] = acquired
+            continue
+        if acquired.last_nt_step is None:
+            # Declared but not yet measured.
+            sliced[handle] = AcquiredResult(
+                data=np.array([], dtype=acquired.data.dtype),
+                axis_name=[],
+                axis=[],
+                last_nt_step=None,
+                handle=handle,
+            )
+            continue
+        nt_index = tuple(acquired.last_nt_step)
+        n_nt_axes = len(nt_index)
+        assert acquired.data is not None
+        sliced[handle] = AcquiredResult(
+            data=acquired.data[nt_index],
+            axis_name=list(acquired.axis_name[n_nt_axes:]),
+            axis=list(acquired.axis[n_nt_axes:]),
+            last_nt_step=acquired.last_nt_step,
+            handle=handle,
+        )
+    return sliced

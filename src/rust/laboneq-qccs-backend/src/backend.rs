@@ -3,19 +3,24 @@
 
 use pyo3::{intern, prelude::*};
 
-use codegenerator_py::{HardwareSetup, SignalChannelProperties, artifacts_to_py, generate_code_py};
+use codegenerator_py::{
+    HardwareSetup, SetupDevice, SignalChannelProperties, artifacts_to_py, generate_code_py,
+};
 use laboneq_common::compiler_settings::CompilerSettings;
 use laboneq_common::named_id::NamedIdStore;
+use laboneq_common::settings::SettingSpec;
+use laboneq_compiler_py::capnp_artifacts::ArtifactSerializerContext;
 use laboneq_compiler_py::compiler_backend::{
     CodeGenArtifact, CombinedOutput, CompilerArtifact, CompilerBackend, Error as CompilerError,
-    ExperimentView, FeedbackCalculator, SignalView,
+    ExperimentView, FeedbackCalculator, PrngSequence, ProcessedExperiment, SignalView,
 };
 use laboneq_compiler_py::compiler_backend::{CompilerBackendResult, PreprocessOutput};
 use laboneq_dsl::types::{ExternalParameterUid, HandleUid, SignalUid};
-use laboneq_error::LabOneQError;
+use laboneq_error::{LabOneQError, laboneq_error};
 use laboneq_ir::ExperimentIr;
 use laboneq_py_utils::py_object_store::PyObjectStore;
 
+use crate::BACKEND_NAME;
 use crate::preprocessor::QccsBackendPreprocessedData;
 use crate::preprocessor::preprocess_experiment;
 use crate::qccs_feedback_calculator::{FeedbackSignal, QccsFeedbackCalculator};
@@ -28,12 +33,34 @@ impl CompilerBackend for QccsBackend {
     type CodeGenArtifact = CodeGenArtifactQccs;
     type CompilerArtifact = CompilationArtifactsQccs;
     type CombinedOutput = QccsCombinedOutput;
+    type EmulatedHqcsProgram = ();
+    fn settings(&self) -> &'static [SettingSpec] {
+        codegenerator_py::CODE_GENERATOR_SETTINGS
+    }
+
+    fn name(&self) -> &'static str {
+        BACKEND_NAME
+    }
 
     fn preprocess_experiment(
         &self,
         experiment: ExperimentView,
     ) -> CompilerBackendResult<PreprocessOutput<Self::Output>> {
         preprocess_experiment(experiment)
+    }
+
+    fn validate(
+        &self,
+        experiment: &ProcessedExperiment<'_>,
+        backend_data: &Self::Output,
+    ) -> CompilerBackendResult<()> {
+        crate::validation::validate(experiment, backend_data)
+    }
+
+    fn prng_sequence(&self, seed: u32, range: u32) -> CompilerBackendResult<Box<dyn PrngSequence>> {
+        let generator = crate::prng::PrngGeneratorQccs::new(seed, 0, range - 1)
+            .map_err(|e| laboneq_error!("{e}"))?;
+        Ok(Box::new(generator))
     }
 
     fn generate_code(
@@ -51,8 +78,27 @@ impl CompilerBackend for QccsBackend {
             routed_output_channel_map: backend_data.routed_output_channel_map().clone(),
             ppc_channel: s.ppc_channel,
         });
+        let devices = backend_data
+            .device_kinds()
+            .iter()
+            .map(|(uid, kind)| SetupDevice {
+                uid: *uid,
+                kind: kind.for_codegen(),
+                is_shfqc: backend_data.is_shfqc(*uid),
+                lead_delay: backend_data
+                    .lead_delays()
+                    .get(uid)
+                    .copied()
+                    .unwrap_or_default(),
+                options: backend_data
+                    .device_options(*uid)
+                    .expect("Expected options for every device in the setup")
+                    .clone(),
+            })
+            .collect();
         let setup_desc = HardwareSetup {
             signals: additional_signals.collect(),
+            devices,
             auxiliary_devices: backend_data.auxiliary_devices().to_vec(),
         };
 
@@ -72,28 +118,32 @@ impl CompilerBackend for QccsBackend {
         Ok(CodeGenArtifactQccs { inner: out })
     }
 
-    fn device_class(&self) -> usize {
-        0
-    }
-
     fn feedback_calculator(
         &self,
         signals: &[SignalView],
         _compiler_settings: &CompilerSettings,
+        backend_data: &Self::Output,
     ) -> Result<
         Option<Box<dyn FeedbackCalculator<Error = CompilerError> + Send + Sync + 'static>>,
         CompilerError,
     > {
-        let feedback_signals = signals.iter().map(|s| FeedbackSignal {
-            uid: s.uid(),
-            awg_key: *s.awg_key(),
-            signal_kind: s.signal_kind().clone(),
-            device_kind: s.device_kind(),
-            is_shfqc: s.device().is_shfqc(),
-            sampling_rate: s.sampling_rate(),
-            signal_delay: s.signal_delay(),
-            port_delay: s.port_delay().copied(),
-            start_delay: s.start_delay(),
+        let feedback_signals = signals.iter().map(|s| {
+            let device = s.device_uid();
+            FeedbackSignal {
+                uid: s.uid(),
+                awg_key: *s.awg_key(),
+                signal_kind: s.signal_kind().clone(),
+                device_kind: *backend_data
+                    .device_kinds()
+                    .get(&device)
+                    .expect("Internal Error: Unknown device kind for device with UID"),
+                device_traits: s.device_traits(),
+                is_shfqc: backend_data.is_shfqc(device),
+                sampling_rate: s.sampling_rate(),
+                signal_delay: s.signal_delay(),
+                port_delay: s.port_delay().copied(),
+                start_delay: s.start_delay(),
+            }
         });
         let model = QccsFeedbackCalculator::new(feedback_signals)?;
         Ok(Some(Box::new(model)))
@@ -109,6 +159,7 @@ impl CompilerBackend for QccsBackend {
     fn finalize(
         &self,
         combined: Self::CombinedOutput,
+        _hqcs_program: (),
     ) -> CompilerBackendResult<
         laboneq_compiler_py::compiler_backend::CompilationOutput<Self::CompilerArtifact>,
     > {
@@ -187,12 +238,12 @@ pub struct CompilationArtifactsQccs {
 }
 
 impl CompilerArtifact for CompilationArtifactsQccs {
-    fn to_python<'py>(
-        &mut self,
-        py: Python<'py>,
-        _id_store: &NamedIdStore,
-        _py_object_store: &PyObjectStore<ExternalParameterUid>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        Ok(self.artifacts.bind(py).into())
+    fn to_capnp_writer<'a>(
+        &'a self,
+        _ctx: &'a ArtifactSerializerContext<'a>,
+    ) -> impl laboneq_capnp::artifacts::ArtifactsWriter + 'a {
+        crate::artifacts_capnp::QccsArtifactsCapnpWriter {
+            artifacts: &self.artifacts,
+        }
     }
 }

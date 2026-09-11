@@ -3,10 +3,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid as _uuid_mod
 from functools import wraps
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 
 import attrs
 import orjson
@@ -15,11 +16,17 @@ from fastapi import (
     Depends,
     Header,
     Request,  # noqa: TC002 - used in dependency, required for FastAPI injection / validation
+    WebSocket,  # noqa: TC002 - annotation is evaluated by FastAPI's dependency injection
+    WebSocketDisconnect,
     status,
 )
 
 from laboneq._version import get_version
+from laboneq.controller.api.commons import decode_submission
+from laboneq.controller.callback_channel import CallbackChannelBusy
+from laboneq.controller.callback_protocol import MessageType
 from laboneq.controller.controller import SubmissionStatus
+from laboneq.controller.results import slice_results
 from laboneq.controller.service.advertised_url import advertised_base_url
 from laboneq.controller.service.models import (
     CallbackInfo,
@@ -27,14 +34,19 @@ from laboneq.controller.service.models import (
     ErrorBody,
     ErrorCode,
     ErrorResponse,
-    ExperimentResponse,
+    ExperimentResultsResponse,
     ExperimentStatus,
     ExperimentStatusResponse,
     InstrumentTopologyResponse,
     ServerInfoResponse,
     SubmitExperimentResponse,
 )
-from laboneq.controller.utilities.exception import LabOneQControllerException
+from laboneq.controller.utilities.exception import (
+    LabOneQControllerException,
+    UnknownCallbackError,
+)
+from laboneq.data.result_selector import ResultSelector
+from laboneq.dsl.result.results import Results
 from laboneq.serializers import core as serializers
 
 if TYPE_CHECKING:
@@ -62,7 +74,7 @@ class ServiceError(Exception):
 
 
 # Minimum client LabOne Q version required (major, minor).
-MIN_CLIENT_VERSION: tuple[int, int] = (2, 58)
+MIN_CLIENT_VERSION: tuple[int, int] = (26, 10)
 
 # All routes are versioned under prefix="/v1" (mounted in app.py).
 router = APIRouter()
@@ -117,19 +129,21 @@ def _error_response(
     return ServiceError(status_code=status_code, body=body)
 
 
-def _deserialize(data: dict[str, Any], label: str) -> Any:
-    """Deserialize a LabOne Q object from a dictionary.
+def _deserialize_submission(
+    body: dict[str, Any],
+) -> tuple[ScheduledExperiment, dict[str, bytes]]:
+    """Read a submission body into the experiment and its payload overrides.
 
     Raises:
-        HTTPException: 400 if deserialization fails.
+        HTTPException: 400 if the body cannot be read.
     """
     try:
-        return serializers.from_dict(data)
+        return decode_submission(body)
     except Exception as exc:
-        logger.exception("Failed to deserialize %s", label)
+        logger.exception("Failed to deserialize experiment submission")
         raise _error_response(
             ErrorCode.INVALID_EXPERIMENT_PAYLOAD,
-            f"Invalid {label}: {exc}",
+            f"Invalid experiment submission: {exc}",
         ) from exc
 
 
@@ -152,6 +166,8 @@ def map_service_errors(fn: Callable[..., Any]) -> Callable[..., Any]:
             return await fn(*args, **kwargs)
         except ServiceError:
             raise
+        except UnknownCallbackError as exc:
+            raise _error_response(ErrorCode.UNKNOWN_CALLBACK, str(exc)) from exc
         except LabOneQControllerException as exc:
             raise _error_response(
                 ErrorCode.CONTROLLER_ERROR,
@@ -174,21 +190,21 @@ def map_service_errors(fn: Callable[..., Any]) -> Callable[..., Any]:
 # ---------------------------------------------------------------------------
 
 
-async def require_client_version(
-    client_version: Annotated[
-        str | None, Header(alias="X-LabOneQ-Client-Version")
-    ] = None,
-    ignore_mismatch: Annotated[
-        bool, Header(alias="X-LabOneQ-Ignore-Version-Mismatch")
-    ] = False,
-) -> str:
-    """FastAPI dependency that validates the client version header.
+_TRUE_HEADER_VALUES = frozenset({"1", "true", "t", "yes", "y", "on"})
+
+
+def _parse_flag_header(value: str | None) -> bool:
+    """Parse a boolean header value; shared by the HTTP and WS handshakes."""
+    return (value or "").strip().lower() in _TRUE_HEADER_VALUES
+
+
+def _validate_client_version(client_version: str | None, ignore_mismatch: bool) -> str:
+    """Validate the client version header value.
 
     Returns the parsed *client_version* string on success.
 
     Raises:
-        HTTPException 400: If the header is missing, the version is too old,
-            or the version string is unparseable.
+        ServiceError: Missing, unparseable, or too-old client version.
     """
     if client_version is None:
         raise _error_response(
@@ -226,6 +242,18 @@ async def require_client_version(
         )
 
     return client_version
+
+
+async def require_client_version(
+    client_version: Annotated[
+        str | None, Header(alias="X-LabOneQ-Client-Version")
+    ] = None,
+    ignore_mismatch: Annotated[
+        str | None, Header(alias="X-LabOneQ-Ignore-Version-Mismatch")
+    ] = None,
+) -> str:
+    """FastAPI dependency that validates the client version header."""
+    return _validate_client_version(client_version, _parse_flag_header(ignore_mismatch))
 
 
 # =============================================================================
@@ -365,13 +393,11 @@ async def submit_experiment(
             f"Invalid JSON body: {exc}",
         ) from exc
 
-    scheduled_experiment = cast(
-        "ScheduledExperiment",
-        _deserialize(body, "scheduled experiment"),
-    )
+    scheduled_experiment, coprocessor_payload_overrides = _deserialize_submission(body)
     await controller_container.submit_experiment(
         experiment_id=handle_id,
         scheduled_experiment=scheduled_experiment,
+        coprocessor_payload_overrides=coprocessor_payload_overrides,
     )
     return SubmitExperimentResponse(
         id=uuid,
@@ -381,46 +407,72 @@ async def submit_experiment(
 
 
 @router.get(
-    "/experiments/{uuid}",
-    response_model=ExperimentResponse,
+    "/experiments/{uuid}/results",
+    response_model=ExperimentResultsResponse,
     tags=["experiments"],
     responses={
-        400: {"model": ErrorResponse, "description": "Unknown UUID"},
+        400: {
+            "model": ErrorResponse,
+            "description": "Unknown UUID or result handle or bad query",
+        },
     },
 )
 @map_service_errors
-async def get_experiment(
+async def get_experiment_results(
     uuid: str,
+    handles: str | None = None,
+    nt: str = "all",
     controller_container: ControllerContainer = Depends(get_controller_container),
-) -> ExperimentResponse:
-    """Full experiment state including results when complete.
+    client_version: str = Depends(require_client_version),
+) -> ExperimentResultsResponse:
+    """Acquired results for the experiment, partial while it is running.
 
-    Returns the current state immediately.  If the experiment is still
-    running, ``results`` will be ``null`` — poll until a terminal status.
+    Both query parameters narrow the selection: ``handles`` to a comma-separated
+    set of acquisition handles, ``nt=latest`` to the slice of each handle's most
+    recently completed near-time step. Handles that are declared but not yet
+    measured come back empty.
+
+    This endpoint is experimental and its query parameters may still change.
     """
+    if nt not in ("all", "latest"):
+        raise _error_response(
+            ErrorCode.INVALID_QUERY_PARAMETER,
+            f"Invalid nt={nt!r}: expected 'all' or 'latest'.",
+        )
     handle_id = _get_handle_id(uuid)
     status_val = await controller_container.get_submission_status(handle_id)
-
-    results_dict: dict[str, Any] | None = None
-
-    if status_val in (
-        SubmissionStatus.COMPLETED,
-        SubmissionStatus.FAILED,
-    ):
-        results = await controller_container.get_submission_results(handle_id)
-        if results is not None:
-            # `to_dict` alone can leave numpy arrays (and other custom leaf
-            # types) unconverted; only the orjson-based encoding used by
-            # `to_json` knows how to serialize them.
-            results_dict = cast(
-                "dict[str, Any]", orjson.loads(serializers.to_json(results))
-            )
-
-    return ExperimentResponse(
+    results = await controller_container.get_submission_results(handle_id)
+    # Commas separate the handles here, so a handle whose name contains one
+    # cannot be requested.
+    selector = ResultSelector(
+        handles=tuple(h for h in handles.split(",") if h) if handles else None,
+        nt=cast("Literal['all', 'latest']", nt),
+    )
+    try:
+        sliced = slice_results(results.acquired_results, selector)
+    except KeyError as exc:
+        raise _error_response(
+            ErrorCode.UNKNOWN_RESULT_HANDLE,
+            f"Unknown result handle: {exc.args[0]!r}",
+            status_code=400,
+        ) from exc
+    # Callback results, execution errors and pipeline timestamps are
+    # only included on an unfiltered (full) fetch; partial fetches
+    # (a handle subset or nt="latest") are the lazy per-callback polls
+    # that discard everything but acquired results.
+    is_full = selector.handles is None and selector.nt == "all"
+    partial = Results(
+        acquired_results=sliced,
+        neartime_callback_results=results.neartime_callback_results if is_full else {},
+        execution_errors=results.execution_errors if is_full else [],
+        pipeline_jobs_timestamps=results.pipeline_jobs_timestamps if is_full else {},
+    )
+    # Serialize via to_json (orjson + the numpy-aware to_json_dict fallback),
+    # not to_dict, whose embedded complex arrays FastAPI's encoder cannot handle.
+    return ExperimentResultsResponse(
         id=uuid,
         status=_to_api_status(status_val),
-        queue_position=-1,
-        results=results_dict,
+        results=orjson.loads(serializers.to_json(partial)),
     )
 
 
@@ -466,3 +518,98 @@ async def cancel_experiment(
     """
     await controller_container.cancel_experiment(_get_handle_id(uuid))
     return {"status": "ok"}
+
+
+# =============================================================================
+# Client near-time callback channel
+# =============================================================================
+
+
+def get_controller_container_ws(websocket: WebSocket) -> ControllerContainer:
+    """Dependency: retrieve the controller container from app state (WS variant)."""
+    return cast("ControllerContainer", websocket.app.state.controller_container)
+
+
+async def _pump_channel_outbound(
+    websocket: WebSocket, outbound: asyncio.Queue[dict[str, Any]]
+) -> None:
+    """Forward channel messages to the socket; close it after the terminal one."""
+    while True:
+        message = await outbound.get()
+        await websocket.send_json(message)
+        if message.get("type") == MessageType.DONE:
+            await websocket.close()
+            return
+
+
+@router.websocket("/experiments/{uuid}/callbacks")
+async def experiment_callbacks(
+    websocket: WebSocket,
+    uuid: str,
+    controller_container: ControllerContainer = Depends(get_controller_container_ws),
+) -> None:
+    """Client near-time callback channel for a submitted experiment.
+
+    One live connection per experiment; a concurrent second connection is
+    rejected, while reconnecting after a disconnect resumes the exchange.
+
+    An experiment without client callbacks will immediately close the
+    WebSocket without termination message.
+    """
+    await websocket.accept()
+    try:
+        _validate_client_version(
+            websocket.headers.get("X-LabOneQ-Client-Version"),
+            _parse_flag_header(
+                websocket.headers.get("X-LabOneQ-Ignore-Version-Mismatch")
+            ),
+        )
+        channel = await controller_container.get_callback_channel(_get_handle_id(uuid))
+        if channel is None:
+            # No client callbacks: Close the unnecessary WebSocket connection.
+            await websocket.close(code=status.WS_1000_NORMAL_CLOSURE)
+            return
+        outbound = channel.attach()
+    except CallbackChannelBusy as exc:
+        # Transient: a transport is still attached, typically a stale one whose
+        # unclean disconnect the service has not yet noticed. Close with "try
+        # again later" so a reconnecting client retries instead of treating this
+        # as a permanent rejection and aborting the run.
+        await websocket.close(
+            code=status.WS_1013_TRY_AGAIN_LATER, reason=str(exc)[:120]
+        )
+        return
+    except (ServiceError, LabOneQControllerException) as exc:
+        reason = exc.body.error.message if isinstance(exc, ServiceError) else str(exc)
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=reason[:120])
+        return
+    # Sending needs its own task even though callbacks and replies alternate.
+    # While a callback is outstanding this loop sits in receive(), so a run
+    # cancelled or failed in the meantime could not get its terminal message
+    # out; and between callbacks a lone loop would wait on the queue and miss a
+    # dropped socket, leaving the channel attached and the reconnecting client
+    # turned away until the next callback.
+    sender = asyncio.create_task(_pump_channel_outbound(websocket, outbound))
+    try:
+        while True:
+            try:
+                message = await websocket.receive_json()
+            except WebSocketDisconnect:
+                break
+            except RuntimeError:
+                # Receive raced the sender closing the socket after the terminal message.
+                break
+            except (KeyError, ValueError):
+                # non-text frame or malformed JSON
+                channel.handle_inbound(None)
+                continue
+            channel.handle_inbound(message)
+    finally:
+        channel.detach()
+        sender.cancel()
+        try:
+            await sender
+        except (asyncio.CancelledError, WebSocketDisconnect):
+            pass
+        except Exception:
+            logger.exception("Callback channel sender failed")

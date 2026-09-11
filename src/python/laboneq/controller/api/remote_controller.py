@@ -10,15 +10,18 @@ import httpx
 
 from laboneq._version import get_version
 from laboneq.controller.api.commons import (
+    AUTH_HEADER,
+    AUTH_SCHEME,
     APIError,
     SubmissionHandle,
+    encode_submission,
     reraise_controller_exception,
 )
 from laboneq.controller.api.controller_api import (
     ControllerAPI,
 )
 from laboneq.controller.controller import SubmissionStatus
-from laboneq.serializers import from_dict, to_dict
+from laboneq.serializers import from_dict
 
 if TYPE_CHECKING:
     from laboneq.data.instrument_topology import InstrumentTopology
@@ -35,10 +38,14 @@ class RemoteController(ControllerAPI):
 
     @staticmethod
     def create(
-        remote_url: str, ignore_version_mismatch: bool | None = None
+        remote_url: str,
+        ignore_version_mismatch: bool | None = None,
+        auth_token: str | None = None,
     ) -> RemoteController:
         remote_controller = RemoteController(
-            remote_url=remote_url, ignore_version_mismatch=ignore_version_mismatch
+            remote_url=remote_url,
+            ignore_version_mismatch=ignore_version_mismatch,
+            auth_token=auth_token,
         )
         remote_controller._connect()
         return remote_controller
@@ -47,6 +54,7 @@ class RemoteController(ControllerAPI):
         self,
         remote_url: str,
         ignore_version_mismatch: bool | None = None,
+        auth_token: str | None = None,
     ):
         self._remote_url = remote_url
         self._ignore_version_mismatch = ignore_version_mismatch
@@ -59,6 +67,10 @@ class RemoteController(ControllerAPI):
             self._headers["X-LabOneQ-Ignore-Version-Mismatch"] = str(
                 ignore_version_mismatch
             ).lower()
+        # Every request sends these headers, the readiness poll included, so
+        # the token needs no handling at the individual call sites.
+        if auth_token is not None:
+            self._headers[AUTH_HEADER] = f"{AUTH_SCHEME} {auth_token}"
 
     def _connect(self):
         self._wait_until_ready()
@@ -79,6 +91,19 @@ class RemoteController(ControllerAPI):
                     resp = client.get(url, headers=self._headers)
                 if resp.status_code == 200:
                     return
+                if resp.status_code == httpx.codes.UNAUTHORIZED:
+                    # The service is up and refusing us, not still starting
+                    # up. Waiting out the deadline would not change that.
+                    if AUTH_HEADER in self._headers:
+                        raise APIError(
+                            f"Controller service at {self._remote_url} rejected "
+                            f"the authentication token: {resp.text}"
+                        )
+                    raise APIError(
+                        f"Controller service at {self._remote_url} requires "
+                        f"authentication that this client was not given: "
+                        f"{resp.text}"
+                    )
                 last_error = f"{resp.status_code}: {resp.text}"
             except httpx.HTTPError as exc:
                 last_error = str(exc)
@@ -108,12 +133,12 @@ class RemoteController(ControllerAPI):
         self,
         scheduled_experiment: ScheduledExperiment,
         handle: SubmissionHandle | None = None,
+        coprocessor_payload_overrides: dict[str, bytes] | None = None,
     ) -> SubmissionHandle:
-        serialized = to_dict(scheduled_experiment)
-        assert isinstance(serialized, dict)  # to satisfy type checker
+        body = encode_submission(scheduled_experiment, coprocessor_payload_overrides)
         if handle is None:
             handle = SubmissionHandle()
-        self._request("PUT", f"v1/experiments/{handle.hex}", json=serialized)
+        self._request("PUT", f"v1/experiments/{handle.hex}", json=body)
         return handle
 
     def wait_for_experiment(self, handle: SubmissionHandle) -> None:
@@ -133,10 +158,8 @@ class RemoteController(ControllerAPI):
         return SubmissionStatus(data["status"])
 
     def get_experiment(self, handle: SubmissionHandle) -> Results:
-        data = self._request_json("GET", f"v1/experiments/{handle.hex}")
-        if data.get("results") is not None:
-            return cast("Results", from_dict(data["results"]))
-        raise APIError(f"Experiment has no results (status: {data.get('status')})")
+        data = self._request_json("GET", f"v1/experiments/{handle.hex}/results")
+        return cast("Results", from_dict(data["results"]))
 
     def cancel_experiment(self, handle: SubmissionHandle) -> None:
         self._request("DELETE", f"v1/experiments/{handle.hex}")

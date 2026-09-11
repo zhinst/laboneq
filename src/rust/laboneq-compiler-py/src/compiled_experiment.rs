@@ -2,9 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
-use laboneq_dsl::types::{AcquisitionType, AveragingMode, SweepParameter};
+use laboneq_common::named_id::NamedIdStore;
+use laboneq_dsl::types::{
+    AcquisitionType, AveragingMode, ExternalParameterUid, HandleUid, SweepParameter,
+};
 use laboneq_ir::pulse_sheet_schedule::PulseSheetSchedule;
+use laboneq_py_utils::py_object_store::PyObjectStore;
 
 use crate::compiler_backend::CompilerArtifact;
 use crate::execution::Execution;
@@ -20,7 +25,14 @@ pub(crate) struct CompiledExperiment<A: CompilerArtifact> {
     pub result_shapes: ResultShapes,
     pub pulse_sheet_schedule: Option<PulseSheetSchedule>,
 
+    // --- Shared reference tables ---
     pub sweep_parameters: Vec<SweepParameter>,
+    pub acquisition_handles: Vec<HandleUid>,
+    pub coprocessors: laboneq_dsl::hqcs::CoprocessorTable,
+
+    // Symbols
+    pub id_store: Arc<NamedIdStore>,
+    pub object_store: Arc<PyObjectStore<ExternalParameterUid>>,
 }
 
 pub(crate) struct ExecutionTiming {
@@ -31,6 +43,7 @@ pub(crate) struct ExecutionTiming {
 }
 
 pub(crate) struct Metadata {
+    pub producer_name: &'static str,
     /// Producer version. Follows Semantic Versioning (SemVer) format.
     pub producer_version: String,
 }

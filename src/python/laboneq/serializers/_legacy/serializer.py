@@ -20,6 +20,32 @@ from laboneq.serializers._legacy.simple_serialization import (
 T = TypeVar("T")
 
 
+def _uses_new_serializer(obj_or_type) -> bool:
+    """Whether `obj_or_type` is a type the classic tree-walk no longer handles.
+
+    `CompiledExperiment` holds the compiler's serialized output, which only
+    `laboneq.serializers` knows how to carry. Everything else still tree-walks.
+    """
+    from laboneq.core.types.compiled_experiment import CompiledExperiment
+
+    if isinstance(obj_or_type, type):
+        return issubclass(obj_or_type, CompiledExperiment)
+    return isinstance(obj_or_type, CompiledExperiment)
+
+
+def _new_to_dict(obj, omit_none_fields: bool) -> Dict:
+    from laboneq.serializers import to_dict
+    from laboneq.serializers.types import SerializationOptions
+
+    return to_dict(obj, SerializationOptions(omit_none_fields=omit_none_fields))
+
+
+def _new_from_dict(data):
+    from laboneq.serializers import from_dict
+
+    return from_dict(data)
+
+
 class Serializer:
     """
     Legacy LabOne Q serializer.
@@ -35,6 +61,9 @@ class Serializer:
         category=FutureWarning,
     )
     def to_json_struct(serializable_object, omit_none_fields=False) -> dict:
+        if _uses_new_serializer(serializable_object):
+            return _new_to_dict(serializable_object, omit_none_fields)
+
         entity_classes, entity_mapper = entity_config()
 
         json_struct = serialize_to_dict_with_ref(
@@ -54,6 +83,11 @@ class Serializer:
         category=FutureWarning,
     )
     def to_json(serializable_object, omit_none_fields=False) -> str:
+        if _uses_new_serializer(serializable_object):
+            from laboneq.serializers import to_json
+
+            return to_json(serializable_object).decode()
+
         options = orjson.OPT_SORT_KEYS | orjson.OPT_SERIALIZE_NUMPY
         try:
             if isinstance(serializable_object, dict):
@@ -80,6 +114,9 @@ class Serializer:
         category=FutureWarning,
     )
     def to_dict(serializable_object, omit_none_fields=False) -> Dict:
+        if _uses_new_serializer(serializable_object):
+            return _new_to_dict(serializable_object, omit_none_fields)
+
         entity_classes, entity_mapper = entity_config()
 
         return serialize_to_dict_with_ref(
@@ -97,6 +134,11 @@ class Serializer:
         category=FutureWarning,
     )
     def from_json(serialized_string: str, type_hint):
+        if _uses_new_serializer(type_hint):
+            from laboneq.serializers import from_json
+
+            return from_json(serialized_string)
+
         if type_hint is dict:
             obj = orjson.loads(serialized_string)
         else:
@@ -118,6 +160,9 @@ class Serializer:
         category=FutureWarning,
     )
     def load(data, type_hint: type[T]) -> T:
+        if _uses_new_serializer(type_hint):
+            return _new_from_dict(data)
+
         if type_hint is dict:
             obj = copy.deepcopy(data)
         else:

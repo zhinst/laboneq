@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import sys
+import warnings
 from dataclasses import replace
 from enum import Enum
 from typing import Any, ClassVar, Type, Union
@@ -39,6 +40,16 @@ from laboneq.serializers.implementations._models._calibration import (
 
 from ._common import collect_models, make_laboneq_converter, register_models
 from ._compiled_experiment import register_compiler_artifact_plugin
+
+_ORJSON_OPTIONS = orjson.OPT_SERIALIZE_NUMPY
+
+
+def artifacts_codegen_to_json_bytes(artifacts: ArtifactsCodegen) -> bytes:
+    return orjson.dumps(serialize_artifacts_qccs(artifacts), option=_ORJSON_OPTIONS)
+
+
+def artifacts_codegen_from_json_bytes(data: bytes) -> ArtifactsCodegen:
+    return deserialize_artifacts_qccs(orjson.loads(data))
 
 
 class AWGSignalTypeModel(Enum):
@@ -266,8 +277,11 @@ _MODELED_FIELDS = [field.name for field in ArtifactsCodegenModel.__attrs_attrs__
 def serialize_artifacts_qccs(artifacts: ArtifactsCodegen) -> dict[str, Any]:
     """Serialize `ArtifactsCodegen` to a dictionary."""
     legacy_artifacts = replace(artifacts, **dict.fromkeys(_MODELED_FIELDS, []))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        legacy = _old_serialize(legacy_artifacts)
     return {
-        "_legacy": _old_serialize(legacy_artifacts),
+        "_legacy": legacy,
         **_converter.unstructure(artifacts, ArtifactsCodegenModel),
     }
 
@@ -276,7 +290,9 @@ def deserialize_artifacts_qccs(data: dict[str, Any]) -> ArtifactsCodegen:
     """Deserialize a dictionary to `ArtifactsCodegen`."""
     data = dict(data)
     legacy_data = data.pop("_legacy")
-    artifacts = _old_deserialize(legacy_data, ArtifactsCodegen)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", FutureWarning)
+        artifacts = _old_deserialize(legacy_data, ArtifactsCodegen)
     modeled = _converter.structure(data, ArtifactsCodegenModel)
     for key in _MODELED_FIELDS:
         setattr(artifacts, key, getattr(modeled, key))

@@ -5,6 +5,7 @@ mod awg_delays;
 mod device_traits;
 mod generate_awg_events;
 pub(crate) mod handle_feedback_registers;
+pub mod hardware_setup;
 pub mod ir;
 pub mod node;
 pub(crate) mod passes;
@@ -15,7 +16,7 @@ pub mod signature;
 pub mod utils;
 pub(crate) mod virtual_signal;
 use laboneq_error::LabOneQError;
-pub use settings::CodeGeneratorSettings;
+pub use settings::{CODE_GENERATOR_SETTINGS, CodeGeneratorSettings};
 mod awg_processor;
 mod context;
 mod context_validation;
@@ -26,13 +27,12 @@ mod integration_units;
 mod ir_adapter;
 pub mod pulse_map;
 pub mod result;
-mod tracing_utils;
 mod triggers;
 mod waveform;
 
 pub use generator::generate_code;
 // Public for Python layer, not intended for external use
-pub use ir_adapter::{CodegenIr, HardwareSetup, SignalChannelProperties, ir_to_codegen_ir};
+pub use ir_adapter::{CodegenIr, ir_to_codegen_ir};
 
 // Re-export for easier access
 pub use crate::sampled_event_handler::FeedbackRegister;

@@ -6,6 +6,7 @@ use std::fmt::Display;
 mod literal;
 pub use literal::*;
 
+use crate::device_options::DeviceOptions;
 use crate::uid::DeviceUid;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -72,52 +73,6 @@ impl Display for GeoLocation {
     }
 }
 
-/// Device kind that can have signals or operations performed on it.
-///
-/// This is different from [`AuxiliaryDeviceKind`] which represents devices without signals, such as SHFPPC or synchronization devices.
-#[derive(Debug, Clone, Eq, PartialEq, Copy, Hash)]
-pub enum DeviceKind {
-    Hdawg,
-    Shfqa,
-    Shfsg,
-    Uhfqa,
-    Zqcs,
-}
-
-impl DeviceKind {
-    pub fn is_qa_device(&self) -> bool {
-        matches!(self, Self::Shfqa | Self::Uhfqa)
-    }
-}
-
-impl std::str::FromStr for DeviceKind {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_uppercase().as_str() {
-            "HDAWG" => Ok(DeviceKind::Hdawg),
-            "SHFQA" => Ok(DeviceKind::Shfqa),
-            "SHFSG" => Ok(DeviceKind::Shfsg),
-            "UHFQA" => Ok(DeviceKind::Uhfqa),
-            "ZQCS" => Ok(DeviceKind::Zqcs),
-            _ => Err(format!("Unknown device kind: '{}'", s)),
-        }
-    }
-}
-
-impl Display for DeviceKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let out = match self {
-            DeviceKind::Hdawg => "HDAWG",
-            DeviceKind::Shfqa => "SHFQA",
-            DeviceKind::Shfsg => "SHFSG",
-            DeviceKind::Uhfqa => "UHFQA",
-            DeviceKind::Zqcs => "ZQCS",
-        };
-        write!(f, "{}", out)
-    }
-}
-
 /// Device kind that represents devices without signals, such as SHFPPC or synchronization devices.
 #[derive(Debug, Clone, Eq, PartialEq, Copy, Hash)]
 pub enum AuxiliaryDeviceKind {
@@ -150,31 +105,29 @@ impl Display for AuxiliaryDeviceKind {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Copy)]
-pub enum ReferenceClock {
-    Internal,
-    External,
+/// A device without signals, as used in the experiment -- see [`AuxiliaryDeviceKind`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct AuxiliaryDevice {
+    uid: DeviceUid,
+    kind: AuxiliaryDeviceKind,
+    options: DeviceOptions,
 }
 
-impl std::str::FromStr for ReferenceClock {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_uppercase().as_str() {
-            "INTERNAL" => Ok(ReferenceClock::Internal),
-            "EXTERNAL" => Ok(ReferenceClock::External),
-            _ => Err(format!("Unknown reference clock: '{}'", s)),
-        }
+impl AuxiliaryDevice {
+    pub fn new(uid: DeviceUid, kind: AuxiliaryDeviceKind, options: DeviceOptions) -> Self {
+        Self { uid, kind, options }
     }
-}
 
-impl Display for ReferenceClock {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let out = match self {
-            ReferenceClock::Internal => "INTERNAL",
-            ReferenceClock::External => "EXTERNAL",
-        };
-        write!(f, "{}", out)
+    pub fn uid(&self) -> DeviceUid {
+        self.uid
+    }
+
+    pub fn kind(&self) -> AuxiliaryDeviceKind {
+        self.kind
+    }
+
+    pub fn options(&self) -> &DeviceOptions {
+        &self.options
     }
 }
 

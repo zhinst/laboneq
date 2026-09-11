@@ -24,7 +24,7 @@ def compile_experiment(
     compiler_settings: dict | None = None,
 ) -> CompiledExperiment:
     """Compile a LabOne Q experiment."""
-    scheduled_experiment = _compile_experiment(
+    output = _compile_experiment(
         device_setup=device_setup,
         experiment=experiment,
         compiler_settings=compiler_settings,
@@ -33,8 +33,7 @@ def compile_experiment(
         device_setup=device_setup,
         experiment=experiment,
         compiler_settings=compiler_settings,
-        experiment_dict=None,  # deprecated
-        scheduled_experiment=scheduled_experiment,
+        _compiler_output=output,
     )
     return compiled_experiment
 

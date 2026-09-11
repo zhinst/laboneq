@@ -3,14 +3,16 @@
 
 use std::collections::HashMap;
 
+use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::types::{AuxiliaryDeviceKind, ChannelKey};
-use laboneq_dsl::device_setup::InstrumentKind;
 use laboneq_dsl::types::SignalUid;
 use laboneq_error::{WithContext, bail};
+use laboneq_log::warn;
 
 use crate::Result;
-use crate::experiment_view::ExperimentViewWrapper;
-use crate::ports::{IoDirection, parse_port};
+use crate::experiment_view::{ExperimentSignal, ExperimentViewWrapper};
+use crate::ports::{IoDirection, Port, is_shfqa_port, parse_port};
+use crate::setup_description::InstrumentKind;
 
 /// Resolves the connections between SHFPPC channels and QA channels.
 ///
@@ -53,6 +55,46 @@ pub(crate) fn resolve_ppc_connections(
         }
     }
     Ok(ppc_channel_map)
+}
+
+/// Drops the `amplifier_pump` calibration of every signal that cannot act on it.
+///
+/// SHFPPC can only be connected to SHFQA acquire lines, and only if a PPC is
+/// actually connected to it.
+/// Otherwise, the `amplifier_pump` calibration is ignored.
+pub(crate) fn discard_unusable_amplifier_pumps(
+    signals: &mut [ExperimentSignal],
+    ppc_connections: &HashMap<SignalUid, ChannelKey>,
+    id_store: &NamedIdStore,
+) {
+    for signal in signals {
+        if signal.calibration.amplifier_pump.is_none() {
+            continue;
+        }
+        let reason = if !can_host_ppc(&signal.ports) {
+            "only applicable to SHFQA acquire lines"
+        } else if !ppc_connections.contains_key(&signal.uid) {
+            "no PPC is connected to it"
+        } else {
+            continue;
+        };
+        warn!(
+            "'amplifier_pump' calibration for signal '{}' will be ignored - {}",
+            id_store.resolve_unchecked(signal.uid),
+            reason
+        );
+        signal.calibration.amplifier_pump = None;
+    }
+}
+
+/// Whether an SHFPPC could be wired to the signal, i.e. it is a QA input line.
+///
+/// The same condition [`parse_ppc_connections`] demands of a connection's target.
+fn can_host_ppc(ports: &[Port]) -> bool {
+    !ports.is_empty()
+        && ports
+            .iter()
+            .all(|p| is_shfqa_port(p) && p.direction == IoDirection::Input)
 }
 
 struct PpcConnection {

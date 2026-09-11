@@ -15,3 +15,7 @@ class LabOneQControllerException(LabOneQException):
         super().__init__(message)
         if cause is not None:
             self.__cause__ = cause
+
+
+class UnknownCallbackError(LabOneQControllerException):
+    """The experiment references an unknown near-time callback."""

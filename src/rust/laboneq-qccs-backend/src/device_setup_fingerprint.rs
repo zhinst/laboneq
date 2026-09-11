@@ -1,10 +1,10 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::setup_description::InstrumentKind;
+use crate::setup_description::SetupDescriptionQccs;
 use laboneq_common::device_setup_fingerprint::InstrumentEntryType;
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_dsl::device_setup::InstrumentKind;
-use laboneq_dsl::setup_description_qccs::SetupDescriptionQccs;
 
 use crate::ports::parse_port;
 

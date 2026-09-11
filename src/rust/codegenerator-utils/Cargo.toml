@@ -10,6 +10,8 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+tracing = { workspace = true }
+
 laboneq-ir = { workspace = true }
 laboneq-dsl = { workspace = true }
 laboneq-common = { workspace = true }

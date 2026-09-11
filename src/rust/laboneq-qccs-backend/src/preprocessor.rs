@@ -4,39 +4,36 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::num::NonZeroU16;
 
 use indexmap::IndexMap;
 
+use crate::setup_description::ReferenceClock;
 use laboneq_common::device_options::DeviceOptions;
-use laboneq_common::device_traits;
+use laboneq_common::device_traits::DeviceTraits;
 use laboneq_common::named_id::resolve_ids;
+use laboneq_common::types::AuxiliaryDevice;
 use laboneq_common::types::AuxiliaryDeviceKind;
 use laboneq_common::types::ChannelKey;
-use laboneq_common::types::ReferenceClock;
 use laboneq_common::types::SignalKind;
 use laboneq_compiler_py::compiler_backend::DeviceSignal;
 use laboneq_compiler_py::compiler_backend::ExperimentView;
 use laboneq_compiler_py::compiler_backend::PreprocessOutput;
-use laboneq_dsl::device_setup::InstrumentKind;
-use laboneq_dsl::setup_description_qccs::AuxiliaryDevice;
 
 use laboneq_dsl::signal_calibration::SignalCalibration;
-use laboneq_dsl::types::PhysicalChannelUid;
+use laboneq_dsl::types::{OscillatorKind, PhysicalChannelUid};
 use laboneq_units::duration::Duration;
-use laboneq_units::duration::Frequency;
-use laboneq_units::duration::Hertz;
 use laboneq_units::duration::Second;
 use laboneq_units::duration::seconds;
 use smallvec::SmallVec;
 
+use crate::device_kind::DeviceKind;
 use laboneq_common::types::AwgKey;
-use laboneq_common::types::DeviceKind;
 use laboneq_compiler_py::compiler_backend::CompilerBackendResult;
 use laboneq_compiler_py::compiler_backend::PreprocessedBackendData;
 use laboneq_dsl::types::DeviceUid;
 use laboneq_dsl::types::SignalUid;
 use laboneq_error::{bail, laboneq_error};
-use laboneq_ir::system::AwgDevice;
 
 use crate::Result;
 use crate::experiment_view::ExperimentSignal;
@@ -46,8 +43,9 @@ use crate::oscillator::{
 };
 use crate::output_routing::process_output_routing;
 use crate::ports::{IoDirection, Port, parse_port};
-use crate::ppc_connections::resolve_ppc_connections;
+use crate::ppc_connections::{discard_unusable_amplifier_pumps, resolve_ppc_connections};
 use crate::precompensation::{SignalPrecompensation, process_precompensation};
+use crate::setup_description::InstrumentKind;
 use crate::setup_processor::create_awg_devices;
 
 pub struct QccsBackendPreprocessedData {
@@ -56,6 +54,37 @@ pub struct QccsBackendPreprocessedData {
     signal_indices: HashMap<SignalUid, usize>,
     lead_delays: HashMap<DeviceUid, Duration<Second>>,
     routed_output_channel_map: HashMap<PhysicalChannelUid, u8>,
+    /// Devices that form one half of an SHFQC, which appears as a virtual
+    /// SHFQA and a virtual SHFSG.
+    shfqc_devices: HashSet<DeviceUid>,
+    device_kinds: IndexMap<DeviceUid, DeviceKind>,
+    device_options: HashMap<DeviceUid, DeviceOptions>,
+}
+
+pub(crate) struct SignalProperties<'a> {
+    pub uid: SignalUid,
+    pub device_uid: DeviceUid,
+    pub awg_key: AwgKey,
+    pub kind: SignalKind,
+    pub device_kind: DeviceKind,
+    /// Whether the device has the "LRT" option.
+    pub has_lrt: bool,
+    pub calibration: &'a SignalCalibration,
+}
+
+impl SignalProperties<'_> {
+    /// Traits of the device the signal plays on.
+    pub(crate) fn device_traits(&self) -> &'static DeviceTraits {
+        self.device_kind.traits()
+    }
+
+    /// Whether the signal is modulated by an oscillator on the device.
+    pub(crate) fn is_hardware_modulated(&self) -> bool {
+        self.calibration
+            .oscillator
+            .as_ref()
+            .is_some_and(|osc| matches!(osc.kind, OscillatorKind::Hardware))
+    }
 }
 
 impl QccsBackendPreprocessedData {
@@ -64,6 +93,9 @@ impl QccsBackendPreprocessedData {
         auxiliary_devices: Vec<AuxiliaryDevice>,
         lead_delays: HashMap<DeviceUid, Duration<Second>>,
         routed_output_channel_map: HashMap<PhysicalChannelUid, u8>,
+        shfqc_devices: HashSet<DeviceUid>,
+        device_kinds: IndexMap<DeviceUid, DeviceKind>,
+        device_options: HashMap<DeviceUid, DeviceOptions>,
     ) -> Self {
         let signal_indices = signals
             .iter()
@@ -76,7 +108,35 @@ impl QccsBackendPreprocessedData {
             signal_indices,
             lead_delays,
             routed_output_channel_map,
+            shfqc_devices,
+            device_kinds,
+            device_options,
         }
+    }
+
+    /// What this backend made of each signal.
+    pub(crate) fn signal_properties(&self) -> impl Iterator<Item = SignalProperties<'_>> {
+        self.signals.iter().map(properties_of)
+    }
+
+    /// What this backend made of one signal.
+    pub(crate) fn signal(&self, signal_uid: SignalUid) -> Option<SignalProperties<'_>> {
+        self.get_signal(signal_uid).map(properties_of)
+    }
+
+    /// The model each device in the setup is, in setup order.
+    pub(crate) fn device_kinds(&self) -> &IndexMap<DeviceUid, DeviceKind> {
+        &self.device_kinds
+    }
+
+    /// The options the instrument the device belongs to was ordered with.
+    pub(crate) fn device_options(&self, device_uid: DeviceUid) -> Option<&DeviceOptions> {
+        self.device_options.get(&device_uid)
+    }
+
+    /// Whether the device is one half of an SHFQC.
+    pub(crate) fn is_shfqc(&self, device_uid: DeviceUid) -> bool {
+        self.shfqc_devices.contains(&device_uid)
     }
 
     pub fn get_signal(&self, signal_uid: SignalUid) -> Option<&BackendSignal> {
@@ -96,12 +156,33 @@ impl QccsBackendPreprocessedData {
     pub(crate) fn routed_output_channel_map(&self) -> &HashMap<PhysicalChannelUid, u8> {
         &self.routed_output_channel_map
     }
+
+    /// Lead delays of the devices in use.
+    pub(crate) fn lead_delays(&self) -> &HashMap<DeviceUid, Duration<Second>> {
+        &self.lead_delays
+    }
+}
+
+fn properties_of(signal: &BackendSignal) -> SignalProperties<'_> {
+    SignalProperties {
+        uid: signal.uid,
+        device_uid: signal.device_uid,
+        awg_key: signal.awg_key,
+        kind: signal.kind.clone(),
+        device_kind: signal.device_kind,
+        has_lrt: signal.has_lrt,
+        calibration: &signal.calibration,
+    }
 }
 
 pub struct BackendSignal {
     pub uid: SignalUid,
     pub device_uid: DeviceUid,
     pub device_kind: DeviceKind,
+    pub kind: SignalKind,
+    pub has_lrt: bool,
+    /// The calibration of the signal, as this backend handed it to the compiler.
+    pub calibration: SignalCalibration,
     /// Device channels the signal occupies, sorted.
     pub channels: SmallVec<[u16; 4]>,
     pub awg_key: AwgKey,
@@ -141,11 +222,20 @@ pub(crate) fn preprocess_experiment(
     validate_setup(&experiment)?;
     let routed_outputs = process_output_routing(&experiment)?;
     let ppc_connections = resolve_ppc_connections(&experiment)?;
+    discard_unusable_amplifier_pumps(
+        &mut experiment.signals,
+        &ppc_connections,
+        experiment.id_store,
+    );
 
     let hdawg_triggering_signal = create_uhfqa_hdawg_triggering_signal(&mut experiment);
-    let (awg_devices, reassigned_signals) = create_awg_devices(&mut experiment)?;
+    let awg_devices = create_awg_devices(&mut experiment)?;
+    let shfqc_devices = awg_devices.shfqc_devices;
+    let device_kinds = awg_devices.kinds;
+    let device_options = awg_devices.options;
+    let physical_device_uids = awg_devices.physical_uids;
 
-    for reassigned in reassigned_signals {
+    for reassigned in awg_devices.reassigned_signals {
         experiment
             .get_signal_mut(reassigned.signal)
             .unwrap()
@@ -156,28 +246,32 @@ pub(crate) fn preprocess_experiment(
         experiment.signals.push(trigger);
     }
 
-    let awg_device_map: IndexMap<DeviceUid, AwgDevice> =
-        awg_devices.into_iter().map(|d| (d.uid(), d)).collect();
-
     let lead_delays = calculate_lead_delay(
         &experiment
             .signals
             .iter()
-            .filter_map(|s| awg_device_map.get(&s.device_uid))
+            .filter_map(|s| Some((s.device_uid, *device_kinds.get(&s.device_uid)?)))
             .collect::<Vec<_>>(),
         &experiment.auxiliary_devices,
     );
 
-    let device_sampling_rates = eval_sampling_rates(&awg_device_map.values().collect::<Vec<_>>())?;
+    let setup_has_shf = device_kinds.values().any(DeviceKind::is_shf);
 
     let mut backend_signals = Vec::with_capacity(experiment.signals.len());
     let mut device_signals = Vec::with_capacity(experiment.signals.len());
     let mut awg_cores: HashMap<(u16, DeviceUid), AwgKey> = HashMap::new();
 
     for signal in &experiment.signals {
-        let device = awg_device_map.get(&signal.device_uid).ok_or_else(|| {
+        let device_kind = *device_kinds.get(&signal.device_uid).ok_or_else(|| {
             laboneq_error!("Device with UID {} not found in setup", signal.device_uid.0)
         })?;
+        let device_traits = device_kind.traits();
+        let physical_device_uid = *physical_device_uids
+            .get(&signal.device_uid)
+            .expect("Every device in the setup has an instrument");
+
+        validate_iq_port_order(device_kind, &signal.ports)
+            .map_err(|e| laboneq_error!("Signal with UID {}: {}", signal.uid.0, e))?;
 
         let mut channels: SmallVec<[u16; 4]> =
             signal.ports.iter().map(|p| p.channel as u16).collect();
@@ -191,7 +285,7 @@ pub(crate) fn preprocess_experiment(
 
         let awg_cores_used: HashSet<u16> = channels
             .iter()
-            .map(|ch| eval_awg_number(*ch, device))
+            .map(|ch| eval_awg_number(*ch, device_traits, device_kind))
             .collect();
         if awg_cores_used.len() > 1 {
             bail!(
@@ -211,30 +305,30 @@ pub(crate) fn preprocess_experiment(
             new_key
         };
 
-        let sampling_rate = device_sampling_rates
-            .get(&signal.device_uid)
-            .ok_or_else(|| {
-                laboneq_error!(
-                    "Expected sampling rate for device UID {}",
-                    signal.device_uid.0
-                )
-            })?;
+        let sampling_rate = device_kind.sampling_rate(setup_has_shf);
+
+        let signal_kind = signal_kind(&signal.ports, device_kind)?;
 
         backend_signals.push(BackendSignal {
             uid: signal.uid,
             device_uid: signal.device_uid,
-            device_kind: device.kind(),
+            device_kind,
+            kind: signal_kind.clone(),
+            has_lrt: contains_option(&device_options, signal.device_uid, "LRT"),
             channels,
             awg_key,
             awg_index,
             ppc_channel: ppc_connections.get(&signal.uid).copied(),
+            // Filled in below, once the passes over the device signals have
+            // settled the calibration.
+            calibration: SignalCalibration::default(),
         });
-
-        let signal_kind = signal_kind(&signal.ports, device.kind())?;
 
         device_signals.push(DeviceSignal {
             uid: signal.uid,
             device_uid: signal.device_uid,
+            physical_device_uid,
+            traits: device_traits,
             kind: signal_kind,
             calibration: signal.calibration.clone(),
             delay_signal: routed_outputs
@@ -242,14 +336,16 @@ pub(crate) fn preprocess_experiment(
                 .get(&signal.uid)
                 .copied()
                 .unwrap_or(0),
-            sampling_rate: *sampling_rate,
+            sampling_rate,
+            sample_multiple: NonZeroU16::new(device_traits.sample_multiple)
+                .expect("device traits define a non-zero sequencer grid"),
         });
     }
 
     process_precompensations(&backend_signals, &mut device_signals, experiment.id_store)?;
 
     let mut oscillators =
-        signal_oscillators(&mut device_signals, &backend_signals, &awg_device_map);
+        signal_oscillators(&mut device_signals, &backend_signals, &device_options);
     resolve_oscillator_modulation(
         &mut oscillators,
         experiment.root,
@@ -257,17 +353,33 @@ pub(crate) fn preprocess_experiment(
         experiment.id_store,
     )?;
 
+    for (backend_signal, device_signal) in backend_signals.iter_mut().zip(&device_signals) {
+        backend_signal.calibration = device_signal.calibration.clone();
+    }
+
     Ok(PreprocessOutput::new(
         QccsBackendPreprocessedData::new(
             backend_signals,
             experiment.auxiliary_devices,
             lead_delays,
             routed_outputs.channel_map,
+            shfqc_devices,
+            device_kinds,
+            device_options,
         ),
         device_signals,
-        awg_device_map.into_values().collect(),
         setup_fingerprint,
     ))
+}
+
+fn contains_option(
+    device_options: &HashMap<DeviceUid, DeviceOptions>,
+    device_uid: DeviceUid,
+    option: &'static str,
+) -> bool {
+    device_options
+        .get(&device_uid)
+        .is_some_and(|options| options.contains(option))
 }
 
 /// Pair each device signal with the device and channel information the oscillator
@@ -276,7 +388,7 @@ pub(crate) fn preprocess_experiment(
 fn signal_oscillators<'a>(
     device_signals: &'a mut [DeviceSignal],
     backend_signals: &'a [BackendSignal],
-    devices: &IndexMap<DeviceUid, AwgDevice>,
+    device_options: &HashMap<DeviceUid, DeviceOptions>,
 ) -> Vec<SignalOscillator<'a>> {
     debug_assert_eq!(device_signals.len(), backend_signals.len());
     device_signals
@@ -289,9 +401,7 @@ fn signal_oscillators<'a>(
             device: OscillatorDevice {
                 uid: backend.device_uid,
                 kind: backend.device_kind,
-                has_lrt: devices
-                    .get(&backend.device_uid)
-                    .is_some_and(|device| device.has_option("LRT")),
+                has_lrt: contains_option(device_options, backend.device_uid, "LRT"),
             },
             channels: &backend.channels,
             oscillator: signal.calibration.oscillator.as_mut(),
@@ -328,11 +438,11 @@ fn process_precompensations(
     Ok(())
 }
 
-fn eval_awg_number(channel: u16, device: &AwgDevice) -> u16 {
-    if device.kind() == DeviceKind::Uhfqa {
+fn eval_awg_number(channel: u16, traits: &DeviceTraits, kind: DeviceKind) -> u16 {
+    if kind == DeviceKind::Uhfqa {
         0
     } else {
-        channel / device.traits().channels_per_awg
+        channel / traits.channels_per_awg
     }
 }
 
@@ -475,7 +585,7 @@ fn contains_sync_devices(devices: &[AuxiliaryDevice]) -> bool {
 
 /// Calculate lead delays for all devices in use based on the device types and setup configuration.
 fn calculate_lead_delay(
-    devices_in_use: &[&AwgDevice],
+    devices_in_use: &[(DeviceUid, DeviceKind)],
     auxiliary_devices: &[AuxiliaryDevice],
 ) -> HashMap<DeviceUid, Duration<Second>> {
     use laboneq_common::device_traits::{
@@ -485,13 +595,13 @@ fn calculate_lead_delay(
     };
     let has_shf = devices_in_use
         .iter()
-        .any(|d| d.kind() == DeviceKind::Shfqa || d.kind() == DeviceKind::Shfsg);
+        .any(|(_, kind)| matches!(kind, DeviceKind::Shfqa | DeviceKind::Shfsg));
     let has_sync_devices = contains_sync_devices(auxiliary_devices);
 
     devices_in_use
         .iter()
-        .map(|device| {
-            let lead_delay = match device.kind() {
+        .map(|(uid, kind)| {
+            let lead_delay = match kind {
                 DeviceKind::Hdawg => {
                     let hdawg_uses_2ghz = has_shf;
                     if has_sync_devices {
@@ -509,9 +619,8 @@ fn calculate_lead_delay(
                 DeviceKind::Uhfqa => DEFAULT_UHFQA_LEAD_PQSC,
                 DeviceKind::Shfqa => DEFAULT_SHFQA_LEAD_PQSC,
                 DeviceKind::Shfsg => DEFAULT_SHFSG_LEAD_PQSC,
-                k => panic!("Unsupported device kind for lead delay evaluation: {k:?}"),
             };
-            (device.uid(), lead_delay)
+            (*uid, lead_delay)
         })
         .collect()
 }
@@ -563,29 +672,75 @@ fn signal_kind(ports: &[Port], instrument: DeviceKind) -> Result<SignalKind> {
     Ok(SignalKind::Iq)
 }
 
-/// Evaluates the sampling rates for each device.
-fn eval_sampling_rates(devices: &[&AwgDevice]) -> Result<HashMap<DeviceUid, Frequency<Hertz>>> {
-    let has_shf = devices
-        .iter()
-        .any(|dev| matches!(dev.kind(), DeviceKind::Shfqa | DeviceKind::Shfsg));
+/// Checks the port order of an HDAWG or UHFQA IQ output signal.
+///
+/// Both device kinds pair two `SIGOUTS` ports into one IQ signal: the first
+/// port carries the I component, the second the Q component, and the I
+/// channel must have the lower channel number. Devices other than HDAWG and
+/// UHFQA, and signals that are not an IQ pair of theirs, are always accepted.
+fn validate_iq_port_order(
+    device_kind: DeviceKind,
+    ports: &[Port],
+) -> std::result::Result<(), String> {
+    if !matches!(device_kind, DeviceKind::Hdawg | DeviceKind::Uhfqa)
+        || ports.len() != 2
+        || ports.iter().any(|p| p.direction != IoDirection::Output)
+    {
+        return Ok(());
+    }
+    if ports[0].channel > ports[1].channel {
+        return Err(format!(
+            "has an IQ pair with reversed ports: the I channel (port {}) \
+             must have a lower channel number than the Q channel (port {})",
+            ports[0].channel, ports[1].channel
+        ));
+    }
+    Ok(())
+}
 
-    devices
-        .iter()
-        .map(|device| {
-            let sampling_rate = match device.kind() {
-                DeviceKind::Shfsg => device_traits::SHFSG_SAMPLING_RATE,
-                DeviceKind::Shfqa => device_traits::SHFQA_SAMPLING_RATE,
-                DeviceKind::Hdawg => {
-                    if has_shf {
-                        device_traits::HDAWG_SAMPLING_RATE_WITH_SHF
-                    } else {
-                        device_traits::HDAWG_SAMPLING_RATE_WITHOUT_SHF
-                    }
-                }
-                DeviceKind::Uhfqa => device_traits::UHFQA_SAMPLING_RATE,
-                k => bail!("Unsupported device kind for sampling rate evaluation: {k:?}"),
-            };
-            Ok((device.uid(), sampling_rate))
-        })
-        .collect::<Result<HashMap<_, _>>>()
+#[cfg(test)]
+mod port_order_tests {
+    use super::*;
+
+    fn port(channel: u8, direction: IoDirection) -> Port {
+        Port {
+            path: format!("SIGOUTS/{channel}"),
+            channel,
+            direction,
+        }
+    }
+
+    #[test]
+    fn accepts_ascending_iq_ports() {
+        let ports = [port(0, IoDirection::Output), port(1, IoDirection::Output)];
+        assert!(validate_iq_port_order(DeviceKind::Hdawg, &ports).is_ok());
+        assert!(validate_iq_port_order(DeviceKind::Uhfqa, &ports).is_ok());
+    }
+
+    #[test]
+    fn rejects_descending_iq_ports() {
+        let ports = [port(1, IoDirection::Output), port(0, IoDirection::Output)];
+        assert!(validate_iq_port_order(DeviceKind::Hdawg, &ports).is_err());
+        assert!(validate_iq_port_order(DeviceKind::Uhfqa, &ports).is_err());
+    }
+
+    #[test]
+    fn ignores_single_rf_port() {
+        let ports = [port(0, IoDirection::Output)];
+        assert!(validate_iq_port_order(DeviceKind::Hdawg, &ports).is_ok());
+    }
+
+    #[test]
+    fn ignores_acquire_input_ports() {
+        let ports = [port(1, IoDirection::Input), port(0, IoDirection::Input)];
+        assert!(validate_iq_port_order(DeviceKind::Hdawg, &ports).is_ok());
+        assert!(validate_iq_port_order(DeviceKind::Uhfqa, &ports).is_ok());
+    }
+
+    #[test]
+    fn ignores_devices_without_iq_output_pairs() {
+        let ports = [port(1, IoDirection::Output), port(0, IoDirection::Output)];
+        assert!(validate_iq_port_order(DeviceKind::Shfsg, &ports).is_ok());
+        assert!(validate_iq_port_order(DeviceKind::Shfqa, &ports).is_ok());
+    }
 }

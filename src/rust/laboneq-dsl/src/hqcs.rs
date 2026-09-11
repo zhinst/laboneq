@@ -1,10 +1,13 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::BTreeMap;
+
 use crate::ExperimentNode;
 use crate::operation::Operation;
 use crate::types::MatchTarget;
 use laboneq_common::named_id::NamedIdStore;
+use laboneq_error::{LabOneQError, bail};
 
 use laboneq_common::uid::{HandleUid, PulseUid, VariableUid};
 use laboneq_units::angle::Angle64;
@@ -28,6 +31,71 @@ pub struct CoprocessorDecl {
 pub struct CoprocessorMappingDecl {
     pub label: String,
     pub inventory_key: String,
+}
+
+/// Coprocessor data is just forwarded by the compiler.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CoprocessorTable {
+    /// keyed by inventory key
+    pub payloads: BTreeMap<String, Vec<u8>>,
+    /// label from experiment -> inventory key
+    pub mappings: BTreeMap<String, String>,
+}
+
+impl TryFrom<&HqcsDeclarations> for CoprocessorTable {
+    type Error = LabOneQError;
+
+    fn try_from(value: &HqcsDeclarations) -> Result<Self, Self::Error> {
+        let mut inventory_keys: BTreeMap<&str, &str> = BTreeMap::new();
+        for mapping in &value.mappings {
+            if inventory_keys
+                .insert(&mapping.label, &mapping.inventory_key)
+                .is_some()
+            {
+                bail!(
+                    "Coprocessor '{}' is mapped to more than one inventory entry.",
+                    mapping.label
+                );
+            }
+        }
+
+        let mut table = Self::default();
+        let mut inventory_key_to_label: BTreeMap<&str, &str> = BTreeMap::new();
+        for coprocessor in &value.coprocessors {
+            let label = coprocessor.label.as_str();
+            if table.mappings.contains_key(label) {
+                bail!("Coprocessor '{label}' is declared more than once.");
+            }
+            let Some(&inventory_key) = inventory_keys.get(label) else {
+                bail!(
+                    "Coprocessor '{label}' is not mapped to an inventory entry of the \
+                     device setup."
+                );
+            };
+            if let Some(previous) = inventory_key_to_label.insert(inventory_key, label) {
+                bail!(
+                    "Coprocessors '{previous}' and '{label}' are both mapped to \
+                     inventory entry '{inventory_key}'."
+                );
+            }
+            table
+                .mappings
+                .insert(label.to_owned(), inventory_key.to_owned());
+            if !coprocessor.payload.is_empty() {
+                table
+                    .payloads
+                    .insert(inventory_key.to_owned(), coprocessor.payload.clone());
+            }
+        }
+
+        if let Some(label) = inventory_keys
+            .keys()
+            .find(|label| !table.mappings.contains_key(**label))
+        {
+            bail!("Coprocessor mapping for '{label}' does not match any declared coprocessor.");
+        }
+        Ok(table)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,6 +243,93 @@ mod tests {
 
     fn store() -> NamedIdStore {
         NamedIdStore::default()
+    }
+
+    fn decls(coprocessors: &[(&str, &[u8])], mappings: &[(&str, &str)]) -> HqcsDeclarations {
+        HqcsDeclarations {
+            coprocessors: coprocessors
+                .iter()
+                .map(|(label, payload)| CoprocessorDecl {
+                    label: (*label).to_owned(),
+                    payload: payload.to_vec(),
+                })
+                .collect(),
+            mappings: mappings
+                .iter()
+                .map(|(label, inventory_key)| CoprocessorMappingDecl {
+                    label: (*label).to_owned(),
+                    inventory_key: (*inventory_key).to_owned(),
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn coprocessor_table_keys_payloads_by_inventory_key() {
+        let hqcs = decls(
+            &[("gpu", &[1, 2]), ("fpga", &[])],
+            &[("gpu", "gpu0"), ("fpga", "fpga0")],
+        );
+        let table = CoprocessorTable::try_from(&hqcs).unwrap();
+        assert_eq!(
+            table.mappings,
+            BTreeMap::from([
+                ("gpu".to_owned(), "gpu0".to_owned()),
+                ("fpga".to_owned(), "fpga0".to_owned()),
+            ])
+        );
+        assert_eq!(
+            table.payloads,
+            BTreeMap::from([("gpu0".to_owned(), vec![1, 2])])
+        );
+    }
+
+    #[test]
+    fn unmapped_coprocessor_is_rejected() {
+        let hqcs = decls(&[("gpu", &[1, 2])], &[]);
+        let err = CoprocessorTable::try_from(&hqcs).unwrap_err().to_string();
+        assert!(err.contains("'gpu' is not mapped"), "{err}");
+    }
+
+    #[test]
+    fn coprocessor_mapped_twice_is_rejected() {
+        let hqcs = decls(&[("gpu", &[])], &[("gpu", "gpu0"), ("gpu", "gpu1")]);
+        let err = CoprocessorTable::try_from(&hqcs).unwrap_err().to_string();
+        assert!(
+            err.contains("'gpu' is mapped to more than one inventory entry"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn shared_inventory_key_is_rejected() {
+        let hqcs = decls(
+            &[("gpu", &[1]), ("fpga", &[2])],
+            &[("gpu", "gpu0"), ("fpga", "gpu0")],
+        );
+        let err = CoprocessorTable::try_from(&hqcs).unwrap_err().to_string();
+        assert!(
+            err.contains("both mapped to inventory entry 'gpu0'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn duplicate_coprocessor_label_is_rejected() {
+        let hqcs = decls(&[("gpu", &[1]), ("gpu", &[2])], &[("gpu", "gpu0")]);
+        let err = CoprocessorTable::try_from(&hqcs).unwrap_err().to_string();
+        assert!(err.contains("'gpu' is declared more than once"), "{err}");
+    }
+
+    #[test]
+    fn mapping_without_coprocessor_is_rejected() {
+        let hqcs = decls(&[("gpu", &[])], &[("gpu", "gpu0"), ("ghost", "gpu1")]);
+        let err = CoprocessorTable::try_from(&hqcs).unwrap_err().to_string();
+        assert!(
+            err.contains("'ghost' does not match any declared coprocessor"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -18,16 +18,15 @@ from laboneq.core.utilities.pulse_sampler import (
     sample_pulse,
     verify_amplitude_no_clipping,
 )
-from laboneq.data.artifacts_qccs import ArtifactsCodegen
 
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
 
     from laboneq.data.artifacts_qccs import (
+        ArtifactsCodegen,
         CodegenWaveform,
         PulseWaveformMap,
     )
-    from laboneq.data.scheduled_experiment import CompilerArtifact
     from laboneq.dsl.experiment.pulse import Pulse
 
 _logger = logging.getLogger(__name__)
@@ -106,19 +105,20 @@ def _replace_pulse_in_wave(
             mixer_type=pwm.mixer_type,
             pulse_parameters=combined_pulse_parameters,
         )
+        samples_i, samples_q = samples.real, samples.imag
         verify_amplitude_no_clipping(
-            samples_i=samples["samples_i"],
-            samples_q=samples["samples_q"],
+            samples_i=samples_i,
+            samples_q=samples_q,
             pulse_id=pulse_id,
             mixer_type=pwm.mixer_type,
             signals=None,
             is_rf_signal=pwm.signal_type != "iq",
         )
 
-        if "samples_q" in samples and instance.needs_conjugate:
-            samples["samples_q"] = -samples["samples_q"]
+        if instance.needs_conjugate:
+            samples_q = -samples_q
 
-        len_samples = len(samples["samples_i"])
+        len_samples = len(samples_i)
         if instance.offset_samples < 0:
             pulse_ofs = -instance.offset_samples
             target_ofs = 0
@@ -129,16 +129,16 @@ def _replace_pulse_in_wave(
             plen = min(len_samples, len(new_samples) - target_ofs)
         if component == Component.COMPLEX:
             new_samples[target_ofs : target_ofs + plen] = (
-                samples["samples_i"][pulse_ofs : pulse_ofs + plen]
-                - 1.0j * samples["samples_q"][pulse_ofs : pulse_ofs + plen]
+                samples_i[pulse_ofs : pulse_ofs + plen]
+                - 1.0j * samples_q[pulse_ofs : pulse_ofs + plen]
             )
         else:
             comp = (
-                "samples_i"
+                samples_i
                 if component == Component.REAL or not is_complex
-                else "samples_q"
+                else samples_q
             )
-            new_samples[target_ofs : target_ofs + plen] = samples[comp][
+            new_samples[target_ofs : target_ofs + plen] = comp[
                 pulse_ofs : pulse_ofs + plen
             ]
     return new_samples
@@ -158,14 +158,11 @@ class WaveReplacement:
 
 
 def calc_wave_replacements(
-    artifacts: CompilerArtifact | None,
+    artifacts: ArtifactsCodegen,
     pulse_uid: str,
     pulse_or_array: ArrayLike | Pulse,
     current_waves: dict[str, CodegenWaveform],
 ) -> list[WaveReplacement]:
-    if not isinstance(artifacts, ArtifactsCodegen):
-        raise LabOneQException("Wave replacement is not supported for this instrument.")
-
     if artifacts.pulse_map is None or artifacts.wave_indices is None:
         raise LabOneQException("No waves available for replacement.")
 

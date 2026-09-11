@@ -1,25 +1,44 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::collections::{HashMap, HashSet};
+
+use indexmap::IndexMap;
+
+use laboneq_common::device_options::DeviceOptions;
+
+use crate::device_kind::DeviceKind;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::shfqc::to_sg_uid;
-use laboneq_common::types::DeviceKind;
 
-use laboneq_dsl::device_setup::Instrument;
-use laboneq_dsl::device_setup::InstrumentKind;
+use laboneq_common::types::PhysicalDeviceUid;
 use laboneq_dsl::types::DeviceUid;
 use laboneq_dsl::types::SignalUid;
-use laboneq_ir::system::AwgDevice;
 
 use crate::Result;
 use crate::experiment_view::ExperimentViewWrapper;
 use crate::ports::Port;
 use crate::ports::is_shfqa_port;
 use crate::ports::is_shfsg_port;
+use crate::setup_description::{Instrument, InstrumentKind};
 
-pub(crate) fn create_awg_devices(
-    experiment: &mut ExperimentViewWrapper,
-) -> Result<(Vec<AwgDevice>, Vec<ReassignedSignal>)> {
+/// The properties of the AWG devices of a setup, keyed by device UID.
+pub(crate) struct AwgDevices {
+    /// The model each device is, in setup order.
+    pub kinds: IndexMap<DeviceUid, DeviceKind>,
+    /// The physical device each device maps to.
+    /// This UID is used to group virtual devices that share the same
+    /// physical hardware, enabling proper device detection.
+    pub physical_uids: HashMap<DeviceUid, PhysicalDeviceUid>,
+    /// The options the instrument each device belongs to was ordered with.
+    pub options: HashMap<DeviceUid, DeviceOptions>,
+    pub reassigned_signals: Vec<ReassignedSignal>,
+    /// Devices that form one half of an SHFQC, which appears as a virtual
+    /// SHFQA and a virtual SHFSG.
+    pub shfqc_devices: HashSet<DeviceUid>,
+}
+
+pub(crate) fn create_awg_devices(experiment: &mut ExperimentViewWrapper) -> Result<AwgDevices> {
     let mut physical_instrument_uid_counter = 0;
     let mut instruments = experiment.instruments.values().map(|instrument| {
         let signals = experiment
@@ -43,12 +62,32 @@ pub(crate) fn create_awg_devices(
     });
 
     instruments.try_fold(
-        (Vec::new(), Vec::new()),
-        |(mut awg_devices, mut reassigned_signals), instrument| {
-            let (devices, reassigned) = device_to_awg_devices(&instrument, experiment.id_store)?;
-            awg_devices.extend(devices);
-            reassigned_signals.extend(reassigned);
-            Ok((awg_devices, reassigned_signals))
+        AwgDevices {
+            kinds: IndexMap::new(),
+            physical_uids: HashMap::new(),
+            options: HashMap::new(),
+            reassigned_signals: Vec::new(),
+            shfqc_devices: HashSet::new(),
+        },
+        |mut acc, instrument| {
+            let out = device_to_awg_devices(&instrument, experiment.id_store)?;
+            if instrument.instrument.kind == InstrumentKind::Shfqc {
+                acc.shfqc_devices
+                    .extend(out.devices.iter().map(|(d, _)| *d));
+            }
+            acc.kinds.extend(out.devices.iter().copied());
+            acc.physical_uids.extend(
+                out.devices
+                    .iter()
+                    .map(|(d, _)| (*d, instrument.physical_instrument_uid.into())),
+            );
+            acc.options.extend(
+                out.devices
+                    .iter()
+                    .map(|(d, _)| (*d, instrument.instrument.options.clone())),
+            );
+            acc.reassigned_signals.extend(out.reassigned_signals);
+            Ok(acc)
         },
     )
 }
@@ -70,40 +109,48 @@ struct SignalProperties<'a> {
     ports: Vec<&'a Port>,
 }
 
+/// The AWG devices one instrument provides, and the models they are.
+struct InstrumentDevices {
+    devices: Vec<(DeviceUid, DeviceKind)>,
+    reassigned_signals: Vec<ReassignedSignal>,
+}
+
 fn device_to_awg_devices(
     instrument: &InstrumentProperties,
     id_store: &mut NamedIdStore,
-) -> Result<(Vec<AwgDevice>, Vec<ReassignedSignal>)> {
+) -> Result<InstrumentDevices> {
     match instrument.instrument.kind {
         InstrumentKind::Shfqc => {
             let out = split_shfqc(instrument, id_store)?;
-            let qa_sg = [out.shfqa_device, out.shfsg_device]
+            Ok(InstrumentDevices {
+                devices: [
+                    out.shfqa_device.map(|d| (d, DeviceKind::Shfqa)),
+                    out.shfsg_device.map(|d| (d, DeviceKind::Shfsg)),
+                ]
                 .into_iter()
                 .flatten()
-                .collect::<Vec<_>>();
-            Ok((qa_sg, out.reassigned_signals))
+                .collect(),
+                reassigned_signals: out.reassigned_signals,
+            })
         }
-        _ => Ok((vec![instrument_to_awg_device(instrument)], vec![])), // No additional signals for non-SHFQC devices
+        // No additional signals for non-SHFQC devices
+        _ => {
+            let kind: DeviceKind = instrument
+                .instrument
+                .kind
+                .try_into()
+                .expect("Unsupported device kind");
+            Ok(InstrumentDevices {
+                devices: vec![(instrument.instrument.uid, kind)],
+                reassigned_signals: vec![],
+            })
+        }
     }
 }
 
-fn instrument_to_awg_device(instrument: &InstrumentProperties) -> AwgDevice {
-    let mut builder = AwgDevice::builder(
-        instrument.instrument.uid,
-        instrument.physical_instrument_uid.into(),
-        instrument
-            .instrument
-            .kind
-            .try_into()
-            .expect("Unsupported device kind"),
-    );
-    builder = builder.options(instrument.instrument.options.clone());
-    builder.build()
-}
-
 struct ShfqcSplitResult {
-    shfqa_device: Option<AwgDevice>,
-    shfsg_device: Option<AwgDevice>,
+    shfqa_device: Option<DeviceUid>,
+    shfsg_device: Option<DeviceUid>,
     reassigned_signals: Vec<ReassignedSignal>,
 }
 
@@ -134,47 +181,24 @@ fn split_shfqc(
         .filter(|s| s.ports.iter().any(|p| is_shfsg_port(p)))
         .collect::<Vec<_>>();
 
-    // Create SHFQA device if there are any QA signals.
-    let shfqa_device = if has_shfqa_ports {
-        let shfqa_builder = AwgDevice::builder(
-            instrument.instrument.uid,
-            instrument.physical_instrument_uid.into(),
-            DeviceKind::Shfqa,
-        )
-        .options(instrument.instrument.options.clone())
-        .shfqc(true);
-        Some(shfqa_builder.build())
-    } else {
-        None
-    };
+    // The SHFQA half keeps the instrument's UID.
+    let shfqa_device = has_shfqa_ports.then_some(instrument.instrument.uid);
 
-    // Create SHFSG device if there are any SG signals.
+    // The SHFSG half gets a UID of its own.
     let shfsg_device = if !shfsg_ports.is_empty() {
-        let shfsg_uid = {
-            let new_uid = to_sg_uid(id_store.resolve(instrument.instrument.uid).unwrap());
-            id_store.get_or_insert(&new_uid).into()
-        };
-
-        let shfsg_builder = AwgDevice::builder(
-            shfsg_uid,
-            instrument.physical_instrument_uid.into(),
-            DeviceKind::Shfsg,
-        )
-        .options(instrument.instrument.options.clone())
-        .shfqc(true);
-        let shfsg = shfsg_builder.build();
-        Some(shfsg)
+        let new_uid = to_sg_uid(id_store.resolve(instrument.instrument.uid).unwrap());
+        Some(id_store.get_or_insert(&new_uid).into())
     } else {
         None
     };
 
     // Reassign signals connected to SG ports to the SHFSG device (if it was created).
-    let reassigned_signals = if let Some(shfsg) = &shfsg_device {
+    let reassigned_signals = if let Some(shfsg) = shfsg_device {
         shfsg_ports
             .iter()
             .map(|s| ReassignedSignal {
                 signal: s.signal,
-                to_device_uid: shfsg.uid(),
+                to_device_uid: shfsg,
             })
             .collect()
     } else {

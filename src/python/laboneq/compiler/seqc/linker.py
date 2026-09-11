@@ -184,11 +184,26 @@ def _check_compatibility(this: CombinedRTOutputSeqC, new: SeqCGenOutput):
             for c in channels
         }
 
+    def precompensations(
+        channels: dict[AwgKey, list[codegen_rs.ChannelProperties]],
+    ) -> dict[str, dict | None]:
+        return {
+            c.signal: c.precompensation
+            for channels in channels.values()
+            for c in channels
+        }
+
     if scheduler_delays(this.channel_properties) != scheduler_delays(
         new.channel_properties
     ):
         raise LabOneQException(
             "Signal scheduler delays do not match between real-time iterations"
+        )
+    if precompensations(this.channel_properties) != precompensations(
+        new.channel_properties
+    ):
+        raise LabOneQException(
+            "Signal precompensations do not match between real-time iterations"
         )
     if this.result_lengths != new.result_lengths:
         raise LabOneQException("Measurements do not match between real-time iterations")

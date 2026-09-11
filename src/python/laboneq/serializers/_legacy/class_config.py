@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from collections import OrderedDict
-from itertools import chain
 
 from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
 from laboneq.dsl.calibration.mixer_calibration import MixerCalibration
@@ -72,9 +71,6 @@ def classes_by_short_name() -> OrderedDict[str, type]:
         "laboneq.dsl.device.servers.data_server",
         "laboneq.serializers._legacy.simple_serialization",
         "laboneq.core.types.enums",
-        "laboneq.core.types.compiled_experiment",
-        "laboneq.data.nt_step_key",
-        "laboneq.data.scheduled_experiment",
         "laboneq.data.artifacts_qccs",
         "laboneq.data.experiment_results",
         "laboneq.executor.executor",
@@ -84,22 +80,4 @@ def classes_by_short_name() -> OrderedDict[str, type]:
         "laboneq.dsl.calibration.units",
     ]
     _, classes_by_short_name = module_classes(dsl_modules)
-    # TODO: remove this after migration to new data types is complete (?)
-    _, classes_by_short_name_compilation_job = module_classes(
-        ["laboneq.data.compilation_job"],
-        class_names=[
-            "DeviceInfoType",
-            "AmplifierPumpInfo",
-            "DeviceInfo",
-            "SignalInfo",
-            "PulseDef",
-            "SignalRange",
-            "Marker",
-        ],
-    )
-    return OrderedDict(
-        chain(
-            classes_by_short_name.items(),
-            classes_by_short_name_compilation_job.items(),
-        )
-    )
+    return OrderedDict(classes_by_short_name.items())

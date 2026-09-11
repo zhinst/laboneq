@@ -44,9 +44,9 @@ class CombinedOutput:
 
 @dataclass
 class RTCompilerOutputContainer:
-    """Container (by device class) for the output of the code gen backend for a single
+    """Container (by backend) for the output of the code gen backend for a single
     run."""
 
-    device_class: int
+    backend: str
     codegen_output: RTCompilerOutput
     schedule: compiler_rs.PulseSheetSchedule | None

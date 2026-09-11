@@ -3,30 +3,27 @@
 
 from __future__ import annotations
 
-import typing
 from copy import deepcopy
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.data.artifacts_qccs import (
     COMPLEX_USAGE,
-    ArtifactsCodegen,
     CommandTableMapEntry,
 )
 
-if typing.TYPE_CHECKING:
-    from laboneq.data.scheduled_experiment import CompilerArtifact
+if TYPE_CHECKING:
+    from laboneq.data.artifacts_qccs import ArtifactsCodegen
 
 
 def calc_ct_replacement(
-    artifacts: CompilerArtifact,
+    artifacts: ArtifactsCodegen,
     parameter_uid: str,
     new_value: int | float,
     in_place=False,
 ) -> list[dict[str, Any]]:
-    assert isinstance(artifacts, ArtifactsCodegen)
     try:
         phase_increment_map = artifacts.parameter_phase_increment_map[parameter_uid]
     except KeyError as e:

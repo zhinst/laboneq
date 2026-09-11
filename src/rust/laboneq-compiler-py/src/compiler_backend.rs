@@ -9,6 +9,7 @@ use pyo3::prelude::*;
 use tracing::instrument;
 
 use laboneq_common::compiler_settings::CompilerSettings;
+use laboneq_common::settings::SettingSpec;
 use laboneq_ir::ExperimentIr;
 use laboneq_py_utils::py_object_store::PyObjectStore;
 use numeric_array::NumericArray;
@@ -16,15 +17,15 @@ use numeric_array::NumericArray;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::types::AwgKey;
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::device_setup::SetupDescription;
 use laboneq_dsl::hqcs::{self, HqcsDeclarations};
 use laboneq_dsl::types::{
-    ExternalParameterUid, HandleUid, ParameterUid, PulseDef, PulseUid, SignalUid,
+    AcquisitionType, ExternalParameterUid, HandleUid, ParameterUid, PulseDef, PulseUid, SignalUid,
+    SweepParameter,
 };
-use laboneq_ir::system::AwgDevice;
 use laboneq_units::duration::{Duration, Second};
 
 // Re-export commonly used types for convenience
+pub use crate::capnp_setup_description::SetupDescriptionPayload;
 pub use crate::error::Error;
 pub use crate::experiment::DeviceSignal;
 pub use crate::signal_view::SignalView;
@@ -34,6 +35,18 @@ pub type CompilerBackendResult<T, E = laboneq_error::LabOneQError> = Result<T, E
 
 // Re-exported so the compiler backend implementations can use these types without `numeric-array`
 pub type ParameterValues = NumericArray;
+
+/// The values every sweep parameter of an experiment takes.
+pub type ParameterMap<'a> = HashMap<ParameterUid, &'a ParameterValues>;
+
+/// A processed experiment, as the rules of a [`CompilerBackend`] see it.
+pub struct ProcessedExperiment<'a> {
+    /// Root of the experiment tree, with every compiler pass applied.
+    pub root: &'a ExperimentNode,
+    pub parameters: ParameterMap<'a>,
+    /// What the experiment's real-time loop acquires.
+    pub acquisition_type: AcquisitionType,
+}
 
 /// A backend that performs hardware-specific preprocessing of an experiment
 /// before it enters the generic compilation pipeline.
@@ -50,6 +63,27 @@ pub trait CompilerBackend: Clone + Send + Sync + 'static {
     type CompilerArtifact: CompilerArtifact;
     type CombinedOutput: CombinedOutput;
 
+    /// The compiler settings this backend accepts, each declared with its
+    /// type, default and documentation. The frontend validates the caller's
+    /// settings against these and its own in one pass; the backend reads the
+    /// values back from [`CompilerSettings::backend`].
+    fn settings(&self) -> &'static [SettingSpec] {
+        &[]
+    }
+
+    /// Backend-specific program collected from HQCS content. `()` for backends
+    /// that only refuse it; a real (non-emulated) coprocessor needs no compiler
+    /// artifact — its program is the payload.
+    type EmulatedHqcsProgram: Default + Send + Sync + 'static;
+
+    /// Name of the backend.
+    ///
+    /// Must be unique across all backends: it is recorded in
+    /// `CompiledExperiment.metadata.createdBy`, selects the reader that decodes
+    /// `CompiledExperiment.artifacts`, and selects this backend's compiler hooks
+    /// on the Python side.
+    fn name(&self) -> &'static str;
+
     /// Analyze the experiment against the target device setup and produce
     /// hardware-specific data needed for subsequent compilation stages.
     ///
@@ -61,6 +95,19 @@ pub trait CompilerBackend: Clone + Send + Sync + 'static {
         experiment: ExperimentView,
     ) -> CompilerBackendResult<PreprocessOutput<Self::Output>>;
 
+    /// Check the experiment against this backend's own rules, on top of the
+    /// ones the compiler checks for every backend.
+    ///
+    /// The compiler calls this once it has processed the experiment and checked
+    /// its own rules, so the tree is the one that goes on to scheduling.
+    fn validate(
+        &self,
+        _experiment: &ProcessedExperiment<'_>,
+        _backend_data: &Self::Output,
+    ) -> CompilerBackendResult<()> {
+        Ok(())
+    }
+
     /// Decide how to handle HQCS content right after deserialization, before
     /// any other processing sees the tree. Default is to refuse anything.
     fn process_hqcs(
@@ -68,8 +115,25 @@ pub trait CompilerBackend: Clone + Send + Sync + 'static {
         root: &mut ExperimentNode,
         hqcs: &HqcsDeclarations,
         id_store: &NamedIdStore,
-    ) -> CompilerBackendResult<()> {
-        refuse_hqcs(root, hqcs, id_store)
+        _sweep_parameters: &[SweepParameter],
+    ) -> CompilerBackendResult<Self::EmulatedHqcsProgram> {
+        refuse_hqcs(root, hqcs, id_store)?;
+        Ok(Self::EmulatedHqcsProgram::default())
+    }
+
+    /// The sequence the PRNG draws for a given seed and range.
+    ///
+    /// One PRNG setup can hold several nested loops that draw from the same
+    /// sequence, hence a generator rather than the values of one loop. The
+    /// default fails: a backend without a PRNG cannot run a PRNG loop.
+    fn prng_sequence(
+        &self,
+        _seed: u32,
+        _range: u32,
+    ) -> CompilerBackendResult<Box<dyn PrngSequence>> {
+        Err(laboneq_error::laboneq_error!(
+            "This backend has no PRNG, so it cannot run a PRNG loop."
+        ))
     }
 
     fn generate_code(
@@ -91,16 +155,12 @@ pub trait CompilerBackend: Clone + Send + Sync + 'static {
         self.generate_code(experiment, compiler_settings, py_object_store, backend_data)
     }
 
-    /// A numeric identifier for the device class this backend targets.
-    ///
-    /// NOTE: This is a temporary workaround as long as the compiler calls Python code that requires this information.
-    fn device_class(&self) -> usize;
-
     /// Get a feedback calculator for the given backend. The default implementation returns `Ok(None)`, indicating that no feedback calculator is available for this backend.
     fn feedback_calculator(
         &self,
         _signals: &[SignalView],
         _compiler_settings: &CompilerSettings,
+        _backend_data: &Self::Output,
     ) -> Result<Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>>, Error>
     {
         Ok(None)
@@ -122,6 +182,7 @@ pub trait CompilerBackend: Clone + Send + Sync + 'static {
     fn finalize(
         &self,
         combined: Self::CombinedOutput,
+        hqcs_program: Self::EmulatedHqcsProgram,
     ) -> CompilerBackendResult<CompilationOutput<Self::CompilerArtifact>>;
 }
 
@@ -161,23 +222,23 @@ pub trait CombinedOutput {
 pub struct ExperimentView<'a> {
     pub root: &'a ExperimentNode,
     pub id_store: &'a mut NamedIdStore,
-    pub parameters: HashMap<ParameterUid, &'a ParameterValues>,
+    pub parameters: ParameterMap<'a>,
     pub pulses: &'a HashMap<PulseUid, PulseDef>,
 
     pub experiment_signals: Vec<ExperimentSignal>,
 
-    // Device setup properties
-    pub setup_description: SetupDescription,
+    /// The target setup, in this backend's own Cap'n Proto schema.
+    pub setup_description: SetupDescriptionPayload,
 }
 
 impl<'a> ExperimentView<'a> {
     pub fn new(
         root: &'a ExperimentNode,
         id_store: &'a mut NamedIdStore,
-        parameters: HashMap<ParameterUid, &'a ParameterValues>,
+        parameters: ParameterMap<'a>,
         pulses: &'a HashMap<PulseUid, PulseDef>,
         experiment_signals: Vec<ExperimentSignal>,
-        setup_description: SetupDescription,
+        setup_description: SetupDescriptionPayload,
     ) -> Self {
         ExperimentView {
             root,
@@ -197,7 +258,6 @@ impl<'a> ExperimentView<'a> {
 pub struct PreprocessOutput<T: PreprocessedBackendData> {
     pub(crate) backend_data: T,
     pub(crate) device_signals: Vec<DeviceSignal>,
-    pub(crate) awg_devices: Vec<AwgDevice>,
     pub(crate) device_setup_fingerprint: String,
 }
 
@@ -206,13 +266,11 @@ impl<T: PreprocessedBackendData> PreprocessOutput<T> {
     pub fn new(
         backend_data: T,
         device_signals: Vec<DeviceSignal>,
-        awg_devices: Vec<AwgDevice>,
         device_setup_fingerprint: String,
     ) -> Self {
         PreprocessOutput {
             backend_data,
             device_signals,
-            awg_devices,
             device_setup_fingerprint,
         }
     }
@@ -226,13 +284,18 @@ pub trait CodeGenArtifact {
 
 /// A compiler artifact produced by a [`CompilerBackend`].
 pub trait CompilerArtifact {
-    /// Convert the artifact to a Python object for returning to the user.
-    fn to_python<'py>(
-        &mut self,
-        py: Python<'py>,
-        id_store: &NamedIdStore,
-        py_object_store: &PyObjectStore<ExternalParameterUid>,
-    ) -> PyResult<Bound<'py, PyAny>>;
+    /// Produce an [`ArtifactsWriter`] that fills `CompiledExperiment.artifacts` (an opaque
+    /// `AnyPointer`) with this backend's own capnp struct.
+    ///
+    /// `ctx` contains the state needed to serialize the artifact consistently with the rest of the compiled experiment.
+    /// It contains e.g. indexes of the parameters and pulses in the compiled experiment,
+    /// so that the artifact can refer to them by index instead of by name.
+    ///
+    /// [`ArtifactsWriter`]: laboneq_capnp::artifacts::ArtifactsWriter
+    fn to_capnp_writer<'a>(
+        &'a self,
+        ctx: &'a crate::capnp_artifacts::ArtifactSerializerContext<'a>,
+    ) -> impl laboneq_capnp::artifacts::ArtifactsWriter + 'a;
 }
 
 pub struct CompilationOutput<T: CompilerArtifact> {
@@ -264,6 +327,7 @@ pub(crate) trait DynCompilerBackend: Send + Sync {
         &self,
         signals: &[SignalView],
         compiler_settings: &CompilerSettings,
+        backend_data: &(dyn PreprocessedBackendData + Send + Sync),
     ) -> Result<Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>>, Error>;
 }
 
@@ -290,10 +354,23 @@ where
         &self,
         signals: &[SignalView],
         compiler_settings: &CompilerSettings,
+        backend_data: &(dyn PreprocessedBackendData + Send + Sync),
     ) -> Result<Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>>, Error>
     {
-        <Self as CompilerBackend>::feedback_calculator(self, signals, compiler_settings)
+        let data = backend_data
+            .as_any()
+            .downcast_ref::<B::Output>()
+            .expect("DynCompilerBackend: backend_data type does not match backend Output type");
+        <Self as CompilerBackend>::feedback_calculator(self, signals, compiler_settings, data)
     }
+}
+
+/// The pseudo-random sequence a device's PRNG produces.
+///
+/// The compiler replays it to label the result axis of a PRNG loop with the
+/// values the loop draws.
+pub trait PrngSequence {
+    fn generate(&mut self) -> u32;
 }
 
 /// Hardware-specific data produced by a [`CompilerBackend`], queried

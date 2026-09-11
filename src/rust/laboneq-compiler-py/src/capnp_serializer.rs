@@ -17,12 +17,12 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Context;
+use capnp::any_pointer;
 use laboneq_py_utils::constant_serializer;
 
 use crate::capnp_py_types::{
-    CancellationSourcePy, ChannelTypePy, DeviceSetupCapnpPy, DeviceSignalPy, ExperimentCapnpPy,
-    ExperimentSignalPy, FieldBindingPy, InstrumentPy, InternalConnectionPy, OscillatorPy,
-    SetupDescriptionPy, SetupDescriptionQccsPy, SetupDescriptionZqcsPy, UnitPy,
+    CancellationSourcePy, ExperimentCapnpPy, ExperimentSignalPy, FieldBindingPy, OscillatorPy,
+    UnitPy,
 };
 use crate::error::{Error, Result};
 use crate::py_conversion::{DslType, DslTypes};
@@ -30,9 +30,8 @@ use crate::py_helpers::is_exact_type;
 use numeric_array::NumericArray;
 
 use laboneq_capnp::pulse::v1::{
-    calibration_capnp, common_capnp, coprocessor_capnp, device_setup_capnp, experiment_capnp,
-    operation_capnp, pulse_capnp, section_capnp, setup_description_qccs_capnp,
-    setup_description_zqcs_capnp, sweep_capnp,
+    calibration_capnp, common_capnp, coprocessor_capnp, experiment_capnp, operation_capnp,
+    pulse_capnp, section_capnp, sweep_capnp,
 };
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -2024,21 +2023,20 @@ impl<'py> Serializer<'py> {
         set_sweep_value_from_py(obj, builder)
     }
 
+    /// Tags `DeviceSetup` with the target backend and forwards the backend's own
+    /// setup-description pointer into the opaque `setupDescription` field.
     fn serialize_device_setup(
         &mut self,
-        obj: DeviceSetupCapnpPy,
+        backend: &str,
+        setup_description: any_pointer::Reader<'_>,
         mut builder: experiment_capnp::experiment::Builder<'_>,
     ) -> Result<()> {
-        let device_setup_builder = builder.reborrow().init_device_setup();
-        match obj.setup_description {
-            SetupDescriptionPy::Qccs(data) => {
-                SetupDescriptionQccsSerializer {}.serialize(data, device_setup_builder)?;
-            }
-            SetupDescriptionPy::Zqcs(data) => {
-                SetupDescriptionZqcsSerializer {}.serialize(data, device_setup_builder)?;
-            }
-        }
-        Ok(())
+        let mut device_setup_builder = builder.reborrow().init_device_setup();
+        device_setup_builder.set_backend(backend);
+        device_setup_builder
+            .init_setup_description()
+            .set_as::<any_pointer::Owned>(setup_description)
+            .map_err(|e| Error::new(format!("Failed to copy the setup description: {e}")))
     }
 
     fn serialize_oscillator(
@@ -2358,12 +2356,16 @@ impl<'py> Serializer<'py> {
 
 /// Serializes a Python experiment object tree to Cap'n Proto bytes.
 ///
+/// `setup_description` is the root of the target backend's own setup-description message,
+/// stored as-is in the opaque `DeviceSetup.setupDescription`; `backend` names its schema.
+///
 /// Returns the serialized bytes as a `Vec<u8>`.
 #[instrument(level = "debug", name = "laboneq.compiler.serialize_capnp", skip_all)]
 pub(crate) fn serialize_experiment(
     py: Python,
     experiment: ExperimentCapnpPy,
-    device_setup: DeviceSetupCapnpPy,
+    backend: &str,
+    setup_description: any_pointer::Reader<'_>,
     packed: bool,
 ) -> Result<Vec<u8>> {
     let mut ser = Serializer::new(py)?;
@@ -2371,7 +2373,7 @@ pub(crate) fn serialize_experiment(
     let mut message = capnp::message::Builder::new_default();
     let mut exp_builder = message.init_root::<experiment_capnp::experiment::Builder<'_>>();
 
-    ser.serialize_device_setup(device_setup, exp_builder.reborrow())?;
+    ser.serialize_device_setup(backend, setup_description, exp_builder.reborrow())?;
 
     // Signals are indexed first (sorted alphabetically for determinism) so that
     // signal references written during section tree traversal use final indices.
@@ -2748,131 +2750,4 @@ fn set_sweep_value_from_py(
     Err(Error::new(format!(
         "Cannot convert value to sweep value: {obj}"
     )))
-}
-
-struct SetupDescriptionZqcsSerializer {}
-
-impl SetupDescriptionZqcsSerializer {
-    fn serialize(
-        &mut self,
-        description: SetupDescriptionZqcsPy<'_>,
-        mut builder: device_setup_capnp::device_setup::Builder<'_>,
-    ) -> Result<()> {
-        let mut setup_builder = builder.reborrow().init_setup_description().init_zqcs();
-        setup_builder.set_data(&description.data);
-        setup_builder.set_uid(description.uid.to_str()?);
-
-        let mut channels_builder = setup_builder
-            .reborrow()
-            .init_channels(description.channels.len() as u32);
-        for (i, channel) in description.channels.iter().enumerate() {
-            let mut channel_builder = channels_builder.reborrow().get(i as u32);
-            channel_builder.set_geolocation(channel.geolocation.to_str()?);
-            channel_builder.set_channel_type(match channel.channel_type {
-                ChannelTypePy::Rf => setup_description_zqcs_capnp::ChannelType::Rf,
-                ChannelTypePy::Qa => setup_description_zqcs_capnp::ChannelType::Qa,
-                ChannelTypePy::Flux => setup_description_zqcs_capnp::ChannelType::Flux,
-            });
-        }
-        Ok(())
-    }
-}
-
-struct SetupDescriptionQccsSerializer {}
-
-impl SetupDescriptionQccsSerializer {
-    fn serialize(
-        &mut self,
-        description: SetupDescriptionQccsPy,
-        mut builder: device_setup_capnp::device_setup::Builder<'_>,
-    ) -> Result<()> {
-        let mut setup_builder = builder.reborrow().init_setup_description().init_qccs();
-        self.serialize_instruments(description.instruments, &mut setup_builder)?;
-        self.serialize_device_signals(description.signals, &mut setup_builder)?;
-        self.serialize_internal_connections(description.internal_connections, &mut setup_builder)?;
-        Ok(())
-    }
-
-    fn serialize_instruments(
-        &mut self,
-        instruments: Vec<InstrumentPy<'_>>,
-        builder: &mut setup_description_qccs_capnp::setup_description_qccs::Builder<'_>,
-    ) -> Result<()> {
-        let mut instruments_builder = builder
-            .reborrow()
-            .init_instruments(instruments.len() as u32);
-        for (i, instrument) in instruments.iter().enumerate() {
-            let mut instrument_builder = instruments_builder.reborrow().get(i as u32);
-            instrument_builder.set_uid(instrument.uid.to_str()?);
-            instrument_builder.set_device_type(instrument.device_type.to_str()?);
-
-            let mut options_builder = instrument_builder
-                .reborrow()
-                .init_options(instrument.options.len() as u32);
-            for (j, option) in instrument.options.iter().enumerate() {
-                options_builder.set(j as u32, option.to_str()?);
-            }
-
-            if let Some(ref clock_source) = instrument.reference_clock_source {
-                match clock_source.to_str()? {
-                    "INTERNAL" => instrument_builder.set_reference_clock_source(
-                        setup_description_qccs_capnp::ReferenceClock::Internal,
-                    ),
-                    "EXTERNAL" => instrument_builder.set_reference_clock_source(
-                        setup_description_qccs_capnp::ReferenceClock::External,
-                    ),
-                    other => {
-                        return Err(Error::new(format!(
-                            "Invalid reference clock source: {}. Expected 'INTERNAL' or 'EXTERNAL'.",
-                            other
-                        )));
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn serialize_device_signals(
-        &mut self,
-        signals: Vec<DeviceSignalPy>,
-        builder: &mut setup_description_qccs_capnp::setup_description_qccs::Builder<'_>,
-    ) -> Result<()> {
-        let mut signals_builder = builder.reborrow().init_signals(signals.len() as u32);
-
-        for (i, signal) in signals.iter().enumerate() {
-            let mut signal_builder = signals_builder.reborrow().get(i as u32);
-
-            signal_builder.set_uid(signal.uid.to_str()?);
-            signal_builder.set_instrument_uid(signal.instrument_uid.to_str()?);
-
-            let mut ports_builder = signal_builder
-                .reborrow()
-                .init_ports(signal.ports.len() as u32);
-            for (j, port) in signal.ports.iter().enumerate() {
-                ports_builder.set(j as u32, port.to_str()?);
-            }
-        }
-        Ok(())
-    }
-
-    fn serialize_internal_connections(
-        &mut self,
-        connections: Vec<InternalConnectionPy<'_>>,
-        builder: &mut setup_description_qccs_capnp::setup_description_qccs::Builder<'_>,
-    ) -> Result<()> {
-        let mut connections_builder = builder
-            .reborrow()
-            .init_internal_connections(connections.len() as u32);
-
-        for (i, connection) in connections.iter().enumerate() {
-            let mut connection_builder = connections_builder.reborrow().get(i as u32);
-
-            connection_builder.set_from_instrument(connection.from_instrument.to_str()?);
-            connection_builder.set_from_port(connection.from_port.to_str()?);
-            connection_builder.set_to_instrument(connection.to_instrument.to_str()?);
-            connection_builder.set_to_port(connection.to_port.to_str()?);
-        }
-        Ok(())
-    }
 }

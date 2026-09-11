@@ -14,7 +14,7 @@ DEFAULT_HDAWG_LEAD_DESKTOP_SETUP_2GHz: float = 24e-9
 DEFAULT_UHFQA_LEAD_PQSC: float = 80e-9
 DEFAULT_SHFQA_LEAD_PQSC: float = 80e-9
 DEFAULT_SHFSG_LEAD_PQSC: float = 80e-9
-DEFAULT_TESTDEVICE_LEAD: float = 1200e-9
+DEFAULT_ZQCS_LEAD: float = 1200e-9
 
 # Mirrors TINYSAMPLE_DURATION from laboneq-units. See that constant for the rationale.
 TINYSAMPLE: float = 1 / 3600000e6

@@ -169,8 +169,11 @@ impl WithContext for PyErrorWithContext {
 /// individually.
 #[derive(Debug, Error)]
 pub enum LabOneQError {
+    /// An error whose root cause is a Python exception, kept alive so that it can be
+    /// re-attached as the `__cause__` of the exception raised at the boundary, preserving
+    /// the original traceback.
     #[error(transparent)]
-    PulseSamplerCallback(#[from] PyErrorWithContext),
+    PythonException(#[from] PyErrorWithContext),
 
     #[error(transparent)]
     ResourceExhaustion(#[from] ResourceExhaustionError),
@@ -182,7 +185,7 @@ pub enum LabOneQError {
 #[cfg(feature = "pyo3")]
 impl From<pyo3::PyErr> for LabOneQError {
     fn from(value: pyo3::PyErr) -> Self {
-        Self::PulseSamplerCallback(value.into())
+        Self::PythonException(value.into())
     }
 }
 
@@ -207,7 +210,7 @@ impl LabOneQError {
             let msg = msg_updater(msg);
             match self {
                 LabOneQError::Generic(_) => LabOneQException::new_err(msg),
-                LabOneQError::PulseSamplerCallback(err) => {
+                LabOneQError::PythonException(err) => {
                     let py_err = LabOneQException::new_err(msg);
                     // If the error is a PyErr, mark it as the 'cause' of the new Python exception.
                     // Python will then properly display the traceback of both.
@@ -230,7 +233,7 @@ impl WithContext for LabOneQError {
         C: Into<Cow<'static, str>>,
     {
         match self {
-            LabOneQError::PulseSamplerCallback(e) => e.add_context(f),
+            LabOneQError::PythonException(e) => e.add_context(f),
             LabOneQError::ResourceExhaustion(e) => e.add_context(f),
             LabOneQError::Generic(e) => e.add_context(f),
         }

@@ -4,6 +4,7 @@
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
 
+mod compiled_experiment;
 mod compiler;
 mod utils;
 
@@ -20,6 +21,9 @@ fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // - https://docs.python.org/3/tutorial/modules.html#packages
     let modules = py.import("sys")?.getattr("modules")?;
 
+    // Register backend name constant
+    m.add("BACKEND_NAME", laboneq_qccs_backend::BACKEND_NAME)?;
+
     let codegenerator = codegenerator_py::create_py_module(m.py(), "codegenerator")?;
     modules.set_item("laboneq._rust.codegenerator", &codegenerator)?;
     m.add_submodule(&codegenerator)?;
@@ -34,7 +38,16 @@ fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
         compiler::compile_experiment_py,
         &compiler
     )?)?;
+    compiler.add_function(wrap_pyfunction!(
+        compiler::serialize_experiment_py,
+        &compiler
+    )?)?;
     modules.set_item("laboneq._rust.compiler", &compiler)?;
     m.add_submodule(&compiler)?;
+
+    let compiled_experiment = compiled_experiment::create_py_module(py, "compiled_experiment")?;
+    modules.set_item("laboneq._rust.compiled_experiment", &compiled_experiment)?;
+    m.add_submodule(&compiled_experiment)?;
+
     Ok(())
 }

@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import attrs
 
@@ -35,6 +35,10 @@ class Instrument:
 
     #: Connections of this instrument.
     connections: list[Connection] = attrs.field(factory=list)
+
+    #: Whether this instrument is reached through a LabOne data server, and so
+    #: requires a setup description to define one for it.
+    requires_data_server: ClassVar[bool] = False
 
     def output_by_uid(self, uid) -> Port | None:
         for o in self.ports:

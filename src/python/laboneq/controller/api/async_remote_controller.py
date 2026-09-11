@@ -16,10 +16,11 @@ from laboneq.controller.api.async_controller_api import (
 from laboneq.controller.api.commons import (
     APIError,
     SubmissionHandle,
+    encode_submission,
     reraise_controller_exception,
 )
 from laboneq.controller.controller import SubmissionStatus
-from laboneq.serializers import from_dict, to_dict
+from laboneq.serializers import from_dict
 
 if TYPE_CHECKING:
     from laboneq.data.instrument_topology import InstrumentTopology
@@ -112,15 +113,15 @@ class AsyncRemoteController(AsyncControllerAPI):
         self,
         scheduled_experiment: ScheduledExperiment,
         handle: SubmissionHandle | None = None,
+        coprocessor_payload_overrides: dict[str, bytes] | None = None,
     ) -> SubmissionHandle:
-        serialized = to_dict(scheduled_experiment)
-        assert isinstance(serialized, dict)
+        body = encode_submission(scheduled_experiment, coprocessor_payload_overrides)
         if handle is None:
             handle = SubmissionHandle()
         await self._request(
             "PUT",
             f"v1/experiments/{handle.hex}",
-            json=serialized,
+            json=body,
         )
         return handle
 
@@ -141,10 +142,8 @@ class AsyncRemoteController(AsyncControllerAPI):
         return SubmissionStatus(data["status"])
 
     async def get_experiment(self, handle: SubmissionHandle) -> Results:
-        data = await self._request_json("GET", f"v1/experiments/{handle.hex}")
-        if data.get("results") is not None:
-            return cast("Results", from_dict(data["results"]))
-        raise APIError(f"Experiment has no results (status: {data.get('status')})")
+        data = await self._request_json("GET", f"v1/experiments/{handle.hex}/results")
+        return cast("Results", from_dict(data["results"]))
 
     async def cancel_experiment(self, handle: SubmissionHandle) -> None:
         await self._request("DELETE", f"v1/experiments/{handle.hex}")

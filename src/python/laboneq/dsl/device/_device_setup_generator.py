@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import logging
-import warnings
 from typing import TYPE_CHECKING, Callable, Union
 
 from yaml import safe_load
@@ -13,24 +12,14 @@ import laboneq.core.path as qct_path
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import ReferenceClockSource
 from laboneq.dsl.device import _device_setup_modifier as modifier
+from laboneq.dsl.device import instrument_registry as registry
 from laboneq.dsl.device.connection import InternalConnection, SignalConnection
-from laboneq.dsl.device.instruments import (
-    HDAWG,
-    PQSC,
-    QHUB,
-    SHFPPC,
-    SHFQA,
-    SHFQC,
-    SHFSG,
-    UHFQA,
-    ZQCS,
-    NonQC,
-)
 from laboneq.dsl.device.servers import DataServer
 
 if TYPE_CHECKING:
     from laboneq.data.instrument_topology import InstrumentTopology
     from laboneq.dsl.device.device_setup import DeviceSetup
+    from laboneq.dsl.device.instrument import Instrument
     from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
     from laboneq.dsl.quantum import QuantumElement
 
@@ -39,26 +28,6 @@ _logger = logging.getLogger(__name__)
 
 
 # Terminal Symbols
-T_HDAWG_DEVICE = "HDAWG"
-T_ZQCS_DEVICE = "ZQCS"
-T_UHFQA_DEVICE = "UHFQA"
-T_SHFQA_DEVICE = "SHFQA"
-T_SHFSG_DEVICE = "SHFSG"
-T_SHFQC_DEVICE = "SHFQC"
-T_SHFPPC_DEVICE = "SHFPPC"
-T_PQSC_DEVICE = "PQSC"
-T_QHUB_DEVICE = "QHUB"
-T_ALL_DEVICE_TYPES = [
-    T_HDAWG_DEVICE,
-    T_UHFQA_DEVICE,
-    T_SHFQA_DEVICE,
-    T_SHFSG_DEVICE,
-    T_SHFQC_DEVICE,
-    T_SHFPPC_DEVICE,
-    T_PQSC_DEVICE,
-    T_QHUB_DEVICE,
-    T_ZQCS_DEVICE,
-]
 T_UID = "uid"
 T_ADDRESS = "address"
 T_OPTIONS = "options"
@@ -72,18 +41,6 @@ T_INTCLK = "internal_clock_signal"
 T_PORT = "port"
 T_PORTS = "ports"
 
-_INSTRUMENT_TOPOLOGY_DEVICE_CLASSES = {
-    T_HDAWG_DEVICE: HDAWG,
-    T_UHFQA_DEVICE: UHFQA,
-    T_SHFQA_DEVICE: SHFQA,
-    T_SHFSG_DEVICE: SHFSG,
-    T_SHFQC_DEVICE: SHFQC,
-    T_ZQCS_DEVICE: ZQCS,
-    T_SHFPPC_DEVICE: SHFPPC,
-    T_PQSC_DEVICE: PQSC,
-    T_QHUB_DEVICE: QHUB,
-}
-
 _SIGNAL_TYPE_TO_CONNECTION_TYPE = {
     T_IQ_SIGNAL: "iq",
     T_RF_SIGNAL: "rf",
@@ -91,7 +48,7 @@ _SIGNAL_TYPE_TO_CONNECTION_TYPE = {
 }
 
 
-# Models 'instruments' (former 'instrument_list') part of the descriptor:
+# Models 'instruments' part of the descriptor:
 #     instruments:
 #       HDAWG:
 #       - address: DEV8001
@@ -142,31 +99,6 @@ def _skip_nones(**kwargs):
     return {k: v for k, v in kwargs.items() if v is not None}
 
 
-def _make_ppc_connection(_: str, remote_path: str, local_ports: list[str]):
-    # In the descriptor SHFPPC has `T_TO` signal type keyword, but is actually a signal connection without a type.
-    return SignalConnection(
-        uid=qct_path.remove_logical_signal_prefix(remote_path),
-        type=None,
-        ports=local_ports,
-    )
-
-
-def _make_connection(signal_type_kw: str, remote_path: str, local_ports: list[str]):
-    SIGTYPE_T_TO_CONNECTION_TYPE = {
-        T_IQ_SIGNAL: "iq",
-        T_RF_SIGNAL: "rf",
-        T_ACQUIRE_SIGNAL: "acquire",
-    }
-    if signal_type_kw == T_TO:
-        return InternalConnection(to=remote_path, from_port=local_ports)
-    else:
-        return SignalConnection(
-            uid=qct_path.remove_logical_signal_prefix(remote_path),
-            type=SIGTYPE_T_TO_CONNECTION_TYPE[signal_type_kw],
-            ports=local_ports,
-        )
-
-
 def _is_valid_remote_path(path: str) -> bool:
     if len(path.split(qct_path.Separator)) != 2:
         return False
@@ -177,10 +109,9 @@ def _is_valid_remote_path(path: str) -> bool:
 
 def _port_decoder(
     port_desc: dict[str, str | list[str]],
-    additional_switch_keys: list[str] | None = None,
 ) -> tuple[str, str, list[str]]:
-    if additional_switch_keys is None:
-        additional_switch_keys = []
+    """Decode one entry of a descriptor's `connections` into the keyword it
+    uses, the target it names and the local ports it lists."""
     if isinstance(port_desc, dict):
         port_desc = dict(port_desc)  # make a copy
     else:
@@ -202,10 +133,7 @@ def _port_decoder(
     else:
         local_ports.extend(ports)
 
-    signal_keys = [T_IQ_SIGNAL, T_ACQUIRE_SIGNAL, T_RF_SIGNAL]
-    trigger_keys = [T_TO]
-    path_keys = signal_keys + trigger_keys
-    all_keys = path_keys + additional_switch_keys
+    all_keys = [*_SIGNAL_TYPE_TO_CONNECTION_TYPE, T_TO]
 
     signal_type_keyword = None
     remote_path = None
@@ -221,59 +149,46 @@ def _port_decoder(
             "Missing signal type: Expected one of the following keywords: "
             + ", ".join(all_keys)
         )
-    if signal_type_keyword in path_keys and not remote_path:
+    if not remote_path:
         raise LabOneQException(
             f"Missing path: specify '{signal_type_keyword}: <group>{qct_path.Separator}<line>'"
         )
     assert isinstance(remote_path, str)
-    if signal_type_keyword in signal_keys:  # signal_keys is a subset of path_keys
-        if not _is_valid_remote_path(remote_path):
-            raise LabOneQException(
-                f"Invalid path: specify '{signal_type_keyword}: <group>{qct_path.Separator}<line>'"
-            )
-        remote_path = qct_path.insert_logical_signal_prefix(remote_path)
+    if signal_type_keyword != T_TO and not _is_valid_remote_path(remote_path):
+        raise LabOneQException(
+            f"Invalid path: specify '{signal_type_keyword}: <group>{qct_path.Separator}<line>'"
+        )
     return signal_type_keyword, remote_path, local_ports
 
 
 def make_zi_devices(
     instruments: InstrumentsType,
     connections: ConnectionsType,
-    server_finder: Callable[[str], str],
+    server_finder: Callable[[str], str | None],
     setup: DeviceSetup,
 ):
-    zi_instruments = {
-        # Descriptor key: Instrument class, Reference clock option, connection builder.
-        T_HDAWG_DEVICE: (HDAWG, T_EXTCLK, _make_connection),
-        T_UHFQA_DEVICE: (UHFQA, T_EXTCLK, _make_connection),
-        T_SHFQA_DEVICE: (SHFQA, T_EXTCLK, _make_connection),
-        T_SHFSG_DEVICE: (SHFSG, T_EXTCLK, _make_connection),
-        T_SHFQC_DEVICE: (SHFQC, T_EXTCLK, _make_connection),
-        T_ZQCS_DEVICE: (ZQCS, None, _make_connection),
-        T_SHFPPC_DEVICE: (SHFPPC, T_EXTCLK, _make_ppc_connection),
-        T_PQSC_DEVICE: (PQSC, T_INTCLK, _make_connection),
-        T_QHUB_DEVICE: (QHUB, T_INTCLK, _make_connection),
-    }
-    ref_clk_types = {
-        T_EXTCLK: ReferenceClockSource.EXTERNAL,
-        T_INTCLK: ReferenceClockSource.INTERNAL,
-    }
-    for desc_key, (dev_cls, ref_clk, make_connection) in zi_instruments.items():
+    # Instruments are parsed in registration order, which is the order they
+    # appear in `setup.instruments`.
+    for desc_key, model in registry.models_with_descriptor_key():
+        make_connection = model.descriptor_connection_decoder or _make_connection
         for uid, address, interface, options in _iterate_over_descriptors_of_type(
             instruments, desc_key
         ):
-            dev = dev_cls(
+            conns = connections.get(uid, [])
+            # NOTE: The reference clock source is not part of the instrument descriptor, but
+            #       part of the connection descriptor. It is therefore parsed here.
+            #       Reference clock has no good model as a connection.
+            conns, ref_clk = parse_reference_clock(conns)
+            dev = model.cls(
                 **_skip_nones(
                     uid=uid,
                     server_uid=server_finder(uid),
                     address=address,
                     interface=interface,
                     device_options=options,
+                    reference_clock_source=ref_clk,
                 )
             )
-            conns = connections.get(uid, [])
-            if ref_clk is not None and ref_clk in conns:
-                dev.reference_clock_source = ref_clk_types[ref_clk]
-                conns.remove(ref_clk)
             modifier.add_instrument(setup, dev)
             for port_desc in conns:
                 signal_type_keyword, remote_path, local_ports = _port_decoder(port_desc)
@@ -284,30 +199,70 @@ def make_zi_devices(
                         make_connection(signal_type_keyword, remote_path, local_ports),
                     )
                 except (LabOneQException, ValueError) as e:
-                    msg = f"Error '{uid}' ({signal_type_keyword}, {qct_path.remove_logical_signal_prefix(remote_path)}): "
+                    msg = f"Error '{uid}' ({signal_type_keyword}, {remote_path}): "
                     msg += str(e)
                     raise LabOneQException(msg) from e
 
 
+def _make_connection(
+    signal_type_kw: str, remote_path: str, local_ports: list[str]
+) -> InternalConnection | SignalConnection:
+    """Build the connection one decoded descriptor entry denotes."""
+    if signal_type_kw == T_TO:
+        return InternalConnection(to=remote_path, from_port=local_ports)
+    return SignalConnection(
+        uid=remote_path,
+        type=_SIGNAL_TYPE_TO_CONNECTION_TYPE[signal_type_kw],
+        ports=local_ports,
+    )
+
+
+def parse_reference_clock(
+    connection: list[dict | str],
+) -> tuple[list[dict | str], ReferenceClockSource | None]:
+    out = list(connection)
+    clk = None
+    for d in out:
+        if d == T_EXTCLK:
+            clk = ReferenceClockSource.EXTERNAL
+            out.remove(d)
+        elif d == T_INTCLK:
+            clk = ReferenceClockSource.INTERNAL
+            out.remove(d)
+    return out, clk
+
+
 def make_unmanaged_instrument(
     instruments: InstrumentsType,
-    server_finder: Callable[[str], str],
+    server_finder: Callable[[str], str | None],
     setup: DeviceSetup,
 ):
     for dev_type, devices in instruments.items():
-        if dev_type not in T_ALL_DEVICE_TYPES:
+        if registry.model_by_descriptor_key(dev_type) is None:
             for descriptor in devices:
                 uid = descriptor[T_UID]
-                dev = NonQC(
+                dev = _unmanaged_instrument(
+                    dev_type,
                     **_skip_nones(
                         server_uid=server_finder(uid),
                         uid=uid,
                         address=descriptor[T_ADDRESS],
                         interface=descriptor.get(T_INTERFACE),
-                        dev_type=dev_type,
-                    )
+                    ),
                 )
                 modifier.add_instrument(setup, dev)
+
+
+def _unmanaged_instrument(device_type: str, **fields) -> Instrument:
+    """Build the instrument a device type no registered instrument claims falls
+    back to."""
+    factory = registry.unmanaged_instrument_factory()
+    if factory is None:
+        raise LabOneQException(
+            f"Instruments of type '{device_type}' are not provided by any "
+            f"installed backend."
+        )
+    return factory(device_type, **fields)
 
 
 def make_qubits(
@@ -401,7 +356,6 @@ class _DeviceSetupGenerator:
         setup_desc = safe_load(yaml_text)
 
         return _DeviceSetupGenerator.from_dicts(
-            instrument_list=setup_desc.get("instrument_list"),
             instruments=setup_desc.get("instruments"),
             connections=setup_desc.get("connections"),
             dataservers=setup_desc.get("dataservers"),
@@ -424,7 +378,6 @@ class _DeviceSetupGenerator:
             setup_desc = safe_load(fp)
 
         return _DeviceSetupGenerator.from_dicts(
-            instrument_list=setup_desc.get("instrument_list"),
             instruments=setup_desc.get("instruments"),
             connections=setup_desc.get("connections"),
             dataservers=setup_desc.get("dataservers"),
@@ -438,7 +391,6 @@ class _DeviceSetupGenerator:
 
     @staticmethod
     def from_dicts(
-        instrument_list: InstrumentsType | None = None,
         instruments: InstrumentsType | None = None,
         connections: ConnectionsType | None = None,
         dataservers: DataServersType | None = None,
@@ -453,20 +405,6 @@ class _DeviceSetupGenerator:
 
         if qubits is None:
             qubits = []
-        if instrument_list is not None:
-            if instruments is None:
-                warnings.warn(
-                    "'instrument_list' section is deprecated in setup descriptor, use 'instruments' instead.",
-                    FutureWarning,
-                    stacklevel=2,
-                )
-                instruments = instrument_list
-            else:
-                warnings.warn(
-                    "Both 'instrument_list' and 'instruments' are present in the setup descriptor, deprecated 'instrument_list' ignored.",
-                    FutureWarning,
-                    stacklevel=2,
-                )
 
         if instruments is None:
             raise LabOneQException(
@@ -489,9 +427,7 @@ class _DeviceSetupGenerator:
             }
 
         if dataservers is None:
-            raise LabOneQException(
-                "At least one server must be defined either in the descriptor or in the constructor."
-            )
+            dataservers = {}
 
         def _make_server_entry(
             server_uid: str, server_def: dict[str, str | list[str]]
@@ -519,7 +455,9 @@ class _DeviceSetupGenerator:
             for server_uid, server_def in dataservers.items()
         ]
 
-        def server_finder(device_uid: str) -> str:
+        def server_finder(device_uid: str) -> str | None:
+            if not servers:
+                return None
             default_data_server: DataServer | None = None
             explicit_data_server: DataServer | None = None
             for data_server, devices in servers:
@@ -590,9 +528,9 @@ class _DeviceSetupGenerator:
 
         for instrument in instrument_topology.instruments:
             options = "/".join(instrument.options) if instrument.options else None
-            device_cls = _INSTRUMENT_TOPOLOGY_DEVICE_CLASSES.get(instrument.device_type)
-            if device_cls is not None:
-                dev = device_cls(
+            model = registry.model_by_descriptor_key(instrument.device_type)
+            if model is not None:
+                dev = model.cls(
                     uid=instrument.uid,
                     address=instrument.address,
                     **_skip_nones(
@@ -603,10 +541,10 @@ class _DeviceSetupGenerator:
                     ),
                 )
             else:
-                dev = NonQC(
+                dev = _unmanaged_instrument(
+                    instrument.device_type,
                     uid=instrument.uid,
                     address=instrument.address,
-                    dev_type=instrument.device_type,
                     **_skip_nones(
                         server_uid=instrument.server_uid,
                         interface=instrument.interface,

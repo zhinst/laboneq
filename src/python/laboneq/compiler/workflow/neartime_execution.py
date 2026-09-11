@@ -97,13 +97,13 @@ class NtCompilerExecutor(ExecutorBase):
         experiment: compiler_rs.ProcessedExperiment,
         settings: CompilerSettings,
         chunk_count: int | None = None,
-        device_class: int = 0,
+        backend: str = "qccs",
     ):
         super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY)
         self._experiment = experiment
         self._settings = settings
         self._chunk_count = chunk_count
-        self._device_class = device_class
+        self._backend = backend
         self._iteration_stack = IterationStack()
 
         self._compiler_output_by_param_values: dict[
@@ -195,7 +195,7 @@ class NtCompilerExecutor(ExecutorBase):
         new_compiler_output = compile_realtime(
             experiment=self._experiment,
             near_time_parameters=parameter_store,
-            device_class=self._device_class,
+            backend=self._backend,
         )
 
         if self._required_parameters is None:

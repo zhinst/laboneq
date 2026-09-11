@@ -3,11 +3,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use laboneq_common::types::DeviceKind;
+use laboneq_common::types::PhysicalDeviceUid;
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::Operation;
-use laboneq_dsl::types::{HandleUid, MatchTarget, SignalUid};
-use laboneq_ir::system::AwgDevice;
+use laboneq_dsl::types::{DeviceUid, HandleUid, MatchTarget, SignalUid};
 
 use crate::error::{Error, Result};
 use crate::signal_view::SignalView;
@@ -58,19 +57,18 @@ fn resolve_match_impl(
         collect_signals_in_node(child, &mut contained_signals);
     }
     let match_devices = collect_devices(contained_signals.iter().map(|s| signals.get(s).unwrap()));
-    let feedback_device = &signals
+    let feedback_signal = signals
         .get(seen_acquisitions.get(&handle).unwrap())
-        .unwrap()
-        .device();
-    let local_feedback_allowed = local_feedback_possible(feedback_device, &match_devices);
+        .unwrap();
+    let local_feedback_allowed = local_feedback_possible(feedback_signal, &match_devices);
     if let Some(local) = obj.local {
         if local && !local_feedback_allowed {
             let msg = format!(
                 "Local feedback not possible across devices: '{}' and '{}'.",
-                feedback_device.uid().0,
+                feedback_signal.device_uid().0,
                 match_devices
                     .iter()
-                    .map(|d| d.uid().0.to_string())
+                    .map(|d| d.uid.0.to_string())
                     .collect::<Vec<_>>()
                     .join(", ")
             );
@@ -90,28 +88,29 @@ fn collect_signals_in_node(node: &ExperimentNode, signals: &mut HashSet<SignalUi
     }
 }
 
-/// Determines if local feedback is possible for SHFQC.
-///
-/// Local feedback is possible if only one SHFQC device is involved in the match branches.
-fn local_feedback_possible(feedback_device: &AwgDevice, match_devices: &[&AwgDevice]) -> bool {
-    // SHFQC: SHFQA + SHFSG who share the same physical device UID
-    matches!(
-        feedback_device.kind(),
-        DeviceKind::Shfqa | DeviceKind::Shfsg
-    ) && match_devices.len() == 1
-        && match_devices.iter().next().unwrap().physical_device_uid()
-            == feedback_device.physical_device_uid()
+/// A device that is contained in the match operation.
+struct MatchDevice {
+    uid: DeviceUid,
+    physical_uid: PhysicalDeviceUid,
 }
 
-fn collect_devices<'a>(signals: impl Iterator<Item = &'a SignalView<'a>>) -> Vec<&'a AwgDevice> {
+/// Whether the match can take feedback without leaving the physical device.
+///
+/// It can when the acquiring device supports local feedback and every signal the
+/// match plays on sits on that same physical device.
+fn local_feedback_possible(feedback_signal: &SignalView, match_devices: &[MatchDevice]) -> bool {
+    feedback_signal.device_traits().supports_local_feedback
+        && match_devices.len() == 1
+        && match_devices[0].physical_uid == feedback_signal.physical_device_uid()
+}
+
+fn collect_devices<'a>(signals: impl Iterator<Item = &'a SignalView<'a>>) -> Vec<MatchDevice> {
     let mut device_uids = HashSet::new();
     signals
-        .filter_map(|s| {
-            if device_uids.contains(&s.device().uid()) {
-                return None;
-            }
-            device_uids.insert(s.device().uid());
-            Some(s.device())
+        .filter(|s| device_uids.insert(s.device_uid()))
+        .map(|s| MatchDevice {
+            uid: s.device_uid(),
+            physical_uid: s.physical_device_uid(),
         })
         .collect()
 }
@@ -119,46 +118,38 @@ fn collect_devices<'a>(signals: impl Iterator<Item = &'a SignalView<'a>>) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use laboneq_common::device_traits::{DeviceTraits, TEST_DEVICE_TRAITS};
     use laboneq_common::named_id::NamedId;
-    use laboneq_common::types::{AwgKey, PhysicalDeviceUid, SignalKind};
+    use laboneq_common::types::{AwgKey, SignalKind};
     use laboneq_dsl::node_structure;
     use laboneq_dsl::operation::{Acquire, Match, Reserve};
-    use laboneq_ir::device::builder::AwgDeviceBuilder;
     use laboneq_ir::signal::Signal;
     use laboneq_ir::signal::builder::SignalBuilder;
     use std::collections::HashMap;
 
+    const LOCAL_FEEDBACK_TRAITS: DeviceTraits = DeviceTraits {
+        supports_local_feedback: true,
+        ..TEST_DEVICE_TRAITS
+    };
+
     struct TestSignalFixture {
-        shfqa_device: AwgDevice,
-        shfsg_device: AwgDevice,
-        hdawg_device: AwgDevice,
+        /// On the SHFQA half of an SHFQC.
         signal1: Signal,
+        /// On the SHFSG half of the same SHFQC.
         signal2: Signal,
+        /// On a separate HDAWG.
         signal3: Signal,
     }
 
     impl TestSignalFixture {
         fn new() -> Self {
-            let shfqa_device =
-                AwgDeviceBuilder::new(0.into(), PhysicalDeviceUid(0), DeviceKind::Shfqa)
-                    .shfqc(true)
-                    .build();
-
-            let shfsg_device =
-                AwgDeviceBuilder::new(1.into(), PhysicalDeviceUid(0), DeviceKind::Shfsg)
-                    .shfqc(true)
-                    .build();
-
-            let hdawg_device =
-                AwgDeviceBuilder::new(2.into(), PhysicalDeviceUid(1), DeviceKind::Hdawg)
-                    .shfqc(false)
-                    .build();
-
             let signal1 = SignalBuilder::new(
                 0.into(),
                 2.0e9,
                 AwgKey(0),
-                shfqa_device.uid(),
+                0.into(),
+                PhysicalDeviceUid(0),
+                &LOCAL_FEEDBACK_TRAITS,
                 SignalKind::Integration,
             )
             .build();
@@ -167,7 +158,9 @@ mod tests {
                 1.into(),
                 2.0e9,
                 AwgKey(1),
-                shfsg_device.uid(),
+                1.into(),
+                PhysicalDeviceUid(0),
+                &LOCAL_FEEDBACK_TRAITS,
                 SignalKind::Iq,
             )
             .build();
@@ -176,15 +169,14 @@ mod tests {
                 2.into(),
                 2.0e9,
                 AwgKey(2),
-                hdawg_device.uid(),
+                2.into(),
+                PhysicalDeviceUid(1),
+                &TEST_DEVICE_TRAITS,
                 SignalKind::Iq,
             )
             .build();
 
             Self {
-                shfqa_device,
-                shfsg_device,
-                hdawg_device,
                 signal1,
                 signal2,
                 signal3,
@@ -193,18 +185,9 @@ mod tests {
 
         fn signal_views(&self) -> HashMap<SignalUid, SignalView<'_>> {
             HashMap::from_iter([
-                (
-                    self.signal1.uid,
-                    SignalView::new(&self.shfqa_device, &self.signal1),
-                ),
-                (
-                    self.signal2.uid,
-                    SignalView::new(&self.shfsg_device, &self.signal2),
-                ),
-                (
-                    self.signal3.uid,
-                    SignalView::new(&self.hdawg_device, &self.signal3),
-                ),
+                (self.signal1.uid, SignalView::new(&self.signal1)),
+                (self.signal2.uid, SignalView::new(&self.signal2)),
+                (self.signal3.uid, SignalView::new(&self.signal3)),
             ])
         }
 

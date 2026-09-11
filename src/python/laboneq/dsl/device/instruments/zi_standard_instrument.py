@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import attrs
 
 from laboneq.core.types.enums import ReferenceClockSource
@@ -44,8 +46,11 @@ class ZIStandardInstrument(Instrument):
         default=None, converter=_reference_clock_source_converter
     )
 
-    #: Device class
-    device_class: int = attrs.field(default=0x0)
+    #: The backend that compiles and runs this instrument. Matches the name
+    #: the backend's compiler hooks register under.
+    backend: ClassVar[str] = "qccs"
+
+    requires_data_server: ClassVar[bool] = True
 
     def calc_options(self):
         return {

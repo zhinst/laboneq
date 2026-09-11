@@ -5,7 +5,7 @@ use laboneq_common::named_id::NamedIdStore;
 use laboneq_dsl::types::{AcquisitionType, PulseDef, SweepParameter};
 
 use crate::node::IrNode;
-use crate::system::DeviceSetup;
+use crate::signal::Signal;
 
 pub struct ExperimentIr<'a> {
     pub root: IrNode,
@@ -13,5 +13,5 @@ pub struct ExperimentIr<'a> {
     pub id_store: &'a NamedIdStore,
     pub parameters: Vec<SweepParameter>,
     pub pulses: Vec<PulseDef>,
-    pub device_setup: &'a DeviceSetup,
+    pub signals: &'a [Signal],
 }

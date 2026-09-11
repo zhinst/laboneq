@@ -23,33 +23,29 @@ from typing import (
 )
 
 import numpy as np
-from zhinst.comms_schemas.labone import KernelInfo, KernelSession
-from zhinst.comms_schemas.labone.core import (
-    AnnotatedValue,
-    ShfGeneratorWaveformVectorData,
-    ZIContext,
-)
-from zhinst.comms_schemas.labone.core.errors import (
-    LabOneCoreError,
-    NotFoundError,
-    OverwhelmedError,
-)
 
+from laboneq.controller.devices import labone
 from laboneq.controller.devices.device_utils import (
     NodeActionSet,
     is_expected,
     to_l1_timeout,
     zhinst_core_version,
 )
-from laboneq.controller.devices.zi_emulator import KernelSessionEmulator
+from laboneq.controller.devices.zi_emulator import (
+    KernelSessionEmulator,
+    MockAnnotatedValue,
+)
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.versioning import (
     RECOMMENDED_MINIMUM_LABONE_VERSION,
     LabOneVersion,
 )
+from laboneq.core.utilities.async_helpers import wait_for
 
 if TYPE_CHECKING:
+    from zhinst.comms_schemas.labone import KernelSession
     from zhinst.comms_schemas.labone.core import (
+        AnnotatedValue,
         DataQueue,
     )
 
@@ -195,8 +191,8 @@ class DataServerConnection:
         host = server_qualifier.host
         port = server_qualifier.port
         if emulator_state is None:
-            data_server = await KernelSession.create(
-                kernel_info=KernelInfo.zi_connection(),
+            data_server = await labone.KernelSession.create(
+                kernel_info=labone.KernelInfo.zi_connection(),
                 host=host,
                 port=port,
                 timeout=to_l1_timeout(timeout_s),
@@ -219,7 +215,7 @@ class DataServerConnection:
                     data_server.get(cls._fullversion_node_path),
                 )
             )
-        except NotFoundError as error:
+        except labone.NotFoundError as error:
             raise LabOneQControllerException(
                 f"Data server at {host}:{port} does not provide required information. "
                 "Is it supported by this version of LabOne Q?"
@@ -284,7 +280,7 @@ class DataServerConnection:
 
         self._server_setup_caps = self._setup_caps.for_server(dataserver_version)
 
-        if isinstance(self._data_server, KernelSession):  # Real server?
+        if isinstance(self._data_server, labone.KernelSession):  # Real server?
             statuses = _get_device_statuses(self.devices_json, serials)
             _check_dataserver_device_compatibility(statuses)
 
@@ -381,24 +377,24 @@ class InstrumentConnection:
                 ),
             )
             return InstrumentConnection(instrument, instrument)
-        instrument_control = await KernelSession.create(
-            kernel_info=KernelInfo.device_connection(
+        instrument_control = await labone.KernelSession.create(
+            kernel_info=labone.KernelInfo.device_connection(
                 device_id=device_qualifier.options.serial,
                 interface=device_qualifier.options.interface,
             ),
             host=server_qualifier.host,
             port=server_qualifier.port,
-            context=ZIContext(),
+            context=labone.ZIContext(),
             timeout=to_l1_timeout(timeout_s),
         )
-        instrument_readout = await KernelSession.create(
-            kernel_info=KernelInfo.device_connection(
+        instrument_readout = await labone.KernelSession.create(
+            kernel_info=labone.KernelInfo.device_connection(
                 device_id=device_qualifier.options.serial,
                 interface=device_qualifier.options.interface,
             ),
             host=server_qualifier.host,
             port=server_qualifier.port,
-            context=ZIContext(),
+            context=labone.ZIContext(),
             timeout=to_l1_timeout(timeout_s),
         )
         return InstrumentConnection(instrument_control, instrument_readout)
@@ -425,20 +421,20 @@ class InstrumentConnection:
                     self.impl.set_with_expression if "*" in node.path else self.impl.set
                 )
                 type_adjusted_value = _resolve_type(node.value, node.path)
-                val: AnnotatedValue
+                val: AnnotatedValue | MockAnnotatedValue
                 if isinstance(self._impl, KernelSessionEmulator):
-                    val = AnnotatedValueWithExtras(
+                    val = MockAnnotatedValue(
                         path=node.path,
                         value=type_adjusted_value,
                         cache=node.cache,
                         filename=node.filename,
                     )
                 else:
-                    val = AnnotatedValue(
+                    val = labone.AnnotatedValue(
                         path=node.path,
                         value=type_adjusted_value,
                     )
-                futures.append(func(val))
+                futures.append(func(cast("AnnotatedValue", val)))
             else:
                 await _gather(*futures)
                 futures.clear()
@@ -494,7 +490,7 @@ async def _gather_with_timeout(
     *args: Coroutine[Any, Any, U], timeout_s: float
 ) -> list[U | BaseException]:
     return await _gather(
-        *(asyncio.wait_for(arg, timeout=timeout_s) for arg in args),
+        *(wait_for(arg, timeout_s) for arg in args),
         return_exceptions=True,
     )
 
@@ -514,14 +510,8 @@ def _resolve_type(value: Any, path: str) -> Any:
         "generator/waveforms" in path.lower()
         or "spectroscopy/envelope/wave" in path.lower()
     ):
-        return ShfGeneratorWaveformVectorData(complex=value)
+        return labone.ShfGeneratorWaveformVectorData(complex=value)
     return value
-
-
-@dataclass
-class AnnotatedValueWithExtras(AnnotatedValue):
-    cache: bool = False
-    filename: str | None = None
 
 
 _key_translate = {
@@ -665,13 +655,13 @@ class AsyncSubscriber:
     async def _get_and_process_erros(self, queue: DataQueue) -> AnnotatedValue:
         while True:
             value = await queue.get()
-            if not isinstance(value.value, LabOneCoreError):
+            if not isinstance(value.value, labone.LabOneCoreError):
                 return value  # Not an error, return the value
             # TODO(2K): Workaround: hold-off errors appear in streaming data only for the subsequent
             # experiment, so we ignore them here. They are captured and reported separately via the errors node.
             # Remove the workaround once the root cause of hold-off errors lag in streaming data is fixed.
             if (
-                not isinstance(value.value, OverwhelmedError)
+                not isinstance(value.value, labone.OverwhelmedError)
                 or str(value.value)
                 != "Hold-off errors detected, triggers arriving too fast."
             ):
@@ -685,9 +675,7 @@ class AsyncSubscriber:
     async def get(self, path: str, timeout_s: float | None = None) -> AnnotatedValue:
         queue = self._subscriptions.get(path)
         assert queue is not None, f"path {path} is not subscribed"
-        value = await asyncio.wait_for(
-            self._get_and_process_erros(queue), timeout=timeout_s
-        )
+        value = await wait_for(self._get_and_process_erros(queue), timeout_s)
         self._last[path] = value
         return value
 

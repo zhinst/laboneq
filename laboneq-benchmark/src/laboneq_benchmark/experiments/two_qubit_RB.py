@@ -6,9 +6,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from qiskit import qasm3, transpile
-from qiskit_experiments.library import randomized_benchmarking
-
 # LabOne Q
 from laboneq import openqasm3
 
@@ -25,6 +22,14 @@ def two_qubit_RB(
     chunk_count: int = 4,
     n_sequences_per_length: int = 40,
 ):
+    """Two qubit randomized benchmarking experiment.
+
+    Requires 'qiskit' and 'qiskit_experiments'.
+    """
+    # 'qiskit' is imported locally within this function to avoid global dependency issues
+    from qiskit import qasm3, transpile
+    from qiskit_experiments.library import randomized_benchmarking
+
     # wrap the experiment definition in an inner function to be able to use it as a callable
     def inner():
         length = 2**sequence_exponent
@@ -33,6 +38,7 @@ def two_qubit_RB(
             physical_qubits=[0, 1],
             lengths=[length],
             num_samples=n_sequences_per_length,
+            seed=42,  # for reproducibility
         ).circuits()
         for circuit in rb2_qiskit_circuits:
             circuit.remove_final_measurements()
@@ -58,7 +64,6 @@ def two_qubit_RB(
         # defined in our quantum operations:
         options.add_measurement_handle = "{qubit.uid}/result"
 
-        # qubits = device_setup.qubits[:1]
         # Create the Experiment
         rb2_exp = transpiler.batch_experiment(
             programs=rb2_program_list,

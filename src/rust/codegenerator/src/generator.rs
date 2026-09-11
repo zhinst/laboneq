@@ -18,6 +18,7 @@ use crate::integration_kernels::SampleIntegrationKernels;
 use crate::integration_kernels::collect_and_process_integration_kernels;
 use crate::integration_units::allocate_integration_units;
 use crate::ir::IrNode;
+use crate::ir::Samples;
 use crate::ir::SignalUid;
 use crate::ir::compilation_job::AwgCore;
 use crate::ir::compilation_job::AwgKey;
@@ -27,7 +28,6 @@ use crate::ir::compilation_job::InitialSignalProperties;
 use crate::ir::compilation_job::SignalKind;
 use crate::ir::experiment::Handle;
 use crate::ir_adapter::value_or_parameter_to_fixed;
-use crate::par_trace;
 use crate::passes::MeasurementAnalysis;
 use crate::passes::analyze_awg::AwgCompilationInfo;
 use crate::passes::analyze_awg::analyze_awg_ir;
@@ -58,11 +58,12 @@ use crate::sampled_event_handler::SeqcResults;
 use crate::sampled_event_handler::handle_sampled_events;
 use crate::sampled_event_handler::seqc_tracker::FeedbackRegisterIndex;
 use crate::sampled_event_handler::seqc_tracker::awg::Awg;
-use crate::tracing_utils::ParallelTraceContext;
 use crate::waveform::CodegenWaveform;
 use crate::waveform::WaveKey;
 use crate::waveform::WaveformStore;
 use crate::waveform_sampler::SampleWaveforms;
+use codegenerator_utils::par_trace;
+use codegenerator_utils::tracing::ParallelTraceContext;
 
 use laboneq_common::types::ChannelKey;
 use laboneq_dsl::signal_calibration::MixerCalibration;
@@ -73,7 +74,6 @@ use laboneq_error::resource_usage::handle_resource_exhaustion;
 use laboneq_error::resource_usage::intercept_and_collect;
 use laboneq_error::{bail, laboneq_error};
 use laboneq_log::warn;
-use laboneq_units::tinysample::{tiny_samples, tinysamples_to_seconds};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use tracing::instrument;
@@ -176,6 +176,8 @@ fn generate_code_for_awg<T: SampleWaveforms + SampleIntegrationKernels>(
         &global_feedback_register,
         ctx,
     )?;
+    let total_execution_time =
+        estimate_total_execution_time(awg_events.program_length, awg.sampling_rate);
     let output = construct_awg_result(
         awg,
         awg_events,
@@ -185,6 +187,7 @@ fn generate_code_for_awg<T: SampleWaveforms + SampleIntegrationKernels>(
         measurement_shapes,
         &awg_info,
         ctx,
+        total_execution_time,
     )?;
     Ok(output)
 }
@@ -199,6 +202,7 @@ fn construct_awg_result(
     measurement_shapes: Option<AwgMeasurementShapes>,
     awg_info: &AwgCompilationInfo,
     ctx: &CodeGenContext,
+    total_execution_time: f64,
 ) -> Result<AwgCodeGenerationResult> {
     let target_feedback_register = ctx.feedback_config.target_feedback_register(&awg.key());
     let feedback_register = match target_feedback_register {
@@ -282,7 +286,9 @@ fn construct_awg_result(
                     .delays
                     .get(&signal.uid)
                     .map(|d| d.delay_port())
-                    .unwrap_or_default(),
+                    .unwrap_or_default()
+                    + signal_properties.signal_alignment_delay,
+                precompensation: signal_properties.precompensation.clone(),
                 amplitude: signal_properties.amplitude.clone(),
                 voltage_offset,
                 gains: mixer_props.gains,
@@ -355,6 +361,7 @@ fn construct_awg_result(
     };
     let result = AwgCodeGenerationResult {
         awg: awg_properties,
+        total_execution_time,
         seqc: create_seqc_program(awg, awg_events.seqc),
         wave_indices: awg_events.wave_indices,
         command_table: {
@@ -539,8 +546,9 @@ fn generate_code_for_multiple_awgs<T: SampleWaveforms + SampleIntegrationKernels
     intercept_and_collect(awg_results)
 }
 
-fn estimate_total_execution_time(root: &IrNode) -> f64 {
-    tinysamples_to_seconds(tiny_samples(root.data().length())).into()
+/// Estimate the real-time execution time of an emitted AWG program, in seconds.
+fn estimate_total_execution_time(program_length: Samples, sampling_rate: f64) -> f64 {
+    program_length as f64 / sampling_rate
 }
 
 #[instrument(name = "laboneq.compiler.generate-code-rs", skip_all)] // Named with `-rs` suffix to distinguish from Python wrapper function
@@ -592,7 +600,10 @@ pub fn generate_code<T: SampleWaveforms + SampleIntegrationKernels + Sync + Send
     )?;
 
     // Result construction
-    let total_execution_time = estimate_total_execution_time(root);
+    let total_execution_time = awg_results
+        .iter()
+        .map(|r| r.total_execution_time)
+        .fold(0.0, f64::max);
     let measurements = evaluate_measurement_per_device(&awg_results);
     let ppc_settings =
         merge_ppc_steps(&awgs, &mut awg_results, &mut ctx.initial_signal_properties)?;

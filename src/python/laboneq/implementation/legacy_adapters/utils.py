@@ -4,8 +4,8 @@
 from typing import Any, NoReturn
 
 from laboneq.core import path as legacy_path
+from laboneq.data.logical_signal import LogicalSignal
 from laboneq.data.path import Separator
-from laboneq.data.setup_description import LogicalSignal
 
 
 def raise_not_implemented(obj: Any) -> NoReturn:

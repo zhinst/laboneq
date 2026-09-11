@@ -1,10 +1,10 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_dsl::device_setup::InstrumentKind;
 use laboneq_error::laboneq_error;
 
 use crate::Result;
+use crate::setup_description::InstrumentKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Port {

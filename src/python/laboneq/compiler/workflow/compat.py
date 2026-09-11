@@ -15,7 +15,7 @@ from laboneq.compiler.workflow import compiler_hooks
 
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
-    from laboneq.data.compilation_job import (
+    from laboneq.implementation.payload_builder.experiment_info_builder import (
         ExperimentInfo,
         ExperimentSignalInfo,
     )
@@ -23,29 +23,32 @@ if TYPE_CHECKING:
 
 def serialize_capnp(
     experiment_info: ExperimentInfo,
-    device_class: int,
+    backend: str,
 ) -> bytes:
     """Serialize the experiment into a Cap'n Proto payload."""
-    hooks = compiler_hooks.get_compiler_hooks(device_class)
+    hooks = compiler_hooks.get_compiler_hooks(backend)
     compiler_module = hooks.compiler_module()
     compiler_module.init_logging(logging.getLogger("laboneq").getEffectiveLevel())
     builder = _CapnpBuilder(experiment_info, hooks)
     return compiler_module.serialize_experiment(
         builder.build_experiment(),
-        device_setup=builder.build_device_setup(),
+        setup_description=builder.setup_description,
         packed=use_packed_capnp(),
     )
 
 
 class _CapnpBuilder:
-    """Assembles `ExperimentCapnpPy` and `DeviceSetupCapnpPy` from `ExperimentInfo`."""
+    """Assembles the experiment and the backend's setup description from `ExperimentInfo`."""
 
     def __init__(
         self, experiment_info: ExperimentInfo, hooks: type[compiler_hooks.CompilerHooks]
     ) -> None:
         self._info = experiment_info
-        result = hooks.build_setup_description(experiment_info)
-        self._setup_description = result.setup_description
+        result = hooks.build_setup_description(
+            experiment_info.device_setup, experiment_info.signal_map
+        )
+        #: The setup description in the backend's own schema, opaque to the core compiler.
+        self.setup_description = result.setup_description
         self._signal_map = result.signal_map
 
     def build_experiment(self) -> compiler_rs.Experiment:
@@ -61,9 +64,6 @@ class _CapnpBuilder:
             coprocessor_mappings=list(src.coprocessor_mappings.items()),
             streams=list(src.streams),
         )
-
-    def build_device_setup(self) -> compiler_rs.DeviceSetup:
-        return SimpleNamespace(setup_description=self._setup_description)
 
     def _build_experiment_signal(
         self, signal_info: ExperimentSignalInfo
@@ -129,38 +129,6 @@ def sanitize_compiler_settings(settings: dict | None) -> dict:
             FutureWarning,
             stacklevel=2,
         )
-
-    if "SHFSG_FORCE_COMMAND_TABLE" in settings:
-        warnings.warn(
-            "The setting `SHFSG_FORCE_COMMAND_TABLE` has no effect and will be removed in a future version",
-            FutureWarning,
-            stacklevel=2,
-        )
-        settings.pop("SHFSG_FORCE_COMMAND_TABLE")
-
-    if "HDAWG_FORCE_COMMAND_TABLE" in settings:
-        warnings.warn(
-            "The setting `HDAWG_FORCE_COMMAND_TABLE` has no effect and will be removed in a future version",
-            FutureWarning,
-            stacklevel=2,
-        )
-        settings.pop("HDAWG_FORCE_COMMAND_TABLE")
-
-    if "SHFQA_MIN_PLAYWAVE_HINT" in settings:
-        warnings.warn(
-            "The setting `SHFQA_MIN_PLAYWAVE_HINT` has no effect.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        settings.pop("SHFQA_MIN_PLAYWAVE_HINT")
-
-    if "SHFQA_MIN_PLAYZERO_HINT" in settings:
-        warnings.warn(
-            "The setting `SHFQA_MIN_PLAYZERO_HINT` has no effect.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        settings.pop("SHFQA_MIN_PLAYZERO_HINT")
 
     if ("MAX_EVENTS_TO_PUBLISH" in settings) and ("OUTPUT_EXTRAS" not in settings):
         warnings.warn(

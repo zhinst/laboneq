@@ -5,20 +5,20 @@ use core::panic;
 use std::fmt::Display;
 
 use laboneq_dsl::operation::PlayPulse;
-use laboneq_dsl::types::{ComplexOrFloat, ValueOrParameter};
+use laboneq_dsl::types::{ComplexOrFloat, ParameterUid, ValueOrParameter};
 use numeric_array::NumericArray;
 
 use crate::error::{Error, Result};
-use crate::experiment_validation::{ExperimentContext, ValidationContext};
+use crate::experiment_validation::traversal::VisitContext;
 
 pub(super) fn validate_play_pulse(
     op: &PlayPulse,
-    ctx: &ExperimentContext,
-    ctx_validator: &mut ValidationContext,
+    ctx: &VisitContext,
+    amplitude_check_done: &mut Vec<ParameterUid>,
 ) -> Result<()> {
     match &op.amplitude {
         ValueOrParameter::Parameter(param_uid) => {
-            if ctx_validator.amplitude_check_done.contains(param_uid) {
+            if amplitude_check_done.contains(param_uid) {
                 return Ok(());
             }
             let parameter = ctx
@@ -33,7 +33,7 @@ pub(super) fn validate_play_pulse(
                     Ok(())
                 })
                 .transpose()?;
-            ctx_validator.amplitude_check_done.push(*param_uid);
+            amplitude_check_done.push(*param_uid);
         }
         ValueOrParameter::Value(amp) => {
             match amp {

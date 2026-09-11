@@ -14,6 +14,7 @@ import numpy as np
 import orjson
 import yaml
 
+from laboneq._backend_plugin import backend_import_prefixes
 from laboneq._version import get_version
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.serializer_registry import (
@@ -183,13 +184,14 @@ def from_dict(
     if serializer is not None:
         return serializer.from_dict(data, options)
     # Serializer not in registry — try importing it by name.
-    # Restrict to laboneq packages to prevent import-time side effects from
-    # crafted __serializer__ values in untrusted data.
+    # Restrict to laboneq and the installed backends' packages, to prevent
+    # import-time side effects from crafted __serializer__ values in untrusted
+    # data.
     try:
         serializer = import_cls(
             serializer_id,
             base_cls=VersionedClassSerializer,
-            prefix_restrictions=("laboneq.", "zhinst_zqcs."),
+            prefix_restrictions=backend_import_prefixes(),
         )
     except ImportError as exc:
         raise ValueError(f"Failed to import serializer {serializer_id!r}.") from exc

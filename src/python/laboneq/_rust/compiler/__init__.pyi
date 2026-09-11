@@ -6,7 +6,6 @@ from typing import Literal, Protocol
 
 from laboneq.compiler.common.iface_compiler_output import RTCompilerOutput
 from laboneq.core.types.units import Quantity
-from laboneq.data.scheduled_experiment import ScheduledExperiment
 from laboneq.dsl.experiment import Section
 from laboneq.dsl.parameter import Parameter
 
@@ -15,10 +14,6 @@ def init_logging(level: int) -> None:
 
 class ProcessedExperiment:
     """Object containing the information about the experiment."""
-
-    def device_lead_delay(self, device_uid: str) -> float: ...
-    def signal_delay_compensation(self, signal_uid: str) -> float: ...
-    def signal_precompensation(self, signal_uid: str) -> dict[str, dict] | None: ...
 
 # ---------------------------------------------------------------------------
 # Input DTOs for serialize_experiment()
@@ -115,45 +110,42 @@ class DeviceSignal(Protocol):
     ports: list[str]
     instrument_uid: str
 
+class InternalConnection(Protocol):
+    from_instrument: str
+    from_port: str
+    to_instrument: str
+    to_port: str
+
 class SetupDescriptionQccs(Protocol):
     instruments: list[Instrument]
     signals: list[DeviceSignal]
-
-class ChannelConfig(Protocol):
-    geolocation: str
-    channel_type: ChannelType
-
-class ChannelType(Enum):
-    RF = 0
-    QA = 1
-    FLUX = 2
-
-class SetupDescriptionZqcs(Protocol):
-    uid: str
-    data: bytes
-    channels: list[ChannelConfig]
+    internal_connections: list[InternalConnection]
 
 class Experiment(Protocol):
     uid: str | None
     sections: list[Section]
     experiment_signals: list[ExperimentSignal]
 
-class DeviceSetup(Protocol):
-    setup_description: SetupDescriptionQccs | SetupDescriptionZqcs
-
 def serialize_experiment(
     experiment: Experiment,
-    device_setup: DeviceSetup,
+    setup_description: SetupDescriptionQccs,
     packed: bool = False,
 ) -> bytes:
-    """Serialize an experiment to Cap'n Proto bytes."""
+    """Serialize an experiment to Cap'n Proto bytes.
+
+    `setup_description` is stored as an opaque `DeviceSetup.setupDescription` pointer, in the
+    QCCS setup-description schema. Other backends have their own compiler module.
+    """
 
 def compile_experiment(
     capnp_data: bytes,
     packed: bool = False,
     compiler_settings: dict | None = None,
-) -> ScheduledExperiment:
-    """Build a scheduled experiment from Cap'n Proto bytes."""
+) -> bytes:
+    """Compile Cap'n Proto experiment bytes into `CompiledExperiment` Cap'n Proto bytes.
+
+    `packed` describes `capnp_data` only; the returned bytes are always unpacked.
+    """
 
 class PulseSheetSchedule:
     """Opaque handle to a pulse sheet schedule computed by the real-time compiler.

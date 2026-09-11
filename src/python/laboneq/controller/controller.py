@@ -7,7 +7,7 @@ import asyncio
 import logging
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -15,7 +15,7 @@ from laboneq import __version__
 from laboneq.controller.constants import CONNECT_CHECK_HOLDOFF
 from laboneq.controller.devices.async_support import _gather
 from laboneq.controller.devices.device_collection import DeviceCollection
-from laboneq.controller.devices.device_utils import zhinst_core_version
+from laboneq.controller.devices.device_utils import labone_client_version
 from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
 from laboneq.controller.near_time_replacement import (
     NearTimeReplacements,
@@ -31,7 +31,6 @@ from laboneq.controller.runtime_context_impl import LegacySessionData
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.versioning import (
     RECOMMENDED_MINIMUM_LABONE_VERSION,
-    LabOneVersion,
     SetupCaps,
 )
 from laboneq.core.exceptions import AbortExecution
@@ -40,11 +39,13 @@ from laboneq.core.utilities.async_helpers import AsyncWorker, EventLoopMixIn
 if TYPE_CHECKING:
     from numpy import typing as npt
 
+    from laboneq.controller.callback_channel import CallbackChannel, DoneStatus
     from laboneq.controller.devices.device_utils import NodeCollector
     from laboneq.controller.recipe_processor import (
         RecipeData,
     )
     from laboneq.controller.utilities.sweep_params_tracker import SweepParamsTracker
+    from laboneq.controller.versioning import LabOneVersion
     from laboneq.data.execution_payload import TargetSetup
     from laboneq.data.experiment_results import ExperimentResults
     from laboneq.data.nt_step_key import NtStepKey
@@ -64,6 +65,54 @@ class ControllerSubmission:
     completion_future: asyncio.Future[ResultsBuilder]
     temp_run_future: asyncio.Future[None]  # TODO(2K): Temporary
     results_builder: ResultsBuilder
+    callback_channel: CallbackChannel | None = None
+    coprocessor_payload_overrides: dict[str, bytes] = field(default_factory=dict)
+
+
+async def _wait_callback_channel(submission: ControllerSubmission) -> bool:
+    """Gate the run start on the client callback channel being attached."""
+    channel = submission.callback_channel
+    if channel is None or await channel.wait_attached(restart_window=True):
+        return True
+    submission.results_builder.add_execution_error(
+        (
+            [],
+            "",
+            f"The client callback channel was not attached within "
+            f"{channel.absence_timeout_s:.0f} s of the experiment becoming "
+            f"ready to run.",
+        )
+    )
+    # completion_future/temp_run_future maybe cancelled by SIGINT handler, avoid InvalidStateError in that case
+    if not submission.completion_future.done():
+        submission.completion_future.set_result(submission.results_builder)
+    if not submission.temp_run_future.done():
+        submission.temp_run_future.set_result(None)
+    return False
+
+
+def _notify_callback_channel_done(submission: ControllerSubmission) -> None:
+    """Send the terminal channel message reflecting how the run ended."""
+    channel = submission.callback_channel
+    if channel is None:
+        return
+    future = submission.completion_future
+    error: dict[str, Any] | None = None
+    if future.cancelled():
+        status: DoneStatus = "cancelled"
+    elif not future.done() or future.exception() is not None:
+        status = "failed"
+        if future.done() and (exc := future.exception()) is not None:
+            error = {"code": "CONTROLLER_ERROR", "message": str(exc)}
+    elif submission.results_builder.results.execution_errors:
+        status = "failed"
+        error = {
+            "code": "EXECUTION_ERROR",
+            "message": submission.results_builder.results.execution_errors[0][2],
+        }
+    else:
+        status = "completed"
+    channel.notify_done(status, error)
 
 
 class SubmissionStatus(Enum):
@@ -98,9 +147,10 @@ class Controller(EventLoopMixIn):
         self._ignore_version_mismatch = ignore_version_mismatch
         self._do_emulation = True
 
-        _zhinst_core_version = LabOneVersion.from_version_string(zhinst_core_version())
-        self._check_zhinst_core_version_support(_zhinst_core_version)
-        self._setup_caps = SetupCaps(client_version=_zhinst_core_version)
+        client_version = labone_client_version()
+        if client_version is not None:
+            self._check_zhinst_core_version_support(client_version)
+        self._setup_caps = SetupCaps(client_version=client_version)
 
         self._devices = DeviceCollection(
             target_setup=target_setup,
@@ -369,11 +419,14 @@ class Controller(EventLoopMixIn):
         _logger.info("Successfully disconnected from all devices and servers.")
 
     def submit_compiled(
-        self, scheduled_experiment: ScheduledExperiment
+        self,
+        scheduled_experiment: ScheduledExperiment,
+        coprocessor_payload_overrides: dict[str, bytes] | None = None,
     ) -> ControllerSubmission:
         return self._event_loop.run(
             self._submit_compiled_async,
             scheduled_experiment=scheduled_experiment,
+            coprocessor_payload_overrides=coprocessor_payload_overrides,
         )
 
     def wait_submission(self, submission: ControllerSubmission):
@@ -402,9 +455,14 @@ class Controller(EventLoopMixIn):
     async def _submit_compiled_async(
         self,
         scheduled_experiment: ScheduledExperiment,
+        callback_channel: CallbackChannel | None = None,
+        coprocessor_payload_overrides: dict[str, bytes] | None = None,
     ) -> ControllerSubmission:
         validate_scheduled_experiment(
-            scheduled_experiment, self._devices, self._neartime_callbacks
+            scheduled_experiment,
+            self._devices,
+            self._neartime_callbacks,
+            allow_client_callbacks=callback_channel is not None,
         )
         submission = ControllerSubmission(
             scheduled_experiment=scheduled_experiment,
@@ -413,6 +471,8 @@ class Controller(EventLoopMixIn):
             results_builder=ResultsBuilder.from_scheduled_experiment(
                 scheduled_experiment
             ),
+            callback_channel=callback_channel,
+            coprocessor_payload_overrides=dict(coprocessor_payload_overrides or {}),
         )
         await self._experiment_runner.submit(submission)
         return submission
@@ -427,15 +487,20 @@ class Controller(EventLoopMixIn):
 
     async def _run_one_experiment(self, submission: ControllerSubmission):
         try:
-            await self._execute_compiled_async(submission=submission)
-        except BaseException as e:
+            if await _wait_callback_channel(submission):
+                await self._execute_compiled_async(submission=submission)
+        except Exception as e:
             # completion_future maybe cancelled by SIGINT handler, avoid InvalidStateError in that case
             if not submission.completion_future.done():
                 submission.completion_future.set_exception(e)
+        finally:
+            _notify_callback_channel_done(submission)
 
     async def _execute_compiled_async(self, submission: ControllerSubmission):
         recipe_data = pre_process_compiled(
-            submission.scheduled_experiment, self._devices
+            submission.scheduled_experiment,
+            self._devices,
+            submission.coprocessor_payload_overrides,
         )
 
         execution_context = ExecutionContext(

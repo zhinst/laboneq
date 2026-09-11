@@ -6,7 +6,9 @@
 use std::collections::{HashMap, HashSet};
 
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_common::types::{DeviceKind, SignalKind};
+use laboneq_common::types::SignalKind;
+
+use crate::device_kind::DeviceKind;
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::Operation;
 use laboneq_dsl::types::{

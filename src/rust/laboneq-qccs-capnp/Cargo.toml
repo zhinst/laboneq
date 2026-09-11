@@ -1,7 +1,7 @@
 [package]
 name = "laboneq-qccs-capnp"
 authors.workspace = true
-description = "Cap'n Proto generated code for LabOne Q QCCS compiled-output schemas"
+description = "Cap'n Proto generated code for LabOne Q QCCS schemas"
 documentation.workspace = true
 edition.workspace = true
 license.workspace = true

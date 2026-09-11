@@ -30,6 +30,8 @@ pub(crate) type Samples = i64;
 
 pub(crate) struct SeqcResults {
     pub seqc: String,
+    /// Duration of the emitted program, in samples.
+    pub program_length: Samples,
     pub wave_indices: IndexMap<String, (WaveIndex, SignalType)>,
     pub command_table: Option<CommandTableResults>,
     pub shf_sweeper_config: Option<String>,

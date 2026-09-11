@@ -20,7 +20,7 @@ class ToolkitDevices(Mapping):
     """Mapping for the Toolkit devices in the system.
 
     To learn more about how Zhinst Toolkit devices works, please refer to the
-    package documentation: https://docs.zhinst.com/zhinst-toolkit/en/latest/
+    package documentation: https://docs.zhinst.com/labone_api_user_manual/reference/toolkit/
 
     Args:
         devices: Mapping of devices in the device setup.

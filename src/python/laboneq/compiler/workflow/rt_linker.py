@@ -21,12 +21,12 @@ def from_single_run(
     rt_compiler_output: RTCompilerOutputContainer, step_indices: list[int]
 ) -> CombinedRTCompilerOutputContainer:
     combined_output = (
-        get_compiler_hooks(rt_compiler_output.device_class)
+        get_compiler_hooks(rt_compiler_output.backend)
         .linker()
         .combined_from_single_run(rt_compiler_output.codegen_output, step_indices)
     )
     return CombinedRTCompilerOutputContainer(
-        device_class=rt_compiler_output.device_class,
+        backend=rt_compiler_output.backend,
         combined_output=combined_output,
         schedule=rt_compiler_output.schedule,
     )
@@ -38,7 +38,7 @@ def merge_compiler_runs(
     previous: RTCompilerOutputContainer,
     step_indices: list[int],
 ):
-    get_compiler_hooks(this.device_class).linker().merge_combined_compiler_runs(
+    get_compiler_hooks(this.backend).linker().merge_combined_compiler_runs(
         this.combined_output, new.codegen_output, previous.codegen_output, step_indices
     )
 
@@ -48,7 +48,7 @@ def repeat_previous(
     previous: RTCompilerOutputContainer,
     previous_step_indices: list[int],
 ):
-    get_compiler_hooks(this.device_class).linker().repeat_previous(
+    get_compiler_hooks(this.backend).linker().repeat_previous(
         this.combined_output, previous.codegen_output, previous_step_indices
     )
 
@@ -58,6 +58,6 @@ def finalize(
     settings: CompilerSettings,
     uses_chunking: bool,
 ):
-    get_compiler_hooks(this.device_class).linker().finalize(
+    get_compiler_hooks(this.backend).linker().finalize(
         this.combined_output, settings, uses_chunking
     )

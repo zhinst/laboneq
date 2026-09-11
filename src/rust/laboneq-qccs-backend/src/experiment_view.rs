@@ -5,14 +5,12 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 use laboneq_common::named_id::NamedIdStore;
+use laboneq_common::types::AuxiliaryDevice;
 use laboneq_compiler_py::compiler_backend::ExperimentView;
 use laboneq_compiler_py::compiler_backend::ParameterValues;
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::device_setup::Instrument;
-use laboneq_dsl::device_setup::SetupDescription;
-use laboneq_dsl::setup_description_qccs::AuxiliaryDevice;
-use laboneq_dsl::setup_description_qccs::InternalConnection;
-use laboneq_dsl::setup_description_qccs::PhysicalChannel;
+
+use crate::setup_description::{InternalConnection, PhysicalChannel};
 use laboneq_dsl::signal_calibration::SignalCalibration;
 use laboneq_dsl::types::DeviceUid;
 
@@ -27,6 +25,8 @@ use crate::Result;
 use crate::device_setup_fingerprint::device_setup_fingerprint;
 use crate::ports::Port;
 use crate::ports::parse_port;
+use crate::setup_description::Instrument;
+use crate::setup_description_capnp;
 
 pub(crate) struct ExperimentSignal {
     pub uid: SignalUid,
@@ -62,10 +62,8 @@ pub(crate) struct ExperimentViewWrapper<'a> {
 
 impl<'a> ExperimentViewWrapper<'a> {
     pub(crate) fn from_experiment_view(experiment: ExperimentView<'a>) -> Result<Self> {
-        let setup = match experiment.setup_description {
-            SetupDescription::Qccs(setup) => setup,
-            _ => panic!("Unsupported setup description type for QCCS backend"),
-        };
+        let setup =
+            setup_description_capnp::read(&experiment.setup_description, experiment.id_store)?;
         let device_setup_fingerprint = device_setup_fingerprint(&setup, experiment.id_store);
         let internal_connections = setup.internal_connections;
 

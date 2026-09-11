@@ -156,5 +156,5 @@ class PulseFunctional(Pulse):
             pulse_function=self.function,
             pulse_parameters=self.pulse_parameters,
         )
-        time = np.arange(len(samples["samples_i"])) / sampling_rate
-        return time, samples["samples_i"] + 1j * samples["samples_q"]
+        time = np.arange(len(samples)) / sampling_rate
+        return time, samples

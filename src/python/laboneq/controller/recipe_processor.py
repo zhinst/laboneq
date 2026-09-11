@@ -33,7 +33,10 @@ from laboneq.controller.constants import (
     adjusted_transfer_rate,
 )
 from laboneq.controller.utilities.awg_waveform import convert_awg_waveform
-from laboneq.controller.utilities.exception import LabOneQControllerException
+from laboneq.controller.utilities.exception import (
+    LabOneQControllerException,
+    UnknownCallbackError,
+)
 from laboneq.core.types.enums import PortMode as RecipePortMode
 from laboneq.core.types.enums.acquisition_type import AcquisitionType
 from laboneq.core.types.enums.averaging_mode import AveragingMode
@@ -93,7 +96,6 @@ class AwgSignalType(Enum):
 
 @dataclass
 class AwgConfig:
-    awg_type: AwgType
     signal_type: AwgSignalType
     signals: set[str]
     # QA
@@ -105,8 +107,6 @@ class AwgConfig:
     source_feedback_register: int | Literal["local"] | None = None
     fb_reg_source_index: int | None = None
     fb_reg_target_index: int | None = None
-    register_selector_bitmask: int | None = 0b11
-    register_selector_shift: int | None = None
 
 
 class AwgConfigs:
@@ -350,6 +350,7 @@ class RecipeData:
     awg_configs: AwgConfigs
     attribute_value_tracker: AttributeValueTracker
     max_step_execution_time: float
+    coprocessor_payloads: dict[str, bytes] = field(default_factory=dict)
 
     def get_initialization(self, device_uid: DeviceUID) -> Initialization:
         for initialization in self.artifacts.initializations:
@@ -399,16 +400,28 @@ class _NeartimeCallbackCollector(ExecutorBase):
 
     def __init__(self) -> None:
         super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY | LoopingMode.ONCE)
-        self.callbacks: set[str] = set()
+        self.names: set[str] = set()
 
-    def nt_callback_handler(self, func_name: str, args: dict[str, Any]):
-        self.callbacks.add(func_name)
+    def nt_callback_handler(
+        self,
+        func_name: str,
+        args: dict[str, Any],
+    ):
+        self.names.add(func_name)
+
+
+def collect_neartime_callback_names(execution: Statement) -> set[str]:
+    """Collect the near-time callback names referenced by an execution tree."""
+    collector = _NeartimeCallbackCollector()
+    collector.run(execution)
+    return collector.names
 
 
 def validate_scheduled_experiment(
     scheduled_experiment: ScheduledExperiment,
     devices: DeviceCollection,
     neartime_callbacks: dict[str, Callable[..., Any]],
+    allow_client_callbacks: bool = False,
 ):
     # Compiled experiment version is correct
     try:
@@ -438,12 +451,12 @@ def validate_scheduled_experiment(
 
     assert scheduled_experiment.execution is not None
 
-    # Validate callbacks
-    collector = _NeartimeCallbackCollector()
-    collector.run(scheduled_experiment.execution)
-    missing = collector.callbacks - set(neartime_callbacks)
-    if missing:
-        raise LabOneQControllerException(
+    # Names not registered on the controller are dispatched to the client when a
+    # callback channel is available; without one they must all resolve locally.
+    names = collect_neartime_callback_names(scheduled_experiment.execution)
+    missing = names - set(neartime_callbacks)
+    if missing and not allow_client_callbacks:
+        raise UnknownCallbackError(
             f"Experiment requires callbacks not registered on the "
             f"controller: {sorted(missing)}. "
             f"Available: {sorted(neartime_callbacks)}."
@@ -756,15 +769,8 @@ def _calculate_awg_configs(
         # Fallback to the old interface that assumes all information is in the generic artifacts.
         artifacts = scheduled_experiment.artifacts
         for initialization in artifacts.initializations:
-            awg_type = (
-                AwgType.QA
-                if initialization.device_type is not None
-                and initialization.device_type.startswith("SHFQA")
-                else AwgType.SG
-            )
             for awg in initialization.awgs or []:
                 awg_config = AwgConfig(
-                    awg_type=awg_type,
                     signal_type=(
                         AwgSignalType.IQ
                         if awg.signal_type == AWGSignalType.IQ
@@ -773,8 +779,6 @@ def _calculate_awg_configs(
                     signals=awg.signals,
                     result_length=awg.result_length,
                     source_feedback_register=awg.source_feedback_register,
-                    register_selector_shift=awg.codeword_bitshift,
-                    register_selector_bitmask=awg.codeword_bitmask,
                     command_table_match_offset=awg.command_table_match_offset,
                 )
                 if awg_config.source_feedback_register not in (None, "local"):
@@ -855,9 +859,32 @@ def _pre_process_attributes(
     return attribute_value_tracker
 
 
+def _resolve_coprocessor_payloads(
+    scheduled_experiment: ScheduledExperiment,
+    overrides: dict[str, bytes] | None,
+) -> dict[str, bytes]:
+    """Merge the initial coprocessor payload and post-compile overrrides.
+
+    Returns the resolved payloads, keyed by inventory key.
+    """
+    payloads = dict(scheduled_experiment.coprocessor_payloads)
+    mappings = scheduled_experiment.coprocessor_mappings
+    for label, payload in (overrides or {}).items():
+        inventory_key = mappings.get(label)
+        if inventory_key is None:
+            raise LabOneQControllerException(
+                f"Experiment provides a payload for '{label}', but '{label}' is not"
+                f" a coprocessor of this experiment."
+                f" Available: {sorted(mappings)}."
+            )
+        payloads[inventory_key] = payload
+    return payloads
+
+
 def pre_process_compiled(
     scheduled_experiment: ScheduledExperiment,
     devices: DeviceCollection,
+    coprocessor_payload_overrides: dict[str, bytes] | None = None,
 ) -> RecipeData:
     rt_loop_properties = scheduled_experiment.rt_loop_properties
     rt_execution_info = RtExecutionInfo(
@@ -922,6 +949,9 @@ def pre_process_compiled(
         awg_configs=awg_configs,
         attribute_value_tracker=attribute_value_tracker,
         max_step_execution_time=scheduled_experiment.max_step_execution_time,
+        coprocessor_payloads=_resolve_coprocessor_payloads(
+            scheduled_experiment, coprocessor_payload_overrides
+        ),
     )
 
     for _, device in devices.all:

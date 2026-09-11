@@ -48,8 +48,8 @@ def pulse_update(
     )
 
     # get i and q quadratures
-    my_pulse.i_wave = numeric_waveform.get("samples_i")
-    my_pulse.q_wave = numeric_waveform.get("samples_q")
+    my_pulse.i_wave = numeric_waveform.real
+    my_pulse.q_wave = numeric_waveform.imag
 
     # calculate amplitude and phase
     my_pulse.amplitudes = np.sqrt(my_pulse.i_wave**2 + my_pulse.q_wave**2)

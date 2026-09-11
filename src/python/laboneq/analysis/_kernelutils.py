@@ -7,7 +7,6 @@ import warnings
 from typing import TYPE_CHECKING
 
 import numpy as np
-from zhinst.utils.shfqa.multistate import QuditSettings
 
 from laboneq.dsl.experiment import pulse_library as pl
 
@@ -35,6 +34,7 @@ def calculate_integration_kernels(
         Deprecated in favor of `calculate_integration_kernels_thresholds`
         which additionally supplies the threshold information.
     """
+    from zhinst.utils.shfqa.multistate import QuditSettings
 
     warnings.warn(
         "Deprecated in favor of `calculate_integration_kernels_thresholds` "
@@ -74,6 +74,8 @@ def calculate_integration_kernels_thresholds(
     !!! version-changed "Added in version 2.26.0"
         Added extended functionality to additionally supply threshold information.
     """
+    from zhinst.utils.shfqa.multistate import QuditSettings
+
     if any(np.any(np.isnan(trace)) for trace in state_traces):
         raise ValueError("`state_traces` contain NaN values.")
 

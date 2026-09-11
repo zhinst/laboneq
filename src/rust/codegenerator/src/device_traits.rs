@@ -2,14 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::ir::{Samples, compilation_job::DeviceKind};
-use laboneq_common::device_traits as device_traits_common;
 
-/// Device specific traits for code generation
-///
-/// NOTE: Mirror from `laboneq` Python package:
-///     src/python/laboneq/compiler/common/device_type.py
-///     Ensure that the values do match when changing.
-
+/// Device specific traits for code generation.
 #[derive(Debug)]
 pub struct DeviceTraits {
     pub type_str: &'static str,
@@ -40,7 +34,7 @@ pub struct DeviceTraits {
 
 pub(crate) const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "HDAWG",
-    sample_multiple: device_traits_common::HDAWG_TRAITS.sample_multiple,
+    sample_multiple: 16,
     min_play_wave: 32,
     max_play_zero_hold: (1 << 19) - 16,
     amplitude_register_count: 4,
@@ -67,7 +61,7 @@ pub(crate) const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
 
 pub(crate) const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "UHFQA",
-    sample_multiple: device_traits_common::UHFQA_TRAITS.sample_multiple,
+    sample_multiple: 8,
     min_play_wave: 16,
     max_play_zero_hold: 131056,
     amplitude_register_count: 1,
@@ -94,7 +88,7 @@ pub(crate) const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
 
 pub(crate) const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "SHFSG",
-    sample_multiple: device_traits_common::SHFSG_TRAITS.sample_multiple,
+    sample_multiple: 16,
     min_play_wave: 32,
     max_play_zero_hold: (1 << 19) - 16,
     amplitude_register_count: 1,
@@ -125,7 +119,7 @@ pub(crate) const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
 
 pub(crate) const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     type_str: "SHFQA",
-    sample_multiple: device_traits_common::SHFQA_TRAITS.sample_multiple,
+    sample_multiple: 16,
     min_play_wave: 32,
     max_play_zero_hold: (1 << 19) - 16,
     amplitude_register_count: 1,

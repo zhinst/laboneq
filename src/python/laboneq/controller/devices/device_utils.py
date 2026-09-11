@@ -6,11 +6,14 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any
 
 from laboneq.controller.devices.zi_emulator import EmulatorState
-from laboneq.controller.versioning import LabOneVersion
+from laboneq.controller.versioning import (
+    RECOMMENDED_MINIMUM_LABONE_VERSION,
+    LabOneVersion,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -153,12 +156,25 @@ def zhinst_core_version() -> str:
     return version("zhinst-core")
 
 
+def labone_client_version() -> LabOneVersion | None:
+    """The version of the installed LabOne client, or `None` if there is none.
+
+    A setup without a client cannot reach an instrument at all, which is a legitimate
+    state rather than an error.
+    """
+    try:
+        return LabOneVersion.from_version_string(zhinst_core_version())
+    except PackageNotFoundError:
+        return None
+
+
 def prepare_emulator_state(ds: DeviceSetupDAO) -> EmulatorState:
     emulator_state = EmulatorState()
 
-    # Ensure emulated data server version matches installed zhinst.core
-    #
-    labonever = LabOneVersion.from_version_string(zhinst_core_version())
+    # The emulated data server reports the installed client's version, so emulation cannot
+    # show a version mismatch that hardware would not. Without a client, fall back to what
+    # this LabOne Q was built against.
+    labonever = labone_client_version() or RECOMMENDED_MINIMUM_LABONE_VERSION
     emulator_state.set_option("ZI", "about/fullversion", str(labonever))
 
     for device_qualifier in ds.devices:

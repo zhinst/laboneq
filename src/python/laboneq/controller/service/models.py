@@ -33,6 +33,10 @@ class ErrorCode(str, Enum):
     NOT_CONFIGURED = "NOT_CONFIGURED"
     VERSION_MISMATCH = "VERSION_MISMATCH"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+    UNAUTHORIZED = "UNAUTHORIZED"
+    UNKNOWN_RESULT_HANDLE = "UNKNOWN_RESULT_HANDLE"
+    INVALID_QUERY_PARAMETER = "INVALID_QUERY_PARAMETER"
+    UNKNOWN_CALLBACK = "UNKNOWN_CALLBACK"
 
 
 # =============================================================================
@@ -46,7 +50,7 @@ class DeviceSetupResponse(BaseModel):
     device_setup: dict[str, Any] = Field(
         description=(
             "Serialized DeviceSetup object. "
-            "Deserialize with laboneq.serializers.core.from_dict()."
+            "Deserialize with laboneq.serializers.from_dict()."
         )
     )
 
@@ -57,7 +61,7 @@ class InstrumentTopologyResponse(BaseModel):
     instrument_topology: dict[str, Any] = Field(
         description=(
             "Serialized InstrumentTopology object. "
-            "Deserialize with laboneq.serializers.core.from_dict()."
+            "Deserialize with laboneq.serializers.from_dict()."
         )
     )
 
@@ -135,20 +139,18 @@ class ExperimentStatusResponse(BaseModel):
     )
 
 
-class ExperimentResponse(BaseModel):
-    """Response from GET /v1/experiments/{uuid} — includes results when done."""
+class ExperimentResultsResponse(BaseModel):
+    """Response from GET /v1/experiments/{uuid}/results — partial or final."""
 
     id: str = Field(description="Experiment UUID")
-    status: ExperimentStatus = Field(description="Current or final execution status")
-    queue_position: int | None = Field(
-        default=None,
-        description="Position in the queue (None once execution has started)",
-    )
-    results: dict[str, Any] | None = Field(
-        default=None,
+    status: ExperimentStatus = Field(description="Current execution status")
+    results: dict[str, Any] = Field(
         description=(
-            "Serialized ExperimentResults once completed; None while running or "
-            "when failed before producing any output."
+            "Serialized ExperimentResults; deserialize with "
+            "laboneq.serializers.from_dict(). Acquired results are filtered "
+            "by the query parameters; whole-run metadata (near-time callbacks, "
+            "execution errors, pipeline timestamps) is present only on an "
+            "unfiltered fetch."
         ),
     )
 

@@ -35,6 +35,7 @@ class ControllerAPI(ABC):
         self,
         scheduled_experiment: ScheduledExperiment,
         handle: SubmissionHandle | None = None,
+        coprocessor_payload_overrides: dict[str, bytes] | None = None,
     ) -> SubmissionHandle:
         """Submit an experiment for execution and return a handle.
 

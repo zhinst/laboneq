@@ -9,7 +9,7 @@ use laboneq_dsl::types::{NumericLiteral, ParameterUid};
 use laboneq_error::LabOneQError;
 use laboneq_ir::ExperimentIr;
 use laboneq_ir::pulse_sheet_schedule::PulseSheetSchedule;
-use laboneq_ir::system::DeviceSetup;
+use laboneq_ir::signal::Signal;
 use laboneq_scheduler::{
     ChunkingInfo, ExperimentContext as SchedulerContext, ParameterStore, ParameterStoreBuilder,
     schedule_experiment,
@@ -17,12 +17,11 @@ use laboneq_scheduler::{
 
 use crate::compiler_backend::{CodeGenArtifact, DynCompilerBackend, PreprocessedBackendData};
 use crate::experiment::Experiment;
-use crate::prepare_schedule;
 use crate::signal_view::signal_views;
 
 pub(crate) struct RealTimeCompilerInput<'a> {
     pub experiment: &'a Experiment,
-    pub device_setup: &'a DeviceSetup,
+    pub signals: &'a [Signal],
     pub compiler_settings: &'a CompilerSettings,
     pub parameters: HashMap<ParameterUid, NumericLiteral>,
     pub chunking_info: Option<(usize, usize)>,
@@ -48,13 +47,14 @@ pub(crate) fn compile_realtime(
         None
     };
 
-    let views = signal_views(input.device_setup);
+    let views = signal_views(input.signals);
 
     let feedback_calculator = input
         .backend
         .feedback_calculator(
             &views.values().cloned().collect::<Vec<_>>(),
             input.compiler_settings,
+            input.backend_data,
         )
         .map_err(|e| laboneq_error::laboneq_error!("{e}"))?;
 
@@ -85,7 +85,7 @@ pub(crate) fn compile_realtime(
         pulses: experiment.pulses.values().cloned().collect(),
         acquisition_type: result.acquisition_type,
         id_store: &experiment.id_store,
-        device_setup: input.device_setup,
+        signals: input.signals,
     };
     let pulse_sheet_schedule = prepare_schedule(&ir, input.compiler_settings);
 
@@ -104,6 +104,30 @@ pub(crate) fn compile_realtime(
         codegen_output: code_gen_output,
     };
     Ok(out)
+}
+
+/// Generate a schedule (event list + metadata) from an IR tree.
+///
+/// This function is used by the Python compiler to generate the event list
+/// for the Pulse Sheet Viewer (PSV).
+fn prepare_schedule(
+    ir: &ExperimentIr,
+    compiler_settings: &CompilerSettings,
+) -> Option<PulseSheetSchedule> {
+    if !compiler_settings.output_extras {
+        return None;
+    }
+    let out = PulseSheetSchedule::generate(
+        &ir.root,
+        ir.signals
+            .iter()
+            .map(|s| (s.traits.name, s.sampling_rate))
+            .collect(),
+        compiler_settings.expand_loops_for_schedule,
+        compiler_settings.max_events_to_publish,
+        ir.id_store,
+    );
+    Some(out)
 }
 
 fn create_parameter_store(parameters: HashMap<ParameterUid, NumericLiteral>) -> ParameterStore {

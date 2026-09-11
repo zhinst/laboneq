@@ -11,9 +11,6 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import zhinst.core
-from zhinst.core.errors import CoreError as LabOneCoreError
-
 from laboneq.compiler.common.resource_usage import (
     ResourceLimitationError,
     ResourceLimitationErrorCollector,
@@ -42,6 +39,11 @@ class SeqCCompileItem:
 def seqc_compile_one(item: SeqCCompileItem):
     if item.code is None:
         return
+
+    # Only SeqC generation needs the compiled `zhinst.core`.
+    import zhinst.core
+    from zhinst.core.errors import CoreError as LabOneCoreError
+
     try:
         elf, extra = zhinst.core.compile_seqc(
             item.code,

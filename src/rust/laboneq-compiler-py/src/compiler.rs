@@ -8,27 +8,53 @@ use pyo3::types::PyDict;
 use pyo3::{PyTypeInfo, intern};
 
 use laboneq_common::compiler_settings::CompilerSettings;
+use laboneq_common::named_id::resolve_ids;
 use laboneq_dsl::types::{HandleUid, SignalUid};
 use laboneq_error::{
     LabOneQError, PyErrorWithContext, ResourceLimitationError, WithContext, bail_resource_usage,
 };
 
-use crate::ProcessedExperiment;
+use crate::capnp_compiled_experiment;
 use crate::chunking_mode::{ChunkingMode, collect_chunking_mode};
 use crate::compiled_experiment::{
     CompiledExperiment, ExecutionTiming, Metadata, RealTimeProperties, ResultShapes,
 };
 use crate::compiler_backend::{CombinedOutput, CompilerBackend};
+use crate::error::ResolveErr;
 use crate::execution::{Execution, create_execution};
+use crate::preprocessor::{PreprocessedExperiment, preprocess_experiment};
 use crate::py_execution::create_py_execution;
 use crate::py_experiment::ExperimentPy;
 use crate::py_pulse_sheet_schedule::PulseSheetSchedulePy;
 use crate::real_time_loop::real_time_loop_properties;
 
-pub(crate) fn run_compilation<B: CompilerBackend>(
+/// Compile an experiment from Cap'n Proto bytes into serialized `CompiledExperiment` bytes.
+///
+/// `packed` describes `capnp_data` only; the returned bytes are always unpacked.
+pub(crate) fn compile_experiment<B: CompilerBackend>(
+    py: Python<'_>,
+    capnp_data: &[u8],
+    packed: bool,
+    compiler_settings: CompilerSettings,
+    backend: B,
+) -> PyResult<Vec<u8>> {
+    let processed = preprocess_experiment(py, capnp_data, packed, &backend)?;
+    let id_store = Arc::clone(&processed.inner.id_store);
+
+    let compiled_experiment = run_compilation(py, backend, processed, compiler_settings)
+        .map_err(|e| e.to_pyerr(|s| resolve_ids(&s, &id_store)))?;
+
+    let serialized_payload =
+        capnp_compiled_experiment::serialize_compiled_experiment(&compiled_experiment)
+            .resolve_err(&id_store)?;
+
+    Ok(serialized_payload)
+}
+
+fn run_compilation<B: CompilerBackend>(
     py: Python<'_>,
     backend: B,
-    processed: ProcessedExperiment<B::Output>,
+    processed: PreprocessedExperiment<B::Output, B::EmulatedHqcsProgram>,
     compiler_settings: CompilerSettings,
 ) -> Result<CompiledExperiment<B::CompilerArtifact>, LabOneQError> {
     let execution = create_execution(&processed.inner)?;
@@ -65,18 +91,19 @@ const AUTO_CHUNK_EXHAUSTED_MSG: &str = "Automatic chunking was not able to find 
 fn compile_whole_or_with_chunks<B: CompilerBackend>(
     py: Python<'_>,
     backend: B,
-    processed: ProcessedExperiment<B::Output>,
+    processed: PreprocessedExperiment<B::Output, B::EmulatedHqcsProgram>,
     compiler_settings: CompilerSettings,
     execution: Execution,
     chunking_mode: Option<ChunkingMode>,
 ) -> Result<CompiledExperiment<B::CompilerArtifact>, LabOneQError> {
-    let device_class = backend.device_class();
+    let backend_name = backend.name();
 
     let backend_typed = backend.clone();
     let rt_properties = real_time_loop_properties(&processed.inner.root)?;
     let id_store = Arc::clone(&processed.inner.id_store);
     let py_object_store = Arc::clone(&processed.inner.py_object_store);
     let sweep_parameters = processed.inner.parameters.clone();
+    let coprocessors = processed.coprocessors;
 
     let raw_acquisitions: Vec<(SignalUid, HandleUid)> =
         processed.result_shapes.raw_acquisitions().collect();
@@ -84,8 +111,7 @@ fn compile_whole_or_with_chunks<B: CompilerBackend>(
     // Prepare the Python objects
     let exp_py = ExperimentPy {
         inner: processed.inner,
-        device_setup: processed.device_setup,
-        delay_compensation: processed.delay_compensation,
+        signals: processed.signals,
         compiler_settings: compiler_settings.clone(),
         backend_data: Arc::new(processed.backend_data),
         backend: Arc::new(backend),
@@ -111,7 +137,7 @@ fn compile_whole_or_with_chunks<B: CompilerBackend>(
             &bound_exp_py,
             &execution_py,
             None,
-            device_class,
+            backend_name,
             &compiler_settings,
         )
         .map(|result| (result, None))
@@ -123,7 +149,7 @@ fn compile_whole_or_with_chunks<B: CompilerBackend>(
                 &bound_exp_py,
                 &execution_py,
                 chunk_count,
-                device_class,
+                backend_name,
                 &compiler_settings,
             )
             .map(|result| (result, chunk_count))
@@ -138,7 +164,7 @@ fn compile_whole_or_with_chunks<B: CompilerBackend>(
                 &bound_exp_py,
                 &execution_py,
                 chunk_count,
-                device_class,
+                backend_name,
                 &compiler_settings,
             );
 
@@ -188,13 +214,14 @@ fn compile_whole_or_with_chunks<B: CompilerBackend>(
         max_step_execution_time: combined_output.max_execution_time_per_step()?,
     };
 
-    let backend_output = backend_typed.finalize(combined_output)?;
+    let backend_output = backend_typed.finalize(combined_output, processed.hqcs_program)?;
 
     let output = CompiledExperiment {
         device_setup_fingerprint: processed.device_setup_fingerprint,
         artifacts: backend_output.artifacts,
         execution_timing,
         metadata: Metadata {
+            producer_name: backend_typed.name(),
             producer_version: env!("CARGO_PKG_VERSION").to_string(),
         },
         pulse_sheet_schedule: compiled_output
@@ -216,6 +243,10 @@ fn compile_whole_or_with_chunks<B: CompilerBackend>(
             handle_result_shapes,
         },
         sweep_parameters,
+        acquisition_handles: processed.acquisition_handles,
+        coprocessors,
+        id_store: Arc::clone(&id_store),
+        object_store: Arc::clone(&py_object_store),
     };
     Ok(output)
 }
@@ -256,7 +287,7 @@ fn call_compile<'py>(
     bound_exp_py: &Bound<'py, ExperimentPy>,
     execution: &Bound<'_, PyAny>,
     chunk_count: Option<u32>,
-    device_class: usize,
+    backend_name: &str,
     compiler_settings: &Bound<'_, PyAny>,
 ) -> Result<CompilationOutputPy<'py>, LabOneQError> {
     let compile_fn = py
@@ -267,7 +298,7 @@ fn call_compile<'py>(
     kwargs.set_item(intern!(py, "experiment"), bound_exp_py)?;
     kwargs.set_item(intern!(py, "execution"), execution)?;
     kwargs.set_item(intern!(py, "chunk_count"), chunk_count)?;
-    kwargs.set_item(intern!(py, "device_class"), device_class)?;
+    kwargs.set_item(intern!(py, "backend"), backend_name)?;
     kwargs.set_item(intern!(py, "compiler_settings"), compiler_settings)?;
     let result = compile_fn.call((), Some(&kwargs));
 
@@ -295,7 +326,7 @@ fn call_compile<'py>(
                 e.set_cause(py, None);
                 let mut cause: PyErrorWithContext = cause.into();
                 cause.add_context(|| e.to_string());
-                return Err(LabOneQError::PulseSamplerCallback(cause));
+                return Err(LabOneQError::PythonException(cause));
             }
             Err(e.into())
         }

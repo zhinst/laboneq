@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use laboneq_common::device_options::DeviceOptions;
-use laboneq_dsl::signal_calibration::{MixerCalibration, PortMode};
+use laboneq_dsl::signal_calibration::{MixerCalibration, PortMode, Precompensation};
 use laboneq_dsl::types::Quantity;
 use laboneq_error::{LabOneQError, laboneq_error};
 use laboneq_units::duration::{Duration, Second};
@@ -459,23 +459,6 @@ impl std::str::FromStr for DeviceKind {
     }
 }
 
-impl TryFrom<laboneq_common::types::DeviceKind> for DeviceKind {
-    type Error = LabOneQError;
-
-    fn try_from(value: laboneq_common::types::DeviceKind) -> Result<Self, Self::Error> {
-        match value {
-            laboneq_common::types::DeviceKind::Hdawg => Ok(DeviceKind::HDAWG),
-            laboneq_common::types::DeviceKind::Shfqa => Ok(DeviceKind::SHFQA),
-            laboneq_common::types::DeviceKind::Shfsg => Ok(DeviceKind::SHFSG),
-            laboneq_common::types::DeviceKind::Uhfqa => Ok(DeviceKind::UHFQA),
-            _ => Err(laboneq_error!(
-                "Unsupported device type: {:?}. Supported types are: SHFQA, SHFSG, HDAWG, UHFQA",
-                value
-            )),
-        }
-    }
-}
-
 /// Pulse marker
 #[derive(Debug, Clone, PartialEq)]
 pub struct Marker {
@@ -544,6 +527,9 @@ pub(crate) struct InitialSignalProperties {
     pub mixer_calibration: Option<MixerCalibration>,
     pub port_mode: Option<PortMode>,
     pub port_delay: Option<FixedValueOrParameter<Duration<Second>>>,
+    /// The part of the alignment delay too fine for the sequencer grid.
+    pub signal_alignment_delay: Duration<Second>,
+    pub precompensation: Option<Precompensation>,
     pub ppc_settings: Option<PpcSettings>,
     pub voltage_offset: Option<FixedValueOrParameter<f64>>,
     pub range: Option<Quantity>,

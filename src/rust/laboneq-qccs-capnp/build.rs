@@ -30,4 +30,11 @@ fn main() {
         vec!["payload".into(), "v1".into()],
         &["payload"],
     );
+
+    compile_schemas(
+        schema_dir,
+        "setup/v1",
+        vec!["setup".into(), "v1".into()],
+        &["setup_description"],
+    );
 }

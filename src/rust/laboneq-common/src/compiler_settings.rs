@@ -1,9 +1,43 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashSet;
+use laboneq_error::ContextualError;
 
-use laboneq_error::{ContextualError, bail, error};
+use crate::settings::{SettingKind, SettingSpec, SettingValue, Settings};
+
+/// Setting keys the frontend reads. A backend declares the rest.
+pub const FRONTEND_SETTINGS: &[SettingSpec] = &[
+    SettingSpec {
+        key: "OUTPUT_EXTRAS",
+        kind: SettingKind::Bool,
+        default: Some(SettingValue::Bool(false)),
+        doc: "Publish the event list and the schedule alongside the compiled experiment.",
+    },
+    SettingSpec {
+        key: "MAX_EVENTS_TO_PUBLISH",
+        kind: SettingKind::Int,
+        default: Some(SettingValue::Int(1000)),
+        doc: "Upper bound on the number of published events.",
+    },
+    SettingSpec {
+        key: "EXPAND_LOOPS_FOR_SCHEDULE",
+        kind: SettingKind::Bool,
+        default: Some(SettingValue::Bool(true)),
+        doc: "Unroll loops in the published schedule, so that every iteration appears.",
+    },
+    SettingSpec {
+        key: "IGNORE_RESOURCE_LIMITATION_ERRORS",
+        kind: SettingKind::Bool,
+        default: Some(SettingValue::Bool(false)),
+        doc: "Continue past an exhausted device resource instead of failing the compile.",
+    },
+    SettingSpec {
+        key: "LOG_REPORT",
+        kind: SettingKind::Bool,
+        default: Some(SettingValue::Bool(true)),
+        doc: "Log a report on the compiled program.",
+    },
+];
 
 #[derive(Debug, Clone)]
 pub struct CompilerSettings {
@@ -12,252 +46,40 @@ pub struct CompilerSettings {
     pub max_events_to_publish: usize,
     pub expand_loops_for_schedule: bool,
 
-    /// Device-specific settings
-    pub hdawg_min_playwave_hint: u16,
-    pub hdawg_min_playzero_hint: u16,
-    pub shfsg_min_playwave_hint: u16,
-    pub shfsg_min_playzero_hint: u16,
-    pub uhfqa_min_playwave_hint: u16,
-    pub uhfqa_min_playzero_hint: u16,
-    pub use_amplitude_increment: bool,
-    pub shf_output_mute_min_duration: f64,
-    pub zqcs_feedback_latency: Option<f64>,
-    /// Whether to emit timing comments in the generated code. This can be useful for debugging and performance analysis, but may add overhead to the compilation process.
-    pub emit_timing_comments: bool,
-
-    /// Resolution settings for the compiler.
-    pub phase_resolution_bits: u64,
-    pub amplitude_resolution_bits: u64,
-
     /// Whether to ignore resource exhaustion errors during compilation. This can be useful for testing and debugging, but should be used with caution in production.
     pub ignore_resource_exhaustion: bool,
 
     /// Whether the compilation should log detailed information about the output program.
     pub log_report: bool,
-}
 
-impl Default for CompilerSettings {
-    fn default() -> Self {
-        Self {
-            output_extras: false,
-            max_events_to_publish: 1000,
-            expand_loops_for_schedule: true,
-            hdawg_min_playwave_hint: 128,
-            hdawg_min_playzero_hint: 128,
-            shfsg_min_playwave_hint: 64,
-            shfsg_min_playzero_hint: 64,
-            uhfqa_min_playwave_hint: 64,
-            uhfqa_min_playzero_hint: 64,
-            use_amplitude_increment: true,
-            shf_output_mute_min_duration: 280e-9,
-            zqcs_feedback_latency: None,
-            emit_timing_comments: false,
-            amplitude_resolution_bits: 24,
-            phase_resolution_bits: 24,
-            ignore_resource_exhaustion: false,
-            log_report: true,
-        }
-    }
+    /// The values of the settings a backend declared. The frontend passes them
+    /// through without interpreting them.
+    pub backend: Settings,
 }
 
 impl CompilerSettings {
-    /// Create settings from key-value pairs with validation
-    pub fn from_key_value_pairs<I, K, V>(pairs: I) -> Result<Self, ContextualError>
+    /// Validate `pairs` against the frontend's settings and the backend's.
+    ///
+    /// # Errors
+    /// If a key belongs to neither, or a value is not of the declared type.
+    pub fn parse<I>(backend_settings: &[SettingSpec], pairs: I) -> Result<Self, ContextualError>
     where
-        I: IntoIterator<Item = (K, V)>,
-        K: AsRef<str>,
-        V: AsRef<str>,
+        I: IntoIterator<Item = (String, SettingValue)>,
     {
-        // Define all supported keys
-        let supported_keys: HashSet<&str> = [
-            "OUTPUT_EXTRAS",
-            "MAX_EVENTS_TO_PUBLISH",
-            "EXPAND_LOOPS_FOR_SCHEDULE",
-            "HDAWG_MIN_PLAYWAVE_HINT",
-            "HDAWG_MIN_PLAYZERO_HINT",
-            "SHFSG_MIN_PLAYWAVE_HINT",
-            "SHFSG_MIN_PLAYZERO_HINT",
-            "UHFQA_MIN_PLAYWAVE_HINT",
-            "UHFQA_MIN_PLAYZERO_HINT",
-            "USE_AMPLITUDE_INCREMENT",
-            "SHF_OUTPUT_MUTE_MIN_DURATION",
-            "ZQCS_FEEDBACK_LATENCY",
-            "EMIT_TIMING_COMMENTS",
-            "PHASE_RESOLUTION_BITS",
-            "AMPLITUDE_RESOLUTION_BITS",
-            "IGNORE_RESOURCE_LIMITATION_ERRORS",
-            "LOG_REPORT",
-        ]
-        .into_iter()
-        .collect();
-
-        let mut settings = Self::default();
-        let mut unsupported_keys = Vec::new();
-
-        for (key, value) in pairs {
-            let key_str = key.as_ref();
-            let value_str = value.as_ref();
-
-            if !supported_keys.contains(key_str) {
-                unsupported_keys.push(key_str.to_string());
-                continue;
-            }
-
-            match key_str {
-                "OUTPUT_EXTRAS" => {
-                    settings.output_extras = value_str
-                        .to_ascii_lowercase()
-                        .parse()
-                        .map_err(|_| error!("Invalid boolean for OUTPUT_EXTRAS: {}", value_str))?;
-                }
-                "MAX_EVENTS_TO_PUBLISH" => {
-                    settings.max_events_to_publish = value_str.parse().map_err(|_| {
-                        error!("Invalid usize for MAX_EVENTS_TO_PUBLISH: {}", value_str)
-                    })?;
-                }
-                "EXPAND_LOOPS_FOR_SCHEDULE" => {
-                    settings.expand_loops_for_schedule =
-                        value_str.to_ascii_lowercase().parse().map_err(|_| {
-                            error!(
-                                "Invalid boolean for EXPAND_LOOPS_FOR_SCHEDULE: {}",
-                                value_str
-                            )
-                        })?;
-                }
-                "HDAWG_MIN_PLAYWAVE_HINT" => {
-                    settings.hdawg_min_playwave_hint = value_str.parse().map_err(|_| {
-                        error!("Invalid u16 for HDAWG_MIN_PLAYWAVE_HINT: {}", value_str)
-                    })?;
-                }
-                "HDAWG_MIN_PLAYZERO_HINT" => {
-                    settings.hdawg_min_playzero_hint = value_str.parse().map_err(|_| {
-                        error!("Invalid u16 for HDAWG_MIN_PLAYZERO_HINT: {}", value_str)
-                    })?;
-                }
-                "SHFSG_MIN_PLAYWAVE_HINT" => {
-                    settings.shfsg_min_playwave_hint = value_str.parse().map_err(|_| {
-                        error!("Invalid u16 for SHFSG_MIN_PLAYWAVE_HINT: {}", value_str)
-                    })?;
-                }
-                "SHFSG_MIN_PLAYZERO_HINT" => {
-                    settings.shfsg_min_playzero_hint = value_str.parse().map_err(|_| {
-                        error!("Invalid u16 for SHFSG_MIN_PLAYZERO_HINT: {}", value_str)
-                    })?;
-                }
-                "UHFQA_MIN_PLAYWAVE_HINT" => {
-                    settings.uhfqa_min_playwave_hint = value_str.parse().map_err(|_| {
-                        error!("Invalid u16 for UHFQA_MIN_PLAYWAVE_HINT: {}", value_str)
-                    })?;
-                }
-                "UHFQA_MIN_PLAYZERO_HINT" => {
-                    settings.uhfqa_min_playzero_hint = value_str.parse().map_err(|_| {
-                        error!("Invalid u16 for UHFQA_MIN_PLAYZERO_HINT: {}", value_str)
-                    })?;
-                }
-                "USE_AMPLITUDE_INCREMENT" => {
-                    settings.use_amplitude_increment =
-                        value_str.to_ascii_lowercase().parse().map_err(|_| {
-                            error!("Invalid boolean for USE_AMPLITUDE_INCREMENT: {}", value_str)
-                        })?;
-                }
-                "SHF_OUTPUT_MUTE_MIN_DURATION" => {
-                    settings.shf_output_mute_min_duration = value_str.parse().map_err(|_| {
-                        error!(
-                            "Invalid f64 for SHF_OUTPUT_MUTE_MIN_DURATION: {}",
-                            value_str
-                        )
-                    })?;
-                }
-                "ZQCS_FEEDBACK_LATENCY" => {
-                    settings.zqcs_feedback_latency = Some(value_str.parse().map_err(|_| {
-                        error!("Invalid f64 for ZQCS_FEEDBACK_LATENCY: {}", value_str)
-                    })?);
-                }
-                "EMIT_TIMING_COMMENTS" => {
-                    settings.emit_timing_comments =
-                        value_str.to_ascii_lowercase().parse().map_err(|_| {
-                            error!("Invalid boolean for EMIT_TIMING_COMMENTS: {}", value_str)
-                        })?;
-                }
-                "PHASE_RESOLUTION_BITS" => {
-                    settings.phase_resolution_bits = value_str.parse().map_err(|_| {
-                        error!("Invalid u64 for PHASE_RESOLUTION_BITS: {}", value_str)
-                    })?;
-                }
-                "AMPLITUDE_RESOLUTION_BITS" => {
-                    settings.amplitude_resolution_bits = value_str.parse().map_err(|_| {
-                        error!("Invalid u64 for AMPLITUDE_RESOLUTION_BITS: {}", value_str)
-                    })?;
-                }
-                "IGNORE_RESOURCE_LIMITATION_ERRORS" => {
-                    settings.ignore_resource_exhaustion =
-                        value_str.to_ascii_lowercase().parse().map_err(|_| {
-                            error!(
-                                "Invalid boolean for IGNORE_RESOURCE_LIMITATION_ERRORS: {}",
-                                value_str
-                            )
-                        })?;
-                }
-                "LOG_REPORT" => {
-                    settings.log_report = value_str
-                        .to_ascii_lowercase()
-                        .parse()
-                        .map_err(|_| error!("Invalid boolean for LOG_REPORT: {}", value_str))?;
-                }
-                _ => unreachable!("Key should have been validated above"),
-            }
-        }
-
-        if !unsupported_keys.is_empty() {
-            let mut sorted_supported: Vec<_> = supported_keys.into_iter().collect();
-            sorted_supported.sort();
-            bail!(
-                "Unsupported compiler settings keys: {}. Supported keys are: {}",
-                unsupported_keys.join(", "),
-                sorted_supported.join(", ")
-            );
-        }
-
-        Ok(settings)
+        let values = Settings::parse(&[FRONTEND_SETTINGS, backend_settings], pairs)?;
+        Ok(CompilerSettings {
+            output_extras: values.bool("OUTPUT_EXTRAS"),
+            max_events_to_publish: values.int("MAX_EVENTS_TO_PUBLISH") as usize,
+            expand_loops_for_schedule: values.bool("EXPAND_LOOPS_FOR_SCHEDULE"),
+            ignore_resource_exhaustion: values.bool("IGNORE_RESOURCE_LIMITATION_ERRORS"),
+            log_report: values.bool("LOG_REPORT"),
+            backend: values,
+        })
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        output_extras: bool,
-        max_events_to_publish: usize,
-        hdawg_min_playwave_hint: u16,
-        hdawg_min_playzero_hint: u16,
-        shfsg_min_playwave_hint: u16,
-        shfsg_min_playzero_hint: u16,
-        uhfqa_min_playwave_hint: u16,
-        uhfqa_min_playzero_hint: u16,
-        amplitude_resolution_bits: u64,
-        phase_resolution_bits: u64,
-        use_amplitude_increment: bool,
-        emit_timing_comments: bool,
-        shf_output_mute_min_duration: f64,
-        ignore_resource_exhaustion: bool,
-        log_report: bool,
-        expand_loops_for_schedule: bool,
-    ) -> Self {
-        Self {
-            output_extras,
-            max_events_to_publish,
-            expand_loops_for_schedule,
-            hdawg_min_playwave_hint,
-            hdawg_min_playzero_hint,
-            shfsg_min_playwave_hint,
-            shfsg_min_playzero_hint,
-            uhfqa_min_playwave_hint,
-            uhfqa_min_playzero_hint,
-            use_amplitude_increment,
-            shf_output_mute_min_duration,
-            emit_timing_comments,
-            amplitude_resolution_bits,
-            phase_resolution_bits,
-            ignore_resource_exhaustion,
-            log_report,
-            zqcs_feedback_latency: None,
-        }
+    /// The settings a compile runs with when the caller passes none.
+    pub fn defaults(backend_settings: &[SettingSpec]) -> Self {
+        CompilerSettings::parse(backend_settings, [])
+            .expect("the declared settings should be consistent with each other")
     }
 }

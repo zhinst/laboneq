@@ -12,7 +12,7 @@ use laboneq_py_utils::py_export::pulse_def_to_py;
 use laboneq_py_utils::py_object_store::PyObjectStore;
 use num_complex::Complex64;
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
-use pyo3::exceptions::PyTypeError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -541,17 +541,12 @@ fn samples_to_waveform(
 ) -> PyResult<Vec<Waveform>> {
     if matches!(ctx.device_kind, DeviceKind::SHFQA) {
         let samples = scale_samples(
-            samples
-                .samples_i
-                .cast::<PyArray1<f64>>()
-                .map_err(|e| laboneq_error::laboneq_error!("{e}"))?
-                .readonly(),
-            samples
-                .samples_q
-                .expect("Expected Q-component for SHFQA waveforms")
-                .cast::<PyArray1<f64>>()
-                .map_err(|e| laboneq_error::laboneq_error!("{e}"))?
-                .readonly(),
+            readonly_f64(&samples.samples_i)?,
+            readonly_f64(
+                &samples
+                    .samples_q
+                    .expect("Expected Q-component for SHFQA waveforms"),
+            )?,
             SHFQA_COMPLEX_SAMPLE_SCALING,
         )?;
         let wave = Waveform {
@@ -577,7 +572,7 @@ fn samples_to_waveform(
                 None
             },
         },
-        samples: SampleBuffer::Float64(samples.samples_i.extract::<Vec<f64>>()?),
+        samples: SampleBuffer::Float64(samples_f64(&samples.samples_i)?),
     };
     waveforms.push(wave_i);
 
@@ -587,7 +582,7 @@ fn samples_to_waveform(
                 signature: Arc::clone(signature),
                 identifier: Some(WaveIdentifier::Q),
             },
-            samples: SampleBuffer::Float64(samples_q.extract::<Vec<f64>>()?),
+            samples: SampleBuffer::Float64(samples_f64(&samples_q)?),
         };
         waveforms.push(wave_q);
     }
@@ -598,7 +593,7 @@ fn samples_to_waveform(
                 signature: Arc::clone(signature),
                 identifier: Some(WaveIdentifier::M1),
             },
-            samples: SampleBuffer::U8(samples_marker1.extract::<Vec<u8>>()?),
+            samples: SampleBuffer::U8(marker_samples(&samples_marker1)?),
         };
         waveforms.push(wave_marker1);
     }
@@ -609,7 +604,7 @@ fn samples_to_waveform(
                 signature: Arc::clone(signature),
                 identifier: Some(WaveIdentifier::M2),
             },
-            samples: SampleBuffer::U8(samples_marker2.extract::<Vec<u8>>()?),
+            samples: SampleBuffer::U8(marker_samples(&samples_marker2)?),
         };
         waveforms.push(wave_marker2);
     }
@@ -897,16 +892,8 @@ fn create_integration_weights(
         };
         if matches!(device, DeviceKind::SHFQA) {
             let samples = scale_samples(
-                samples_i
-                    .arr
-                    .cast::<PyArray1<f64>>()
-                    .map_err(|e| laboneq_error::laboneq_error!("{e}"))?
-                    .readonly(),
-                samples_q
-                    .arr
-                    .cast::<PyArray1<f64>>()
-                    .map_err(|e| laboneq_error::laboneq_error!("{e}"))?
-                    .readonly(),
+                readonly_f64(&samples_i.arr)?,
+                readonly_f64(&samples_q.arr)?,
                 SHFQA_COMPLEX_SAMPLE_SCALING,
             )?;
             let key = WaveKey {
@@ -929,14 +916,14 @@ fn create_integration_weights(
                     signature: Arc::clone(&basename),
                     identifier: Some(WaveIdentifier::I),
                 },
-                samples: SampleBuffer::Float64(samples_i.arr.extract::<Vec<f64>>()?),
+                samples: SampleBuffer::Float64(samples_f64(&samples_i.arr)?),
             };
             let wave_q = Waveform {
                 key: WaveKey {
                     signature: Arc::clone(&basename),
                     identifier: Some(WaveIdentifier::Q),
                 },
-                samples: SampleBuffer::Float64(samples_q.arr.extract::<Vec<f64>>()?),
+                samples: SampleBuffer::Float64(samples_f64(&samples_q.arr)?),
             };
             let integration_weight =
                 SampledIntegrationKernel::new(weight.signals.clone(), None, vec![wave_i, wave_q]);
@@ -944,6 +931,35 @@ fn create_integration_weights(
         }
     }
     Ok(integration_weights)
+}
+
+/// Borrows a 1-D `float64` NumPy array as a read-only view.
+fn readonly_f64<'py>(arr: &Bound<'py, PyAny>) -> PyResult<PyReadonlyArray1<'py, f64>> {
+    Ok(arr.cast::<PyArray1<f64>>()?.readonly())
+}
+
+/// Copies a 1-D `float64` NumPy array into a `Vec`.
+fn samples_f64(arr: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
+    Ok(readonly_f64(arr)?.as_array().to_vec())
+}
+
+/// Copies a 1-D NumPy array of marker samples into a `Vec`.
+///
+/// Markers are sampled as `uint8`, or as `int16` where they are accumulated
+/// across the pulses of a waveform.
+fn marker_samples(arr: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    if let Ok(arr) = arr.cast::<PyArray1<u8>>() {
+        return Ok(arr.readonly().as_array().to_vec());
+    }
+    arr.cast::<PyArray1<i16>>()?
+        .readonly()
+        .as_array()
+        .iter()
+        .map(|&sample| {
+            u8::try_from(sample)
+                .map_err(|_| PyValueError::new_err(format!("Marker sample out of range: {sample}")))
+        })
+        .collect()
 }
 
 fn scale_samples<'py>(

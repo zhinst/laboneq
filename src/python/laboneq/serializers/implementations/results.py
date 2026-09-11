@@ -38,21 +38,18 @@ def _acquired_axis_to_ndarrays(
         # empty axis data
         return axis
 
-    if isinstance(axis[0], np.ndarray) or (
-        axis[0] and isinstance(axis[0][0], np.ndarray)
-    ):
-        # list of numpy arrays, or lists of lists of numpy arrays
-        # (these occur when deserializing dicts that were not read from JSON)
-        return axis
+    def to_ndarrays(entry: Any) -> npt.NDArray[Any] | list[npt.NDArray[Any]]:
+        # Already-materialized arrays (dicts that were not read from JSON) pass
+        # through. A parallel sweep is a list whose items are themselves
+        # lists/arrays; a simple sweep is a flat list of scalars. Classify each
+        # entry on its own so an empty leading entry cannot mislabel the rest.
+        if isinstance(entry, np.ndarray):
+            return entry
+        if any(isinstance(x, (list, np.ndarray)) for x in entry):
+            return [x if isinstance(x, np.ndarray) else np.array(x) for x in entry]
+        return np.array(entry)
 
-    list_of_arrays = axis[0] and not isinstance(axis[0][0], list)
-
-    if list_of_arrays:
-        # list of numpy arrays
-        return [np.array(x) for x in axis]
-    else:
-        # list of lists of numpy arrays
-        return [[np.array(x) for x in item] for item in axis]
+    return [to_ndarrays(entry) for entry in axis]
 
 
 @serializer(types=Results, public=True)

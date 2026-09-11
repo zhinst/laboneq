@@ -17,6 +17,6 @@ if TYPE_CHECKING:
 class CombinedRTCompilerOutputContainer:
     """Container for the compiler artifacts, after linking."""
 
-    device_class: int
+    backend: str
     combined_output: CombinedOutput
     schedule: compiler_rs.PulseSheetSchedule | None = None

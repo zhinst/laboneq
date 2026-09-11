@@ -17,9 +17,8 @@ import flask.cli
 import numpy as np
 from flask import Flask, request
 
-import laboneq.core.path as qct_path
 from laboneq.core.utilities.compile_experiment import compile_experiment
-from laboneq.simulator.output_simulator import OutputSimulator
+from laboneq.simulator.signal_plots import backends
 
 if TYPE_CHECKING:
     from laboneq.core.types.compiled_experiment import CompiledExperiment
@@ -108,12 +107,8 @@ def _interactive_psv_app(
     html_text = PulseSheetViewer.generate_viewer_html_text(
         compiled_experiment.scheduled_experiment.schedule, name, interactive=True
     )
-    simulation = OutputSimulator(
-        compiled_experiment,
-        max_simulation_length=max_simulation_length,
-    )
-    exp = compiled_experiment.experiment
-    ds = compiled_experiment.device_setup
+
+    backend = backends.from_compiled_experiment(compiled_experiment)
 
     app = Flask(__name__)
 
@@ -122,18 +117,33 @@ def _interactive_psv_app(
         signal_id = request.args.get("signal_id")
         start = float(request.args.get("start"))
         stop = float(request.args.get("stop"))
-        signal_path = qct_path.remove_logical_signal_prefix(
-            exp.signals[signal_id].mapped_logical_signal_path
-        )
-        lsg, ls = qct_path.split(signal_path)
-        pc = ds.logical_signal_groups[lsg].logical_signals[ls].physical_channel
-        snip = simulation.get_snippet(pc, start, stop - start)
+
+        if max_simulation_length is not None and stop > max_simulation_length:
+            return {
+                "time": [],
+                "name_i": "I",
+                "name_q": "Q",
+                "samples_i": [],
+                "samples_q": [],
+            }
+
+        duration = stop - start
+
+        result = backend.simulate_channel_output(
+            compiled_experiment=compiled_experiment,
+            experiment_signals=[signal_id],
+            start_time=start,
+            duration=duration,
+        )[0]
+
         return {
-            "time": snip.time.tolist(),
+            "time": result.time.tolist(),
             "name_i": "I",
-            "name_q": "Q" if np.iscomplexobj(snip.wave) else "",
-            "samples_i": snip.wave.real.tolist(),
-            "samples_q": snip.wave.imag.tolist() if np.iscomplexobj(snip.wave) else [],
+            "name_q": "Q" if np.iscomplexobj(result.samples) else "",
+            "samples_i": result.samples.real.tolist(),
+            "samples_q": result.samples.imag.tolist()
+            if np.iscomplexobj(result.samples)
+            else [],
         }
 
     @app.route("/psv.html")
@@ -155,7 +165,7 @@ def interactive_psv(
         compiled_experiment: The compiled experiment to show.
         inline: If `True`, displays the pulse sheet viewer in the Notebook.
         max_simulation_length: Displays signals up to this time in seconds.
-            No signals beyond this time are shown. Default: 10ms.
+            Signals that extend beyond this time are not shown. Default: 10ms.
         max_events_to_publish: Number of events to show
     """
     app = _interactive_psv_app(

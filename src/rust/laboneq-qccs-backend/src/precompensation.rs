@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use std::fmt;
 
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_common::types::{AwgKey, DeviceKind};
+use laboneq_common::types::AwgKey;
+
+use crate::device_kind::DeviceKind;
 use laboneq_dsl::signal_calibration::{
     BounceCompensation, ExponentialCompensation, FirCompensation, Precompensation,
 };

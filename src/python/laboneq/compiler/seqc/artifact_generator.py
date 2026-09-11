@@ -25,7 +25,6 @@ from laboneq.data.artifacts_qccs import (
 from laboneq.data.calibration import CancellationSource
 
 if TYPE_CHECKING:
-    from laboneq._rust import compiler as compiler_rs
     from laboneq._rust.codegenerator import ChannelProperties, FeedbackRegisterConfig
     from laboneq.compiler.common.integration_times import IntegrationTimes
     from laboneq.compiler.seqc.linker import CombinedRTOutputSeqC, NeartimeStep
@@ -168,7 +167,6 @@ class ArtifactGenerator:
 
 def calc_outputs(
     combined_compiler_output: CombinedRTOutputSeqC,
-    experiment_rs: compiler_rs.ProcessedExperiment,
     generator: ArtifactGenerator,
 ):
     channels_flat = (
@@ -180,26 +178,21 @@ def calc_outputs(
         if channel_properties.direction != "OUT":
             continue
 
-        signal_id = channel_properties.signal
         channel = channel_properties.channel
         signal_range = channel_properties.range
 
-        scheduler_port_delay = channel_properties.scheduler_delay
-        scheduler_port_delay += experiment_rs.signal_delay_compensation(signal_id)
-
-        precompensation = experiment_rs.signal_precompensation(signal_id)
         output = IO(
             channel=channel,
             enable=True,
             offset=channel_properties.voltage_offset,
-            precompensation=precompensation,
+            precompensation=channel_properties.precompensation,
             lo_frequency=channel_properties.lo_frequency,
             port_mode=_PORT_MODE.get(channel_properties.port_mode),
             range=None if signal_range is None else float(signal_range.value),
             range_unit=(signal_range.unit if signal_range is not None else None),
             modulation=channel_properties.hardware_oscillator is not None,
             port_delay=channel_properties.port_delay,
-            scheduler_port_delay=scheduler_port_delay,
+            scheduler_port_delay=channel_properties.scheduler_delay,
             marker_mode=channel_properties.marker_mode,
             amplitude=channel_properties.amplitude,
             routed_outputs=[
@@ -235,7 +228,6 @@ def calc_inputs(
         if channel_properties.direction != "IN":
             continue
         signal_range = channel_properties.range
-        scheduler_port_delay: float = channel_properties.scheduler_delay
         input = IO(
             channel=channel_properties.channel,
             enable=True,
@@ -243,7 +235,7 @@ def calc_inputs(
             range=None if signal_range is None else float(signal_range.value),
             range_unit=signal_range.unit if signal_range is not None else None,
             port_delay=channel_properties.port_delay,
-            scheduler_port_delay=scheduler_port_delay,
+            scheduler_port_delay=channel_properties.scheduler_delay,
             port_mode=_PORT_MODE.get(channel_properties.port_mode),
         )
         initialization = generator.find_initialization(awg_key.device_id)
@@ -251,7 +243,6 @@ def calc_inputs(
 
 
 def populate_codegen_artifacts(
-    experiment_rs: compiler_rs.ProcessedExperiment,
     combined_compiler_output: CombinedRTOutputSeqC,
 ) -> CombinedRTOutputSeqC:
     artifacts = combined_compiler_output
@@ -260,7 +251,7 @@ def populate_codegen_artifacts(
     for device in combined_compiler_output.device_properties:
         init = Initialization(device_uid=device.uid, device_type=device.device_type)
         init.config.sampling_rate = device.sampling_rate
-        init.config.lead_delay = experiment_rs.device_lead_delay(device.uid)
+        init.config.lead_delay = device.lead_delay
         generator.artifacts.initializations.append(init)
 
     for ppc_settings in combined_compiler_output.ppc_settings:
@@ -289,7 +280,7 @@ def populate_codegen_artifacts(
 
     generator.add_oscillator_params(combined_compiler_output.channel_properties)
 
-    calc_outputs(combined_compiler_output, experiment_rs, generator)
+    calc_outputs(combined_compiler_output, generator)
     calc_inputs(combined_compiler_output, generator)
 
     for step in combined_compiler_output.neartime_steps:

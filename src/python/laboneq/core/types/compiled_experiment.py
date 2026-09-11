@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
-from laboneq.core.validators import dicts_equal
+from laboneq.core.exceptions import LabOneQException
 
 if TYPE_CHECKING:
     from laboneq.data.scheduled_experiment import ScheduledExperiment
@@ -40,14 +41,18 @@ class CompiledExperiment:
             The device setup the experiment was compiled for.
         experiment (Experiment):
             The (uncompiled) experiment.
-        experiment_dict (deprecated):
-            Deprecated. A representation of the source experiment, using
-            primitive Python datatypes only (dicts, lists, etc).
-            Use `.experiment` instead.
         scheduled_experiment (internal):
             Internal. The internal representation of the compiled
             experiment. Available for debugging but subject to
             change in any LabOne Q release.
+
+    !!! version-changed "Changed in version 26.10.0"
+        The `scheduled_experiment` constructor argument was removed. Obtain a
+        `CompiledExperiment` by compiling an experiment.
+
+    !!! version-changed "Removed in version 26.10.0"
+        The `.experiment_dict` attribute, deprecated since version 2.14.0,
+        was removed. Use `.experiment` instead.
 
     !!! version-changed "Changed in version 2.54.0"
         The following deprecated methods for saving and loading were removed:
@@ -68,16 +73,14 @@ class CompiledExperiment:
         Note that the `.device_setup` and `.experiment` were no longer
         deprecated in version 2.56.0.˝
 
-    !!! version-changed "Deprecated in version 2.14.0"
-        The `.experiment_dict` attribute was deprecated in
-        version 2.14.0. Use `.experiment` instead.
-
     !!! version-changed "Changed in version 2.14.0"
         The `.scheduled_experiment` attribute was documented to
         be internal and subject to change.
     """
 
-    scheduled_experiment: ScheduledExperiment
+    # Internal: the compiler's serialized output; `scheduled_experiment` is the Python
+    # view of it. Excluded from `repr` because it is large and opaque.
+    _compiler_output: bytes = field(repr=False)
 
     # The source device setup.
     device_setup: DeviceSetup | None = None
@@ -88,12 +91,9 @@ class CompiledExperiment:
     # Settings passed to the compiler
     compiler_settings: dict[str, Any] | None = None
 
-    # A representation of the source experiment, using primitive Python datatypes only
-    # (dicts, lists, etc.)
-    experiment_dict: dict[str, Any] | None = None
-
-    # Post-compile coprocessor payload overrides; keyed by coprocessor label.
-    payload_overrides: dict[str, bytes] = field(default_factory=dict)
+    # Coprocessor payloads attached after compilation, keyed by the coprocessor label
+    # declared in the experiment.
+    coprocessor_payload_overrides: dict[str, bytes] = field(default_factory=dict)
 
     @property
     def estimated_runtime(self) -> float:
@@ -117,25 +117,72 @@ class CompiledExperiment:
             for handle, properties in self.scheduled_experiment.result_shape_info.shapes.items()
         }
 
-    def set_coprocessor_payload(self, coprocessor_label: str, payload: bytes) -> None:
-        """Override the payload for a coprocessor, post-compile.
+    @cached_property
+    def scheduled_experiment(self) -> ScheduledExperiment:
+        """The internal representation of the compiled experiment.
 
-        The experiment-body `Coprocessor.set_payload(...)` declares the
-        initial payload; this method overrides it post-compilation.
+        Available for debugging but subject to change in any LabOne Q release.
+        """
+        from laboneq.core import compiler_output
+
+        return compiler_output.deserialize(self._compiler_output)
+
+    def set_coprocessor_payload(self, coprocessor_label: str, payload: bytes) -> None:
+        """Attach a payload to a coprocessor, post-compile.
+
+        Takes precedence over the payload declared in the experiment body with
+        `Coprocessor.set_payload(...)`.
 
         Args:
-            coprocessor_label: The coprocessor label (as declared in the experiment body).
-            payload: The new payload. Opaque to LabOne Q.
+            coprocessor_label: The coprocessor label, as declared in the
+                experiment body.
+            payload: Opaque to LabOne Q.
+
+        Raises:
+            TypeError: If *payload* is not `bytes`.
+            LabOneQException: If the label is not a coprocessor of this
+                compiled experiment.
         """
-        self.payload_overrides[coprocessor_label] = payload
+        if not isinstance(payload, bytes):
+            message = (
+                f"The coprocessor payload must be bytes, not {type(payload).__name__}."
+            )
+            raise TypeError(message)
+        mappings = self.scheduled_experiment.coprocessor_mappings
+        if coprocessor_label not in mappings:
+            raise LabOneQException(
+                f"'{coprocessor_label}' is not a coprocessor of this compiled "
+                f"experiment. Available: {sorted(mappings)}."
+            )
+        self.coprocessor_payload_overrides[coprocessor_label] = payload
 
     def __eq__(self, other):
         if other is self:
             return True
         if type(other) is not CompiledExperiment:
             return NotImplemented
-        return (other.device_setup, other.experiment, other.scheduled_experiment) == (
+        return (
+            other.device_setup,
+            other.experiment,
+            other._compiler_output,
+            other.coprocessor_payload_overrides,
+        ) == (
             self.device_setup,
             self.experiment,
-            self.scheduled_experiment,
-        ) and dicts_equal(other.experiment_dict, self.experiment_dict)
+            self._compiler_output,
+            self.coprocessor_payload_overrides,
+        )
+
+
+def compiler_output_bytes(compiled_experiment: CompiledExperiment) -> bytes:
+    """LabOne Q internal use only.
+
+    Get the compiler output bytes from a `CompiledExperiment`.
+
+    Args:
+        compiled_experiment: The compiled experiment.
+
+    Returns:
+        The compiler output bytes.
+    """
+    return compiled_experiment._compiler_output

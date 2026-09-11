@@ -80,8 +80,9 @@ fn resolve_phase_reset_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use laboneq_common::device_traits::TEST_DEVICE_TRAITS;
     use laboneq_common::named_id::NamedId;
-    use laboneq_common::types::AwgKey;
+    use laboneq_common::types::{AwgKey, PhysicalDeviceUid};
     use laboneq_dsl::node_structure;
     use laboneq_dsl::operation::{Reserve, ResetOscillatorPhase};
     use laboneq_dsl::types::Oscillator;
@@ -93,6 +94,8 @@ mod tests {
             2e9,
             AwgKey(0),
             NamedId::debug_id(0).into(),
+            PhysicalDeviceUid(0),
+            &TEST_DEVICE_TRAITS,
             SignalKind::Iq,
         )
         .build()
@@ -166,6 +169,8 @@ mod tests {
             2e9,
             AwgKey(0),
             NamedId::debug_id(0).into(),
+            PhysicalDeviceUid(0),
+            &TEST_DEVICE_TRAITS,
             SignalKind::Rf,
         )
         .oscillator(Oscillator {

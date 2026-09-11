@@ -3,43 +3,58 @@
 
 use crate::error::Result;
 
+use crate::compiler_backend::{CompilerBackend, ProcessedExperiment};
 use crate::experiment::Experiment;
-use crate::signal_view::{SignalView, signal_views};
+use crate::real_time_loop::real_time_loop_properties;
+use crate::signal_view::signal_views;
 use laboneq_ir::signal::Signal;
-use laboneq_ir::system::DeviceSetup;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 mod validate_parameters;
-use laboneq_common::types::AwgKey;
-use laboneq_dsl::{
-    ExperimentNode,
-    types::{ParameterUid, PulseDef, PulseUid, SectionUid, SignalUid, SweepParameter},
-};
+use laboneq_dsl::types::ParameterUid;
 
+mod traversal;
 mod validate_operations;
 mod validate_pulses;
-mod validate_signals;
 mod validate_unique_sections;
 
-use validate_operations::validate_experiment_operations;
+use traversal::{VisitContext, validate_tree};
+use validate_operations::OperationValidator;
 use validate_unique_sections::validate_unique_sections;
 
-/// Validates an [`Experiment`].
-pub(super) fn validate_experiment(
+/// Validates an [`Experiment`], against the compiler's own rules and the
+/// backend's.
+pub(super) fn validate_experiment<B: CompilerBackend>(
     experiment: &Experiment,
-    device_setup: &DeviceSetup,
+    setup_signals: &[Signal],
+    backend: &B,
+    backend_data: &B::Output,
 ) -> Result<()> {
     validate_unique_sections(&experiment.root)?;
-    let nt_only_parameters = collect_nt_only_parameters(device_setup);
-    let ctx = ExperimentContext {
-        root_node: &experiment.root,
+    let acquisition_type = real_time_loop_properties(&experiment.root)?.acquisition_type;
+    let nt_only_parameters = collect_nt_only_parameters(setup_signals);
+    let parameters = experiment.parameters.iter().map(|p| (p.uid, p)).collect();
+    let signals = signal_views(setup_signals);
+    let ctx = VisitContext {
         pulses: &experiment.pulses,
-        parameters: experiment.parameters.iter().map(|p| (p.uid, p)).collect(),
-        signals: &signal_views(device_setup),
+        parameters: &parameters,
+        signals: &signals,
         nt_only_parameters: &nt_only_parameters,
+        section_uid: None,
+        inside_rt_bound: false,
     };
-    validate_experiment_operations(&ctx)?;
-    Ok(())
+    validate_tree(&experiment.root, ctx, &mut OperationValidator::new(&ctx))?;
+
+    let processed = ProcessedExperiment {
+        root: &experiment.root,
+        parameters: experiment
+            .parameters
+            .iter()
+            .map(|p| (p.uid, p.inner_values().as_ref()))
+            .collect(),
+        acquisition_type,
+    };
+    Ok(backend.validate(&processed, backend_data)?)
 }
 
 /// Return the UIDs of parameters bound to near-time-only calibration fields on a signal.
@@ -54,6 +69,8 @@ fn nt_only_parameter_uids(signal: &Signal) -> impl Iterator<Item = ParameterUid>
         uid: _,
         awg_key: _,
         device_uid: _,
+        physical_device_uid: _,
+        traits: _,
         sampling_rate: _,
         port_mode: _,
         kind: _,
@@ -65,6 +82,7 @@ fn nt_only_parameter_uids(signal: &Signal) -> impl Iterator<Item = ParameterUid>
         thresholds: _,
         mixer_calibration: _,
         start_delay: _,
+        signal_alignment_delay: _,
         signal_delay: _,
     } = signal;
 
@@ -93,42 +111,6 @@ fn nt_only_parameter_uids(signal: &Signal) -> impl Iterator<Item = ParameterUid>
 }
 
 /// Collect the UIDs of all parameters bound to near-time sweeps only.
-fn collect_nt_only_parameters(setup: &DeviceSetup) -> HashSet<ParameterUid> {
-    setup.signals().flat_map(nt_only_parameter_uids).collect()
-}
-
-struct ExperimentContext<'a> {
-    root_node: &'a ExperimentNode,
-    pulses: &'a HashMap<PulseUid, PulseDef>,
-    parameters: HashMap<ParameterUid, &'a SweepParameter>,
-    signals: &'a HashMap<SignalUid, SignalView<'a>>,
-    nt_only_parameters: &'a HashSet<ParameterUid>,
-}
-
-struct ValidationContext {
-    amplitude_check_done: Vec<ParameterUid>,
-    signal_check_done: Vec<SignalUid>,
-    signal_pulse_map: HashMap<SignalUid, HashSet<PulseUid>>,
-    section_uid: Option<SectionUid>,
-    traversal_done: bool,
-}
-
-struct ParamsContext<'a> {
-    inside_rt_bound: bool,
-    found_chunked_sweep: bool,
-    declared_sweep_parameters: Vec<&'a ParameterUid>,
-    rt_sweep_parameters: HashSet<&'a ParameterUid>,
-    awgs_with_section_trigger: HashMap<&'a AwgKey, &'a SignalView<'a>>,
-    awgs_with_automute: HashMap<&'a AwgKey, &'a SignalView<'a>>,
-    awgs_with_ppc_sweeps: HashMap<&'a AwgKey, &'a SignalView<'a>>,
-}
-
-impl ParamsContext<'_> {
-    fn enter_rt_bound(&mut self) {
-        self.inside_rt_bound = true;
-    }
-
-    fn exit_rt_bound(&mut self) {
-        self.inside_rt_bound = false;
-    }
+fn collect_nt_only_parameters(signals: &[Signal]) -> HashSet<ParameterUid> {
+    signals.iter().flat_map(nt_only_parameter_uids).collect()
 }

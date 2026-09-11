@@ -3,7 +3,6 @@
 
 //! Python/PyO3 helpers used by `capnp_serializer`.
 
-use laboneq_dsl::signal_calibration::Precompensation;
 use pyo3::exceptions::PyValueError;
 use pyo3::intern;
 use pyo3::prelude::*;
@@ -11,6 +10,7 @@ use pyo3::types::PyDict;
 use pyo3::types::{IntoPyDict, PyModule};
 
 use laboneq_common::compiler_settings::CompilerSettings;
+use laboneq_common::settings::{SettingSpec, SettingValue};
 
 use crate::error::LabOneQException;
 /// Check whether `obj` is an exact instance of the Python type `ty`.
@@ -58,79 +58,39 @@ pub(crate) fn iq_to_complex<'py>(
         .call_method1(intern!(py, "reshape"), (-1i64,))
 }
 
-/// Creates code generator settings from a Python dictionary
-pub(crate) fn compiler_settings_from_py_dict(ob: &Bound<PyDict>) -> PyResult<CompilerSettings> {
-    // Convert PyDict to key-value pairs
-    let pairs: Result<Vec<(String, String)>, PyErr> = ob
-        .iter()
+/// Read the compiler settings a caller passed, keeping each value's type.
+///
+/// `bool` is checked before `int` because a Python `bool` is an `int`.
+pub(crate) fn setting_values_from_py_dict(
+    ob: &Bound<PyDict>,
+) -> PyResult<Vec<(String, SettingValue)>> {
+    ob.iter()
         .map(|(key, value)| {
-            let key_str: String = key.extract()?;
-            let value_str: String = value.str()?.extract()?;
-            Ok((key_str, value_str))
+            let key: String = key.extract()?;
+            let value = if let Ok(value) = value.extract::<bool>() {
+                SettingValue::Bool(value)
+            } else if let Ok(value) = value.extract::<i64>() {
+                SettingValue::Int(value)
+            } else if let Ok(value) = value.extract::<f64>() {
+                SettingValue::Float(value)
+            } else if let Ok(value) = value.extract::<String>() {
+                SettingValue::Str(value)
+            } else {
+                return Err(PyValueError::new_err(format!(
+                    "Compiler setting {key} must be a bool, int, float or str, got {value}"
+                )));
+            };
+            Ok((key, value))
         })
-        .collect();
-
-    CompilerSettings::from_key_value_pairs(pairs?)
-        .map_err(|err| LabOneQException::new_err(err.to_string()))
+        .collect()
 }
 
-/// Convert a [`Precompensation`] into the QCCS artifact compatible Python dictionary format.
-pub(crate) fn precompensation_to_py<'py>(
-    py: Python<'py>,
-    precomp: &Precompensation,
-) -> PyResult<Bound<'py, PyDict>> {
-    let high_pass = precomp
-        .high_pass
-        .as_ref()
-        .map(|hp| -> PyResult<_> {
-            let d = PyDict::new(py);
-            d.set_item(intern!(py, "timeconstant"), hp.timeconstant)?;
-            Ok(d)
-        })
-        .transpose()?;
-
-    let exponential: Option<Vec<Bound<'py, PyDict>>> = if precomp.exponential.is_empty() {
-        None
-    } else {
-        Some(
-            precomp
-                .exponential
-                .iter()
-                .map(|exp| -> PyResult<_> {
-                    let d = PyDict::new(py);
-                    d.set_item(intern!(py, "timeconstant"), exp.timeconstant)?;
-                    d.set_item(intern!(py, "amplitude"), exp.amplitude)?;
-                    Ok(d)
-                })
-                .collect::<PyResult<_>>()?,
-        )
-    };
-
-    let fir = precomp
-        .fir
-        .as_ref()
-        .map(|fir| -> PyResult<_> {
-            let d = PyDict::new(py);
-            d.set_item(intern!(py, "coefficients"), fir.coefficients.clone())?;
-            Ok(d)
-        })
-        .transpose()?;
-
-    let bounce = precomp
-        .bounce
-        .as_ref()
-        .map(|bounce| -> PyResult<_> {
-            let d = PyDict::new(py);
-            d.set_item(intern!(py, "delay"), bounce.delay)?;
-            d.set_item(intern!(py, "amplitude"), bounce.amplitude)?;
-            Ok(d)
-        })
-        .transpose()?;
-
-    let out = PyDict::new(py);
-    out.set_item(intern!(py, "exponential"), exponential)?;
-    out.set_item(intern!(py, "high_pass"), high_pass)?;
-    out.set_item(intern!(py, "bounce"), bounce)?;
-    out.set_item(intern!(py, "FIR"), fir)?;
-    Ok(out)
+/// Validate the settings a caller passed against the frontend's and the backend's.
+pub(crate) fn compiler_settings_from_py_dict(
+    backend_settings: &[SettingSpec],
+    ob: Option<&Bound<PyDict>>,
+) -> PyResult<CompilerSettings> {
+    let pairs = ob.map(setting_values_from_py_dict).transpose()?;
+    CompilerSettings::parse(backend_settings, pairs.unwrap_or_default())
+        .map_err(|err| LabOneQException::new_err(err.to_string()))
 }

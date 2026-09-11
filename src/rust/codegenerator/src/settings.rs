@@ -4,6 +4,7 @@
 //! Module for defining settings for the code generator.
 use std::vec;
 
+use laboneq_common::settings::{SettingKind, SettingSpec, SettingValue, Settings};
 use laboneq_error::laboneq_error;
 
 use crate::Result;
@@ -17,6 +18,76 @@ pub struct SanitizationChange {
     pub sanitized: String,
     pub reason: String,
 }
+
+/// The compiler settings the SeqC code generator reads.
+pub const CODE_GENERATOR_SETTINGS: &[SettingSpec] = &[
+    SettingSpec {
+        key: "HDAWG_MIN_PLAYWAVE_HINT",
+        kind: SettingKind::Int,
+        default: Some(SettingValue::Int(128)),
+        doc: "Shortest waveform, in samples, to emit for an HDAWG without padding or merging.",
+    },
+    SettingSpec {
+        key: "HDAWG_MIN_PLAYZERO_HINT",
+        kind: SettingKind::Int,
+        default: Some(SettingValue::Int(128)),
+        doc: "Shortest gap, in samples, to emit as a playZero on an HDAWG rather than as waveform data.",
+    },
+    SettingSpec {
+        key: "SHFSG_MIN_PLAYWAVE_HINT",
+        kind: SettingKind::Int,
+        default: Some(SettingValue::Int(64)),
+        doc: "Shortest waveform, in samples, to emit for an SHFSG without padding or merging.",
+    },
+    SettingSpec {
+        key: "SHFSG_MIN_PLAYZERO_HINT",
+        kind: SettingKind::Int,
+        default: Some(SettingValue::Int(64)),
+        doc: "Shortest gap, in samples, to emit as a playZero on an SHFSG rather than as waveform data.",
+    },
+    SettingSpec {
+        key: "UHFQA_MIN_PLAYWAVE_HINT",
+        kind: SettingKind::Int,
+        default: Some(SettingValue::Int(64)),
+        doc: "Shortest waveform, in samples, to emit for a UHFQA without padding or merging.",
+    },
+    SettingSpec {
+        key: "UHFQA_MIN_PLAYZERO_HINT",
+        kind: SettingKind::Int,
+        default: Some(SettingValue::Int(64)),
+        doc: "Shortest gap, in samples, to emit as a playZero on a UHFQA rather than as waveform data.",
+    },
+    SettingSpec {
+        key: "AMPLITUDE_RESOLUTION_BITS",
+        kind: SettingKind::Int,
+        default: Some(SettingValue::Int(24)),
+        doc: "Resolution, in bits, that a pulse amplitude is rounded to.",
+    },
+    SettingSpec {
+        key: "PHASE_RESOLUTION_BITS",
+        kind: SettingKind::Int,
+        default: Some(SettingValue::Int(24)),
+        doc: "Resolution, in bits, that an oscillator phase is rounded to.",
+    },
+    SettingSpec {
+        key: "USE_AMPLITUDE_INCREMENT",
+        kind: SettingKind::Bool,
+        default: Some(SettingValue::Bool(true)),
+        doc: "Sweep an amplitude by incrementing it, where the device supports it.",
+    },
+    SettingSpec {
+        key: "EMIT_TIMING_COMMENTS",
+        kind: SettingKind::Bool,
+        default: Some(SettingValue::Bool(false)),
+        doc: "Annotate the generated code with the timing of each statement.",
+    },
+    SettingSpec {
+        key: "SHF_OUTPUT_MUTE_MIN_DURATION",
+        kind: SettingKind::Float,
+        default: Some(SettingValue::Float(280e-9)),
+        doc: "Shortest silence, in seconds, worth muting an SHF output for.",
+    },
+];
 
 #[derive(Debug, Clone)]
 pub struct CodeGeneratorSettings {
@@ -35,6 +106,36 @@ pub struct CodeGeneratorSettings {
 }
 
 impl CodeGeneratorSettings {
+    /// Read the declared settings into the code generator's own type.
+    ///
+    /// The values already have the declared kind; the only check left is that
+    /// the waveform hints fit into `u16`.
+    ///
+    /// `ignore_resource_exhaustion` is a frontend setting, so it is a separate
+    /// argument.
+    pub fn from_settings(values: &Settings, ignore_resource_exhaustion: bool) -> Result<Self> {
+        let hint = |key: &'static str| -> Result<u16> {
+            let value = values.int(key);
+            u16::try_from(value).map_err(|_| {
+                laboneq_error!("{key} must be between 0 and {}, got {value}", u16::MAX)
+            })
+        };
+        Ok(CodeGeneratorSettings {
+            hdawg_min_playwave_hint: hint("HDAWG_MIN_PLAYWAVE_HINT")?,
+            hdawg_min_playzero_hint: hint("HDAWG_MIN_PLAYZERO_HINT")?,
+            shfsg_min_playwave_hint: hint("SHFSG_MIN_PLAYWAVE_HINT")?,
+            shfsg_min_playzero_hint: hint("SHFSG_MIN_PLAYZERO_HINT")?,
+            uhfqa_min_playwave_hint: hint("UHFQA_MIN_PLAYWAVE_HINT")?,
+            uhfqa_min_playzero_hint: hint("UHFQA_MIN_PLAYZERO_HINT")?,
+            amplitude_resolution_bits: values.int("AMPLITUDE_RESOLUTION_BITS") as u64,
+            phase_resolution_bits: values.int("PHASE_RESOLUTION_BITS") as u64,
+            use_amplitude_increment: values.bool("USE_AMPLITUDE_INCREMENT"),
+            emit_timing_comments: values.bool("EMIT_TIMING_COMMENTS"),
+            shf_output_mute_min_duration: values.float("SHF_OUTPUT_MUTE_MIN_DURATION"),
+            ignore_resource_exhaustion,
+        })
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         hdawg_min_playwave_hint: u16,

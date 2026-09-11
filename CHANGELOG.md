@@ -1,3 +1,37 @@
+# LabOne Q 26.10.0b2 (2026-09-11)
+
+## Bug Fixes
+
+- Fixed a bug where `OpenQASMTranspiler.section()` added the program's quantum operations to an enclosing DSL context, such as `exp.section()`, leading to duplicated sections or dropped operations, such as delays.
+- Fixed a bug where, on Python 3.10 and 3.11, canceling an experiment while the controller waited for its client callback channel to attach could be silently ignored, causing experiment execution to hang.
+- Fixed a bug where sections that span signals with different sample rates were padded to the sequencer grid: mixing HDAWG and UHFQA signals in one section inserted gaps of up to 13.3 ns between pulses and stretched the section to match. Timings in existing experiments may shift accordingly. Sections containing acquisitions, triggers or sweeps, or with `on_system_grid=True`, are unaffected.
+- Fixed a bug where `CompiledExperiment` serialization failed with `ModuleNotFoundError: No module named 'xarray'` when the optional `xarray` dependency is not installed.
+- Fixed a bug where `DeviceSetup` silently swapped I and Q for HDAWG and UHFQA IQ signal connections whose ports list the Q channel before the I channel. Such connections are now rejected.
+
+## Documentation
+
+- Fixed stale documentation links to zhinst-toolkit that pointed to removed docs.zhinst.com resources.
+
+## Removals from the Codebase
+
+- `CompiledExperiment` now contains the compiler's output bytes and is serialized into a Python object view
+  when the `.scheduled_experiment` attribute is accessed.
+
+  The deprecated `laboneq.dsl.serialization.Serializer` now delegates to `laboneq.serializers` for compiled
+  experiments, so it reads and writes the same format.
+- Removed deprecated HDAWG_FORCE_COMMAND_TABLE compiler setting. The option had no effect and therefore has no replacement functionality.
+- Removed deprecated SHFQA_MIN_PLAYWAVE_HINT compiler setting. The option had no effect and therefore has no replacement functionality.
+- Removed deprecated SHFQA_MIN_PLAYZERO_HINT compiler setting. The option had no effect and therefore has no replacement functionality.
+- Removed deprecated SHFSG_FORCE_COMMAND_TABLE compiler setting. The option had no effect and therefore has no replacement functionality.
+- Removed empty package `laboneq.contrib.example_helpers.descriptors`.
+- Removed serialization support for `xarray.DataArray` and `xarray.Dataset` objects, which existed only in the deprecated legacy serializer. `AcquiredResult.to_xarray()` and `AcquiredResults.to_xarray()` are unaffected.
+- Removed the deprecated `CompiledExperiment.experiment_dict` attribute. It has been deprecated since version
+  2.14.0 and was always `None` for a freshly compiled experiment. Use `CompiledExperiment.experiment` instead.
+- Removed the deprecated `instrument_list` section of the device setup descriptor and the corresponding
+  `instrument_list` argument of `DeviceSetup.from_dicts()`. Use `instruments` instead; the contents are
+  unchanged. A descriptor that only has `instrument_list` now fails with
+  `'instruments' section is mandatory in the setup descriptor.`
+
 # LabOne Q 26.10.0b1 (2026-08-13)
 
 ## Features

@@ -31,7 +31,6 @@ from laboneq.dsl.device.io_units.logical_signal import LogicalSignal
 from laboneq.dsl.device.io_units.physical_channel import PhysicalChannel
 from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
-from laboneq.dsl.device.ports import Port
 from laboneq.dsl.device.servers.data_server import DataServer
 from laboneq.serializers.implementations._models._calibration import (
     SignalCalibrationModel,
@@ -86,22 +85,10 @@ class DataServerModel:
 @attrs.define
 class ConnectionModel:
     direction: IODirectionModel
-    local_path: str | None
     local_port: str | None
     remote_path: str | None
-    remote_port: str | None
     signal_type: IOSignalTypeModel | None
     _target_class: ClassVar[Type] = Connection
-
-
-@attrs.define
-class PortModel:
-    direction: IODirectionModel
-    uid: str | None
-    connector_labels: list[str]
-    physical_port_ids: list[str]
-    signal_type: IOSignalTypeModel | None
-    _target_class: ClassVar[Type] = Port
 
 
 @attrs.define
@@ -147,8 +134,6 @@ class ZIStandardInstrumentModel:
             ),
             "_instrument_type": type(obj).__name__,
         }
-        if isinstance(obj, ZQCS):
-            out["ports"] = [_converter.unstructure(p, PortModel) for p in obj.ports]
         return out
 
     @classmethod
@@ -177,10 +162,6 @@ class ZIStandardInstrumentModel:
             device_options=obj["device_options"],
             reference_clock_source=ref_clk_source,
         )
-        if instrument is ZQCS:
-            kwargs["ports"] = [
-                _converter.structure(p, PortModel) for p in obj.get("ports", [])
-            ]
         return instrument(**kwargs)
 
 

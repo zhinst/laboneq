@@ -12,35 +12,17 @@ The following functions are provided:
 
 from __future__ import annotations
 
-import abc
 import copy
 import itertools
-import warnings
 from typing import TYPE_CHECKING, TypeGuard
 
 import attrs
 
 import laboneq.core.path as qct_path
-from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import PhysicalChannelType
-from laboneq.core.types.enums.io_direction import IODirection
+from laboneq.dsl.device import instrument_registry
 from laboneq.dsl.device._calibration_mediator import CalibrationMediator
-from laboneq.dsl.device.connection import (
-    Connection,
-    InternalConnection,
-    SignalConnection,
-)
-from laboneq.dsl.device.instruments import (
-    HDAWG,
-    PQSC,
-    QHUB,
-    SHFPPC,
-    SHFQA,
-    SHFQC,
-    SHFSG,
-    UHFQA,
-    ZQCS,
-)
+from laboneq.dsl.device.connection import Connection, SignalConnection
+from laboneq.dsl.device.connection_builder import DeviceSetupInternalException
 from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
 from laboneq.dsl.device.io_units import LogicalSignal
 from laboneq.dsl.device.io_units.physical_channel import (
@@ -48,587 +30,59 @@ from laboneq.dsl.device.io_units.physical_channel import (
 )
 from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
-from laboneq.dsl.enums import IOSignalType
 
 if TYPE_CHECKING:
+    from laboneq.core.types.enums import PhysicalChannelType
+    from laboneq.core.types.enums.io_direction import IODirection
+    from laboneq.dsl.device.connection import InternalConnection
     from laboneq.dsl.device.device_setup import DeviceSetup
     from laboneq.dsl.device.instrument import Instrument
 
 
-class DeviceSetupInternalException(LabOneQException):
-    pass
-
-
-class _InstrumentGenerator(abc.ABC):
-    @staticmethod
-    @abc.abstractmethod
-    def make_connections(
-        connection: InternalConnection | SignalConnection,
-    ) -> list[Connection]:
-        """Make instrument connections."""
-        pass
-
-    @staticmethod
-    def make_logical_signal(
-        connection: InternalConnection | SignalConnection, pc: PhysicalChannel
-    ) -> LogicalSignal | None:
-        """Make logical signal which is associated with the connection."""
-        return None
-
-    @classmethod
-    def determine_signal_type(cls, ports: list[str]) -> str:
-        raise NotImplementedError(
-            "Must be implemented if device connections produces physical signals."
+def _raise_for_invalid_connection(old: Connection, new: Connection):
+    if old.local_port == new.local_port and old.signal_type != new.signal_type:
+        raise DeviceSetupInternalException(
+            f"Multiple signal types specified for {new.local_port}."
         )
 
-    @staticmethod
-    def raise_for_invalid_connection(old: Connection, new: Connection):
-        equal_iqs = (IOSignalType.I, IOSignalType.Q, IOSignalType.IQ)
-        if old.local_port == new.local_port:
-            if old.signal_type in equal_iqs and new.signal_type in equal_iqs:
-                return
-            if old.signal_type != new.signal_type:
-                raise DeviceSetupInternalException(
-                    f"Multiple signal types specified for {new.local_port}."
-                )
 
-    @staticmethod
-    def raise_for_existing_connection(old: Connection, new: Connection):
-        if old == new:
-            raise DeviceSetupInternalException("Connection already exists.")
+def _raise_for_existing_connection(old: Connection, new: Connection):
+    if old == new:
+        raise DeviceSetupInternalException("Connection already exists.")
 
-    @classmethod
-    def make_physical_channel(
-        cls, instrument: str, ports: list[str], channel_type: str | None = None
-    ) -> PhysicalChannel | None:
-        split_ports = [port.split(qct_path.Separator) for port in ports]
-        signal_name = "_".join(
-            (
-                group[0]
-                for group in itertools.groupby(
-                    [x for y in zip(*split_ports) for x in y]
-                )
-            )
-        ).lower()
-        path = qct_path.Separator.join(
+
+def _make_physical_channel(
+    instrument: str, ports: list[str | None], channel_type: PhysicalChannelType
+) -> PhysicalChannel:
+    split_ports = [port.split(qct_path.Separator) for port in ports if port is not None]
+    signal_name = "_".join(
+        (
+            group[0]
+            for group in itertools.groupby([x for y in zip(*split_ports) for x in y])
+        )
+    ).lower()
+    return PhysicalChannel(
+        uid=f"{instrument}/{signal_name}",
+        name=signal_name,
+        type=channel_type,
+        path=qct_path.Separator.join(
             [qct_path.PhysicalChannelGroups_Path_Abs, instrument, signal_name]
-        )
-        if channel_type is None:
-            channel_type = cls.determine_signal_type(ports)
-        if channel_type in ("iq", "acquire"):
-            channel_type_ = PhysicalChannelType.IQ_CHANNEL
-        elif channel_type == "rf":
-            channel_type_ = PhysicalChannelType.RF_CHANNEL
-        else:
-            raise ValueError(f"Invalid channel type: '{channel_type}'")
-        return PhysicalChannel(
-            uid=f"{instrument}/{signal_name}",
-            name=signal_name,
-            type=channel_type_,
-            path=path,
-        )
-
-
-class _HDAWGGenerator(_InstrumentGenerator):
-    @staticmethod
-    def determine_signal_type(ports: list[str]) -> str:
-        if len(ports) == 2:
-            return "iq"
-        if len(ports) == 1:
-            if ports[0].startswith("DIOS"):
-                return "acquire"
-            else:
-                return "rf"
-        return "<unknown>"
-
-    @staticmethod
-    def make_connections(
-        connection: InternalConnection | SignalConnection,
-    ) -> list[Connection]:
-        connections = []
-        if isinstance(connection, SignalConnection):
-            if connection.type == "iq":
-                if len(connection.ports) != 2:
-                    raise DeviceSetupInternalException(
-                        "HDAWG SIGOUTS connection for requires two local ports, where the first is the I channel and the second is the Q channel."
-                    )
-            if connection.type == "rf":
-                if len(connection.ports) != 1:
-                    raise DeviceSetupInternalException(
-                        "HDAWG connection of type RF requires exactly one port."
-                    )
-        connection_type = _HDAWGGenerator.determine_signal_type(connection.ports)
-        if isinstance(connection, SignalConnection):
-            if connection_type == "iq":
-                for i, local_port in enumerate(connection.ports):
-                    connections.append(
-                        Connection(
-                            local_port=local_port,
-                            remote_path=qct_path.insert_logical_signal_prefix(
-                                connection.uid
-                            ),
-                            remote_port=str(i),
-                            signal_type=[IOSignalType.I, IOSignalType.Q][i],
-                        )
-                    )
-            elif connection_type == "rf":
-                conn = Connection(
-                    local_port=connection.ports[0],
-                    remote_path=qct_path.insert_logical_signal_prefix(connection.uid),
-                    remote_port="0",
-                    signal_type=IOSignalType.RF,
-                )
-                connections.append(conn)
-        else:
-            if len(connection.ports) != 1:
-                raise DeviceSetupInternalException(
-                    "Connection to instrument for HDAWG requires exactly one local port."
-                )
-            conn = Connection(
-                local_port=connection.ports[0],
-                remote_path=connection.to,
-                remote_port="0",
-                signal_type=IOSignalType.DIO,
-            )
-            connections.append(conn)
-        return connections
-
-    @staticmethod
-    def make_logical_signal(
-        connection: InternalConnection | SignalConnection, pc: PhysicalChannel
-    ) -> LogicalSignal | None:
-        assert isinstance(connection, SignalConnection)
-        ls = LogicalSignal(
-            uid=connection.uid,
-            name=connection.name,
-            direction=IODirection.OUT,
-            path=qct_path.Separator.join(
-                [
-                    qct_path.LogicalSignalGroups_Path_Abs,
-                    connection.uid,
-                ]
-            ),
-            physical_channel=pc,
-        )
-        return ls
-
-
-class _ZQCSGenerator(_InstrumentGenerator):
-    @staticmethod
-    def determine_signal_type(ports: list[str]) -> str:
-        return "rf"
-
-    @staticmethod
-    def make_connections(
-        connection: InternalConnection | SignalConnection,
-    ) -> list[Connection]:
-        connections = []
-        if isinstance(connection, SignalConnection):
-            [port] = connection.ports
-            signal_type, direction = {
-                "iq": (IOSignalType.IQ, IODirection.OUT),
-                "rf": (IOSignalType.RF, IODirection.OUT),
-                "acquire": (IOSignalType.IQ, IODirection.IN),
-            }[connection.type]
-            conn = Connection(
-                local_port=port,
-                remote_path=qct_path.insert_logical_signal_prefix(connection.uid),
-                remote_port=None,
-                signal_type=signal_type,
-                direction=direction,
-            )
-            connections.append(conn)
-        else:
-            raise DeviceSetupInternalException("ZQCS does not feature a DIO port")
-        return connections
-
-    @staticmethod
-    def make_logical_signal(
-        connection: InternalConnection | SignalConnection, pc: PhysicalChannel
-    ) -> LogicalSignal | None:
-        assert isinstance(connection, SignalConnection)
-        direction = IODirection.IN if connection.type == "acquire" else IODirection.OUT
-        ls = LogicalSignal(
-            uid=connection.uid,
-            name=connection.name,
-            direction=direction,
-            path=qct_path.Separator.join(
-                [
-                    qct_path.LogicalSignalGroups_Path_Abs,
-                    connection.uid,
-                ]
-            ),
-            physical_channel=pc,
-        )
-        return ls
-
-
-class _UHFQAGenerator(_InstrumentGenerator):
-    @staticmethod
-    def determine_signal_type(ports: list[str]) -> str:
-        if not ports:
-            return "acquire"
-        else:
-            return "iq"
-
-    @staticmethod
-    def make_connections(
-        connection: InternalConnection | SignalConnection,
-    ) -> list[Connection]:
-        if not isinstance(connection, SignalConnection):
-            raise DeviceSetupInternalException(
-                "Only signal connections are supported on UHFQA."
-            )
-        if connection.type is not None:
-            if connection.type == "rf":
-                raise DeviceSetupInternalException("RF signal not supported on UHFQA.")
-            if connection.type == "acquire" and connection.ports:
-                raise DeviceSetupInternalException(
-                    "Specifying ports for UHFQA acquire signal is not allowed."
-                )
-        connection_type = _UHFQAGenerator.determine_signal_type(connection.ports)
-        connections = []
-        if connection_type == "acquire":
-            for i, local_port in enumerate(["QAS/0", "QAS/1"]):
-                connections.append(
-                    Connection(
-                        local_port=local_port,
-                        remote_path=qct_path.insert_logical_signal_prefix(
-                            connection.uid
-                        ),
-                        remote_port=str(i),
-                        signal_type=IOSignalType.IQ,
-                        direction=IODirection.IN,
-                    )
-                )
-        if connection_type == "iq":
-            if len(connection.ports) != 2:
-                raise DeviceSetupInternalException(
-                    "IQ signal connection for UHFQA requires two local ports, where the first is the I channel and the second is the Q channel."
-                )
-            for i, local_port in enumerate(connection.ports):
-                connections.append(
-                    Connection(
-                        local_port=local_port,
-                        remote_path=qct_path.insert_logical_signal_prefix(
-                            connection.uid
-                        ),
-                        remote_port=str(i),
-                        signal_type=[IOSignalType.I, IOSignalType.Q][i],
-                    )
-                )
-        return connections
-
-    @staticmethod
-    def make_logical_signal(
-        connection: InternalConnection | SignalConnection, pc: PhysicalChannel
-    ) -> LogicalSignal | None:
-        assert isinstance(connection, SignalConnection)
-        is_output = True
-        if _UHFQAGenerator.determine_signal_type(connection.ports) == "acquire":
-            is_output = False
-        ls = LogicalSignal(
-            uid=connection.uid,
-            name=connection.name,
-            direction=IODirection.OUT if is_output else IODirection.IN,
-            path=qct_path.Separator.join(
-                [
-                    qct_path.LogicalSignalGroups_Path_Abs,
-                    connection.uid,
-                ]
-            ),
-            physical_channel=pc,
-        )
-        return ls
-
-    @classmethod
-    def make_physical_channel(
-        cls, instrument: str, ports: list[str], channel_type: str | None = None
-    ) -> PhysicalChannel | None:
-        connection_type = _UHFQAGenerator.determine_signal_type(ports)
-        if connection_type == "acquire":
-            ports = ["QAS/0", "QAS/1"]
-        return super().make_physical_channel(instrument, ports, connection_type)
-
-
-class _SHFPPCGenerator(_InstrumentGenerator):
-    @staticmethod
-    def make_connections(
-        connection: InternalConnection | SignalConnection,
-    ) -> list[Connection]:
-        # TODO: Can SHFPPC port be connected to multiple logical signals? Currently no tests for it.
-        connections = []
-        if not isinstance(connection, SignalConnection):
-            raise DeviceSetupInternalException(
-                "Only signal connections are supported on SHFPPC."
-            )
-        if len(connection.ports) != 1:
-            raise DeviceSetupInternalException(
-                "SHFPPC signals require exactly one port."
-            )
-        # SHFPPC accepts either full logical signal path or just <group>/<name>
-        remote_path = connection.uid
-        if qct_path.LogicalSignalGroups_Path_Abs not in remote_path:
-            remote_path = (
-                qct_path.LogicalSignalGroups_Path_Abs
-                + qct_path.Separator
-                + connection.uid
-            )
-        connections.append(
-            Connection(
-                local_port=connection.ports[0],
-                remote_path=remote_path,
-                remote_port=None,
-                signal_type=IOSignalType.PPC,
-            )
-        )
-        return connections
-
-    @classmethod
-    def make_physical_channel(
-        cls, instrument: str, ports: list[str], channel_type: str | None = None
-    ) -> PhysicalChannel | None:
-        return None
-
-
-class _SHFQAGenerator(_InstrumentGenerator):
-    @staticmethod
-    def determine_signal_type(ports: list[str]) -> str:
-        if ports[0].endswith("INPUT"):
-            return "acquire"
-        if ports[0].endswith("OUTPUT"):
-            return "iq"
-        return "<unknown>"
-
-    @staticmethod
-    def make_connections(
-        connection: InternalConnection | SignalConnection,
-    ) -> list[Connection]:
-        if not isinstance(connection, SignalConnection):
-            raise DeviceSetupInternalException(
-                "Only signal connections are supported on QA channels."
-            )
-        if len(connection.ports) != 1:
-            raise DeviceSetupInternalException(
-                "Device QA channel signals require exactly one port."
-            )
-        if connection.type == "rf":
-            raise DeviceSetupInternalException(
-                "RF signals not supported on QA channels."
-            )
-
-        connection_type = _SHFQAGenerator.determine_signal_type(connection.ports)
-        connections = []
-        if connection_type == "acquire":
-            for i, local_port in enumerate(connection.ports):
-                connections.append(
-                    Connection(
-                        local_port=local_port,
-                        remote_path=qct_path.insert_logical_signal_prefix(
-                            connection.uid
-                        ),
-                        remote_port=str(i),
-                        signal_type=IOSignalType.IQ,
-                        direction=IODirection.IN,
-                    )
-                )
-        elif connection_type == "iq":
-            for i, local_port in enumerate(connection.ports):
-                connections.append(
-                    Connection(
-                        local_port=local_port,
-                        remote_path=qct_path.insert_logical_signal_prefix(
-                            connection.uid
-                        ),
-                        remote_port=str(i),
-                        signal_type=IOSignalType.IQ,
-                    )
-                )
-        return connections
-
-    @staticmethod
-    def make_logical_signal(
-        connection: InternalConnection | SignalConnection, pc: PhysicalChannel
-    ) -> LogicalSignal | None:
-        assert isinstance(connection, SignalConnection)
-        is_output = _SHFQAGenerator.determine_signal_type(connection.ports) != "acquire"
-        return LogicalSignal(
-            uid=connection.uid,
-            name=connection.name,
-            direction=IODirection.OUT if is_output else IODirection.IN,
-            path=qct_path.Separator.join(
-                [
-                    qct_path.LogicalSignalGroups_Path_Abs,
-                    connection.uid,
-                ]
-            ),
-            physical_channel=pc,
-        )
-
-
-class _SHFSGGenerator(_InstrumentGenerator):
-    @staticmethod
-    def determine_signal_type(ports: list[str]) -> str:
-        if ports[0].endswith("OUTPUT"):
-            return "iq"
-        return "<unknown>"
-
-    @staticmethod
-    def make_connections(
-        connection: InternalConnection | SignalConnection,
-    ) -> list[Connection]:
-        if not isinstance(connection, SignalConnection):
-            raise DeviceSetupInternalException(
-                "Only signal connections are supported on SG channels."
-            )
-        # Compatibility for DeviceSetup descriptor: It still requires signal type to be defined.
-        if connection.type is not None:
-            if not connection.type == "iq":
-                raise DeviceSetupInternalException(
-                    "Only IQ signals are supported on SG channels."
-                )
-        if len(connection.ports) != 1:
-            raise DeviceSetupInternalException(
-                "Device SG channel signals require exactly one port."
-            )
-
-        connection_type = _SHFSGGenerator.determine_signal_type(connection.ports)
-        connections = []
-        if connection_type == "iq":
-            for i, local_port in enumerate(connection.ports):
-                connections.append(
-                    Connection(
-                        local_port=local_port,
-                        remote_path=qct_path.insert_logical_signal_prefix(
-                            connection.uid
-                        ),
-                        remote_port=str(i),
-                        signal_type=IOSignalType.IQ,
-                    )
-                )
-        return connections
-
-    @staticmethod
-    def make_logical_signal(
-        connection: InternalConnection | SignalConnection, pc: PhysicalChannel
-    ) -> LogicalSignal | None:
-        assert isinstance(connection, SignalConnection)
-        return LogicalSignal(
-            uid=connection.uid,
-            name=connection.name,
-            direction=IODirection.OUT,
-            path=qct_path.Separator.join(
-                [
-                    qct_path.LogicalSignalGroups_Path_Abs,
-                    connection.uid,
-                ]
-            ),
-            physical_channel=pc,
-        )
-
-
-class _SHFQCGenerator(_InstrumentGenerator):
-    @staticmethod
-    def determine_signal_type(ports: list[str]) -> str:
-        is_qa = False
-        for port in ports:
-            if "QACHANNELS" in port:
-                is_qa = True
-                break
-        if is_qa:
-            return _SHFQAGenerator.determine_signal_type(ports)
-        else:
-            return _SHFSGGenerator.determine_signal_type(ports)
-
-    @staticmethod
-    def make_connections(
-        connection: InternalConnection | SignalConnection,
-    ) -> list[Connection]:
-        connections = []
-        is_qa = False
-        for ports in connection.ports:
-            if "QACHANNELS" in ports:
-                is_qa = True
-                break
-        if is_qa:
-            qa_conns = _SHFQAGenerator.make_connections(connection)
-            connections.extend(qa_conns)
-        else:
-            sg_conns = _SHFSGGenerator.make_connections(connection)
-            connections.extend(sg_conns)
-        return connections
-
-    @staticmethod
-    def make_logical_signal(
-        connection: InternalConnection | SignalConnection, pc: PhysicalChannel
-    ) -> LogicalSignal | None:
-        is_qa = False
-        for ports in connection.ports:
-            if "QACHANNELS" in ports:
-                is_qa = True
-                break
-        if is_qa:
-            return _SHFQAGenerator.make_logical_signal(connection, pc)
-        else:
-            return _SHFSGGenerator.make_logical_signal(connection, pc)
-
-
-def _warn_for_explicit_zsync_ports():
-    warnings.warn(
-        "Explicit ZSYNCS connections are deprecated and currently ignored. "
-        "Remove them from the device setup descriptor. This will be a hard "
-        "error in a future version.",
-        FutureWarning,
-        stacklevel=4,
+        ),
     )
 
 
-class _PQSCGenerator(_InstrumentGenerator):
-    @staticmethod
-    def make_connections(
-        connection: InternalConnection | SignalConnection,
-    ) -> list[Connection]:
-        if not isinstance(connection, InternalConnection):
-            raise DeviceSetupInternalException(
-                "Only to device connections are supported on PQSC."
-            )
-        _warn_for_explicit_zsync_ports()
-        return [
-            Connection(
-                local_port=connection.from_port,
-                remote_path=connection.to,
-                remote_port="0",
-                signal_type=IOSignalType.ZSYNC,
-            )
-        ]
-
-
-class _QHUBGenerator(_InstrumentGenerator):
-    @staticmethod
-    def make_connections(
-        connection: InternalConnection | SignalConnection,
-    ) -> list[Connection]:
-        if not isinstance(connection, InternalConnection):
-            raise DeviceSetupInternalException(
-                "Only to device connections are supported on QHUB."
-            )
-        _warn_for_explicit_zsync_ports()
-        return [
-            Connection(
-                local_port=connection.from_port,
-                remote_path=connection.to,
-                remote_port="0",
-                signal_type=IOSignalType.ZSYNC,
-            )
-        ]
-
-
-def _raise_for_invalid_ports(instr: Instrument, ports: list[str]):
-    port_uids = [port.uid for port in instr.ports]
-    for port in ports:
-        if port not in port_uids:
-            msg = f"Port {port} not defined for the device '{instr.__class__.__name__}'. Available ports: {port_uids}"
-            raise DeviceSetupInternalException(msg)
+def _make_logical_signal(
+    connection: SignalConnection, direction: IODirection, pc: PhysicalChannel
+) -> LogicalSignal:
+    return LogicalSignal(
+        uid=connection.uid,
+        name=connection.name,
+        direction=direction,
+        path=qct_path.Separator.join(
+            [qct_path.LogicalSignalGroups_Path_Abs, connection.uid]
+        ),
+        physical_channel=pc,
+    )
 
 
 def _all_strings(items: list[str | None]) -> TypeGuard[list[str]]:
@@ -703,20 +157,15 @@ def add_connection(
         - Updates `DeviceSetup.logical_signal_groups`
         - Updates `DeviceSetup.physical_signal_groups`
     """
-    HANDLERS: dict[type[Instrument], type[_InstrumentGenerator]] = {
-        HDAWG: _HDAWGGenerator,
-        UHFQA: _UHFQAGenerator,
-        SHFPPC: _SHFPPCGenerator,
-        SHFQA: _SHFQAGenerator,
-        SHFQC: _SHFQCGenerator,
-        SHFSG: _SHFSGGenerator,
-        PQSC: _PQSCGenerator,
-        QHUB: _QHUBGenerator,
-        ZQCS: _ZQCSGenerator,
-    }
     dev = setup.instrument_by_uid(instrument)
     if dev is None:
         raise DeviceSetupInternalException(f"Instrument {instrument} not found.")
+    builder = instrument_registry.connection_builder(dev)
+    if builder is None:
+        raise DeviceSetupInternalException(
+            f"Instrument '{instrument}' of type '{type(dev).__name__}' does not "
+            f"support connections."
+        )
 
     if isinstance(connection, SignalConnection) and len(connection.ports) == 1:
         connection = attrs.evolve(
@@ -724,73 +173,68 @@ def add_connection(
             ports=_resolve_signal_connection_ports(setup, dev, instrument, connection),
         )
 
-    handler = HANDLERS[dev.__class__]
-    if isinstance(dev, ZQCS):
-        try:
-            [port] = connection.ports
-        except ValueError as e:
-            raise DeviceSetupInternalException(
-                "'ports' field must be a list with a single item"
-            ) from e
-        dev.append_port(port, connection.type)
-    else:
-        _raise_for_invalid_ports(dev, connection.ports)
+    resolved = builder(dev, connection)
 
     # Device connections
-    new_conns = handler.make_connections(connection)
+    remote_path = (
+        qct_path.insert_logical_signal_prefix(connection.uid)
+        if isinstance(connection, SignalConnection)
+        else connection.to
+    )
+    new_conns = [
+        Connection(
+            local_port=port.port,
+            remote_path=remote_path,
+            signal_type=port.signal_type,
+            direction=resolved.direction,
+        )
+        for port in resolved.ports
+    ]
     for conn in dev.connections:
         for new_conn in new_conns:
+            _raise_for_invalid_connection(conn, new_conn)
             if isinstance(connection, SignalConnection):
-                _InstrumentGenerator.raise_for_invalid_connection(conn, new_conn)
-                _InstrumentGenerator.raise_for_existing_connection(conn, new_conn)
-            if isinstance(connection, InternalConnection):
-                _InstrumentGenerator.raise_for_invalid_connection(conn, new_conn)
+                _raise_for_existing_connection(conn, new_conn)
 
-    if isinstance(connection, SignalConnection):
+    if isinstance(connection, SignalConnection) and resolved.channel_type is not None:
         # Physical signals
-        pc = handler.make_physical_channel(
-            instrument, connection.ports, connection.type
+        pc = _make_physical_channel(
+            instrument, [port.port for port in resolved.ports], resolved.channel_type
         )
-        if pc:
-            group, name = pc.uid.split(qct_path.Separator)
-            if group in setup.physical_channel_groups:
-                if name in setup.physical_channel_groups[group].channels:
-                    pc = setup.physical_channel_groups[group].channels[name]
-                else:
-                    setup.physical_channel_groups[group].channels[name] = pc
-                pcg = setup.physical_channel_groups[group]
+        group, name = pc.uid.split(qct_path.Separator)
+        if group in setup.physical_channel_groups:
+            if name in setup.physical_channel_groups[group].channels:
+                pc = setup.physical_channel_groups[group].channels[name]
             else:
-                pcg = PhysicalChannelGroup(uid=group)
-                pcg.channels[name] = pc
-                setup.physical_channel_groups[group] = pcg
+                setup.physical_channel_groups[group].channels[name] = pc
+        else:
+            pcg = PhysicalChannelGroup(uid=group)
+            pcg.channels[name] = pc
+            setup.physical_channel_groups[group] = pcg
 
-            # Mediator responsible for making sure calibration changes propagate
-            # between the physical channel and the logical signals its mapped to.
-            if pc.uid in setup._calibration_mediators:
-                mediator = setup._calibration_mediators[pc.uid]
+        # Mediator responsible for making sure calibration changes propagate
+        # between the physical channel and the logical signals its mapped to.
+        if pc.uid in setup._calibration_mediators:
+            mediator = setup._calibration_mediators[pc.uid]
+        else:
+            mediator = CalibrationMediator(pc)
+            setup._calibration_mediators[pc.uid] = mediator
+
+        # Logical signals
+        ls = _make_logical_signal(connection, resolved.direction, pc)
+        mediator.add_logical_signal(ls)
+        group, name = ls.uid.split(qct_path.Separator)
+        if group in setup.logical_signal_groups:
+            if name in setup.logical_signal_groups[group].logical_signals:
+                raise DeviceSetupInternalException(
+                    f"Signal {connection.uid} already exists."
+                )
             else:
-                mediator = CalibrationMediator(pc)
-                setup._calibration_mediators[pc.uid] = mediator
-
-            # Logical signals
-            assert isinstance(pc, PhysicalChannel), (
-                "LogicalSignal must have a physical channel"
-            )
-            ls = handler.make_logical_signal(connection, pc)
-            if ls:
-                mediator.add_logical_signal(ls)
-                group, name = ls.uid.split(qct_path.Separator)
-                if group in setup.logical_signal_groups:
-                    if name in setup.logical_signal_groups[group].logical_signals:
-                        raise DeviceSetupInternalException(
-                            f"Signal {connection.uid} already exists."
-                        )
-                    else:
-                        setup.logical_signal_groups[group].logical_signals[name] = ls
-                else:
-                    lsg = LogicalSignalGroup(uid=group)
-                    lsg.logical_signals[name] = ls
-                    setup.logical_signal_groups[group] = lsg
+                setup.logical_signal_groups[group].logical_signals[name] = ls
+        else:
+            lsg = LogicalSignalGroup(uid=group)
+            lsg.logical_signals[name] = ls
+            setup.logical_signal_groups[group] = lsg
 
     dev.connections.extend(new_conns)
 
@@ -826,7 +270,7 @@ def add_instrument(setup: DeviceSetup, instrument: Instrument):
     if isinstance(instrument, ZIStandardInstrument):
         if not instrument.address:
             raise DeviceSetupInternalException("Instrument must have an address.")
-        if not isinstance(instrument, ZQCS):
+        if instrument.requires_data_server:
             if len(setup.servers) == 1 and instrument.server_uid is None:
                 instrument.server_uid = next(iter(setup.servers.values())).uid
             else:

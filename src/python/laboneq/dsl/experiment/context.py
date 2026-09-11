@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import abc
 import threading
-from typing import Iterable
+from contextlib import contextmanager
+from typing import Generator, Iterable
 
 
 class Context(abc.ABC):
@@ -44,3 +45,18 @@ def iter_contexts() -> Iterable[Context]:
 
 def reversed_iter_contexts() -> Iterable[Context]:
     return reversed(get_local_contexts())
+
+
+@contextmanager
+def isolated_contexts() -> Generator[None, None, None]:
+    """Hide the active contexts for the duration of the block.
+
+    Code within the block behaves as if no context was active, so sections
+    created within it are not added to an enclosing section or experiment.
+    """
+    outer_contexts = get_local_contexts()
+    _store.active_contexts = []
+    try:
+        yield
+    finally:
+        _store.active_contexts = outer_contexts

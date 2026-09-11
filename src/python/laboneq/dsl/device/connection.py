@@ -25,10 +25,8 @@ if TYPE_CHECKING:
 @attrs.define
 class Connection:
     direction: IODirection = attrs.field(default=IODirection.OUT)
-    local_path: str | None = attrs.field(default=None)
     local_port: str | None = attrs.field(default=None)
     remote_path: str | None = attrs.field(default=None)
-    remote_port: str | None = attrs.field(default=None)
     signal_type: Optional[IOSignalType] = attrs.field(default=None)
 
 

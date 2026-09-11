@@ -1,7 +1,8 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use laboneq_common::types::{AwgKey, SignalKind};
+use laboneq_common::device_traits::DeviceTraits;
+use laboneq_common::types::{AwgKey, PhysicalDeviceUid, SignalKind};
 use laboneq_dsl::{
     signal_calibration::{MixerCalibration, OutputRoute, PortMode, Precompensation},
     types::{AmplifierPump, DeviceUid, Oscillator, Quantity, SignalUid, ValueOrParameter},
@@ -14,6 +15,12 @@ pub struct Signal {
     pub uid: SignalUid,
     pub awg_key: AwgKey,
     pub device_uid: DeviceUid,
+    /// Physical device the signal's device maps to.
+    /// This UID is used to group virtual devices that share the same
+    /// physical hardware, enabling proper device detection.
+    pub physical_device_uid: PhysicalDeviceUid,
+    /// Capabilities of the hardware the signal plays on.
+    pub traits: &'static DeviceTraits,
 
     // Configuration parameters
     pub sampling_rate: f64,
@@ -36,6 +43,8 @@ pub struct Signal {
     // Timing parameters
     pub port_delay: Option<ValueOrParameter<Duration<Second>>>,
     pub start_delay: Duration<Second>,
+    /// The part of the alignment delay too fine for the sequencer grid.
+    pub signal_alignment_delay: Duration<Second>,
     pub signal_delay: Duration<Second>,
 }
 
@@ -52,6 +61,8 @@ pub mod builder {
             sampling_rate: f64,
             awg_key: AwgKey,
             device_uid: DeviceUid,
+            physical_device_uid: PhysicalDeviceUid,
+            traits: &'static DeviceTraits,
             kind: SignalKind,
         ) -> Self {
             Self {
@@ -60,6 +71,8 @@ pub mod builder {
                     sampling_rate,
                     awg_key,
                     device_uid,
+                    physical_device_uid,
+                    traits,
                     oscillator: None,
                     lo_frequency: None,
                     voltage_offset: None,
@@ -71,6 +84,7 @@ pub mod builder {
                     signal_delay: 0.0.into(),
                     port_delay: None,
                     start_delay: 0.0.into(),
+                    signal_alignment_delay: 0.0.into(),
                     range: None,
                     precompensation: None,
                     added_outputs: vec![],

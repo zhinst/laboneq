@@ -1,0 +1,25 @@
+[package]
+name = "laboneq-qccs-codegen-artifacts-py"
+description = "Standalone Cap'n Proto CodegenArtifactsQccs -> Python deserializer"
+authors.workspace = true
+documentation.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "laboneq_qccs_codegen_artifacts_py"
+crate-type = ["lib"]
+
+[dependencies]
+capnp = { workspace = true }
+pyo3 = { workspace = true }
+
+laboneq-compiled-experiment-py = { workspace = true }
+laboneq-qccs-capnp = { workspace = true }
+laboneq-error = { workspace = true, features = ["pyo3"] }

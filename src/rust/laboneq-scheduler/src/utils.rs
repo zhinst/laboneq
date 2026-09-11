@@ -255,18 +255,9 @@ mod tests {
     #[test]
     fn test_compute_grid_common_rates() {
         let signals = [
-            MySignal::new(
-                device_traits::HDAWG_SAMPLING_RATE_WITHOUT_SHF.value(),
-                device_traits::HDAWG_TRAITS.sample_multiple,
-            ),
-            MySignal::new(
-                device_traits::SHFSG_SAMPLING_RATE.value(),
-                device_traits::SHFSG_TRAITS.sample_multiple,
-            ),
-            MySignal::new(
-                device_traits::UHFQA_SAMPLING_RATE.value(),
-                device_traits::UHFQA_TRAITS.sample_multiple,
-            ),
+            MySignal::new(device_traits::HDAWG_SAMPLING_RATE_WITHOUT_SHF.value(), 16),
+            MySignal::new(device_traits::SHFSG_SAMPLING_RATE.value(), 16),
+            MySignal::new(device_traits::UHFQA_SAMPLING_RATE.value(), 8),
         ];
         let (signal_grid, sequencer_grid) = compute_grid(signals.iter()).unwrap();
         // 2.4 GHz -> 1500, 2.0 GHz -> 1800, 1.8 GHz -> 2000
@@ -292,37 +283,37 @@ mod tests {
         let sampling_rate_expected_grids = [
             (
                 device_traits::HDAWG_SAMPLING_RATE_WITHOUT_SHF,
-                device_traits::HDAWG_TRAITS.sample_multiple,
+                16,
                 tiny_samples(1500),
                 tiny_samples(24000),
             ),
             (
                 device_traits::HDAWG_SAMPLING_RATE_WITH_SHF,
-                device_traits::HDAWG_TRAITS.sample_multiple,
+                16,
                 tiny_samples(1800),
                 tiny_samples(28800),
             ), // HDAWG with 2 Ghz
             (
                 device_traits::UHFQA_SAMPLING_RATE,
-                device_traits::UHFQA_TRAITS.sample_multiple,
+                8,
                 tiny_samples(2000),
                 tiny_samples(16000),
             ),
             (
                 device_traits::SHFQA_SAMPLING_RATE,
-                device_traits::SHFQA_TRAITS.sample_multiple,
+                16,
                 tiny_samples(1800),
                 tiny_samples(28800),
             ),
             (
                 device_traits::SHFSG_SAMPLING_RATE,
-                device_traits::SHFSG_TRAITS.sample_multiple,
+                16,
                 tiny_samples(1800),
                 tiny_samples(28800),
             ),
             (
                 device_traits::ZQCS_OUTPUT_SAMPLING_RATE,
-                device_traits::ZQCS_TRAITS.sample_multiple,
+                4,
                 tiny_samples(1800),
                 tiny_samples(7200),
             ),

@@ -5,8 +5,6 @@
 
 from __future__ import annotations
 
-# regular expressions
-import re
 from typing import TYPE_CHECKING, List
 
 import matplotlib
@@ -17,12 +15,10 @@ import matplotlib.pyplot as plt
 # numpy for mathematics
 import numpy as np
 
-from laboneq.core.types.enums.acquisition_type import is_spectroscopy
-from laboneq.simulator.output_simulator import OutputSimulator
+from laboneq.simulator.signal_plots import backends, prepare_signal_plots
 
 if TYPE_CHECKING:
     from laboneq.core.types.compiled_experiment import CompiledExperiment
-    from laboneq.data.artifacts_qccs import WeightInfo
 
 
 def zi_mpl_theme():
@@ -39,57 +35,6 @@ def zi_mpl_theme():
             "text.usetex": False,
         }
     )
-
-
-def _integration_weights_by_signal(
-    compiled_experiment: CompiledExperiment,
-) -> dict[str, list]:
-
-    scheduled_exp = compiled_experiment.scheduled_experiment
-
-    awg_to_channel_signals = {}
-    for integrator in scheduled_exp.artifacts.integrator_allocations:
-        key = (integrator.device_id, integrator.awg)
-        integration_unit_to_signals: dict[int, set[str]] = {}
-        for int_ch in integrator.channels:
-            integration_unit_to_signals.setdefault(int_ch, set()).add(
-                integrator.signal_id
-            )
-        awg_to_channel_signals.setdefault(key, dict()).update(
-            integration_unit_to_signals
-        )
-
-    rt_step_by_awg = set()
-    weight_info_by_signal: dict[str, list[WeightInfo]] = {}
-    for rt_init in scheduled_exp.artifacts.realtime_execution_init:
-        key = (rt_init.device_id, rt_init.awg_index)
-        integration_unit_to_signals = awg_to_channel_signals.get(key, {})
-        if key not in rt_step_by_awg:
-            rt_step_by_awg.add(key)
-            for iw in scheduled_exp.artifacts.integration_weights[
-                rt_init.kernel_indices_ref
-            ]:
-                for unit in iw.integration_units:
-                    for signal in integration_unit_to_signals.get(unit, set()):
-                        weight_info_by_signal.setdefault(signal, list()).append(iw)
-
-    kernel_samples_by_signal: dict[str, list] = {
-        signal: [] for signal in weight_info_by_signal
-    }
-    for signal, kernels in weight_info_by_signal.items():
-        for kernel in kernels:
-            waveform: None | np.ndarray = None
-            for scale, suffix in [(1, ".wave"), (1, "_i.wave"), (1j, "_q.wave")]:
-                new_wf = scheduled_exp.artifacts.waves.get(kernel.id + suffix)
-                if new_wf is not None:
-                    waveform = scale * new_wf.samples + (
-                        waveform if waveform is not None else 0
-                    )
-            assert waveform is not None, "kernel not found"
-            waveform = np.repeat(waveform, kernel.downsampling_factor)
-            kernel_samples_by_signal[signal] += [waveform]
-
-    return kernel_samples_by_signal
 
 
 def plot_simulation(
@@ -145,273 +90,52 @@ def plot_simulation(
     Returns:
         None.
     """
-    simulation = OutputSimulator(
-        compiled_experiment, max_simulation_length=start_time + length
+
+    backend = backends.from_compiled_experiment(compiled_experiment)
+
+    plots = prepare_signal_plots(
+        compiled_experiment=compiled_experiment,
+        simulation_start_time=start_time,
+        simulation_duration=length,
+        signal_overrides=signals,
+        signal_patterns=signal_names_to_show,
+        integration_kernels_to_plot=integration_kernels_to_plot,
+        signal_plots_backend=backend,
     )
-    exp_is_spectroscopy = is_spectroscopy(
-        compiled_experiment.scheduled_experiment.rt_loop_properties.acquisition_type
-    )
-    if signals is None:
-        mapped_signals = compiled_experiment.experiment.signal_mapping_status[
-            "mapped_signals"
-        ]
-    else:
-        mapped_signals = signals
-
-    kernel_samples = _integration_weights_by_signal(compiled_experiment)
-
-    # Gather the information to plot in each panel as list of lists:
-    # [
-    #   [line1, line_2, ...],  # for subplot 1
-    #   [line1, line_2, ...],  # for subplot 2
-    #   ...
-    # ]
-    xs = []  # x-axis values
-    y1s = []  # y-axis values - in-phase (I) signals
-    labels1 = []  # labels for the in-phase (I) signals
-    y2s = []  # y-axis values - quadrature (Q) signals
-    labels2 = []  # labels for the quadrature (Q) signals
-    titles = []  # subplot titles: this is not a list of lists: only one title per panel
-
-    # extract physical channel info for each logical signal as a list of
-    # [(physical_channel_path, {"signal": list_of_logical_signal_names})]
-    # With the exceptions of the drive signals, list_of_logical_signal_names should be
-    # a one-entry list.
-    channels_and_signals = []
-    for signal in mapped_signals:
-        mapped_path = compiled_experiment.experiment.signals[
-            signal
-        ].mapped_logical_signal_path
-
-        full_path = re.sub(r"/logical_signal_groups/", "", mapped_path)
-        signal_group_name = re.sub(r"/[^/]*$", "", full_path)
-        signal_line_name = re.sub(r".*/", "", full_path)
-
-        physical_channel_path = (
-            compiled_experiment.device_setup.logical_signal_groups[signal_group_name]
-            .logical_signals[signal_line_name]
-            .physical_channel
-        )
-
-        if "sg" in physical_channel_path.name and physical_channel_path in [
-            phys_ch[0] for phys_ch in channels_and_signals
-        ]:
-            idx = [
-                i
-                for i, phys_ch in enumerate(channels_and_signals)
-                if physical_channel_path == phys_ch[0]
-            ][0]
-            channels_and_signals[idx][1]["signals"].append(signal)
-        else:
-            channels_and_signals += [(physical_channel_path, {"signals": [signal]})]
-
-    # group according to the names in group_signal_names_as
-    if signal_names_to_show is not None:
-        assert hasattr(signal_names_to_show, "__iter__")
-        channels_and_signals_tmp = []
-        for s in signal_names_to_show:
-            for ch, ch_v in channels_and_signals:
-                for sig in ch_v["signals"]:
-                    if s in sig:
-                        channels_and_signals_tmp += [(ch, ch_v)]
-                        break
-        channels_and_signals = channels_and_signals_tmp
-        if len(channels_and_signals) == 0:
-            raise ValueError(
-                f"None of the signals in group_signal_names_as "
-                f"({signal_names_to_show}) match the signals used in the "
-                f"experiment: {mapped_signals}."
-            )
-
-    # simulate output only once for each physical channel
-    for channel, channel_values in channels_and_signals:
-        my_snippet = simulation.get_snippet(
-            channel,
-            start=start_time,
-            output_length=length,
-            get_trigger=True,
-            get_marker=True,
-            get_frequency=True,
-        )
-
-        physical_channel_name = channel.uid.replace("_", " ").replace("/", ": ")
-
-        signal = channel_values["signals"][0]
-        signal_names = "-".join(channel_values["signals"])
-
-        if (
-            "iq_channel" in str(channel.type).lower()
-            and "input" not in channel.name
-            and "qas_0_1" not in channel.name
-        ):
-            if my_snippet.time is not None:
-                xs.append([my_snippet.time])
-
-                y1s.append([my_snippet.wave.real])
-                labels1.append(["I"])
-
-                y2s.append([my_snippet.wave.imag])
-                labels2.append(["Q"])
-
-                titles.append(f"{physical_channel_name} - {signal_names}".upper())
-
-        elif (
-            "input" in channel.name or "qas_0_1" in channel.name
-        ) and not exp_is_spectroscopy:
-            if (my_snippet.time is not None) and (signal in kernel_samples):
-                this_kernel_samples = kernel_samples[signal]
-                trigger_indices = np.argwhere(my_snippet.wave).flatten()
-                # known issue: the simulator does not extend the QA trigger
-                # waveform past the last trigger, so we make the new waveform longer
-                xs_sublist, y1s_sublist, y2s_sublist = [], [], []
-                labels1_sublist, labels2_sublist = [], []
-                if integration_kernels_to_plot == "all":
-                    integration_kernels_to_plot = (
-                        np.arange(len(this_kernel_samples)) + 1
-                    )
-                for k in integration_kernels_to_plot:
-                    kernel = this_kernel_samples[k - 1]
-                    if len(trigger_indices) and trigger_indices[-1] + len(kernel) > len(
-                        my_snippet.wave
-                    ):
-                        dt: float = my_snippet.time[1] - my_snippet.time[0]  # type: ignore
-                        waveform = np.zeros(
-                            trigger_indices[-1] + len(kernel),
-                            dtype=np.complex128,
-                        )
-                        time = dt * np.arange(len(waveform)) + my_snippet.time[0]  # type: ignore
-                    else:
-                        waveform = np.zeros_like(my_snippet.wave, dtype=np.complex128)
-                        time = my_snippet.time
-
-                    for i in trigger_indices:
-                        waveform[i : i + len(kernel)] = kernel
-
-                    xs_sublist.append(time)
-
-                    y1s_sublist.append(waveform.real)
-                    labels1_sublist.append(
-                        f"w{k}-I" if len(this_kernel_samples) > 1 else "I"
-                    )
-
-                    y2s_sublist.append(waveform.imag)
-                    labels2_sublist.append(
-                        f"w{k}-Q" if len(this_kernel_samples) > 1 else "Q"
-                    )
-
-                xs.append(xs_sublist)
-
-                y1s.append(y1s_sublist)
-                labels1.append(labels1_sublist)
-
-                y2s.append(y2s_sublist)
-                labels2.append(labels2_sublist)
-
-                titles.append(f"{physical_channel_name} - {signal}".upper())
-
-        elif "iq_channel" not in str(channel.type).lower():
-            if my_snippet.time is not None:
-                time_length = len(my_snippet.time)
-
-                xs.append([my_snippet.time])
-
-                y1s.append([my_snippet.wave.real])
-                labels1.append([f"{physical_channel_name}"])
-
-                titles.append(f"{physical_channel_name} - {signal_names}".upper())
-
-                empty_array = np.full(time_length, np.nan)
-                y2s.append([empty_array])
-                labels2.append([None])
-        if (
-            "qa" not in str(channel.name)
-            and np.sum(my_snippet.trigger) != 0
-            and f"{physical_channel_name} - Trigger".upper() not in titles
-        ):
-            if my_snippet.time is not None:
-                time_length = len(my_snippet.time)
-
-                xs.append([my_snippet.time])
-
-                y1s.append([my_snippet.trigger])
-                labels1.append(["Trigger"])
-
-                titles.append(f"{physical_channel_name} - Trigger".upper())
-
-                empty_array = np.full(time_length, np.nan)
-                y2s.append([empty_array])
-                labels2.append([None])
-
-        if np.any(my_snippet.marker):
-            if my_snippet.time is not None:
-                time_length = len(my_snippet.time)
-
-                xs.append([my_snippet.time])
-
-                y1s.append([my_snippet.marker.real])
-                labels1.append(["Marker 1"])
-
-                if np.any(my_snippet.marker.imag):
-                    y2s.append([my_snippet.marker.imag])
-                    labels2.append(["Marker 2"])
-                else:
-                    empty_array = np.full(time_length, np.nan)
-                    labels2.append([None])
-                    y2s.append([empty_array])
-
-                titles.append(
-                    f"{physical_channel_name} - {signal_names} - Marker".upper()
-                )
 
     with zi_mpl_theme():
         fig, axes = plt.subplots(
-            nrows=len(y1s),
+            nrows=len(plots),
             sharex=False,
-            figsize=(plot_width, len(y1s) * plot_height),
+            figsize=(plot_width, len(plots) * plot_height),
         )
-        if len(xs) == 1:
-            # ensure axes are always iterable
-            axes = np.array([axes])
+        if len(plots) == 1:
+            axes = [axes]
 
         c_cycle = plt.rcParams["axes.prop_cycle"]
-        # colormaps for when the number of lines to plot exceeds the number of available
-        # colors in plt.rcParams["axes.prop_cycle"]
-        cmap_i = matplotlib.colormaps["hsv"]
-        cmap_q = matplotlib.colormaps["plasma"]
 
-        for axs, x_all, y1_all, y2_all, label1_all, label2_all, title in zip(
-            axes.flat, xs, y1s, y2s, labels1, labels2, titles
-        ):
-            for i, (x, y1, y2, label1, label2) in enumerate(
-                zip(x_all, y1_all, y2_all, label1_all, label2_all)
-            ):
-                # Color is taken from cmaps if len(x_all) > len(c_cycle), else from
-                # default color cycle
-                c = (
-                    cmap_i(i / len(x_all))
-                    if len(x_all) > len(c_cycle) / 2
-                    else f"C{2 * i}"
+        for ax, plot in zip(axes, plots):
+            for i, series in enumerate(plot.y):
+                ax.plot(
+                    plot.x * xaxis_scaling,
+                    series.data,
+                    label=series.label,
+                    color=get_color(
+                        series_index=i,
+                        number_of_series=len(plot.y),
+                        color_cycle_length=len(c_cycle),
+                    ),
                 )
-                axs.plot(x * xaxis_scaling, y1, label=label1, color=c)
-                c = (
-                    cmap_q(i / len(x_all))
-                    if len(x_all) > len(c_cycle) / 2
-                    else f"C{2 * i + 1}"
-                )
-                axs.plot(x * xaxis_scaling, y2, label=label2, color=c)
-            axs.set_ylabel(yaxis_label)
-            axs.set_xlabel(xaxis_label)
-            axs.set_title(title)
-            axs.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0), handlelength=0.75)
-            if scientific_notation:
-                axs.ticklabel_format(axis="both", style="sci", scilimits=(0, 0))
-            axs.grid(True)
-
-        # enforce same x-axis scale for all plots
-        for ax in axes:
             ax.set_xlim(
                 start_time * xaxis_scaling, (start_time + length) * xaxis_scaling
             )
+            ax.set_ylabel(yaxis_label)
+            ax.set_xlabel(xaxis_label)
+            ax.set_title(plot.title)
+            ax.legend(loc="upper left", bbox_to_anchor=(1.0, 1.0), handlelength=0.75)
+            if scientific_notation:
+                ax.ticklabel_format(axis="both", style="sci", scilimits=(0, 0))
+            ax.grid(True)
 
         fig.tight_layout()
         fig.align_labels()
@@ -569,3 +293,16 @@ def plot2d_abs(results, handle):
         plt.plot(axis, np.abs(data))
         plt.xlabel(xlabel)
         plt.ylabel("level")
+
+
+def get_color(*, series_index: int, number_of_series: int, color_cycle_length: int):
+    cmap_i = matplotlib.colormaps["hsv"]
+    cmap_q = matplotlib.colormaps["plasma"]
+
+    if number_of_series <= color_cycle_length:
+        return f"C{series_index}"
+
+    if not series_index % 2:
+        return cmap_i(series_index / number_of_series)
+
+    return cmap_q(series_index / number_of_series)

@@ -16,6 +16,7 @@ Example:
 
 from __future__ import annotations
 
+import hmac
 import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
@@ -26,6 +27,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from laboneq._version import get_version
+from laboneq.controller.api.commons import AUTH_HEADER, AUTH_SCHEME
+from laboneq.controller.constants import (
+    CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S,
+    PROTOCOL_VERSION,
+)
 from laboneq.controller.service.controller_container import ControllerContainer
 from laboneq.controller.service.models import (
     ErrorBody,
@@ -47,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# Root-level health probes (not versioned, no auth)
+# Root-level health probes (not versioned; guarded like every other route)
 # =============================================================================
 
 health_router = APIRouter(tags=["health"])
@@ -96,6 +102,8 @@ def create_app(
     reset_devices: bool = False,
     instrument_topology: InstrumentTopology | None = None,
     public_url: str | None = None,
+    auth_token: str | None = None,
+    channel_absence_timeout_s: float = CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S,
 ) -> FastAPI:
     """Create the FastAPI application.
 
@@ -114,9 +122,15 @@ def create_app(
             `laboneq.controller.service.advertised_url`).  Needed only when the
             service sits behind a proxy that forwards no ``Forwarded`` or
             ``X-Forwarded-*`` headers.
+        auth_token: Secret every request must present as
+            ``Authorization: Bearer <token>``. ``None`` serves every caller that
+            can reach the port.
+        channel_absence_timeout_s: Fail a run whose client callback channel
+            stays detached longer than this many seconds.
 
     Returns:
-        Configured FastAPI application.
+        Configured FastAPI application. Should it fail to start up, the reason
+        is left on ``app.state.startup_error``, which is ``None`` otherwise.
 
     Example:
         Basic usage::
@@ -133,21 +147,29 @@ def create_app(
     """
 
     @asynccontextmanager
-    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         """Manage application lifecycle.
 
         Connects to hardware on startup; a connection failure propagates and
-        aborts server startup rather than running in a degraded state.
+        aborts server startup rather than running in a degraded state. It is
+        also recorded on `app.state.startup_error`: an ASGI server logs the
+        exception and exits, so whoever started the server never sees it
+        otherwise.
         """
         logger.info("Starting LabOne Q Controller Service v%s", get_version())
-        _app.state.controller_container = await ControllerContainer.create(
-            neartime_callbacks=neartime_callbacks,
-            device_setup=device_setup,
-            dataserver=dataserver,
-            do_emulation=do_emulation,
-            reset_devices=reset_devices,
-            instrument_topology=instrument_topology,
-        )
+        try:
+            app.state.controller_container = await ControllerContainer.create(
+                neartime_callbacks=neartime_callbacks,
+                device_setup=device_setup,
+                dataserver=dataserver,
+                do_emulation=do_emulation,
+                reset_devices=reset_devices,
+                instrument_topology=instrument_topology,
+                channel_absence_timeout_s=channel_absence_timeout_s,
+            )
+        except BaseException as exc:
+            app.state.startup_error = exc
+            raise
         yield
 
     app = FastAPI(
@@ -160,6 +182,7 @@ def create_app(
     )
 
     app.state.public_url = public_url
+    app.state.startup_error = None
 
     @app.exception_handler(ServiceError)
     async def _handle_service_error(
@@ -188,8 +211,9 @@ def create_app(
 
     # Add CORS middleware if enabled; for now, we are very permissive.
     # Note: allow_credentials is deliberately False — the CORS spec forbids
-    # combining credentials=true with allow_origins=["*"].  When auth is added,
-    # enumerate specific origins instead.
+    # combining credentials=true with allow_origins=["*"].  This sits inside
+    # the auth middleware below, so a preflight OPTIONS on a token-guarded app
+    # gets a 401 with no CORS headers rather than a real answer.
     if enable_cors:
         app.add_middleware(
             CORSMiddleware,
@@ -198,6 +222,44 @@ def create_app(
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    # Registered ahead of `add_server_headers` below, which makes it the inner
+    # of the two: Starlette builds its stack so that the earliest-registered
+    # middleware ends up innermost. A rejected request therefore still travels
+    # back out through the header middleware and identifies the server.
+    if auth_token is not None:
+        if not auth_token:
+            raise ValueError(
+                "auth_token must be a non-empty secret, or None to install no check."
+            )
+        expected_token = auth_token.encode()
+
+        @app.middleware("http")
+        async def require_auth_token(
+            request: Request, call_next: Callable[[Request], Awaitable[Response]]
+        ) -> Response:
+            scheme, _, credentials = request.headers.get(AUTH_HEADER, "").partition(" ")
+            # The scheme is not a secret, so it may be compared directly; the
+            # credentials are compared as bytes, because compare_digest raises
+            # on a non-ASCII str and the header holds whatever the caller sent.
+            if scheme.lower() != AUTH_SCHEME.lower() or not hmac.compare_digest(
+                credentials.encode(), expected_token
+            ):
+                body = ErrorResponse(
+                    error=ErrorBody(
+                        code=ErrorCode.UNAUTHORIZED.value,
+                        message=(
+                            f"This service serves only callers presenting its "
+                            f"token as '{AUTH_HEADER}: {AUTH_SCHEME} <token>'."
+                        ),
+                    )
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    content=body.model_dump(),
+                    headers={"WWW-Authenticate": AUTH_SCHEME},
+                )
+            return await call_next(request)
 
     # inject server identification headers on every response.
     _server_version = get_version()
@@ -208,7 +270,7 @@ def create_app(
     ) -> Response:
         response = await call_next(request)
         response.headers["X-LabOneQ-Server-Version"] = _server_version
-        response.headers["X-LabOneQ-Protocol-Version"] = "1.0"
+        response.headers["X-LabOneQ-Protocol-Version"] = PROTOCOL_VERSION
         response.headers["Accept-Post"] = "application/json"
         return response
 

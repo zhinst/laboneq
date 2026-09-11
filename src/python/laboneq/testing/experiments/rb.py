@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, ClassVar
 
 import attrs
+import numpy as np
 import numpy.random as nprnd
 
 from laboneq.contrib.example_helpers.randomized_benchmarking_helper import (
@@ -19,6 +20,7 @@ from laboneq.simple import (
     Oscillator,
     SectionAlignment,
     SignalCalibration,
+    SweepParameter,
 )
 
 if TYPE_CHECKING:
@@ -72,6 +74,9 @@ def create_rb_experiment(settings: RBExperimentSettings):
                     _results[n, m, k, i] = measure(qubit)
     results = average(_results, over_dimension=0)
     ```
+    The nesting shown is the one of `AveragingMode.CYCLIC`. Under
+    `AveragingMode.SEQUENTIAL` the averaging loop is the innermost loop instead of the
+    outermost one, so each sequence is averaged before the next one is played.
 
     """
     builder = RBExperimentBuilder()
@@ -133,6 +138,12 @@ class RBExperimentSettings:
             oscillator.
         sg_range: Range to set in the SignalCalibration of the drive (SG) channel.
             If set to None, uses the default settings.
+        chunk_count: Number of chunks to split the sequence sweep into. Chunking
+            carries more sequences than fit into a single program, but not every setup
+            can execute the chunks: a UHFQA cannot, nor can an SHFQA acquiring in
+            `AcquisitionType.RAW`. Each chunk is averaged on its own.
+        auto_chunking: Whether the compiler picks the chunk count itself, taking
+            `chunk_count` as its starting guess.
     """
 
     seed: int = attrs.field(validator=attrs.validators.ge(0))
@@ -158,6 +169,8 @@ class RBExperimentSettings:
     sg_modulation_type: ModulationType
     qa_modulation_type: ModulationType
     sg_range: float | None
+    chunk_count: int = attrs.field(default=1, validator=attrs.validators.ge(1))
+    auto_chunking: bool = False
 
 
 @attrs.define
@@ -189,6 +202,9 @@ class RBExperimentBuilder:
                     _results[n, m, k, i] = measure(qubit)
     results = average(_results, over_dimension=0)
     ```
+    The nesting shown is the one of `AveragingMode.CYCLIC`. Under
+    `AveragingMode.SEQUENTIAL` the averaging loop is the innermost loop instead of the
+    outermost one, so each sequence is averaged before the next one is played.
     The real execution is much more complex than what this snippet suggests, but this is
     still useful for understanding which parts are randomized and how results are
     obtained.
@@ -216,7 +232,15 @@ class RBExperimentBuilder:
             settings.pi_half_pulse_amp,
         )
 
-        # Construct a RB experiment with identical structure to the example notebook
+        # All RB sequences, indexed as (sequence_length, repetition) pairs. The RNG is
+        # drawn in this order below, so the order is part of what a seed pins down.
+        sequences = [
+            (sequence_length, repetition)
+            for sequence_length in settings.sequence_lengths
+            for repetition in range(settings.n_repeat)
+        ]
+        index = SweepParameter(uid="rb_index", values=np.arange(len(sequences)))
+
         with exp.acquire_loop_rt(
             uid="rt_loop",
             count=settings.n_average,
@@ -224,62 +248,67 @@ class RBExperimentBuilder:
             acquisition_type=settings.acquisition_type,
             reset_oscillator_phase=False,
         ):
-            # inner loop - sweep over sequence lengths
-            for length in settings.sequence_lengths:
-                # innermost loop - different random sequences for each length
-                for k in range(settings.n_repeat):
-                    # RB block
-
-                    # generate composite pulse representing the sequence of Cliffords
-                    with exp.section(
-                        uid=f"cliffords_{length}_{k}",
-                        alignment=SectionAlignment.RIGHT,
-                    ):
-                        for qubit_id in settings.qubit_ids:
-                            generate_play_rb_pulses(
-                                exp,
-                                f"{qubit_id}_drive",
-                                length,
-                                clifford_parametrized,
-                                gate_map=gate_map,
-                                rng=rng,
-                            )
-                    # readout and data acquisition
-                    with exp.section(uid=f"readout_{length}_{k}"):
-                        for qubit_id in settings.qubit_ids:
-                            exp.reserve(
-                                signal=f"{qubit_id}_drive",
-                            )
-                            # add a delay before the readout pulse
-                            exp.delay(
-                                signal=f"{qubit_id}_measure",
-                                time=settings.prereadout_delay,
-                            )
-                            # play readout pulse
-                            exp.play(
-                                signal=f"{qubit_id}_measure",
-                                pulse=settings.measure_pulse,
-                            )
-                            # signal data acquisition
-                            exp.acquire(
-                                signal=f"{qubit_id}_acquire",
-                                handle=f"ac_{qubit_id}",
-                                kernel=settings.acquire_kernel,
-                            )
-                    with exp.section(
-                        uid=f"relaxation_{length}_{k}",
-                        length=settings.relaxation_length,
-                    ):
-                        for qubit_id in settings.qubit_ids:
-                            exp.reserve(
-                                signal=f"{qubit_id}_drive",
-                            )
-                            exp.reserve(
-                                signal=f"{qubit_id}_measure",
-                            )
-                            exp.reserve(
-                                f"{qubit_id}_acquire",
-                            )
+            with exp.sweep(
+                uid="rb_sweep",
+                parameter=index,
+                chunk_count=settings.chunk_count,
+                auto_chunking=settings.auto_chunking,
+            ):
+                # The composite pulse of a sequence of Cliffords, one case per sequence.
+                # A match on a sweep parameter is resolved at compile time, so a chunk
+                # holds only the cases it plays.
+                with exp.match(sweep_parameter=index):
+                    for i, (sequence_length, _repetition) in enumerate(sequences):
+                        with exp.case(i):
+                            with exp.section(
+                                uid=f"cliffords_{i}",
+                                alignment=SectionAlignment.RIGHT,
+                            ):
+                                for qubit_id in settings.qubit_ids:
+                                    generate_play_rb_pulses(
+                                        exp,
+                                        f"{qubit_id}_drive",
+                                        sequence_length,
+                                        clifford_parametrized,
+                                        gate_map=gate_map,
+                                        rng=rng,
+                                    )
+                # Readout and data acquisition at the end of every sequence
+                with exp.section(uid="readout"):
+                    for qubit_id in settings.qubit_ids:
+                        exp.reserve(
+                            signal=f"{qubit_id}_drive",
+                        )
+                        # add a delay before the readout pulse
+                        exp.delay(
+                            signal=f"{qubit_id}_measure",
+                            time=settings.prereadout_delay,
+                        )
+                        # play readout pulse
+                        exp.play(
+                            signal=f"{qubit_id}_measure",
+                            pulse=settings.measure_pulse,
+                        )
+                        # signal data acquisition
+                        exp.acquire(
+                            signal=f"{qubit_id}_acquire",
+                            handle=f"ac_{qubit_id}",
+                            kernel=settings.acquire_kernel,
+                        )
+                with exp.section(
+                    uid="relaxation",
+                    length=settings.relaxation_length,
+                ):
+                    for qubit_id in settings.qubit_ids:
+                        exp.reserve(
+                            signal=f"{qubit_id}_drive",
+                        )
+                        exp.reserve(
+                            signal=f"{qubit_id}_measure",
+                        )
+                        exp.reserve(
+                            f"{qubit_id}_acquire",
+                        )
 
         exp.set_calibration(
             self._make_calibration(

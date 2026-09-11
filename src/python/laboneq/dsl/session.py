@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Union
 from laboneq import laboneq_logging
 from laboneq.controller import Controller, LabOneQControllerException
 from laboneq.controller.runtime_context_impl import LegacySessionData
+from laboneq.controller.target_setup import build_target_setup
 from laboneq.controller.toolkit_adapter import ToolkitDevices
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types import CompiledExperiment
@@ -25,9 +26,6 @@ from laboneq.dsl.device.io_units.logical_signal import (
     resolve_logical_signal_ref,
 )
 from laboneq.dsl.result import Results
-from laboneq.implementation.legacy_adapters.converters_target_setup import (
-    convert_dsl_to_target_setup,
-)
 
 if TYPE_CHECKING:
     # Imported lazily at runtime (see `_RemoteControllerBacking.connect`) to
@@ -35,6 +33,7 @@ if TYPE_CHECKING:
     # pulls in `laboneq.serializers`, which eventually imports this module
     # back.
     from laboneq.controller.api.remote_controller import RemoteController
+    from laboneq.controller.service.local_service import LocalControllerService
     from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.data.setup_descriptions import SetupDescription
     from laboneq.dsl.device.io_units.logical_signal import (
@@ -114,6 +113,7 @@ class _SessionBacking(ABC):
         self,
         scheduled_experiment: ScheduledExperiment,
         legacy_session_data: LegacySessionData,
+        coprocessor_payload_overrides: dict[str, bytes] | None = None,
     ):
         """Submit *scheduled_experiment* and return once it has completed.
 
@@ -142,7 +142,7 @@ class _LocalControllerBacking(_SessionBacking):
         disable_runtime_checks: bool,
         timeout: float | None,
     ) -> _LocalControllerBacking:
-        target_setup = convert_dsl_to_target_setup(device_setup)
+        target_setup = build_target_setup(device_setup)
         controller = Controller(
             target_setup=target_setup,
             ignore_version_mismatch=ignore_version_mismatch,
@@ -186,11 +186,14 @@ class _LocalControllerBacking(_SessionBacking):
         self,
         scheduled_experiment: ScheduledExperiment,
         legacy_session_data: LegacySessionData,
+        coprocessor_payload_overrides: dict[str, bytes] | None = None,
     ):
         self._controller.set_legacy_session_data(legacy_session_data)
         handle = None
         try:
-            handle = self._controller.submit_compiled(scheduled_experiment)
+            handle = self._controller.submit_compiled(
+                scheduled_experiment, coprocessor_payload_overrides
+            )
             self._controller.wait_submission(handle)
         finally:
             self._controller.stop_workers()
@@ -204,16 +207,25 @@ class _LocalControllerBacking(_SessionBacking):
 class _RemoteControllerBacking(_SessionBacking):
     """Submits experiments to a running controller service over HTTP,
     instead of driving hardware directly.
+
+    Under `do_emulation`, the service submitted to is one this backing starts
+    on localhost and owns, rather than the one the setup points at.
     """
 
-    def __init__(self, remote_controller: RemoteController):
+    def __init__(
+        self,
+        remote_controller: RemoteController,
+        local_service: LocalControllerService | None = None,
+    ):
         self._remote_controller = remote_controller
+        self._local_service = local_service
         self._raw_results = Results()
 
     @classmethod
     def connect(
         cls,
         remote_url: str,
+        device_setup: DeviceSetup,
         do_emulation: bool,
         ignore_version_mismatch: bool,
         reset_devices: bool,
@@ -225,12 +237,6 @@ class _RemoteControllerBacking(_SessionBacking):
         # the comment next to the `TYPE_CHECKING` import above.
         from laboneq.controller.api.remote_controller import RemoteController
 
-        if do_emulation:
-            raise LabOneQException(
-                "do_emulation is not supported when connected via a remote "
-                "controller service; emulation is configured on the service "
-                "itself."
-            )
         if reset_devices:
             raise LabOneQException(
                 "reset_devices is not supported when connected via a remote "
@@ -254,12 +260,34 @@ class _RemoteControllerBacking(_SessionBacking):
                 "on the controller service instead (see its '--callbacks' "
                 "option)."
             )
-        remote_controller = RemoteController.create(
-            # Stripped because the client appends request paths to this address.
-            remote_url=remote_url.rstrip("/"),
-            ignore_version_mismatch=ignore_version_mismatch,
-        )
-        return cls(remote_controller=remote_controller)
+        local_service: LocalControllerService | None = None
+        auth_token: str | None = None
+        if do_emulation:
+            # Imported lazily so that a session which never emulates does not
+            # pull FastAPI and uvicorn in.
+            from laboneq.controller.service.local_service import (
+                LocalControllerService,
+            )
+
+            # The configured service drives real hardware, so emulation cannot
+            # go there. Host an emulated one instead and use it in its place.
+            local_service = LocalControllerService.start(device_setup)
+            remote_url = local_service.url
+            auth_token = local_service.auth_token
+        try:
+            remote_controller = RemoteController.create(
+                # Stripped because the client appends request paths to this address.
+                remote_url=remote_url.rstrip("/"),
+                ignore_version_mismatch=ignore_version_mismatch,
+                auth_token=auth_token,
+            )
+        except BaseException:
+            # There is no backing to disconnect() when connect() raises, so a
+            # service started above has to be released right here.
+            if local_service is not None:
+                local_service.stop()
+            raise
+        return cls(remote_controller=remote_controller, local_service=local_service)
 
     def assert_supports_registering_callbacks(self) -> None:
         raise LabOneQException(
@@ -280,7 +308,12 @@ class _RemoteControllerBacking(_SessionBacking):
         )
 
     def disconnect(self) -> None:
-        self._remote_controller.close()
+        try:
+            self._remote_controller.close()
+        finally:
+            if self._local_service is not None:
+                self._local_service.stop()
+                self._local_service = None
 
     def disable_outputs(
         self,
@@ -297,10 +330,14 @@ class _RemoteControllerBacking(_SessionBacking):
         self,
         scheduled_experiment: ScheduledExperiment,
         legacy_session_data: LegacySessionData,
+        coprocessor_payload_overrides: dict[str, bytes] | None = None,
     ):
         # legacy_session_data has no remote equivalent: there is no HTTP
         # endpoint to forward it to.
-        handle = self._remote_controller.submit_experiment(scheduled_experiment)
+        handle = self._remote_controller.submit_experiment(
+            scheduled_experiment,
+            coprocessor_payload_overrides=coprocessor_payload_overrides,
+        )
         try:
             self._remote_controller.wait_for_experiment(handle)
             self._raw_results = self._remote_controller.get_experiment(handle)
@@ -582,10 +619,10 @@ class Session:
             )
 
         self._ignore_version_mismatch = ignore_version_mismatch
-        if (
-            self._connection_state.connected
-            and self._connection_state.emulated != do_emulation
-        ):
+        # Tear down any previous backing before building a new one: reassigning
+        # `self._backing` below would otherwise abandon it while it still holds
+        # a hardware connection (or, for a remote backing, a bound port).
+        if self._backing is not None:
             self.disconnect()
         self._connection_state.emulated = do_emulation
 
@@ -593,6 +630,7 @@ class Session:
         if remote_url is not None:
             self._backing = _RemoteControllerBacking.connect(
                 remote_url=remote_url,
+                device_setup=self._device_setup,
                 do_emulation=do_emulation,
                 ignore_version_mismatch=ignore_version_mismatch,
                 reset_devices=reset_devices,
@@ -790,7 +828,9 @@ class Session:
         )
         try:
             backing.execute(
-                self.compiled_experiment.scheduled_experiment, legacy_session_data
+                self.compiled_experiment.scheduled_experiment,
+                legacy_session_data,
+                self.compiled_experiment.coprocessor_payload_overrides,
             )
         finally:
             raw_results = backing.raw_results

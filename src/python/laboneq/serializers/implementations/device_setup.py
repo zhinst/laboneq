@@ -38,7 +38,7 @@ _converter = make_converter()
 @serializer(types=DeviceSetup, public=True)
 class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
     SERIALIZER_ID = "laboneq.serializers.implementations.DeviceSetupSerializer"
-    VERSION = 5
+    VERSION = 6
 
     @classmethod
     def to_dict(
@@ -89,6 +89,14 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
         }
 
     @classmethod
+    def from_dict_v6(
+        cls,
+        serialized_data: JsonSerializableType,
+        options: DeserializationOptions | None = None,
+    ) -> DeviceSetup:
+        return cls.from_dict_v5(serialized_data, options)
+
+    @classmethod
     def from_dict_v5(
         cls,
         serialized_data: JsonSerializableType,
@@ -127,6 +135,7 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
         options: DeserializationOptions | None = None,
     ) -> DeviceSetup:
         se = serialized_data["__data__"]
+        cls._remove_connection_paths(se)
         uid = se["uid"]
         servers = {
             k: _converter.structure(v, DataServerModel)
@@ -156,6 +165,16 @@ class DeviceSetupSerializer(VersionedClassSerializer[DeviceSetup]):
             logical_signal_groups=logical_signal_groups,
             qubits=qubits,
         )
+
+    @classmethod
+    def _remove_connection_paths(cls, device_setup_data: dict):
+        """Drop the `local_path` and `remote_port` connection fields that
+        serializations up to v5 carry. Both were unused; `Connection` no
+        longer has them."""
+        for instrument in device_setup_data["instruments"]:
+            for connection in instrument["connections"]:
+                connection.pop("local_path", None)
+                connection.pop("remote_port", None)
 
     @classmethod
     def _rename_physical_channel_field(cls, device_setup_data: dict):

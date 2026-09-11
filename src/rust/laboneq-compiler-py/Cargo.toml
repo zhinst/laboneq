@@ -28,6 +28,7 @@ capnp = { workspace = true }
 numpy = { workspace = true }
 indexmap = { workspace = true }
 tracing = { workspace = true }
+rustc-hash = { workspace = true }
 
 laboneq-capnp = { workspace = true }
 laboneq-common = { workspace = true }

@@ -138,87 +138,10 @@ impl<'py> FromPyObject<'_, 'py> for FieldBindingPy<'py> {
 }
 
 #[derive(FromPyObject, Debug)]
-pub(crate) struct DeviceSetupCapnpPy<'py> {
-    pub setup_description: SetupDescriptionPy<'py>,
-}
-
-#[derive(FromPyObject, Debug)]
-pub(crate) enum SetupDescriptionPy<'py> {
-    Qccs(SetupDescriptionQccsPy<'py>),
-    Zqcs(SetupDescriptionZqcsPy<'py>),
-}
-
-#[derive(FromPyObject, Debug)]
-pub(crate) struct SetupDescriptionQccsPy<'py> {
-    pub instruments: Vec<InstrumentPy<'py>>,
-    pub signals: Vec<DeviceSignalPy<'py>>,
-    pub internal_connections: Vec<InternalConnectionPy<'py>>,
-}
-
-#[derive(FromPyObject, Debug)]
-pub(crate) struct InternalConnectionPy<'py> {
-    pub from_instrument: Bound<'py, PyString>,
-    pub from_port: Bound<'py, PyString>,
-    pub to_instrument: Bound<'py, PyString>,
-    pub to_port: Bound<'py, PyString>,
-}
-
-#[derive(FromPyObject, Debug)]
 pub(crate) struct OscillatorPy<'py> {
     pub uid: Bound<'py, PyString>,
     pub frequency: Bound<'py, PyAny>,
     pub modulation: Option<Bound<'py, PyString>>,
-}
-
-#[derive(FromPyObject, Debug)]
-pub(crate) struct InstrumentPy<'py> {
-    pub uid: Bound<'py, PyString>,
-    pub device_type: Bound<'py, PyString>,
-    pub options: Vec<Bound<'py, PyString>>,
-    pub reference_clock_source: Option<Bound<'py, PyString>>,
-}
-
-#[derive(FromPyObject, Debug)]
-pub(crate) struct DeviceSignalPy<'py> {
-    pub uid: Bound<'py, PyString>,
-    pub ports: Vec<Bound<'py, PyString>>,
-    pub instrument_uid: Bound<'py, PyString>,
-}
-
-#[derive(FromPyObject, Debug)]
-pub(crate) struct SetupDescriptionZqcsPy<'py> {
-    pub uid: Bound<'py, PyString>,
-    pub data: Vec<u8>,
-    pub channels: Vec<ChannelConfigPy<'py>>,
-}
-
-#[derive(FromPyObject, Debug)]
-pub(crate) struct ChannelConfigPy<'py> {
-    pub geolocation: Bound<'py, PyString>,
-    pub channel_type: ChannelTypePy,
-}
-
-#[derive(Debug)]
-pub(crate) enum ChannelTypePy {
-    Rf,
-    Qa,
-    Flux,
-}
-
-impl FromPyObject<'_, '_> for ChannelTypePy {
-    type Error = PyErr;
-
-    fn extract(obj: Borrowed<'_, '_, PyAny>) -> Result<Self, Self::Error> {
-        let name: String = obj.getattr("name")?.extract()?;
-        match name.as_str().to_ascii_lowercase().as_str() {
-            "rf" => Ok(Self::Rf),
-            "qa" => Ok(Self::Qa),
-            "flux" => Ok(Self::Flux),
-            other => Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "unknown ChannelType variant: {other}"
-            ))),
-        }
-    }
 }
 
 #[derive(FromPyObject, Debug)]

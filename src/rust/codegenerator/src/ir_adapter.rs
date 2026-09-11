@@ -1,12 +1,11 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZero;
 use std::sync::Arc;
 
-use laboneq_common::types::{AuxiliaryDeviceKind, AwgKey as AwgKeyCommon, ChannelKey};
-use laboneq_dsl::setup_description_qccs::AuxiliaryDevice;
+use laboneq_common::types::{AuxiliaryDevice, AuxiliaryDeviceKind, AwgKey as AwgKeyCommon};
 use laboneq_error::{bail, laboneq_error};
 use num_complex::Complex;
 
@@ -16,8 +15,8 @@ use laboneq_common::types::SignalKind as SignalKindCommon;
 use laboneq_dsl::types::{
     AcquisitionType as AcquisitionTypeCommon, AveragingMode, ComplexOrFloat, MarkerSelector,
     Oscillator as OscillatorCommon, OscillatorKind as OscillatorKindCommon, OscillatorUid,
-    ParameterUid, PhysicalChannelUid, PulseDef as PulseDefCommon, PulseKind as PulseKindCommon,
-    PulseUid, SectionUid, SignalUid, SweepParameter as SweepParameterCommon, ValueOrParameter,
+    ParameterUid, PulseDef as PulseDefCommon, PulseKind as PulseKindCommon, PulseUid, SectionUid,
+    SignalUid, SweepParameter as SweepParameterCommon, ValueOrParameter,
 };
 use laboneq_ir::node::IrNode as HirNode;
 use laboneq_ir::signal::Signal as SignalCommon;
@@ -27,6 +26,7 @@ use laboneq_units::tinysample::{TinySamples, tiny_samples};
 
 use crate::Result;
 use crate::awg_processor::process_awgs;
+use crate::hardware_setup::{HardwareSetup, SignalChannelProperties};
 use crate::ir::compilation_job::{
     AwgCore, AwgCoreBuilder, Device, DeviceKind, InitialSignalProperties, Marker, Oscillator,
     OscillatorKind, PulseDef, PulseDefKind, PulseType, Signal, SignalKind, SweepParameter,
@@ -52,26 +52,12 @@ pub struct CodegenIr {
     pub(crate) auxiliary_devices: Vec<AuxiliaryDevice>,
 }
 
-pub struct HardwareSetup {
-    pub signals: Vec<SignalChannelProperties>,
-    pub auxiliary_devices: Vec<AuxiliaryDevice>,
-}
-
-pub struct SignalChannelProperties {
-    pub signal_uid: SignalUid,
-    pub awg_key: AwgKeyCommon,
-    pub awg_index: u16,
-    pub channels: Vec<u8>,
-    pub routed_output_channel_map: HashMap<PhysicalChannelUid, u8>,
-    pub ppc_channel: Option<ChannelKey>,
-}
-
 /// Lower a IR into a codegenerator IR.
 pub fn ir_to_codegen_ir(
     experiment: &ExperimentIr,
     hardware_setup: &HardwareSetup,
 ) -> Result<(CodegenIr, PulseParameterDeduplicator)> {
-    let ir_signals = experiment.device_setup.signals().collect::<Vec<_>>();
+    let ir_signals = experiment.signals.iter().collect::<Vec<_>>();
     let id_store = &experiment.id_store;
 
     let additional_signal_map = hardware_setup
@@ -83,10 +69,7 @@ pub fn ir_to_codegen_ir(
     validate_unique_oscillators(&ir_signals)?;
 
     let trigger_modes = eval_trigger_modes(
-        experiment
-            .device_setup
-            .awg_devices()
-            .filter_map(|device| device.kind().try_into().ok()),
+        hardware_setup.devices.iter().map(|device| device.kind),
         hardware_setup
             .auxiliary_devices
             .iter()
@@ -112,30 +95,21 @@ pub fn ir_to_codegen_ir(
                 awg_core.output_mute_enable();
             }
         } else {
-            let device = experiment
-                .device_setup
-                .device_by_uid(&signal.device_uid)
-                .unwrap();
-            let awg_device_kind = device.kind().try_into()?;
+            let setup_device = hardware_setup.device(signal.device_uid)?;
             let awg_device = Device::new(
                 id_store
                     .resolve(signal.device_uid)
                     .unwrap()
                     .to_string()
                     .into(),
-                awg_device_kind,
+                setup_device.kind,
             );
             let awg_index = additional_info.awg_index;
             let mut awg_core =
                 AwgCoreBuilder::new(awg_index, awg_device.into(), signal.sampling_rate);
-            awg_core.options(
-                device
-                    .options()
-                    .expect("Expected device options to be set")
-                    .clone(),
-            );
-            awg_core.trigger_mode(*trigger_modes.get(&awg_device_kind).unwrap());
-            if device.is_shfqc() {
+            awg_core.options(setup_device.options.clone());
+            awg_core.trigger_mode(*trigger_modes.get(&setup_device.kind).unwrap());
+            if setup_device.is_shfqc {
                 awg_core.is_shfqc();
             }
             if signal.automute {
@@ -174,7 +148,7 @@ pub fn ir_to_codegen_ir(
         &pulse_defs,
         &sweep_parameters,
     );
-    let device_properties = create_device_properties(experiment, id_store);
+    let device_properties = create_device_properties(experiment, hardware_setup, id_store)?;
 
     let codegen_ir = transform_ir(&mut lowerer, &experiment.root, tiny_samples(0))?;
     let dedup = lowerer.pulse_parameter_deduplicator;
@@ -186,9 +160,18 @@ pub fn ir_to_codegen_ir(
         averaging_count: lowerer.averaging_count,
         awg_cores: awgs,
         initial_signal_properties: experiment
-            .device_setup
-            .signals()
-            .map(|signal| create_initial_signal_properties(signal, hardware_setup))
+            .signals
+            .iter()
+            .map(|signal| {
+                let channel_properties =
+                    additional_signal_map.get(&signal.uid).ok_or_else(|| {
+                        laboneq_error!(
+                            "Expected to find channel properties for signal with UID '{}'",
+                            signal.uid.0
+                        )
+                    })?;
+                create_initial_signal_properties(signal, channel_properties)
+            })
             .collect::<Result<Vec<_>>>()?,
         awg_devices: device_properties,
         auxiliary_devices: hardware_setup.auxiliary_devices.clone(),
@@ -198,12 +181,13 @@ pub fn ir_to_codegen_ir(
 
 fn create_device_properties(
     experiment: &ExperimentIr,
+    hardware_setup: &HardwareSetup,
     id_store: &NamedIdStore,
-) -> Vec<DeviceProperties> {
+) -> Result<Vec<DeviceProperties>> {
     let mut device_sampling_rates =
         experiment
-            .device_setup
-            .signals()
+            .signals
+            .iter()
             .fold(HashMap::new(), |mut acc, signal| {
                 if let Some(existing_rate) = acc.get(&signal.device_uid) {
                     assert_eq!(
@@ -215,18 +199,18 @@ fn create_device_properties(
                 acc
             });
 
-    experiment
-        .device_setup
-        .awg_devices()
-        .map(|device| DeviceProperties {
-            uid: id_store.resolve(device.uid()).unwrap().to_string().into(),
-            kind: device
-                .kind()
-                .try_into()
-                .expect("Expected a valid device type."),
-            sampling_rate: device_sampling_rates.remove(&device.uid()),
+    hardware_setup
+        .devices
+        .iter()
+        .map(|device| {
+            Ok(DeviceProperties {
+                uid: id_store.resolve(device.uid).unwrap().to_string().into(),
+                kind: device.kind,
+                sampling_rate: device_sampling_rates.remove(&device.uid),
+                lead_delay: device.lead_delay,
+            })
         })
-        .collect::<Vec<_>>()
+        .collect::<Result<Vec<_>>>()
 }
 
 fn validate_unique_oscillators(signals: &[&SignalCommon]) -> Result<()> {
@@ -250,14 +234,8 @@ fn validate_unique_oscillators(signals: &[&SignalCommon]) -> Result<()> {
 
 fn create_initial_signal_properties(
     signal: &SignalCommon,
-    setup: &HardwareSetup,
+    channel_properties: &SignalChannelProperties,
 ) -> Result<InitialSignalProperties> {
-    let channel_properties = setup
-        .signals
-        .iter()
-        .find(|info| info.signal_uid == signal.uid)
-        .expect("Internal error: Expected to find signal properties for signal UID");
-
     Ok(InitialSignalProperties {
         uid: signal.uid,
         amplitude: signal.amplitude.map(value_or_parameter_to_fixed),
@@ -265,6 +243,8 @@ fn create_initial_signal_properties(
         mixer_calibration: signal.mixer_calibration.clone(),
         port_mode: signal.port_mode.clone(),
         port_delay: signal.port_delay.map(value_or_parameter_to_fixed),
+        signal_alignment_delay: signal.signal_alignment_delay,
+        precompensation: signal.precompensation.clone(),
         ppc_settings: signal
             .amplifier_pump
             .as_ref()
@@ -341,7 +321,7 @@ fn eval_trigger_modes(
     devices: impl Iterator<Item = DeviceKind>,
     mut auxiliary_devices: impl Iterator<Item = AuxiliaryDeviceKind>,
 ) -> HashMap<DeviceKind, TriggerMode> {
-    let unique_devices = devices.collect::<std::collections::HashSet<_>>();
+    let unique_devices = devices.collect::<HashSet<_>>();
 
     // Standalone UHFQA
     if unique_devices == [DeviceKind::UHFQA].into() {

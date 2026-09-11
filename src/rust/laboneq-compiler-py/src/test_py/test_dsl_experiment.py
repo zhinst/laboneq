@@ -136,59 +136,6 @@ def create_derived_param_experiment_operation_field():
     return serialize_experiment(setup, exp)
 
 
-def simple_zqcs_setup():
-    desc = """\
-instruments:
-  ZQCS:
-    - address: http://box
-      uid: device_zqcs
-connections:
-  device_zqcs:
-    - rf_signal: q0/drive_line
-      ports: ["1:1:1:1"]
-    - iq_signal: q0/measure_line
-      ports: ["1:3:1:1"]
-    - acquire_signal: q0/acquire_line
-      ports: ["1:1:2:1"]
-"""
-    return simple.DeviceSetup.from_descriptor(
-        desc, server_host="localhost", server_port=8008
-    )
-
-
-ZQCS_SETUP_DESCRIPTION_BLOB = '{"a":1,"b":"1.2.3","data":{}}'.encode()
-
-
-class SetupDescriptionZQCS:
-    """Mock setup description for ZQCS tests."""
-
-    def __init__(self, data: bytes):
-        self.data = data
-
-
-def create_experiment_with_zqcs_setup_description():
-    """Experiment carrying a setup-description blob."""
-    setup = simple_zqcs_setup()
-    lsg = setup.logical_signal_groups["q0"].logical_signals
-    exp = simple.Experiment(
-        uid="test",
-        signals=[
-            simple.ExperimentSignal("q0/drive_line", map_to=lsg["drive_line"]),
-            simple.ExperimentSignal("q0/measure_line", map_to=lsg["measure_line"]),
-            simple.ExperimentSignal("q0/acquire_line", map_to=lsg["acquire_line"]),
-        ],
-    )
-    with exp.acquire_loop_rt(count=1):
-        with exp.section(uid="play"):
-            exp.play("q0/drive_line", simple.pulse_library.const())
-        with exp.section(uid="readout"):
-            exp.play("q0/measure_line", simple.pulse_library.const())
-            exp.acquire("q0/acquire_line", handle="h0", length=96e-9)
-
-    setup.setup_description = SetupDescriptionZQCS(data=ZQCS_SETUP_DESCRIPTION_BLOB)
-    return serialize_experiment(setup, exp)
-
-
 def create_missing_signal_experiment():
     setup = simple_hdawg_setup()
     exp = simple.Experiment(

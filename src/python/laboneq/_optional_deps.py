@@ -20,11 +20,6 @@ if TYPE_CHECKING:
 
     import xarray as xr
 
-try:
-    HAS_XARRAY = True
-except ModuleNotFoundError:
-    HAS_XARRAY = False
-
 # Type hints
 XarrayDataArray: TypeAlias = "xr.DataArray"
 XarrayDataset: TypeAlias = "xr.Dataset"

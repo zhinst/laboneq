@@ -9,10 +9,35 @@ import concurrent.futures
 import signal
 import threading
 import time
-from contextlib import contextmanager
-from typing import Callable, Coroutine, Generic, TypeVar
+from contextlib import contextmanager, suppress
+from typing import Awaitable, Callable, Coroutine, Generic, TypeVar
 
 T = TypeVar("T")
+
+
+async def wait_for(awaitable: Awaitable[T], timeout_s: float | None) -> T:
+    """Await *awaitable* for at most *timeout_s* seconds (None: no limit).
+
+    Raises `asyncio.TimeoutError` on expiry, like `asyncio.wait_for`, but
+    never drops a cancellation of the caller: before Python 3.12,
+    `asyncio.wait_for` returns the inner result when it completes in the same
+    loop iteration as the cancellation arrives, and the caller carries on as if
+    nobody had cancelled it.
+    """
+    inner = asyncio.ensure_future(awaitable)
+    try:
+        done, _ = await asyncio.wait({inner}, timeout=timeout_s)
+    except asyncio.CancelledError:
+        inner.cancel()
+        with suppress(asyncio.CancelledError):
+            await inner
+        raise
+    if not done:
+        inner.cancel()
+        with suppress(asyncio.CancelledError):
+            await inner
+        raise asyncio.TimeoutError
+    return inner.result()
 
 
 # Required to keep sync interface callable from Jupyter Notebooks
@@ -142,9 +167,7 @@ class AsyncWorker(Generic[T]):
         try:
             while True:
                 try:
-                    item = await asyncio.wait_for(
-                        self._queue.get(), timeout=self._cycle_timeout
-                    )
+                    item = await wait_for(self._queue.get(), self._cycle_timeout)
                     self._idle_cycles = 0
                     await self._run_one(item)
                     self._queue.task_done()
@@ -173,13 +196,16 @@ class AsyncWorker(Generic[T]):
         if self._task is not None:
             # Complete the queue, but avoid waiting forever if the worker
             # stops unexpectedly (e.g. due to an uncaught exception)
-            await asyncio.wait(
-                [
-                    asyncio.create_task(self._queue.join()),
-                    self._task,
-                ],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+            join = asyncio.create_task(self._queue.join())
+            try:
+                await asyncio.wait(
+                    [join, self._task], return_when=asyncio.FIRST_COMPLETED
+                )
+            finally:
+                # the queue is not joined if the worker task stopped mid-item
+                join.cancel()
+                # `stop` must not return with a task of its own still pending.
+                await asyncio.wait([join])
             self._task.cancel()
             await self._finalize_task()
 

@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 from enum import Enum, auto
-from typing import Literal
+from typing import Any, Literal
 
 import numpy.typing as npt
 
 from laboneq.compiler.seqc.waveform_sampler import SampledWaveformSignature
+from laboneq.core.utilities.pulse_sampler import PulseDef
 from laboneq.data.artifacts_qccs import CodegenWaveform, PulseMapEntry
-from laboneq.data.compilation_job import PulseDef
 
 class SignalType(Enum):
     IQ = auto()
@@ -101,6 +101,7 @@ class ChannelProperties:
     routed_outputs: list[RoutedOutput]
     # Delay in seconds to be applied
     scheduler_delay: float
+    precompensation: dict[str, Any] | None
     output_mute_enable: bool
     hardware_oscillator: HardwareOscillator | None
 
@@ -130,6 +131,7 @@ class DeviceProperties:
     uid: str
     device_type: str
     sampling_rate: float | None
+    lead_delay: float
 
 class PpcSettings:
     device: str

@@ -7,7 +7,7 @@ pub mod device_setup_fingerprint;
 pub mod device_traits;
 pub mod named_id;
 pub mod near_time;
-pub mod prng_generator_qccs;
+pub mod settings;
 pub mod shfqc;
 pub mod types;
 pub mod uid;

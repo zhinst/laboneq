@@ -30,8 +30,8 @@ struct Coprocessor {
   # `Experiment.coprocessors`.
 
   label @0 :Text;
-  # User-chosen local label. Keys `compiled.set_payload(label, ...)` and error
-  # messages; NOT used for cross-references.
+  # User-chosen local label. Keys `compiled.set_coprocessor_payload(label, ...)`
+  # and error messages.
 
   payload @1 :Data;
   # Opaque kernel payload. Absent when unset.

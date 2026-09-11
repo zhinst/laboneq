@@ -15,8 +15,12 @@ workspace = true
 [dependencies]
 smallvec = { workspace = true }
 indexmap = { workspace = true }
+itertools = { workspace = true }
 pyo3 = { workspace = true }
+capnp = { workspace = true }
 
+laboneq-capnp = { workspace = true }
+laboneq-qccs-capnp = { workspace = true }
 laboneq-compiler-py = { workspace = true }
 laboneq-common = { workspace = true }
 laboneq-dsl = { workspace = true }

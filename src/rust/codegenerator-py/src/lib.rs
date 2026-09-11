@@ -28,7 +28,9 @@ mod utils;
 mod waveform_sampler;
 
 // Re-export types from codegenerator that are needed in the preprocessor and backend for the convenience.
-pub use codegenerator::{HardwareSetup, SignalChannelProperties};
+pub use codegenerator::CODE_GENERATOR_SETTINGS;
+pub use codegenerator::hardware_setup::{HardwareSetup, SetupDevice, SignalChannelProperties};
+pub use codegenerator::ir::compilation_job::DeviceKind;
 
 pub fn generate_code_py(
     py: Python<'_>,
@@ -46,7 +48,7 @@ pub fn generate_code_py(
         py_object_store,
         experiment.id_store,
     );
-    let settings = compiler_setting_to_codegenerator_settings(compiler_settings);
+    let settings = compiler_setting_to_codegenerator_settings(compiler_settings)?;
     let result = py.detach(|| generate_code(codegen_ir, &sampler, settings))?;
     Ok(result)
 }
@@ -67,19 +69,9 @@ pub fn artifacts_to_py<'py>(
 
 fn compiler_setting_to_codegenerator_settings(
     compiler_settings: &CompilerSettings,
-) -> CodeGeneratorSettings {
-    CodeGeneratorSettings::new(
-        compiler_settings.hdawg_min_playwave_hint,
-        compiler_settings.hdawg_min_playzero_hint,
-        compiler_settings.shfsg_min_playwave_hint,
-        compiler_settings.shfsg_min_playzero_hint,
-        compiler_settings.uhfqa_min_playwave_hint,
-        compiler_settings.uhfqa_min_playzero_hint,
-        compiler_settings.amplitude_resolution_bits,
-        compiler_settings.phase_resolution_bits,
-        compiler_settings.use_amplitude_increment,
-        compiler_settings.emit_timing_comments,
-        compiler_settings.shf_output_mute_min_duration,
+) -> Result<CodeGeneratorSettings, LabOneQError> {
+    CodeGeneratorSettings::from_settings(
+        &compiler_settings.backend,
         compiler_settings.ignore_resource_exhaustion,
     )
 }

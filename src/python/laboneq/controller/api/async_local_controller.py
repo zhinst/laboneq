@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 import attrs
@@ -10,19 +11,17 @@ import attrs
 from laboneq.controller.api.async_controller_api import AsyncControllerAPI
 from laboneq.controller.api.commons import APIError, SubmissionRegistry
 from laboneq.controller.constants import DEFAULT_TIMEOUT_S
-from laboneq.controller.controller import Controller, SubmissionStatus
+from laboneq.controller.controller import Controller
+from laboneq.controller.target_setup import build_target_setup
 from laboneq.dsl.result.results import Results
-from laboneq.implementation.legacy_adapters.device_setup_converter import (
-    convert_device_setup_to_setup,
-)
-from laboneq.implementation.payload_builder.target_setup_generator import (
-    TargetSetupGenerator,
-)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from laboneq.controller.api.commons import SubmissionHandle
+    from laboneq.controller.callback_channel import CallbackChannel
+    from laboneq.controller.controller import SubmissionStatus
+    from laboneq.data.experiment_results import ExperimentResults
     from laboneq.data.instrument_topology import InstrumentTopology
     from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.dsl.device.device_setup import DeviceSetup
@@ -45,8 +44,7 @@ class AsyncLocalController(AsyncControllerAPI):
         """Create an instance of the AsyncLocalController."""
         if timeout_s is None:
             timeout_s = DEFAULT_TIMEOUT_S
-        setup = convert_device_setup_to_setup(device_setup)
-        target_setup = TargetSetupGenerator.from_setup(setup)
+        target_setup = build_target_setup(device_setup)
         if neartime_callbacks is None:
             neartime_callbacks = {}
         controller = Controller(
@@ -94,7 +92,10 @@ class AsyncLocalController(AsyncControllerAPI):
 
     async def aclose(self):
         for handle in self._submissions:
-            await self.cancel_experiment(handle)
+            # A failed submission has already reached the caller through
+            # `get_experiment`; teardown has to reach the disconnect regardless.
+            with suppress(Exception):
+                await self.cancel_experiment(handle)
         await self._controller._disconnect_async()
 
     async def get_default_devicesetup(self) -> DeviceSetup:
@@ -125,15 +126,25 @@ class AsyncLocalController(AsyncControllerAPI):
         self,
         scheduled_experiment: ScheduledExperiment,
         handle: SubmissionHandle | None = None,
+        callback_channel: CallbackChannel | None = None,
+        coprocessor_payload_overrides: dict[str, bytes] | None = None,
     ) -> SubmissionHandle:
         handle = self._submissions.ensure_unique_handle(handle)
         self._submissions.add(
             handle,
             await self._controller._submit_compiled_async(
                 scheduled_experiment=scheduled_experiment,
+                callback_channel=callback_channel,
+                coprocessor_payload_overrides=coprocessor_payload_overrides,
             ),
         )
         return handle
+
+    async def get_callback_channel(
+        self, handle: SubmissionHandle
+    ) -> CallbackChannel | None:
+        """The client callback channel for *handle*, if the experiment has one."""
+        return self._submissions.get(handle).callback_channel
 
     async def wait_for_experiment(self, handle: SubmissionHandle):
         await self._controller._wait_submission_async(self._submissions.get(handle))
@@ -142,9 +153,7 @@ class AsyncLocalController(AsyncControllerAPI):
         return self._controller.submission_status(self._submissions.get(handle))
 
     async def get_experiment(self, handle: SubmissionHandle) -> Results:
-        status = await self.get_experiment_status(handle)
-        if status not in [SubmissionStatus.COMPLETED, SubmissionStatus.FAILED]:
-            await self.wait_for_experiment(handle)
+        await self.wait_for_experiment(handle)
         experiment_results = self._controller.submission_results(
             self._submissions.get(handle)
         )
@@ -155,6 +164,12 @@ class AsyncLocalController(AsyncControllerAPI):
             execution_errors=experiment_results.execution_errors,
             pipeline_jobs_timestamps=experiment_results.pipeline_jobs_timestamps,
         )
+
+    async def get_experiment_results(
+        self, handle: SubmissionHandle
+    ) -> ExperimentResults:
+        """Current, possibly partial, results. Does not await completion."""
+        return self._controller.submission_results(self._submissions.get(handle))
 
     async def cancel_experiment(self, handle: SubmissionHandle):
         # TODO(2K): No mechanism to cancel yet. Implement proper cancellation.

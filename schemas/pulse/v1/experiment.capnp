@@ -11,9 +11,9 @@ using DeviceSetup = import "device_setup.capnp";
 using Calibration = import "calibration.capnp";
 using Coprocessor = import "coprocessor.capnp";
 
+const schemaVersion :Text = "0.2";
 # Schema version. The schema is in 0.x development mode:
 # no compatibility guarantees exist between 0.x releases.
-const schemaVersion :Text = "0.1";
 
 # ========================================================================================
 # Experiment

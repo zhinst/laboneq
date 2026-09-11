@@ -1,227 +1,97 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use laboneq_common::types::SignalKind;
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::{Acquire, AveragingLoop, Operation, PlayPulse};
 use laboneq_dsl::types::{
-    AcquisitionType, AveragingMode, ComplexOrFloat, MarkerSelector, PulseFunction, PulseKind,
-    SectionUid, Trigger, ValueOrParameter,
+    AcquisitionType, AveragingMode, ComplexOrFloat, ParameterUid, PulseFunction, PulseKind,
+    ValueOrParameter,
 };
-use std::collections::{HashMap, HashSet};
-
-use laboneq_common::types::{DeviceKind, SignalKind};
 use numeric_array::NumericArray;
 
 use crate::error::{Error, Result};
 
-use crate::experiment_validation::{
-    ExperimentContext, ParamsContext, ValidationContext, validate_parameters::*,
-    validate_pulses::*, validate_signals::*,
-};
+use crate::experiment_validation::traversal::{Validator, VisitContext};
+use crate::experiment_validation::{validate_parameters::*, validate_pulses::*};
 use crate::signal_view::SignalView;
 
-/// Validates [Operation] variants in an experiment.
-pub(super) fn validate_experiment_operations(ctx: &ExperimentContext) -> Result<()> {
-    let mut ctx_validator = ValidationContext {
-        amplitude_check_done: Vec::with_capacity(ctx.pulses.len()),
-        signal_pulse_map: HashMap::with_capacity(ctx.signals.len()),
-        signal_check_done: Vec::with_capacity(ctx.signals.len()),
-        section_uid: None,
-        traversal_done: false,
-    };
-
-    let mut ctx_params = ParamsContext {
-        inside_rt_bound: false,
-        found_chunked_sweep: false,
-        declared_sweep_parameters: ctx.parameters.keys().collect::<Vec<_>>(),
-        rt_sweep_parameters: HashSet::with_capacity(ctx.parameters.len()),
-        awgs_with_section_trigger: HashMap::with_capacity(ctx.signals.len()),
-        awgs_with_automute: HashMap::with_capacity(ctx.signals.len()),
-        awgs_with_ppc_sweeps: HashMap::with_capacity(ctx.signals.len()),
-    };
-
-    // TODO: we currently keep track of node-relevant visiting information, e.g. parent sections, rt / nt boundary,
-    //  while traversing the experiment tree. it would be beneficial refactor this logic out of validation.
-    visit_node(
-        ctx.root_node,
-        ctx,
-        &mut ctx_validator,
-        &mut ctx_params,
-        None,
-    )?;
-    validate_sweep_parameters(&mut ctx_params)?;
-    ctx_validator.traversal_done = true;
-    check_ppc_sweeper(ctx, &ctx_validator, &mut ctx_params)?;
-    Ok(())
+/// Validates the operations of an experiment.
+pub(super) struct OperationValidator {
+    amplitude_check_done: Vec<ParameterUid>,
+    declared_sweep_parameters: Vec<ParameterUid>,
+    found_chunked_sweep: bool,
 }
 
-fn visit_node<'a>(
-    node: &'a ExperimentNode,
-    ctx: &ExperimentContext<'a>,
-    ctx_validator: &mut ValidationContext,
-    ctx_params: &mut ParamsContext<'a>,
-    parent_section_uid: Option<SectionUid>,
-) -> Result<()> {
-    let next_uid = node
-        .kind
-        .section_info()
-        .map(|s| *s.uid)
-        .or(parent_section_uid);
+impl OperationValidator {
+    pub(super) fn new(ctx: &VisitContext) -> Self {
+        OperationValidator {
+            amplitude_check_done: Vec::with_capacity(ctx.pulses.len()),
+            declared_sweep_parameters: ctx.parameters.keys().copied().collect(),
+            found_chunked_sweep: false,
+        }
+    }
+}
 
-    let prev_uid = std::mem::replace(&mut ctx_validator.section_uid, next_uid);
-    let mut children_visited = false;
+impl<'a> Validator<'a> for OperationValidator {
+    fn start(&mut self, ctx: &VisitContext<'a>) -> Result<()> {
+        check_signals_supported(ctx)
+    }
 
-    digest_rt_parameters(node, ctx_params);
-
-    match &node.kind {
-        Operation::PlayPulse(op) => {
-            let signal = ctx
-                .signals
-                .get(&op.signal)
-                .ok_or_else(|| Error::new("Signal not found."))?;
-            validate_play_pulse(op, ctx, ctx_validator)?;
-            shfqa_unique_measure_pulse(op, signal, ctx_validator)?;
-            check_no_play_on_acquire_line(signal, ctx_validator)?;
-            check_arbitrary_marker_is_valid(op, signal, ctx, ctx_validator)?;
-            check_phase_on_rf_signal_support(op, signal, ctx, ctx_validator)?;
-            check_markers(op, signal, ctx_validator)?;
-        }
-        Operation::Acquire(op) => {
-            check_acquire_only_on_acquire_line(op, ctx, ctx_validator)?;
-        }
-        Operation::AveragingLoop(op) => {
-            validate_experiment_signals(op, ctx, ctx_validator, ctx_params)?;
-            validate_averaging_loop(op)?;
-        }
-        Operation::Section(op) => {
-            digest_awg_triggers(op, ctx, ctx_params);
-            validate_triggers(&op.triggers, ctx)?;
-        }
-        Operation::Sweep(op) => {
-            validate_parallel_sweep(op, ctx)?;
-            digest_sweep_parameters(op, ctx_params);
-            validate_chunked_sweep(op, ctx_params)?;
-            validate_no_nt_parameter_in_rt_sweep(op, ctx, ctx_params)?;
-        }
-        Operation::RealTimeBoundary => {
-            assert_eq!(
-                node.children.len(),
-                1,
-                "RealTimeBoundary node must have exactly one child."
-            );
-            ctx_params.enter_rt_bound();
-            for child in node.children.iter() {
-                visit_node(child, ctx, ctx_validator, ctx_params, next_uid)?;
+    fn visit(&mut self, node: &ExperimentNode, ctx: &VisitContext<'a>) -> Result<()> {
+        match &node.kind {
+            Operation::PlayPulse(op) => {
+                let signal = ctx
+                    .signals
+                    .get(&op.signal)
+                    .ok_or_else(|| Error::new("Signal not found."))?;
+                validate_play_pulse(op, ctx, &mut self.amplitude_check_done)?;
+                check_no_play_on_acquire_line(signal, ctx)?;
+                check_arbitrary_marker_is_valid(op, signal, ctx)?;
+                check_phase_on_rf_signal_support(op, signal, ctx)?;
             }
-            ctx_params.exit_rt_bound();
-            children_visited = true;
-        }
-        _ => {}
-    };
-
-    if children_visited {
-        ctx_validator.section_uid = prev_uid;
-        return Ok(());
+            Operation::Acquire(op) => {
+                check_acquire_only_on_acquire_line(op, ctx)?;
+            }
+            Operation::AveragingLoop(op) => {
+                validate_averaging_loop(op)?;
+            }
+            Operation::Sweep(op) => {
+                validate_parallel_sweep(op, ctx)?;
+                digest_sweep_parameters(op, &mut self.declared_sweep_parameters);
+                validate_chunked_sweep(op, ctx, &mut self.found_chunked_sweep)?;
+                validate_no_nt_parameter_in_rt_sweep(op, ctx)?;
+            }
+            Operation::RealTimeBoundary => {
+                assert_eq!(
+                    node.children.len(),
+                    1,
+                    "RealTimeBoundary node must have exactly one child."
+                );
+            }
+            _ => {}
+        };
+        Ok(())
     }
 
-    let mut rt_operation_mixer_checker = (ctx_params.inside_rt_bound && node.children.len() > 1)
-        .then(RealTimeSiblingOperationChecker::new);
-    for child in node.children.iter() {
-        if let Some(checker) = rt_operation_mixer_checker.as_mut() {
-            checker.visit_node(child)
-        }
-        visit_node(child, ctx, ctx_validator, ctx_params, next_uid)?;
+    fn leave(&mut self, node: &ExperimentNode, ctx: &VisitContext<'a>) -> Result<()> {
+        validate_no_mixed_operations(node, ctx)
     }
-    rt_operation_mixer_checker
-        .map(|c| c.validate(next_uid))
-        .transpose()?;
 
-    ctx_validator.section_uid = prev_uid;
-    Ok(())
+    fn finish(&mut self, _ctx: &VisitContext<'a>) -> Result<()> {
+        validate_sweep_parameters(&mut self.declared_sweep_parameters)
+    }
 }
 
-fn shfqa_unique_measure_pulse(
-    pulse: &PlayPulse,
-    signal: &SignalView,
-    ctx_validator: &mut ValidationContext,
-) -> Result<()> {
-    let Some(pulse_uid) = pulse.pulse.as_ref() else {
-        return Ok(());
-    };
-    if matches!(signal.signal_kind(), SignalKind::Integration)
-        || !matches!(signal.device_kind(), DeviceKind::Shfqa)
-    {
-        return Ok(());
-    }
-
-    ctx_validator
-        .signal_pulse_map
-        .entry(signal.uid())
-        .or_insert_with_key(|_key| HashSet::new())
-        .insert(*pulse_uid);
-
-    if ctx_validator
-        .signal_pulse_map
-        .get(&signal.uid())
-        .is_none_or(|v| v.len() > 1)
-    {
-        let err_msg = format!(
-            "Multiple different pulses are being played on signal '{}'. SHFQA \
-            generators can only hold a single pulse waveform. Therefore, playing \
-            multiple readout pulses represented by different Python objects is \
-            not possible on a SHFQA measurement line.",
-            signal.uid().0,
-        );
-        return Err(Error::new(&err_msg));
-    }
-
-    Ok(())
-}
-
-fn check_markers(
-    pulse: &PlayPulse,
-    signal: &SignalView,
-    ctx_validator: &mut ValidationContext,
-) -> Result<()> {
-    let Some(pulse_uid) = pulse.pulse.as_ref() else {
-        return Ok(());
-    };
-
-    let section_uid = ctx_validator
-        .section_uid
-        .as_ref()
-        .ok_or_else(|| Error::new("Internal error: section not found."))?;
-    if matches!(signal.device_kind(), DeviceKind::Hdawg)
-        && matches!(signal.signal_kind(), SignalKind::Rf)
-        && pulse
-            .markers
-            .iter()
-            .any(|m| matches!(m.marker_selector, MarkerSelector::M2))
-    {
-        let err_msg = format!(
-            "Single channel RF Pulse '{}' referenced in section '{}' \
-            has marker 2 enabled. Please only use marker 1 on RF channels.",
-            pulse_uid.0, section_uid.0,
-        );
-        return Err(Error::new(&err_msg));
-    }
-    if signal.device_kind().is_qa_device() && !pulse.markers.is_empty() {
-        let err_msg = format!(
-            "Pulse '{}' referenced in section {} \
-            has markers but is to be played on a QA device. QA \
-            devices do not support markers.",
-            pulse_uid.0, section_uid.0,
-        );
-        return Err(Error::new(&err_msg));
-    }
-
-    // Check for marker / automute conflicts
-    if !pulse.markers.is_empty() && signal.automute() {
-        let err_msg = format!(
-            "Automute cannot be used with markers on same signal: '{}'.",
-            signal.uid().0
-        );
-        return Err(Error::new(&err_msg));
+/// Refuse a signal that asks for something its device cannot do.
+fn check_signals_supported(ctx: &VisitContext) -> Result<()> {
+    for signal in ctx.signals.values() {
+        if signal.automute() && !signal.device_traits().supports_output_mute {
+            return Err(Error::new(format!(
+                "Automute is not available on device '{}'",
+                signal.device_traits().name
+            )));
+        }
     }
     Ok(())
 }
@@ -229,12 +99,11 @@ fn check_markers(
 fn check_phase_on_rf_signal_support(
     pulse: &PlayPulse,
     signal: &SignalView,
-    ctx: &ExperimentContext,
-    ctx_validator: &mut ValidationContext,
+    ctx: &VisitContext,
 ) -> Result<()> {
     if !matches!(signal.signal_kind(), SignalKind::Rf)
         || !signal.is_hardware_modulated()
-        || matches!(signal.device_kind(), DeviceKind::Zqcs)
+        || signal.device_traits().supports_baseband_phase_modulation
     {
         return Ok(());
     }
@@ -247,14 +116,10 @@ fn check_phase_on_rf_signal_support(
         _ => false,
     };
     if !valid_amplitude || pulse.phase.is_some() {
-        let section_uid = ctx_validator
-            .section_uid
-            .as_ref()
-            .ok_or_else(|| Error::new("Internal error: section not found."))?;
         let err_msg = format!(
             "In section '{}', signal '{}': baseband phase modulation \
             not possible for RF signal with HW oscillator.",
-            section_uid.0,
+            ctx.section_uid()?.0,
             signal.uid().0,
         );
         return Err(Error::new(&err_msg));
@@ -262,24 +127,16 @@ fn check_phase_on_rf_signal_support(
     Ok(())
 }
 
-fn check_acquire_only_on_acquire_line(
-    acquire: &Acquire,
-    ctx: &ExperimentContext,
-    ctx_validator: &mut ValidationContext,
-) -> Result<()> {
+fn check_acquire_only_on_acquire_line(acquire: &Acquire, ctx: &VisitContext) -> Result<()> {
     let signal = ctx
         .signals
         .get(&acquire.signal)
         .expect("Expected signal to exist.");
     if !matches!(signal.signal_kind(), SignalKind::Integration) {
-        let section_uid = ctx_validator
-            .section_uid
-            .as_ref()
-            .ok_or_else(|| Error::new("Internal error: section not found."))?;
         let err_msg = format!(
             "In section '{}', an acquire statement is issued on \
             signal '{}'. `acquire` is only allowed on acquire lines.",
-            section_uid.0,
+            ctx.section_uid()?.0,
             signal.uid().0,
         );
         return Err(Error::new(&err_msg));
@@ -287,20 +144,13 @@ fn check_acquire_only_on_acquire_line(
     Ok(())
 }
 
-fn check_no_play_on_acquire_line(
-    signal: &SignalView,
-    ctx_validator: &mut ValidationContext,
-) -> Result<()> {
+fn check_no_play_on_acquire_line(signal: &SignalView, ctx: &VisitContext) -> Result<()> {
     match signal.signal_kind() {
         SignalKind::Integration => {
-            let section_uid = ctx_validator
-                .section_uid
-                .as_ref()
-                .ok_or_else(|| Error::new("Internal error: section not found."))?;
             let err_msg = format!(
                 "In section {}, a play statement is issued on \
                 signal {}. `play` is not allowed on acquire lines.",
-                section_uid.0,
+                ctx.section_uid()?.0,
                 signal.uid().0,
             );
             Err(Error::new(&err_msg))
@@ -320,16 +170,12 @@ fn all_zero_or_one_samples(samples: &NumericArray) -> Result<bool> {
 fn check_arbitrary_marker_is_valid(
     pulse: &PlayPulse,
     signal: &SignalView,
-    ctx: &ExperimentContext,
-    ctx_validator: &mut ValidationContext,
+    ctx: &VisitContext,
 ) -> Result<()> {
     if pulse.markers.is_empty() {
         return Ok(());
     }
-    let section_uid = ctx_validator
-        .section_uid
-        .as_ref()
-        .ok_or_else(|| Error::new("Internal error: section not found."))?;
+    let section_uid = ctx.section_uid()?;
 
     for marker in pulse.markers.iter() {
         let Some(pulse_id) = marker.pulse_id.as_ref() else {
@@ -378,58 +224,29 @@ fn check_arbitrary_marker_is_valid(
 /// This is an arbitrary restriction as scheduler currently does not support mixing of
 /// operations and sections in real-time.
 /// TODO: remove this restriction when scheduler supports it.
-struct RealTimeSiblingOperationChecker {
-    has_pulses: bool,
-    has_sections: bool,
-}
-
-impl RealTimeSiblingOperationChecker {
-    fn new() -> Self {
-        Self {
-            has_pulses: false,
-            has_sections: false,
-        }
+fn validate_no_mixed_operations(node: &ExperimentNode, ctx: &VisitContext) -> Result<()> {
+    if !ctx.inside_rt_bound || node.children.len() <= 1 {
+        return Ok(());
     }
-
-    fn visit_node(&mut self, node: &ExperimentNode) {
-        // Reserve is allowed to be mixed with sections
-        if matches!(&node.kind, Operation::Reserve(_)) {
-            return;
-        }
-        if node.kind.section_info().is_none() {
-            self.has_pulses = true;
+    // Reserve is allowed to be mixed with sections
+    let operations = node
+        .children
+        .iter()
+        .filter(|child| !matches!(&child.kind, Operation::Reserve(_)));
+    let (mut has_pulses, mut has_sections) = (false, false);
+    for child in operations {
+        if child.kind.section_info().is_none() {
+            has_pulses = true;
         } else {
-            self.has_sections = true;
+            has_sections = true;
         }
     }
-
-    fn has_mixed_operations(&self) -> bool {
-        self.has_pulses && self.has_sections
-    }
-
-    fn validate(&self, section: Option<SectionUid>) -> Result<()> {
-        if self.has_mixed_operations() {
-            let msg = format!(
-                "Sections and pulses cannot be mixed in section '{}'.",
-                section.map(|s| s.0.to_string()).unwrap_or("".to_string()),
-            );
-            return Err(Error::new(&msg));
-        }
-        Ok(())
-    }
-}
-
-fn validate_triggers(triggers: &[Trigger], ctx: &ExperimentContext) -> Result<()> {
-    for trigger in triggers.iter() {
-        if let Some(signal_info) = ctx.signals.get(&trigger.signal)
-            && signal_info.automute()
-        {
-            let err_msg = format!(
-                "Automute cannot be used with triggers on same signal: '{}'.",
-                signal_info.uid().0
-            );
-            return Err(Error::new(&err_msg));
-        }
+    if has_pulses && has_sections {
+        let msg = format!(
+            "Sections and pulses cannot be mixed in section '{}'.",
+            ctx.section_uid.map(|s| s.0.to_string()).unwrap_or_default(),
+        );
+        return Err(Error::new(&msg));
     }
     Ok(())
 }

@@ -23,18 +23,46 @@ pub enum PyObjectPayload<'a> {
     RawBytes(&'a [u8]),
 }
 
+/// Owned counterpart of [`PyObjectPayload`], as retained by [`PyObjectStore`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OwnedPyObjectPayload {
+    Str(String),
+    Json(Vec<u8>),
+    RawBytes(Vec<u8>),
+}
+
+impl From<&PyObjectPayload<'_>> for OwnedPyObjectPayload {
+    fn from(payload: &PyObjectPayload<'_>) -> Self {
+        match *payload {
+            PyObjectPayload::Str(value) => Self::Str(value.to_owned()),
+            PyObjectPayload::Json(data) => Self::Json(data.to_vec()),
+            PyObjectPayload::RawBytes(data) => Self::RawBytes(data.to_vec()),
+        }
+    }
+}
+
+struct StoredPyObject {
+    payload: OwnedPyObjectPayload,
+    value: Py<PyAny>,
+}
+
 /// Content-addressed store of Python objects the compiler carries through
 /// opaquely.
 ///
 /// Callers submit a serialized payload and get back a UID.
 /// The store deserializes the payload into a Python object only once, and returns the same UID for
-/// repeated submissions of the same payload. The store can resolve a UID back to the Python object.
+/// repeated submissions of the same payload. A UID resolves back to either the original payload
+/// ([`resolve`]) or the Python object ([`resolve_to_python`]) -- keeping the payload lets a
+/// consumer re-emit the value in exactly the form it arrived in, without a Python round trip.
 ///
 /// UIDs are process-local -- never serialized, valid only within the run that
 /// produced them -- so the hash needs no cross-version stability.
+///
+/// [`resolve`]: PyObjectStore::resolve
+/// [`resolve_to_python`]: PyObjectStore::resolve_to_python
 #[derive(Default)]
 pub struct PyObjectStore<K: Copy + Eq + Hash + From<u64>> {
-    values: HashMap<K, Py<PyAny>>,
+    values: HashMap<K, StoredPyObject>,
 }
 
 impl<K: Copy + Eq + Hash + From<u64>> PyObjectStore<K> {
@@ -51,14 +79,23 @@ impl<K: Copy + Eq + Hash + From<u64>> PyObjectStore<K> {
     pub fn store(&mut self, py: Python<'_>, payload: PyObjectPayload<'_>) -> PyResult<K> {
         let uid = K::from(uid_of(&payload));
         if let Entry::Vacant(entry) = self.values.entry(uid) {
-            entry.insert(payload.into_py_object(py)?);
+            let owned = OwnedPyObjectPayload::from(&payload);
+            entry.insert(StoredPyObject {
+                payload: owned,
+                value: payload.into_py_object(py)?,
+            });
         }
         Ok(uid)
     }
 
+    /// Resolve the payload the value associated with the given UID was stored from.
+    pub fn resolve(&self, key: &K) -> Option<&OwnedPyObjectPayload> {
+        self.values.get(key).map(|stored| &stored.payload)
+    }
+
     /// Resolve the Python object associated with the given UID.
-    pub fn resolve(&self, key: &K) -> Option<&Py<PyAny>> {
-        self.values.get(key)
+    pub fn resolve_to_python(&self, key: &K) -> Option<&Py<PyAny>> {
+        self.values.get(key).map(|stored| &stored.value)
     }
 }
 
@@ -82,7 +119,7 @@ impl PyObjectPayload<'_> {
 mod tests {
     use pyo3::prelude::*;
 
-    use super::{PyObjectPayload, PyObjectStore};
+    use super::{OwnedPyObjectPayload, PyObjectPayload, PyObjectStore};
 
     const JSON: &[u8] = b"[1, 2]";
 
@@ -99,12 +136,50 @@ mod tests {
             let json_uid = store.store(py, PyObjectPayload::Json(JSON)).unwrap();
             let bytes_uid = store.store(py, PyObjectPayload::RawBytes(b"x")).unwrap();
 
-            let resolved_str = store.resolve(&str_uid).unwrap();
+            let resolved_str = store.resolve_to_python(&str_uid).unwrap();
             assert!(resolved_str.bind(py).eq("x").unwrap());
-            let resolved_json = store.resolve(&json_uid).unwrap();
+            let resolved_json = store.resolve_to_python(&json_uid).unwrap();
             assert!(resolved_json.bind(py).eq(vec![1, 2]).unwrap());
-            let resolved_bytes = store.resolve(&bytes_uid).unwrap();
+            let resolved_bytes = store.resolve_to_python(&bytes_uid).unwrap();
             assert!(resolved_bytes.bind(py).eq(b"x".as_slice()).unwrap());
+
+            assert_eq!(
+                store.resolve(&str_uid),
+                Some(&OwnedPyObjectPayload::Str("x".to_owned()))
+            );
+            assert_eq!(
+                store.resolve(&json_uid),
+                Some(&OwnedPyObjectPayload::Json(JSON.to_vec()))
+            );
+            assert_eq!(
+                store.resolve(&bytes_uid),
+                Some(&OwnedPyObjectPayload::RawBytes(b"x".to_vec()))
+            );
+        });
+    }
+
+    #[test]
+    fn payload_distinguishes_kinds_yielding_equal_objects() {
+        // The reason the payload is kept: both deserialize to the same Python `str`, so
+        // only the stored payload tells a serializer which form to write back.
+        Python::attach(|py| {
+            let mut store = new_store();
+
+            let str_uid = store.store(py, PyObjectPayload::Str("x")).unwrap();
+            let json_uid = store.store(py, PyObjectPayload::Json(b"\"x\"")).unwrap();
+
+            let from_str = store.resolve_to_python(&str_uid).unwrap().bind(py);
+            let from_json = store.resolve_to_python(&json_uid).unwrap().bind(py);
+            assert!(from_str.eq(from_json).unwrap());
+
+            assert_eq!(
+                store.resolve(&str_uid),
+                Some(&OwnedPyObjectPayload::Str("x".to_owned()))
+            );
+            assert_eq!(
+                store.resolve(&json_uid),
+                Some(&OwnedPyObjectPayload::Json(b"\"x\"".to_vec()))
+            );
         });
     }
 

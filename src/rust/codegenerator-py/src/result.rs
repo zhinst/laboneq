@@ -28,7 +28,7 @@ use codegenerator::result::{PpcSettings, RoutedOutput, SeqCGenOutput};
 use codegenerator::waveform_sampler::{SampleBuffer, WaveformStore};
 
 use crate::common_types::PortModePy;
-use crate::utils::mixer_type_to_py;
+use crate::utils::{mixer_type_to_py, precompensation_to_py};
 
 type DeviceUidString = String;
 type SignalUidString = String;
@@ -193,6 +193,8 @@ pub(crate) struct DevicePropertiesPy {
     pub device_type: String,
     #[pyo3(get)]
     pub sampling_rate: Option<f64>,
+    #[pyo3(get)]
+    pub lead_delay: f64,
 }
 
 #[pyclass(name = "AwgProperties", skip_from_py_object)]
@@ -366,6 +368,10 @@ impl AwgCodeGenerationResultPy {
                         .map(|o| routed_output_to_py(py, o, id_store).unwrap())
                         .collect(),
                     scheduler_delay: output.scheduler_delay.into(),
+                    precompensation: output
+                        .precompensation
+                        .as_ref()
+                        .map(|precomp| precompensation_to_py(py, precomp).unwrap().unbind()),
                     output_mute_enable: output.output_mute_enable,
                     hardware_oscillator: output
                         .oscillator
@@ -400,6 +406,7 @@ impl AwgCodeGenerationResultPy {
                         .map(|lf| fixed_value_or_parameterf64_to_pyany(py, &lf, id_store).unwrap()),
                     routed_outputs: Vec::new(), // Input channels don't have routed outputs
                     scheduler_delay: properties.scheduler_delay.into(),
+                    precompensation: None, // Input channels don't have precompensation
                     output_mute_enable: false, // Input channels don't have output mute
                     hardware_oscillator: properties
                         .oscillator
@@ -710,6 +717,7 @@ fn create_device_properties(
                 uid: dp.uid.to_string(),
                 device_type: dp.kind.as_str().to_string(),
                 sampling_rate: dp.sampling_rate,
+                lead_delay: dp.lead_delay.into(),
             };
             Py::new(py, dp_py).unwrap()
         })
@@ -723,6 +731,7 @@ fn create_device_properties(
                 uid: id_store.resolve(dp.uid()).unwrap().to_string(),
                 device_type: dp.kind().to_string(),
                 sampling_rate: None, // Auxiliary devices don't have sampling rates
+                lead_delay: 0.0,
             };
             Py::new(py, dp_py).unwrap()
         })
@@ -867,6 +876,8 @@ pub(crate) struct ChannelPropertiesPy {
     #[pyo3(get)]
     pub scheduler_delay: f64,
     #[pyo3(get)]
+    pub precompensation: Option<Py<PyDict>>,
+    #[pyo3(get)]
     output_mute_enable: bool,
     #[pyo3(get)]
     hardware_oscillator: Option<Py<HardwareOscillatorPy>>,
@@ -895,6 +906,7 @@ impl ChannelPropertiesPy {
             && py_opt_eq(py, &self.range, &other.range)?
             && py_opt_eq(py, &self.lo_frequency, &other.lo_frequency)?
             && self.scheduler_delay == other.scheduler_delay
+            && py_opt_eq(py, &self.precompensation, &other.precompensation)?
             && self.output_mute_enable == other.output_mute_enable
             && py_opt_eq(py, &self.hardware_oscillator, &other.hardware_oscillator)?)
     }

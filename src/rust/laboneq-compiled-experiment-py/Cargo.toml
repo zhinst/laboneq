@@ -1,0 +1,28 @@
+[package]
+name = "laboneq-compiled-experiment-py"
+description = "Standalone Cap'n Proto CompiledExperiment -> Python deserializer"
+authors.workspace = true
+documentation.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "laboneq_compiled_experiment_py"
+crate-type = ["lib"]
+
+[dependencies]
+capnp = { workspace = true }
+pyo3 = { workspace = true }
+numpy = { workspace = true }
+num-complex = { workspace = true }
+serde_json = { workspace = true }
+
+laboneq-capnp = { workspace = true }
+laboneq-error = { workspace = true, features = ["pyo3"] }
+laboneq-py-utils = { workspace = true }

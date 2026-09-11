@@ -10,6 +10,16 @@ CONNECT_CHECK_HOLDOFF = 10  # sec
 
 DEFAULT_TIMEOUT_S = 10.0
 
+# Version of the controller service protocol, reported in the
+# X-LabOneQ-Protocol-Version header. Anything that talks to the service without
+# being shipped alongside it is compatible by this version rather than by a
+# LabOne Q release version, so the two move independently.
+PROTOCOL_VERSION = "1.0"
+
+# How long a run may be without its client callback channel. Covers both the
+# initial attach, measured from run-eligibility, and mid-run reconnect windows.
+CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S = 60.0
+
 PIPELINER_RELOAD_WORST_CASE = 1500e-6  # sec
 
 # Conservative hypothetical estimate used to model worst-case data transfer time,

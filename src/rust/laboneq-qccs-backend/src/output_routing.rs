@@ -208,8 +208,8 @@ mod tests {
     use super::*;
 
     use crate::ports::{Port, parse_port};
+    use crate::setup_description::InstrumentKind;
     use laboneq_compiler_py::compiler_backend::ParameterValues;
-    use laboneq_dsl::device_setup::InstrumentKind;
     use laboneq_dsl::signal_calibration::OutputRoute;
     use laboneq_dsl::types::ValueOrParameter;
 

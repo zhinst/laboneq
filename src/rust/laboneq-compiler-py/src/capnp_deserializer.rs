@@ -15,21 +15,19 @@
 //! auto-generated `_s_<n>` names registered in the `NamedIdStore`, matching
 //! the legacy compiler path.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 
+use crate::capnp_setup_description::SetupDescriptionPayload;
 use crate::error::{Error, Result};
 
 use laboneq_capnp::pulse::v1::{
-    calibration_capnp, common_capnp, coprocessor_capnp, device_setup_capnp, experiment_capnp,
-    operation_capnp, pulse_capnp, section_capnp, setup_description_qccs_capnp,
-    setup_description_zqcs_capnp, sweep_capnp,
+    calibration_capnp, common_capnp, coprocessor_capnp, experiment_capnp, operation_capnp,
+    pulse_capnp, section_capnp, sweep_capnp,
 };
-use laboneq_common::device_options::DeviceOptions;
 use laboneq_common::named_id::{NamedId, NamedIdStore};
-use laboneq_common::types::{Literal, ReferenceClock};
+use laboneq_common::types::Literal;
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::device_setup::{Instrument, SetupDescription};
 use laboneq_dsl::experiment_signal::ExperimentSignal;
 use laboneq_dsl::hqcs::{
     CmpOp, CoprocessorDecl, CoprocessorMappingDecl, FieldBinding, HqcsDeclarations, IsLiveTarget,
@@ -40,10 +38,6 @@ use laboneq_dsl::operation::{
     Match, NearTimeCallback, Operation, PlayPulse, PrngLoop, PrngSetup, Reserve,
     ResetOscillatorPhase, Section, Send, SendArg, SetNode, Sweep, ValueEntry,
 };
-use laboneq_dsl::setup_description_qccs::{
-    InternalConnection, PhysicalChannel, SetupDescriptionQccs,
-};
-use laboneq_dsl::setup_description_zqcs::{ChannelType, SetupDescriptionZqcs, ZqcsChannel};
 use laboneq_dsl::signal_calibration::{
     BounceCompensation, CorrectionMatrix, ExponentialCompensation, FirCompensation,
     HighPassCompensation, MixerCalibration, OutputRoute, PortMode, Precompensation,
@@ -76,9 +70,10 @@ pub(crate) struct DeserializedExperiment {
 
     pub experiment_signals: Vec<ExperimentSignal>,
 
-    pub setup_description: SetupDescription,
+    pub setup_description: SetupDescriptionPayload,
 
     pub hqcs: HqcsDeclarations,
+    pub handles: Vec<HandleUid>,
 }
 
 // === Pure helper functions ===
@@ -588,6 +583,7 @@ impl<'py> Deserializer<'py> {
             experiment_signals,
             setup_description,
             hqcs: self.hqcs,
+            handles: self.handle_ids.into_iter().map(Into::into).collect(),
         })
     }
 
@@ -937,6 +933,7 @@ impl<'py> Deserializer<'py> {
 
         let streams = experiment.get_streams().map_err(Error::new)?;
         self.hqcs.streams = Vec::with_capacity(streams.len() as usize);
+        let mut seen_stream_uids: HashSet<&str> = HashSet::new();
         for stream in streams.iter() {
             let resolve_endpoint = |idx: u32| -> Result<StreamEndpoint> {
                 if (idx as usize) < self.hqcs.coprocessors.len() {
@@ -961,6 +958,12 @@ impl<'py> Deserializer<'py> {
 
             let link = text_to_str(stream.get_link().map_err(Error::new)?)?;
             let uid = text_to_str(stream.get_uid().map_err(Error::new)?)?;
+            if !seen_stream_uids.insert(uid) {
+                return Err(Error::new(format!(
+                    "Duplicate stream uid '{uid}'; stream uids must be unique \
+                     within an experiment."
+                )));
+            }
 
             let field_readers = stream.get_fields().map_err(Error::new)?;
             let mut fields = Vec::with_capacity(field_readers.len() as usize);
@@ -1890,34 +1893,15 @@ impl<'py> Deserializer<'py> {
         }
     }
 
+    /// Lifts `DeviceSetup.setupDescription` out of the message without decoding it: only the
+    /// backend named by `DeviceSetup.backend` knows the schema behind the pointer.
     fn deserialize_device_setup(
         &mut self,
-        reader: &experiment_capnp::experiment::Reader<'_>,
-    ) -> Result<SetupDescription> {
-        let reader = reader.get_device_setup().map_err(Error::new)?;
-        self.deserialize_setup_description(&reader)
-    }
-
-    fn deserialize_setup_description(
-        &mut self,
-        reader: &device_setup_capnp::device_setup::Reader<'_>,
-    ) -> Result<SetupDescription> {
-        let setup_description = reader.get_setup_description();
-        let out = match setup_description.which().map_err(Error::new)? {
-            device_setup_capnp::device_setup::setup_description::Which::Zqcs(desc) => {
-                SetupDescriptionZqcsDeserializer::deserialize(
-                    &desc.map_err(Error::new)?,
-                    &mut self.id_store,
-                )?
-            }
-            device_setup_capnp::device_setup::setup_description::Which::Qccs(desc) => {
-                SetupDescriptionQccsDeserializer::deserialize(
-                    &desc.map_err(Error::new)?,
-                    &mut self.id_store,
-                )?
-            }
-        };
-        Ok(out)
+        experiment: &experiment_capnp::experiment::Reader<'_>,
+    ) -> Result<SetupDescriptionPayload> {
+        let device_setup = experiment.get_device_setup().map_err(Error::new)?;
+        let backend = text_to_str(device_setup.get_backend().map_err(Error::new)?)?;
+        SetupDescriptionPayload::from_pointer(backend, device_setup.get_setup_description())
     }
 
     /// Deserialize signals from the device setup section
@@ -2280,208 +2264,5 @@ pub(crate) fn deserialize_experiment(
             .get_root::<experiment_capnp::experiment::Reader<'_>>()
             .map_err(Error::new)?;
         Deserializer::new(py).deserialize(&experiment)
-    }
-}
-
-struct SetupDescriptionQccsDeserializer<'a> {
-    id_store: &'a mut NamedIdStore,
-
-    instruments: Vec<Instrument>,
-    physical_channels: Vec<PhysicalChannel>,
-}
-
-impl SetupDescriptionQccsDeserializer<'_> {
-    fn deserialize(
-        reader: &setup_description_qccs_capnp::setup_description_qccs::Reader<'_>,
-        id_store: &mut NamedIdStore,
-    ) -> Result<SetupDescription> {
-        let mut derializer = SetupDescriptionQccsDeserializer {
-            id_store,
-            instruments: Vec::new(),
-            physical_channels: Vec::new(),
-        };
-
-        reader
-            .get_instruments()
-            .map_err(Error::new)?
-            .iter()
-            .try_for_each(|instrument| {
-                derializer
-                    .deserialize_instrument(instrument)
-                    .map_err(|e| Error::new(format!("Failed to deserialize instrument: {e}")))
-            })?;
-
-        derializer.deserialize_signals(reader)?;
-
-        let internal_connections = derializer.deserialize_internal_connections(reader)?;
-
-        let setup = SetupDescriptionQccs::new(
-            derializer.instruments,
-            derializer.physical_channels,
-            internal_connections,
-        );
-        Ok(SetupDescription::Qccs(setup))
-    }
-
-    /// Deserialize signals from the device setup section
-    fn deserialize_signals(
-        &mut self,
-        reader: &setup_description_qccs_capnp::setup_description_qccs::Reader<'_>,
-    ) -> Result<()> {
-        let signals_reader = reader.get_signals().map_err(Error::new)?;
-
-        self.physical_channels
-            .reserve(signals_reader.len() as usize);
-
-        for signal in signals_reader.iter() {
-            let channel_uid = text_to_str(signal.get_uid().map_err(Error::new)?)?;
-            let device_uid = text_to_str(signal.get_instrument_uid().map_err(Error::new)?)?;
-
-            let ports: Vec<&str> = signal
-                .get_ports()
-                .map_err(Error::new)?
-                .iter()
-                .map(|p| text_to_str(p.map_err(Error::new)?))
-                .collect::<Result<Vec<_>>>()?;
-            let ports = ports.iter().map(|p| p.to_string()).collect::<Vec<_>>();
-
-            let physical_channel = PhysicalChannel {
-                uid: self.id_store.get_or_insert(channel_uid).into(),
-                device_uid: self.id_store.get_or_insert(device_uid).into(),
-                ports,
-            };
-            self.physical_channels.push(physical_channel);
-        }
-        Ok(())
-    }
-
-    /// Deserialize an instrument entry from the device setup section
-    fn deserialize_instrument(
-        &mut self,
-        instrument: setup_description_qccs_capnp::instrument::Reader<'_>,
-    ) -> Result<()> {
-        fn deserialize_reference_clock_source(
-            reference_clock_source: setup_description_qccs_capnp::ReferenceClock,
-        ) -> Option<ReferenceClock> {
-            match reference_clock_source {
-                setup_description_qccs_capnp::ReferenceClock::External => {
-                    Some(ReferenceClock::External)
-                }
-                setup_description_qccs_capnp::ReferenceClock::Internal => {
-                    Some(ReferenceClock::Internal)
-                }
-                setup_description_qccs_capnp::ReferenceClock::Unspecified => None,
-            }
-        }
-
-        let uid = instrument
-            .get_uid()
-            .map_err(Error::new)?
-            .to_string()
-            .map_err(Error::new)?;
-
-        let device_type = instrument
-            .get_device_type()
-            .map_err(Error::new)?
-            .to_string()
-            .map_err(Error::new)?;
-
-        let options = instrument
-            .get_options()
-            .map_err(Error::new)?
-            .iter()
-            .flat_map(|s| s.map(|s| s.to_string().map_err(Error::new)))
-            .collect::<Result<Vec<_>>>()?;
-
-        let reference_clock_source = deserialize_reference_clock_source(
-            instrument
-                .get_reference_clock_source()
-                .map_err(Error::new)?,
-        );
-
-        let instrument = Instrument {
-            uid: self.id_store.get_or_insert(uid).into(),
-            kind: device_type
-                .parse()
-                .map_err(|_| Error::new(format!("Unknown device type: {device_type}")))?,
-            options: DeviceOptions::new(options),
-            reference_clock: reference_clock_source,
-        };
-        self.instruments.push(instrument);
-        Ok(())
-    }
-
-    fn deserialize_internal_connections(
-        &mut self,
-        reader: &setup_description_qccs_capnp::setup_description_qccs::Reader<'_>,
-    ) -> Result<Vec<InternalConnection>> {
-        let connections_reader = reader.get_internal_connections().map_err(Error::new)?;
-
-        let mut connections = Vec::with_capacity(connections_reader.len() as usize);
-
-        for connection in connections_reader.iter() {
-            let from_instrument =
-                text_to_str(connection.get_from_instrument().map_err(Error::new)?)?;
-            let from_port = text_to_str(connection.get_from_port().map_err(Error::new)?)?;
-            let to_instrument = text_to_str(connection.get_to_instrument().map_err(Error::new)?)?;
-            let to_port = text_to_str(connection.get_to_port().map_err(Error::new)?)?;
-
-            connections.push(InternalConnection {
-                from_instrument: self.id_store.get_or_insert(from_instrument).into(),
-                from_port: from_port.to_string(),
-                to_instrument: self.id_store.get_or_insert(to_instrument).into(),
-                to_port: to_port.to_string(),
-            });
-        }
-        Ok(connections)
-    }
-}
-
-struct SetupDescriptionZqcsDeserializer {}
-
-impl SetupDescriptionZqcsDeserializer {
-    fn deserialize(
-        reader: &setup_description_zqcs_capnp::setup_description_zqcs::Reader<'_>,
-        id_store: &mut NamedIdStore,
-    ) -> Result<SetupDescription> {
-        let mut derializer = SetupDescriptionZqcsDeserializer {};
-
-        let device_uid = text_to_str(reader.get_uid().map_err(Error::new)?)?;
-        let channels = derializer.deserialize_channels(reader)?;
-        let data = reader.get_data().map_err(Error::new)?.to_owned();
-
-        let setup =
-            SetupDescriptionZqcs::new(data, id_store.get_or_insert(device_uid).into(), channels);
-        Ok(SetupDescription::Zqcs(setup))
-    }
-
-    fn deserialize_channels(
-        &mut self,
-        reader: &setup_description_zqcs_capnp::setup_description_zqcs::Reader<'_>,
-    ) -> Result<Vec<ZqcsChannel>> {
-        let signals_reader = reader.get_channels().map_err(Error::new)?;
-
-        let mut channels = Vec::with_capacity(signals_reader.len() as usize);
-
-        for signal in signals_reader.iter() {
-            let geolocation = text_to_str(signal.get_geolocation().map_err(Error::new)?)?;
-            let channel_type = match signal.get_channel_type() {
-                Ok(setup_description_zqcs_capnp::ChannelType::Rf) => ChannelType::Rf,
-                Ok(setup_description_zqcs_capnp::ChannelType::Qa) => ChannelType::Qa,
-                Ok(setup_description_zqcs_capnp::ChannelType::Flux) => ChannelType::Flux,
-                Err(::capnp::NotInSchema(v)) => {
-                    return Err(Error::new(format!(
-                        "Unknown channel type discriminant: {v}"
-                    )));
-                }
-            };
-
-            let physical_channel = ZqcsChannel {
-                geolocation: geolocation.to_string(),
-                channel_type,
-            };
-            channels.push(physical_channel);
-        }
-        Ok(channels)
     }
 }

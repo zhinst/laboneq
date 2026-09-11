@@ -1,11 +1,11 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, num::NonZeroU16, sync::Arc};
 
-use laboneq_common::types::SignalKind;
+use laboneq_common::device_traits::DeviceTraits;
+use laboneq_common::types::{PhysicalDeviceUid, SignalKind};
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::hqcs::HqcsDeclarations;
 use laboneq_dsl::signal_calibration::SignalCalibration;
 use laboneq_dsl::types::{
     DeviceUid, ExternalParameterUid, PulseDef, PulseUid, SignalUid, SweepParameter,
@@ -13,7 +13,7 @@ use laboneq_dsl::types::{
 use laboneq_py_utils::py_object_store::PyObjectStore;
 use laboneq_units::duration::{Frequency, Hertz};
 
-use crate::NamedIdStore;
+use laboneq_common::named_id::NamedIdStore;
 
 pub(crate) struct Experiment {
     /// Root node of the experiment tree
@@ -24,8 +24,6 @@ pub(crate) struct Experiment {
     pub parameters: Vec<SweepParameter>,
     pub pulses: HashMap<PulseUid, PulseDef>,
     pub py_object_store: Arc<PyObjectStore<ExternalParameterUid>>,
-    #[expect(dead_code)] // not yet consumed; wired up by the lowering pass later
-    pub hqcs: HqcsDeclarations,
 }
 
 /// Device signal definition, representing a signal in the device setup.
@@ -34,6 +32,12 @@ pub struct DeviceSignal {
     /// Identification parameters
     pub uid: SignalUid,
     pub device_uid: DeviceUid,
+    /// Physical device the signal's device maps to.
+    /// This UID is used to group virtual devices that share the same
+    /// physical hardware, enabling proper device detection.
+    pub physical_device_uid: PhysicalDeviceUid,
+    /// Capabilities of the hardware the signal plays on.
+    pub traits: &'static DeviceTraits,
 
     /// Configuration parameters
     pub kind: SignalKind,
@@ -41,4 +45,6 @@ pub struct DeviceSignal {
     /// Delay signal in samples
     pub delay_signal: i64,
     pub sampling_rate: Frequency<Hertz>,
+    /// The sequencer grid, in samples at `sampling_rate`.
+    pub sample_multiple: NonZeroU16,
 }

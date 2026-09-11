@@ -46,11 +46,9 @@ pub fn pulse_def_to_py<'py>(
     id_store: &NamedIdStore,
     pulse_def: &PulseDef,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let m = py.import("laboneq")?;
-    let pulse_def_py_cls = m
-        .getattr("data")
-        .and_then(|m| m.getattr("compilation_job"))
-        .and_then(|m| m.getattr("PulseDef"))?;
+    let pulse_def_py_cls = py
+        .import("laboneq.core.utilities.pulse_sampler")?
+        .getattr("PulseDef")?;
 
     let kwargs = PyDict::new(py);
     kwargs.set_item("uid", id_store.resolve(pulse_def.uid).unwrap())?;
@@ -112,7 +110,7 @@ fn external_or_value_to_py<'py>(
 ) -> PyResult<Bound<'py, PyAny>> {
     match value {
         ExternalOrValue::ExternalParameter(uid) => Ok(py_objects
-            .resolve(uid)
+            .resolve_to_python(uid)
             .expect("Internal error: Failed to resolve external parameter uid to python object")
             .bind(py))
         .cloned(),

@@ -13,7 +13,7 @@ from laboneq.data.setup_descriptions import SetupDescription
 from laboneq.dsl.calibration import Calibration
 from laboneq.dsl.device import _device_setup_modifier as setup_modifier
 from laboneq.dsl.device._calibration_mediator import CalibrationMediator
-from laboneq.dsl.device._device_setup_modifier import DeviceSetupInternalException
+from laboneq.dsl.device.connection_builder import DeviceSetupInternalException
 from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
 from laboneq.dsl.device.physical_channel_group import PhysicalChannelGroup
 from laboneq.dsl.device.servers import DataServer
@@ -55,6 +55,11 @@ class DeviceSetup:
             opaque setup description, or `None` if no description is attached.
         coprocessors (dict[str, CoprocessorInventoryEntry]): Coprocessor inventory
             advertised by the system, by coprocessor key.
+
+    !!! version-removed "Removed in version 26.10.0"
+
+        Removed support for the deprecated `instrument_list` section of the setup
+        descriptor. Use `instruments` instead.
 
     !!! version-changed "Changed in version 2.61.0"
 
@@ -133,8 +138,9 @@ class DeviceSetup:
         Instruments must have an unique UID and Zurich Instruments instruments
         must have an address.
 
-        At least one dataserver must be defined and if only one dataserver exists,
-        instruments are automatically connected to it, otherwise the respective dataserver UID
+        An instrument reached through a LabOne data server requires at least one
+        dataserver to be defined. If only one dataserver exists, such instruments are
+        automatically connected to it, otherwise the respective dataserver UID
         must be defined in the instrument class itself.
 
         Args:
@@ -143,7 +149,7 @@ class DeviceSetup:
         Raises:
             LabOneQException:
                 - If an instrument with the same UID already exists.
-                - No dataservers are defined in the setup.
+                - The instrument needs a dataserver and none is defined in the setup.
                 - Instrument is missing `uid` or `address`.
         """
         try:
@@ -447,7 +453,6 @@ class DeviceSetup:
             setup_name: Name of the setup that should be created.
         """
         ds = _DeviceSetupGenerator.from_dicts(
-            instrument_list=data.get("instrument_list"),
             instruments=data.get("instruments"),
             connections=data.get("connections"),
             dataservers=data.get("dataservers"),
@@ -461,7 +466,6 @@ class DeviceSetup:
     def from_dicts(
         cls,
         *,
-        instrument_list: InstrumentsType | None = None,
         instruments: InstrumentsType | None = None,
         connections: ConnectionsType | None = None,
         dataservers: DataServersType | None = None,
@@ -472,22 +476,24 @@ class DeviceSetup:
         """Construct the device setup from Python dicts, same structure as yaml
 
         Args:
-            instrument_list (dict):
-                List of instruments in the setup (deprecated; for
-                backwards compatibility)
             instruments (dict):
                 List of instruments in the setup
             connections (dict):
                 Connections between devices
+            dataservers:
+                Dataservers in the setup.
             server_host:
                 Server host of the setup that should be created.
             server_port:
                 Port of the server that should be created.
             setup_name:
                 Name of the setup that should be created.
+
+        !!! version-removed "Removed in version 26.10.0"
+
+            Removed the deprecated `instrument_list` argument. Use `instruments` instead.
         """
         ds = _DeviceSetupGenerator.from_dicts(
-            instrument_list=instrument_list,
             instruments=instruments,
             connections=connections,
             dataservers=dataservers,

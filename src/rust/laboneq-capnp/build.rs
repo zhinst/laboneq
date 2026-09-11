@@ -38,8 +38,6 @@ fn main() {
             "pulse",
             "section",
             "sweep",
-            "setup_description_qccs",
-            "setup_description_zqcs",
         ],
     );
 

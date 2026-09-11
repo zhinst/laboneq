@@ -9,9 +9,9 @@ use std::vec;
 
 use indexmap::IndexMap;
 
+use crate::compiler_backend::{CompilerBackend, PrngSequence};
 use laboneq_common::named_id::NamedId;
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_common::prng_generator_qccs::PrngGeneratorQccs;
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::Operation;
 use laboneq_dsl::operation::PrngLoop;
@@ -38,12 +38,13 @@ use crate::error::{Error, Result};
 ///
 /// This is due to fact that sample precise raw acquisition length is not known until code generation
 /// and it can be affected by chunking
-pub(crate) fn extract_result_shapes<'a>(
+pub(crate) fn extract_result_shapes<'a, B: CompilerBackend>(
     root: &ExperimentNode,
     sweep_parameters: impl Iterator<Item = &'a SweepParameter> + 'a,
     id_store: &mut NamedIdStore,
+    backend: &'a B,
 ) -> Result<ResultShapes> {
-    let mut extractor = ResultShapeExtractor::new(sweep_parameters);
+    let mut extractor = ResultShapeExtractor::new(sweep_parameters, backend);
     extractor.visit_node(root)?;
     Ok(ResultShapes {
         handle_result_shapes: extractor.handle_result_shapes,
@@ -251,15 +252,17 @@ impl MatchContext {
     }
 }
 
-struct ResultShapeExtractor<'a> {
+struct ResultShapeExtractor<'a, B> {
     // --- Input data ---
     sweep_parameters: HashMap<ParameterUid, &'a SweepParameter>,
+    // Supplies the PRNG sequence of a PRNG loop.
+    backend: &'a B,
 
     // --- State during traversal ---
     // Loop stack to track nested loops and their associated sweep parameters and axis information.
     loop_stack: Vec<LoopEntry>,
     // Stack of active PRNG generators for nested PRNG loops.
-    prng_stack: Vec<PrngGeneratorQccs>,
+    prng_stack: Vec<Box<dyn PrngSequence>>,
     // Match context stack to track nested match statements.
     match_context: MatchContext,
     // Sweep depth to case index for match statements.
@@ -270,10 +273,11 @@ struct ResultShapeExtractor<'a> {
     needs_raw_acquisition_injection: bool,
 }
 
-impl<'a> ResultShapeExtractor<'a> {
-    fn new(sweep_parameters: impl Iterator<Item = &'a SweepParameter>) -> Self {
+impl<'a, B: CompilerBackend> ResultShapeExtractor<'a, B> {
+    fn new(sweep_parameters: impl Iterator<Item = &'a SweepParameter>, backend: &'a B) -> Self {
         Self {
             sweep_parameters: sweep_parameters.map(|sp| (sp.uid, sp)).collect(),
+            backend,
             loop_stack: Vec::new(),
             conditional_sweep_cases: Vec::new(),
             match_context: MatchContext::default(),
@@ -291,7 +295,7 @@ impl<'a> ResultShapeExtractor<'a> {
     }
 }
 
-impl ResultShapeExtractor<'_> {
+impl<B: CompilerBackend> ResultShapeExtractor<'_, B> {
     fn visit_node(&mut self, node: &ExperimentNode) -> Result<()> {
         match &node.kind {
             Operation::AveragingLoop(op) => self.visit_averaging_loop(node, op)?,
@@ -374,9 +378,7 @@ impl ResultShapeExtractor<'_> {
         node: &ExperimentNode,
         op: &laboneq_dsl::operation::PrngSetup,
     ) -> Result<()> {
-        let (seed, lower, upper) = (op.seed, 0u32, op.range - 1);
-        let prng_generator =
-            PrngGeneratorQccs::new(seed, lower, upper).map_err(|e| Error::new(e.to_string()))?;
+        let prng_generator = self.backend.prng_sequence(op.seed, op.range)?;
 
         self.prng_stack.push(prng_generator);
         self.generic_visit(node)?;

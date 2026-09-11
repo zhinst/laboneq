@@ -16,6 +16,7 @@ from laboneq.dsl.enums import (
     AcquisitionType,
     AveragingMode,
 )
+from laboneq.dsl.experiment.context import isolated_contexts
 from laboneq.openqasm3 import device
 from laboneq.openqasm3 import options as exp_options
 from laboneq.openqasm3.gate_store import _GateStoreQuantumOperations
@@ -138,7 +139,11 @@ class OpenQasm3Importer:
             externs=self.supplied_externs,
             namespace=self.scope,
         )
-        return visitor.transpile(parent, uid_hint=uid_hint)
+        # Quantum operations auto-add their section to the active DSL context.
+        # The transpiled sections are wired into the returned section instead,
+        # so an enclosing DSL context must be left untouched.
+        with isolated_contexts():
+            return visitor.transpile(parent, uid_hint=uid_hint)
 
 
 def _port_from_logical_signal_path(ls: str) -> device.Port:

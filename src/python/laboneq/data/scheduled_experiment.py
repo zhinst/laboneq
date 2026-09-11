@@ -90,3 +90,10 @@ class ScheduledExperiment:
 
     #: Software versions used to produce this experiment.
     versions: SoftwareVersions = field(default_factory=lambda: SoftwareVersions(""))
+
+    # Declared coprocessor payload per device-setup inventory key.
+    # Opaque to LabOne Q.
+    coprocessor_payloads: dict[str, bytes] = field(default_factory=dict)
+
+    # Experiment-side coprocessor label -> device-setup inventory key.
+    coprocessor_mappings: dict[str, str] = field(default_factory=dict)

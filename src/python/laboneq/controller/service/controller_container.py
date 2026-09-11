@@ -12,20 +12,24 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import logging
+import uuid as _uuid_mod
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from laboneq.controller.api.async_local_controller import AsyncLocalController
 from laboneq.controller.api.commons import SubmissionHandle
+from laboneq.controller.callback_channel import CallbackChannel
+from laboneq.controller.constants import CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S
+from laboneq.controller.recipe_processor import collect_neartime_callback_names
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import ModuleType
 
     from laboneq.controller.api.controller_api import SubmissionStatus
+    from laboneq.data.experiment_results import ExperimentResults
     from laboneq.data.instrument_topology import InstrumentTopology
     from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.dsl.device import DeviceSetup
-    from laboneq.dsl.result.results import Results
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +200,7 @@ class ControllerContainer:
         _token: Any = None,
         controller: AsyncLocalController,
         device_setup: DeviceSetup,
+        channel_absence_timeout_s: float = CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S,
     ) -> None:
         if _token is not _CREATE_TOKEN:
             raise RuntimeError(
@@ -204,6 +209,7 @@ class ControllerContainer:
             )
         self._controller = controller
         self._device_setup = device_setup
+        self._channel_absence_timeout_s = channel_absence_timeout_s
 
     @classmethod
     async def create(
@@ -215,6 +221,7 @@ class ControllerContainer:
         do_emulation: bool = False,
         reset_devices: bool = False,
         instrument_topology: InstrumentTopology | None = None,
+        channel_absence_timeout_s: float = CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S,
     ) -> ControllerContainer:
         """Connect to hardware and return a ready-to-use container.
 
@@ -241,6 +248,8 @@ class ControllerContainer:
             reset_devices: Reset hardware on connect.
             instrument_topology: Instrument topology to build ``device_setup``
                 from when *device_setup* is not given.
+            channel_absence_timeout_s: Fail a run whose client callback
+                channel stays detached longer than this many seconds.
 
         Raises:
             ValueError: Invalid combination of *device_setup*, *dataserver*,
@@ -285,6 +294,7 @@ class ControllerContainer:
             _token=_CREATE_TOKEN,
             controller=controller,
             device_setup=device_setup,
+            channel_absence_timeout_s=channel_absence_timeout_s,
         )
 
     # ------------------------------------------------------------------
@@ -349,21 +359,56 @@ class ControllerContainer:
     # ------------------------------------------------------------------
 
     async def submit_experiment(
-        self, experiment_id: int, scheduled_experiment: ScheduledExperiment
+        self,
+        experiment_id: int,
+        scheduled_experiment: ScheduledExperiment,
+        coprocessor_payload_overrides: dict[str, bytes] | None = None,
     ):
         """Accept an experiment for execution.
+
+        An experiment referencing near-time callbacks that are not registered on
+        the controller service gets a :class:`CallbackChannel` to dispatch them
+        to the client; its run starts only once the client has attached to the
+        callback WebSocket.
 
         Args:
             experiment_id: Client-supplied UUID for this experiment.
             scheduled_experiment: The compiled experiment.
+            coprocessor_payload_overrides: Payloads keyed by
+                the coprocessor label declared in the experiment.
 
         Raises:
             LabOneQControllerException: an error occurs during submission.
         """
+        callback_channel = None
+        if scheduled_experiment.execution is not None:
+            names = collect_neartime_callback_names(scheduled_experiment.execution)
+            if names - set(self._controller.neartime_callbacks):
+                uuid_str = str(_uuid_mod.UUID(int=experiment_id))
+                callback_channel = CallbackChannel(
+                    results_url=f"/v1/experiments/{uuid_str}/results",
+                    absence_timeout_s=self._channel_absence_timeout_s,
+                )
         await self._controller.submit_experiment(
-            scheduled_experiment, handle=SubmissionHandle(id=experiment_id)
+            scheduled_experiment,
+            handle=SubmissionHandle(id=experiment_id),
+            callback_channel=callback_channel,
+            coprocessor_payload_overrides=coprocessor_payload_overrides,
         )
         logger.info("Submitted experiment %s", experiment_id)
+
+    async def get_callback_channel(self, experiment_id: int) -> CallbackChannel | None:
+        """The client callback channel for *experiment_id*, if any.
+
+        Returns None when the experiment has no client callbacks, that is, when
+        every near-time callback it uses is registered on the service.
+
+        Raises:
+            LabOneQControllerException: Unknown experiment id.
+        """
+        return await self._controller.get_callback_channel(
+            SubmissionHandle(id=experiment_id)
+        )
 
     async def get_submission_status(self, experiment_id: int) -> SubmissionStatus:
         """Return ``status`` for *experiment_id*."""
@@ -371,9 +416,11 @@ class ControllerContainer:
             SubmissionHandle(id=experiment_id)
         )
 
-    async def get_submission_results(self, experiment_id: int) -> Results:
-        """Await completion and return ``results``."""
-        return await self._controller.get_experiment(SubmissionHandle(id=experiment_id))
+    async def get_submission_results(self, experiment_id: int) -> ExperimentResults:
+        """Current (possibly partial) results for *experiment_id*."""
+        return await self._controller.get_experiment_results(
+            SubmissionHandle(id=experiment_id)
+        )
 
     async def cancel_experiment(self, experiment_id: int) -> None:
         """Cancel a queued/running experiment or release a completed one."""

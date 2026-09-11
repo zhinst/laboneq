@@ -5,9 +5,8 @@ use std::collections::HashMap;
 use std::num::NonZero;
 
 use indexmap::IndexMap;
-use laboneq_common::types::ChannelKey;
-use laboneq_dsl::setup_description_qccs::AuxiliaryDevice;
-use laboneq_dsl::signal_calibration::PortMode;
+use laboneq_common::types::{AuxiliaryDevice, ChannelKey};
+use laboneq_dsl::signal_calibration::{PortMode, Precompensation};
 use laboneq_dsl::types::{ParameterUid, PumpCancellationSource, Quantity};
 
 use laboneq_units::duration::{Duration, Second};
@@ -44,6 +43,7 @@ pub struct SeqCGenOutput {
 
 pub struct AwgCodeGenerationResult {
     pub awg: AwgProperties,
+    pub total_execution_time: f64,
     pub seqc: SeqCProgram,
     pub wave_indices: IndexMap<String, (WaveIndex, SignalType)>,
     pub command_table: Option<CommandTable>,
@@ -113,6 +113,8 @@ pub struct DeviceProperties {
     pub uid: DeviceUid,
     pub kind: DeviceKind,
     pub sampling_rate: Option<f64>,
+    /// How long the device takes before its output starts.
+    pub lead_delay: Duration<Second>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -197,8 +199,10 @@ pub struct ChannelProperties {
     pub channel: ChannelIndex,
     pub marker_mode: Option<MarkerMode>,
     pub oscillator: Option<ChannelOscillator>,
-    /// Delay to apply to this channel.
+    /// Delay to apply to this channel. It already includes the signal's
+    /// alignment delay.
     pub scheduler_delay: Duration<Second>,
+    pub precompensation: Option<Precompensation>,
     /// Near-time sweep values.
     /// Controller accepts either a fixed value or a parameter.
     pub amplitude: Option<FixedValueOrParameter<f64>>,
@@ -237,7 +241,8 @@ pub struct Gains {
 pub struct InputChannelProperties {
     pub signal: SignalUid,
     pub channel: ChannelIndex,
-    /// Delay to apply to this channel.
+    /// Delay to apply to this channel. An input port applies no
+    /// alignment delay, so this is the scheduler's delay alone.
     pub scheduler_delay: Duration<Second>,
     pub port_mode: Option<PortMode>,
     pub port_delay: Option<FixedValueOrParameter<Duration<Second>>>,

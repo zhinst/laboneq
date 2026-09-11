@@ -152,7 +152,6 @@ def _process_pulse_replacements(
             )
 
             # Ensured by `calc_wave_replacements`
-            assert isinstance(artifacts, ArtifactsCodegen)
             assert artifacts.wave_indices is not None
 
             acquisition_type = recipe_data.rt_execution_info.acquisition_type

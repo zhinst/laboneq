@@ -6,5 +6,5 @@
 /// Shared between compilation (linking per-step code generator output) and the
 /// controller/runtime (matching execution state and results back to the step
 /// that produced them).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NtStepKey(pub Vec<usize>);

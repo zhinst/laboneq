@@ -2,3 +2,4 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod pulse_parameters;
+pub mod tracing;

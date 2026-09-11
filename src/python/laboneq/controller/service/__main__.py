@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from laboneq._version import get_version
+from laboneq.controller.constants import CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S
 from laboneq.controller.service.app import create_app
 from laboneq.controller.service.controller_container import load_callbacks_from_module
 from laboneq.data.instrument_topology import InstrumentTopology
@@ -256,6 +257,14 @@ Examples:
         "and testing using the Swagger UI",
     )
     parser.add_argument(
+        "--channel-absence-timeout",
+        type=float,
+        default=CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S,
+        metavar="SECONDS",
+        help="Fail a run when its client callback channel stays detached "
+        "longer than this many seconds (default: %(default)s).",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -306,6 +315,9 @@ Examples:
         parser.error(
             "--instrumenttopology cannot be combined with --devicesetup or --dataserver"
         )
+
+    if parsed_args.channel_absence_timeout <= 0:
+        parser.error("--channel-absence-timeout must be positive")
 
     # Parse dataserver address
     dataserver: tuple[str, str] | None = None
@@ -417,6 +429,7 @@ Examples:
         reset_devices=parsed_args.reset_devices,
         instrument_topology=instrument_topology,
         public_url=parsed_args.public_url,
+        channel_absence_timeout_s=parsed_args.channel_absence_timeout,
     )
 
     uvicorn.run(

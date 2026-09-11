@@ -4,14 +4,51 @@
 from __future__ import annotations
 
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
+
+import pybase64
 
 from laboneq.controller.utilities.exception import LabOneQControllerException
+from laboneq.serializers import from_dict, to_dict
 
 if TYPE_CHECKING:
     import httpx
 
     from laboneq.controller.controller import ControllerSubmission
+    from laboneq.data.scheduled_experiment import ScheduledExperiment
+
+
+# Header and scheme carrying the service's authentication token.
+AUTH_HEADER = "Authorization"
+AUTH_SCHEME = "Bearer"
+
+
+def encode_submission(
+    scheduled_experiment: ScheduledExperiment,
+    coprocessor_payload_overrides: dict[str, bytes] | None = None,
+) -> dict[str, Any]:
+    """Build the JSON body of `PUT v1/experiments/{uuid}`."""
+    serialized = cast("dict", to_dict(scheduled_experiment))
+    return {
+        "scheduled_experiment": serialized,
+        "coprocessor_payload_overrides": {
+            label: pybase64.b64encode(payload).decode("ascii")
+            for label, payload in (coprocessor_payload_overrides or {}).items()
+        },
+    }
+
+
+def decode_submission(
+    body: dict[str, Any],
+) -> tuple[ScheduledExperiment, dict[str, bytes]]:
+    """Read a `PUT v1/experiments/{uuid}` body written by `encode_submission`."""
+    return (
+        cast("ScheduledExperiment", from_dict(body["scheduled_experiment"])),
+        {
+            label: pybase64.b64decode(value.encode("ascii"))
+            for label, value in body.get("coprocessor_payload_overrides", {}).items()
+        },
+    )
 
 
 class APIError(Exception):

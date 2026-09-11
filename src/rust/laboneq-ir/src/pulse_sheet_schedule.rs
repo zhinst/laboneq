@@ -16,7 +16,6 @@
 use std::collections::HashMap;
 
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_common::types::DeviceKind;
 use laboneq_dsl::types::{MarkerSelector, SectionUid, SignalUid};
 use laboneq_units::tinysample::{TINYSAMPLE_DURATION, TinySamples};
 use serde::Serialize;
@@ -1371,7 +1370,7 @@ impl PulseSheetSchedule {
     ///
     /// # Arguments
     /// * `root` - The root IR node to traverse
-    /// * `sampling_rates` - List of (DeviceKind, sampling_rate) pairs
+    /// * `sampling_rates` - List of (device name, sampling_rate) pairs
     /// * `expand_loops` - Whether to expand compressed loops
     /// * `max_events` - Maximum number of events to generate
     /// * `id_store` - ID store for resolving UIDs
@@ -1388,7 +1387,7 @@ impl PulseSheetSchedule {
     /// due to the complex visitor pattern and different traversal requirements (preorder vs postorder).
     pub fn generate(
         root: &IrNode,
-        sampling_rates: Vec<(DeviceKind, f64)>,
+        sampling_rates: Vec<(&str, f64)>,
         expand_loops: bool,
         max_events: usize,
         id_store: &NamedIdStore,
@@ -1415,17 +1414,14 @@ impl PulseSheetSchedule {
         }
     }
 
-    fn generate_sampling_rates(sampling_rates: Vec<(DeviceKind, f64)>) -> Vec<(Vec<String>, u64)> {
+    fn generate_sampling_rates(sampling_rates: Vec<(&str, f64)>) -> Vec<(Vec<String>, u64)> {
         // Group devices by sampling rate
-        let mut rate_groups: HashMap<u64, Vec<DeviceKind>> = HashMap::new();
-        for (device_kind, rate) in sampling_rates {
+        let mut rate_groups: HashMap<u64, Vec<&str>> = HashMap::new();
+        for (device_name, rate) in sampling_rates {
             let rate_key = rate.abs() as u64;
-            if !rate_groups
-                .entry(rate_key)
-                .or_default()
-                .contains(&device_kind)
-            {
-                rate_groups.entry(rate_key).or_default().push(device_kind);
+            let group = rate_groups.entry(rate_key).or_default();
+            if !group.contains(&device_name) {
+                group.push(device_name);
             }
         }
 
@@ -1433,10 +1429,8 @@ impl PulseSheetSchedule {
         let mut sampling_rates_vec: Vec<(Vec<String>, u64)> = rate_groups
             .into_iter()
             .map(|(rate_bits, devices)| {
-                let mut sorted_devices: Vec<String> = devices
-                    .into_iter()
-                    .map(|d| d.to_string().to_lowercase())
-                    .collect();
+                let mut sorted_devices: Vec<String> =
+                    devices.into_iter().map(str::to_lowercase).collect();
                 sorted_devices.sort();
                 (sorted_devices, rate_bits)
             })
@@ -1947,10 +1941,10 @@ mod tests {
     #[test]
     fn test_sampling_rates() {
         let sampling_rates = [
-            (DeviceKind::Hdawg, 2.4e9),
-            (DeviceKind::Shfqa, 2e9),
-            (DeviceKind::Shfsg, 2e9),
-            (DeviceKind::Uhfqa, 1.8e9),
+            ("HDAWG", 2.4e9),
+            ("SHFQA", 2e9),
+            ("SHFSG", 2e9),
+            ("UHFQA", 1.8e9),
         ];
         let generated_rates = PulseSheetSchedule::generate_sampling_rates(sampling_rates.to_vec());
 

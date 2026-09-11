@@ -1712,6 +1712,7 @@ impl<'a> SampledEventHandler<'a> {
 
     pub(crate) fn finish(mut self) -> Result<SeqcResults> {
         Ok(SeqcResults {
+            program_length: self.seqc_tracker.current_time(),
             seqc: self.assemble_seqc()?,
             wave_indices: self.wave_indices.finish(),
             command_table: self.command_table_tracker.finish(),

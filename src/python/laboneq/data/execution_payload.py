@@ -12,7 +12,7 @@ from laboneq.data import EnumReprMixin
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
 
-    from laboneq.data.setup_description import ReferenceClockSource
+    from laboneq.core.types.enums import ReferenceClockSource
 
 # Added when SHFQC is split into virtual SHFSG & SHFQA
 # SHFQC(uid="shfqc") --> SHFSG(uid="shfqc_sg"), SHFQA(uid="shfqc")
@@ -39,9 +39,9 @@ class TargetDeviceType(EnumReprMixin, Enum):
 #
 @dataclass
 class TargetServer:
-    uid: str | None = None
-    host: str | None = None
-    port: int | None = None
+    uid: str
+    host: str
+    port: int
 
 
 class TargetChannelType(EnumReprMixin, Enum):
@@ -60,7 +60,8 @@ class TargetChannelCalibration:
 @dataclass
 class TargetDevice:
     uid: str
-    server: TargetServer
+    # uid of the server in `TargetSetup.servers` this device is reached through
+    server: str | None
     device_serial: str
     device_type: TargetDeviceType
     device_options: str | None
@@ -73,7 +74,6 @@ class TargetDevice:
     qc_with_qa: bool = False
     qc_with_sg: bool = False
     reference_clock_source: ReferenceClockSource | None = None
-    device_class: int = 0x0
 
 
 @dataclass

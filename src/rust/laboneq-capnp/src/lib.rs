@@ -6,6 +6,20 @@
 #![allow(unused_qualifications)]
 #![allow(unreachable_pub)]
 
+pub mod artifacts;
+pub mod convert;
+pub mod metadata;
+
+/// Reader options for LabOne Q messages.
+///
+/// Raises the traversal limit well above the default (~64 MB): experiments scale to
+/// 1,000,000+ sections and compiled output embeds waveforms and sequencer binaries.
+pub fn reader_options() -> capnp::message::ReaderOptions {
+    let mut options = capnp::message::ReaderOptions::new();
+    options.traversal_limit_in_words(Some(1024 * 1024 * 1024)); // ~8 GB
+    options
+}
+
 pub mod pulse {
     pub mod v1 {
         capnp::generated_code!(pub mod calibration_capnp, "pulse/v1/calibration_capnp.rs");
@@ -18,14 +32,6 @@ pub mod pulse {
         capnp::generated_code!(pub mod pulse_capnp, "pulse/v1/pulse_capnp.rs");
         capnp::generated_code!(pub mod section_capnp, "pulse/v1/section_capnp.rs");
         capnp::generated_code!(pub mod sweep_capnp, "pulse/v1/sweep_capnp.rs");
-        capnp::generated_code!(
-            pub mod setup_description_qccs_capnp,
-            "pulse/v1/setup_description_qccs_capnp.rs"
-        );
-        capnp::generated_code!(
-            pub mod setup_description_zqcs_capnp,
-            "pulse/v1/setup_description_zqcs_capnp.rs"
-        );
     }
 }
 
@@ -47,7 +53,7 @@ pub mod compiled_experiment {
     }
 }
 
-// Re-exported at the crate root so other crates that reference
-// `compiled_experiment/v1/common.capnp` via `crate_provides("laboneq_capnp", ...)`
-// (which assumes crate-root placement) resolve to this module.
-pub use compiled_experiment::v1::common_capnp;
+// Re-exported at the crate root so other crates that reference these schemas via
+// `crate_provides("laboneq_capnp", ...)` (which assumes crate-root placement) resolve to
+// these modules.
+pub use compiled_experiment::v1::{common_capnp, values_capnp};

@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use laboneq_dsl::types::{SignalUid, ValueOrParameter};
 
 use laboneq_common::device_traits::DeviceTraits;
-use laboneq_common::types::{AwgKey, DeviceKind, SignalKind};
+use laboneq_common::types::{AwgKey, SignalKind};
+
+use crate::device_kind::DeviceKind;
 use laboneq_compiler_py::compiler_backend::{Error, FeedbackCalculator};
 use laboneq_units::duration::{Duration, Second, seconds};
 
@@ -22,6 +24,7 @@ pub(crate) struct FeedbackSignal {
     pub(crate) awg_key: AwgKey,
     pub(crate) signal_kind: SignalKind,
     pub(crate) device_kind: DeviceKind,
+    pub(crate) device_traits: &'static DeviceTraits,
     pub(crate) is_shfqc: bool,
     pub(crate) sampling_rate: f64,
     pub(crate) signal_delay: Duration<Second>,
@@ -123,7 +126,7 @@ struct GeneratorParameters {
 
 impl QccsFeedbackCalculator<QCCSFeedbackModel> {
     pub(crate) fn new(
-        signals: impl Iterator<Item = FeedbackSignal>,
+        signals: impl IntoIterator<Item = FeedbackSignal>,
     ) -> Result<QccsFeedbackCalculator<QCCSFeedbackModel>, Error> {
         Self::new_with_model(signals, QCCSFeedbackModel::new())
     }
@@ -134,7 +137,7 @@ where
     M: FeedbackModel,
 {
     pub(crate) fn new_with_model(
-        signals: impl Iterator<Item = FeedbackSignal>,
+        signals: impl IntoIterator<Item = FeedbackSignal>,
         model: M,
     ) -> Result<QccsFeedbackCalculator<M>, Error> {
         let signal_map = signals
@@ -358,15 +361,14 @@ where
         let lead_time = generator_signal.start_delay;
         let signal_delay = generator_signal.signal_delay;
         let sampling_rate = generator_signal.sampling_rate;
-        let sample_multiple =
-            DeviceTraits::from_device_kind(&generator_signal.device_kind).sample_multiple as i64;
+        let sample_multiple = generator_signal.device_traits.sample_multiple as i64;
 
         Ok(GeneratorParameters {
             lead_time,
             signal_delay,
             sampling_rate,
             sample_multiple,
-            device: feedback_device(generator_signal)?,
+            device: feedback_device(generator_signal),
         })
     }
 
@@ -388,8 +390,7 @@ where
             .port_delay
             .unwrap_or(ValueOrParameter::Value(seconds(0.0)));
 
-        let acquisition_device_traits =
-            DeviceTraits::from_device_kind(&acquisition_signal.device_kind);
+        let acquisition_device_traits = acquisition_signal.device_traits;
         let integration_dsp_latency = acquisition_device_traits
             .integration_dsp_latency
             .unwrap_or(seconds(0.0));
@@ -406,7 +407,7 @@ where
             integration_dsp_latency,
             sampling_rate,
             port_granularity_samples,
-            device: feedback_device(acquisition_signal)?,
+            device: feedback_device(acquisition_signal),
         })
     }
 
@@ -482,26 +483,22 @@ impl FeedbackCalculator for QccsFeedbackCalculator<QCCSFeedbackModel> {
     }
 }
 
-fn feedback_device(signal: &FeedbackSignal) -> Result<FeedbackDevice, Error> {
+fn feedback_device(signal: &FeedbackSignal) -> FeedbackDevice {
     if signal.is_shfqc {
-        Ok(FeedbackDevice::Shfqc)
-    } else {
-        match signal.device_kind {
-            DeviceKind::Shfqa => Ok(FeedbackDevice::Shfqa),
-            DeviceKind::Uhfqa => Ok(FeedbackDevice::Uhfqa),
-            DeviceKind::Hdawg => Ok(FeedbackDevice::Hdawg),
-            DeviceKind::Shfsg => Ok(FeedbackDevice::Shfsg),
-            _ => Err(Error::new(format!(
-                "Unsupported device '{}' for QCCS feedback latency calculation",
-                signal.device_kind
-            ))),
-        }
+        return FeedbackDevice::Shfqc;
+    }
+    match signal.device_kind {
+        DeviceKind::Shfqa => FeedbackDevice::Shfqa,
+        DeviceKind::Uhfqa => FeedbackDevice::Uhfqa,
+        DeviceKind::Hdawg => FeedbackDevice::Hdawg,
+        DeviceKind::Shfsg => FeedbackDevice::Shfsg,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::device_traits::{SHFQA_TRAITS, SHFSG_TRAITS};
     use approx::abs_diff_eq;
     use laboneq_common::named_id::NamedId;
     use laboneq_common::types::SignalKind;
@@ -544,6 +541,11 @@ mod tests {
             awg_key: AwgKey(awg_uid),
             signal_kind,
             device_kind,
+            device_traits: match device_kind {
+                DeviceKind::Shfqa => &SHFQA_TRAITS,
+                DeviceKind::Shfsg => &SHFSG_TRAITS,
+                _ => panic!("Unexpected device kind in test: {device_kind}"),
+            },
             is_shfqc: true,
             sampling_rate: 2e9,
             signal_delay: seconds(signal_delay),
@@ -666,11 +668,9 @@ mod tests {
             let gen_uid = gen_signal.uid;
 
             let mock_model = MockFeedbackModel::new();
-            let calculator = QccsFeedbackCalculator::new_with_model(
-                [acq_signal, gen_signal].into_iter(),
-                mock_model,
-            )
-            .unwrap();
+            let calculator =
+                QccsFeedbackCalculator::new_with_model([acq_signal, gen_signal], mock_model)
+                    .unwrap();
 
             let result = calculator.compute_start_with_latency(
                 acquisition_absolute_start,
@@ -747,11 +747,9 @@ mod tests {
             let gen_uid = gen_signal.uid;
 
             let mock_model = MockFeedbackModel::new();
-            let calculator = QccsFeedbackCalculator::new_with_model(
-                [acq_signal, gen_signal].into_iter(),
-                mock_model,
-            )
-            .unwrap();
+            let calculator =
+                QccsFeedbackCalculator::new_with_model([acq_signal, gen_signal], mock_model)
+                    .unwrap();
 
             let result = calculator
                 .compute_start_with_latency(

@@ -5,14 +5,12 @@
 
 from __future__ import annotations
 
-import re
 import sys
 from typing import Any, Callable, ClassVar, Type
 
 import attrs
 import numpy
 
-from laboneq.data.awg_info import AwgKey
 from laboneq.data.scheduled_experiment import (
     CompilerArtifact,
     HandleResultShape,
@@ -91,18 +89,15 @@ class CompilerArtifactModel:
                 result["_artifact_type"] = artifact_type
                 return result
 
-        # Fallback to old serializer for unregistered types
-        result = _old_serialize(obj)
-        result["_artifact_type"] = "_legacy"
-        return result
+        raise ValueError(
+            f"No serialization plugin registered for {type(obj).__name__}. "
+            f"Registered types: {', '.join(_compiler_artifact_plugins)}. "
+            "Is the backend that produced these artifacts installed and imported?"
+        )
 
     @classmethod
     def _structure(cls, obj: dict[str, Any], _) -> CompilerArtifact:
-        artifact_type = obj.pop("_artifact_type", "_legacy")
-
-        if artifact_type == "_legacy":
-            # Fallback to old deserializer for legacy data
-            return _old_deserialize(obj, CompilerArtifact)
+        artifact_type = obj.pop("_artifact_type", None)
 
         if artifact_type in _compiler_artifact_plugins:
             _, _, structure_fn = _compiler_artifact_plugins[artifact_type]
@@ -110,7 +105,7 @@ class CompilerArtifactModel:
 
         raise ValueError(
             f"Unknown _artifact_type: {artifact_type}. "
-            f"Available types: {', '.join(_compiler_artifact_plugins.keys())}"
+            f"Available types: {', '.join(_compiler_artifact_plugins)}"
         )
 
 
@@ -131,6 +126,8 @@ class ScheduledExperimentModel:
     total_execution_time: float
     max_step_execution_time: float
     versions: SoftwareVersionsModel
+    coprocessor_payloads: dict[str, bytes] = attrs.field(factory=dict)
+    coprocessor_mappings: dict[str, str] = attrs.field(factory=dict)
 
     _target_class: ClassVar[Type] = ScheduledExperiment
 
@@ -141,19 +138,6 @@ def _old_serialize(obj):
 
 def _old_deserialize(obj, obj_type):
     return Serializer.load(obj, obj_type)
-
-
-def _unstructure_awg_key(obj: AwgKey):
-    return f"AwgKey({obj.device_id}, {obj.awg_id})"
-
-
-def _structure_awg_key(obj, _) -> AwgKey:
-    match_result = re.fullmatch(r"AwgKey\((.*), (.*)\)", obj)
-    assert match_result is not None
-    device_id, awg_idx = match_result.groups()
-    if awg_idx.isnumeric():
-        awg_idx = int(awg_idx)
-    return AwgKey(device_id, awg_idx)
 
 
 def _unstructure_np_or_list_np(obj: numpy.ndarray | list[numpy.ndarray]):
@@ -181,11 +165,6 @@ def make_converter():
     for cls in [Statement, dict[str, Any] | None]:
         converter.register_unstructure_hook(cls, _old_serialize)
         converter.register_structure_hook(cls, _old_deserialize)
-
-    # For AwgKey and ResultSource we register custom serializer/deserializer, since they are used as dictionary key
-    # and cannot be serialized to a dict
-    converter.register_unstructure_hook(AwgKey, _unstructure_awg_key)
-    converter.register_structure_hook(AwgKey, _structure_awg_key)
 
     # The type of HandleResultShapeModel.axis_values is simple, yet the serializer is not able to consume it,
     # even though we have serializers for both list and numpy.ndarray. Thus, have to register special hooks.

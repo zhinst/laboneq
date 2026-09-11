@@ -20,9 +20,9 @@ if TYPE_CHECKING:
 def compile_realtime(
     experiment: compiler_rs.ProcessedExperiment,
     near_time_parameters: ParameterStore[str, float],
-    device_class: int,
+    backend: str,
 ) -> RTCompilerOutputContainer:
-    compiler_module: compiler_rs = get_compiler_hooks(device_class).compiler_module()
+    compiler_module: compiler_rs = get_compiler_hooks(backend).compiler_module()
     result = compiler_module.compile_realtime(
         experiment=experiment,
         parameters={
@@ -42,7 +42,7 @@ def compile_realtime(
         near_time_parameters.mark_used(used_parameter)
 
     return RTCompilerOutputContainer(
-        device_class=device_class,
+        backend=backend,
         codegen_output=result.codegen_output(),
         schedule=result.pulse_sheet_schedule,
     )

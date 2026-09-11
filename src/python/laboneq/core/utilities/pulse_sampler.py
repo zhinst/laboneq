@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Literal
 
 import numpy as np
@@ -12,9 +13,25 @@ from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums.mixer_type import MixerType
 
 if TYPE_CHECKING:
-    from laboneq.data.compilation_job import PulseDef
+    from numpy.typing import ArrayLike
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PulseDef:
+    """A pulse to sample.
+
+    Built by the compiler backend and passed to the samplers below; the
+    `laboneq.core.utilities.pulse_sampler.PulseDef` path is part of that contract.
+    """
+
+    uid: str | None = None
+    function: str | None = None
+    length: float | None = None
+    amplitude: float = 1.0
+    can_compress: bool = False
+    samples: ArrayLike | None = None
 
 
 class Marker:
@@ -81,11 +98,8 @@ def sample_marker(
             pulse_function=pulse_def.function,
             samples=pulse_def.samples,
             mixer_type=None,
-            markers=None,
         )
-        marker_samples_int = np.clip(marker_samples["samples_i"], 0, 1).astype(np.uint8)
-
-        return marker_samples_int
+        return np.clip(marker_samples, 0, 1).astype(np.uint8)
 
     if start is None:
         return None
@@ -112,9 +126,8 @@ def sample_pulse(
     samples: np.ndarray | None = None,
     mixer_type: MixerType | None = MixerType.IQ,
     pulse_parameters: dict[str, Any] | None = None,
-    markers: list[Marker] | None = None,
     subslice: tuple[int, int] | None = None,
-):
+) -> np.ndarray:
     """Create a waveform from a pulse definition.
 
     Depending on the given parameters, this function either samples a functional
@@ -144,18 +157,16 @@ def sample_pulse(
         samples: Pulse shape for a sampled pulse
         mixer_type: Type of the mixer after the AWG. Only effective for IQ signals.
         pulse_parameters: Extra pulse parameters, passed to the sampler,
-        markers: Configuration of the markers,
-        pulse_defs: Definitions of other pulses (maybe referenced by marker spec),
+
     Returns:
-        A dict with one ("samples_i", real case) or two ("samples_i" and
-        "samples_q", complex case) ndarrays representing the sampled, scaled and
-        possibly modulated waveform for this pulse. Markers are optionally represented
-        by more fields ("marker1" and maybe "marker2")
+        The sampled, scaled and possibly modulated waveform as a single ndarray.
+        For `signal_type == "iq"` the array is complex-valued, carrying I in the real
+        and Q in the imaginary part. For every other signal type the imaginary part
+        carries no information, and a real-valued array is returned.
 
     Raises:
         ValueError: Invalid combination of arguments
     """
-    markers = markers or []
     if pulse_function == "":
         pulse_function = None
 
@@ -197,7 +208,13 @@ def sample_pulse(
         assert len(shape) == 2 and shape[1] == 2
         samples = samples[:, 0] + 1j * samples[:, 1]
 
-    samples = amplitude * samples.astype(complex)
+    if np.imag(amplitude) == 0.0:
+        amplitude = np.real(amplitude)
+
+    canonical_dtype = np.result_type(samples.dtype, np.float64)
+    if signal_type == "iq" or canonical_dtype.kind not in "fc":
+        canonical_dtype = np.complex128
+    samples = amplitude * samples.astype(canonical_dtype, copy=False)
 
     phase = phase or 0.0
     modulation_frequency = modulation_frequency or 0.0
@@ -208,17 +225,17 @@ def sample_pulse(
         phase,
     )
 
-    t = np.arange(num_samples) / sampling_rate
     if modulation_frequency:
-        carrier_phase = 2.0 * np.pi * modulation_frequency * t
-    else:
-        carrier_phase = 0
-    carrier_phase += phase
-
-    samples = np.exp(-1.0j * carrier_phase) * samples
+        t = np.arange(num_samples) / sampling_rate
+        carrier_phase = 2.0 * np.pi * modulation_frequency * t + phase
+        samples = np.exp(-1.0j * carrier_phase) * samples
+    elif phase:
+        # Without modulation the carrier phase is a scalar, so keep it one: a constant
+        # array here would cost a full `np.exp` over every sample.
+        samples = np.exp(-1.0j * phase) * samples
 
     if mixer_type == MixerType.UHFQA_ENVELOPE and signal_type == "iq":
-        if not np.allclose(samples.imag, 0.0):
+        if np.iscomplexobj(samples) and not np.allclose(samples.imag, 0.0):
             raise LabOneQException(
                 "HW modulation on UHFQA requires a real baseband (phase "
                 "modulation is not permitted)."
@@ -227,7 +244,7 @@ def sample_pulse(
     # TODO: Collect warnings and return them as part of the result to avoid
     # spamming the log in case of many pulses.
     if signal_type != "iq":
-        if not np.allclose(samples.imag, 0.0):
+        if np.iscomplexobj(samples) and not np.allclose(samples.imag, 0.0):
             if modulation_frequency:
                 _logger.debug(
                     "Complex-valued pulse envelope provided for an rf-signal, imaginary part will be dropped after performing software modulation."
@@ -237,11 +254,38 @@ def sample_pulse(
                 _logger.warning(
                     "Complex-valued pulse envelope provided for an rf-signal, imaginary part will be dropped."
                 )
-        samples = samples.real
+        # `.real` of a complex array is a stride-2 view; materialise it so that
+        # consumers (notably the Rust code generators) get a contiguous buffer.
+        samples = np.ascontiguousarray(samples.real)
 
-    retval = {"samples_i": samples.real, "samples_q": samples.imag}
+    return samples
 
-    for m in markers:
+
+def sample_markers(
+    num_total_samples: int,
+    *,
+    sampling_rate: float,
+    length: float,
+    markers: list[Marker] | None,
+) -> dict[str, np.ndarray]:
+    """Sample the markers attached to a pulse.
+
+    Args:
+        num_total_samples: Number of samples of the pulse the markers belong to.
+        sampling_rate: Sampling rate of the device the pulse is played on.
+        length: Pulse length in seconds.
+        markers: Configuration of the markers.
+
+    Returns:
+        A dict with a "samples_marker1" and/or "samples_marker2" entry for each marker
+        that sampled to something. Markers that sample to nothing are omitted, so the
+        dict is empty when there are no markers.
+
+    Raises:
+        LabOneQException: A marker is configured inconsistently with its pulse.
+    """
+    sampled: dict[str, np.ndarray] = {}
+    for m in markers or []:
         if m.pulse is not None:
             marker_pulse_def = m.pulse
             if m.length is not None:
@@ -263,7 +307,7 @@ def sample_pulse(
             if (marker_length := m.length) is None:
                 marker_length = length
         m_sampled = sample_marker(
-            len(samples),
+            num_total_samples,
             sampling_rate=sampling_rate,
             enable=m.enable,
             start=m.start,
@@ -271,10 +315,8 @@ def sample_pulse(
             pulse_def=marker_pulse_def,
         )
         if m_sampled is not None:
-            marker_selector = m.marker_selector
-            retval[f"samples_{marker_selector}"] = m_sampled
-
-    return retval
+            sampled[f"samples_{m.marker_selector}"] = m_sampled
+    return sampled
 
 
 # registries of pulse samplers and factories:

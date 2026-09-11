@@ -56,6 +56,12 @@ struct CompiledExperiment {
 
   pulseSheet @9 :PulseSheet.PulseSheet;
   # Scheduled event timeline. For debugging and visualization only.
+
+  # --- Coprocessors ---
+
+  coprocessors @10 :List(CoprocessorBinding);
+  # Coprocessors the experiment declared, each bound to a device-setup inventory slot.
+  # Coprocessors the experiment left unmapped are absent.
 }
 
 struct Metadata {
@@ -97,4 +103,18 @@ struct AcquisitionHandle {
 
   uid @0 :Text;
   # Text UID.
+}
+
+struct CoprocessorBinding {
+  # An experiment-declared coprocessor, bound to a device-setup inventory slot.
+
+  label @0 :Text;
+  # Experiment-side coprocessor label, as declared in the experiment body. Keys
+  # `compiled.set_coprocessor_payload(label, ...)` and error messages.
+
+  inventoryKey @1 :Text;
+  # Device-setup inventory key `label` is mapped to.
+
+  payload @2 :Data;
+  # Payload declared in the experiment body.
 }

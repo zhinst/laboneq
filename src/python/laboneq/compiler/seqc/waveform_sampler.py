@@ -21,6 +21,7 @@ from laboneq.compiler.seqc.wave_compressor import (
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.pulse_sampler import (
     length_to_samples,
+    sample_markers,
     sample_pulse,
     verify_amplitude_no_clipping,
 )
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
     import numpy.typing as npt
 
     from laboneq.core.types.enums.mixer_type import MixerType
-    from laboneq.data.compilation_job import PulseDef
+    from laboneq.core.utilities.pulse_sampler import PulseDef
 
 _logger = logging.getLogger(__name__)
 
@@ -177,14 +178,14 @@ def sample_integration_weight(
         pulse_parameters=pulse_parameters,
     )
     verify_amplitude_no_clipping(
-        samples_i=iw_samples["samples_i"],
-        samples_q=iw_samples["samples_q"],
+        samples_i=iw_samples.real,
+        samples_q=iw_samples.imag,
         pulse_id=pulse_def.uid,
         mixer_type=mixer_type,
         signals=tuple(signals),
         is_rf_signal=False,
     )
-    return (iw_samples["samples_i"], iw_samples["samples_q"])
+    return (iw_samples.real, iw_samples.imag)
 
 
 def sample_waveform(
@@ -232,24 +233,30 @@ def sample_waveform(
             params_pulse_combined = pulse_params.parameters
         else:
             params_pulse_combined = None
-        sampled_pulse = sample_pulse(
+        pulse_length = pulse_part.length / sampling_rate
+        pulse_samples = sample_pulse(
             signal_type=signal_type,
             sampling_rate=sampling_rate,
             amplitude=amplitude,
-            length=pulse_part.length / sampling_rate,
+            length=pulse_length,
             pulse_function=pulse_def.function,
             modulation_frequency=used_oscillator_frequency,
             phase=iq_phase,
             samples=pulse_def.samples,
             mixer_type=mixer_type,
             pulse_parameters=params_pulse_combined,
+        )
+        sampled_markers = sample_markers(
+            len(pulse_samples),
+            sampling_rate=sampling_rate,
+            length=pulse_length,
             markers=pulse_part.markers,
         )
         sampled_pulse = SamplesSignature(
-            samples_i=sampled_pulse["samples_i"],
-            samples_q=sampled_pulse["samples_q"],
-            samples_marker1=sampled_pulse.get("samples_marker1"),
-            samples_marker2=sampled_pulse.get("samples_marker2"),
+            samples_i=pulse_samples.real,
+            samples_q=pulse_samples.imag,
+            samples_marker1=sampled_markers.get("samples_marker1"),
+            samples_marker2=sampled_markers.get("samples_marker2"),
         )
         verify_amplitude_no_clipping(
             samples_i=sampled_pulse.samples_i,

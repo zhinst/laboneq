@@ -1,12 +1,11 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
+use std::num::NonZeroU16;
 
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_dsl::types::{DeviceUid, OscillatorKind, SignalUid};
+use laboneq_dsl::types::{OscillatorKind, SignalUid};
 use laboneq_ir::signal::Signal;
-use laboneq_ir::system::AwgDevice;
 use laboneq_log::debug;
 use laboneq_units::duration::{Duration, Second};
 
@@ -16,50 +15,21 @@ use crate::experiment::DeviceSignal;
 use crate::setup_processor::DelayRegistry;
 use crate::setup_processor::delays::{SignalDelayProperties, compute_signal_delays};
 
-pub(crate) struct SetupProperties {
-    pub signals: Vec<DeviceSignal>,
-    pub awg_devices: Vec<AwgDevice>,
-}
-
-pub(crate) struct ProcessedSetup {
-    pub signals: Vec<Signal>,
-    pub devices: Vec<AwgDevice>,
-    pub on_device_delays: DelayRegistry,
-}
-
-/// Process the setup properties.
+/// Build the signals the rest of the compiler works with.
 ///
 /// TODO: Most of the functionality could be moved to the Compiler backends.
 pub(crate) fn process_setup(
-    setup: SetupProperties,
+    signals: Vec<DeviceSignal>,
     backend_processed: &impl PreprocessedBackendData,
     id_store: &NamedIdStore,
-) -> Result<ProcessedSetup> {
-    let signals = setup.signals;
-
-    let device_map = setup
-        .awg_devices
-        .iter()
-        .map(|d| (d.uid(), d))
-        .collect::<HashMap<_, _>>();
-
-    // Compute the on-device delays based on the signal properties and device information.
-    let delays = compute_delays(&signals, &device_map, backend_processed).map_err(Error::new)?;
-
-    // Process the signals, generating the final signal configurations with the computed delays and adapted precompensation settings.
-    let signals = process_signals(signals, &device_map, &delays, id_store, backend_processed)?;
-
-    Ok(ProcessedSetup {
-        signals,
-        devices: setup.awg_devices,
-        on_device_delays: delays,
-    })
+) -> Result<Vec<Signal>> {
+    let delays = compute_delays(&signals, backend_processed);
+    process_signals(signals, &delays, id_store, backend_processed)
 }
 
-/// Generates the signals from the signal properties and device information.
+/// Assemble each signal from its setup properties and its computed delays.
 fn process_signals(
     signal_properties: Vec<DeviceSignal>,
-    devices: &HashMap<DeviceUid, &AwgDevice>,
     delays: &DelayRegistry,
     id_store: &NamedIdStore,
     backend_processed: &impl PreprocessedBackendData,
@@ -67,7 +37,6 @@ fn process_signals(
     let signals = signal_properties
         .into_iter()
         .map(|prop| -> Result<Signal> {
-            let device = devices.get(&prop.device_uid).unwrap();
             let sampling_rate = prop.sampling_rate;
 
             // Resolving AUTO modulation requires hardware knowledge and is therefore the
@@ -85,7 +54,7 @@ fn process_signals(
             let signal_delay = round_signal_delay(
                 prop.calibration.signal_delay,
                 sampling_rate.value(),
-                device.traits().sample_multiple,
+                prop.sample_multiple,
                 prop.uid,
                 id_store,
             )?;
@@ -96,12 +65,15 @@ fn process_signals(
                 port_mode: prop.calibration.port_mode,
                 port_delay: prop.calibration.port_delay,
                 start_delay: delays.signal_start_delay(prop.uid),
+                signal_alignment_delay: delays.signal_alignment_delay(prop.uid),
                 amplitude: prop.calibration.amplitude,
                 range: prop.calibration.range,
                 precompensation: prop.calibration.precompensation,
                 signal_delay,
                 awg_key: backend_processed.awg_key(prop.uid)?,
                 device_uid: prop.device_uid,
+                physical_device_uid: prop.physical_device_uid,
+                traits: prop.traits,
                 sampling_rate: prop.sampling_rate.value(),
                 amplifier_pump: prop.calibration.amplifier_pump,
                 oscillator: prop.calibration.oscillator,
@@ -118,10 +90,14 @@ fn process_signals(
     Ok(signals)
 }
 
+/// Round a calibrated signal delay onto the signal's sequencer grid.
+///
+/// Errors on a negative delay, and logs when rounding moves it by more than a
+/// sample.
 fn round_signal_delay(
     delay: Duration<Second>,
     sampling_rate: f64,
-    sample_multiple: u16,
+    sample_multiple: NonZeroU16,
     signal_id: SignalUid,
     id_store: &NamedIdStore,
 ) -> Result<Duration<Second>> {
@@ -150,51 +126,41 @@ fn round_signal_delay(
     Ok(rounded_delay)
 }
 
-/// Rounds the given delay to the nearest multiple of the sample period, with ties rounded towards zero.
+/// Round a delay to the nearest whole number of sequencer grid steps, with ties
+/// rounded towards zero.
 fn round_delay(
     delay: Duration<Second>,
     sampling_rate: f64,
-    sample_multiple: u16,
+    sample_multiple: NonZeroU16,
 ) -> Duration<Second> {
     let samples = delay * sampling_rate;
-    let sample_multiple = sample_multiple as f64;
+    let sample_multiple = sample_multiple.get() as f64;
     let delay_samples = ((samples.value() / sample_multiple + 0.5).ceil() - 1.0) * sample_multiple;
     (delay_samples / sampling_rate).into()
 }
 
-/// Computes the on-device delays for a set of signals based on their properties and device information.
+/// Work out how long each signal waits so that they all start together.
 ///
-/// Once the on-device delays are computed, the start and port delays for each signal are calculated accordingly
-/// to compensate for the on-device delays, ensuring that the signals are correctly aligned in time when executed on the device.
-///
-/// The alignment takes into account following factors:
-/// - Lead delay: The inherent delay of the device before the signal starts being output.
-/// - Signal delay: The delay introduced by the setup properties for the signal (e.g. output routing).
-/// - Precompensation delay: Delay introduced by precompensation settings on the signal.
-///
-/// Returns a struct containing the start and port delays for each signal, which can be used to adjust the signal timing in the setup processing.
+/// A signal arrives carrying the delay its backend already accounts for, such
+/// as output routing or precompensation. The largest of those sets the common
+/// start; every signal waits the difference, on top of the head start its
+/// instrument needs.
 fn compute_delays(
     signals: &[DeviceSignal],
-    devices: &HashMap<DeviceUid, &AwgDevice>,
     backend_processed: &impl PreprocessedBackendData,
-) -> Result<DelayRegistry> {
+) -> DelayRegistry {
     let signal_delay_props = signals
         .iter()
-        .map(|s| {
-            let device = devices.get(&s.device_uid).unwrap();
-            SignalDelayProperties::new(
-                s.uid,
-                s.sampling_rate.value(),
-                device.uid(),
-                device.kind(),
-                s.delay_signal,
-                backend_processed.lead_delay(s.uid),
-            )
+        .map(|s| SignalDelayProperties {
+            uid: s.uid,
+            sampling_rate: s.sampling_rate.value(),
+            sample_multiple: s.sample_multiple,
+            delay_signal: s.delay_signal,
+            lead_delay: backend_processed.lead_delay(s.uid),
         })
         .collect::<Vec<_>>();
 
-    let delays = compute_signal_delays(&signal_delay_props);
-    Ok(delays)
+    compute_signal_delays(&signal_delay_props)
 }
 
 #[cfg(test)]
@@ -202,9 +168,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_round_delay() {
+    fn round_delay_snaps_to_the_sequencer_grid() {
         let sampling_rate = 2.0e9;
-        let sample_multiple = 4;
+        let sample_multiple = NonZeroU16::new(4).unwrap();
 
         for (delay_samples, delay_rounded_samples) in [
             (0.0, 0.0),
@@ -225,7 +191,7 @@ mod tests {
             let rounded_samples = rounded_seconds.value() * sampling_rate;
             assert_eq!(
                 rounded_samples, delay_rounded_samples,
-                "Delay {} should round to {}, but got {}.",
+                "{} samples should round to {}, but got {}.",
                 delay_samples, delay_rounded_samples, rounded_samples
             );
         }
