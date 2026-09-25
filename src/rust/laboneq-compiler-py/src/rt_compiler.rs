@@ -93,7 +93,7 @@ pub(crate) fn compile_realtime(
     let code_gen_output = input.backend.generate_code_dyn(
         ir,
         input.compiler_settings,
-        &input.experiment.py_object_store,
+        &input.experiment.external_parameters,
         input.backend_data,
     )?;
     drop(_t);

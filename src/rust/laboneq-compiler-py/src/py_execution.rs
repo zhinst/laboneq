@@ -22,14 +22,14 @@ pub(crate) fn create_py_execution<'py>(
     execution: &Execution,
     sweep_parameters: &[SweepParameter],
     id_store: &NamedIdStore,
-    py_objects: &PyObjectStore<ExternalParameterUid>,
+    external_parameters: &PyObjectStore<ExternalParameterUid>,
 ) -> PyResult<Bound<'py, PyAny>> {
     create_py_execution_impl(
         py,
         &execution.statements,
         sweep_parameters,
         id_store,
-        py_objects,
+        external_parameters,
     )
 }
 
@@ -38,12 +38,12 @@ fn create_py_execution_impl<'py>(
     statements: &[Statement],
     sweep_parameters: &[SweepParameter],
     id_store: &NamedIdStore,
-    py_objects: &PyObjectStore<ExternalParameterUid>,
+    external_parameters: &PyObjectStore<ExternalParameterUid>,
 ) -> PyResult<Bound<'py, PyAny>> {
     let mut builder = PyStatementBuilder {
         py,
         id_store,
-        py_objects,
+        external_parameters,
     };
 
     let mut out = Vec::with_capacity(statements.len());
@@ -60,8 +60,13 @@ fn create_py_execution_impl<'py>(
                     .values,
             )?,
             Statement::Loop { count, body } => {
-                let body =
-                    create_py_execution_impl(py, body, sweep_parameters, id_store, py_objects)?;
+                let body = create_py_execution_impl(
+                    py,
+                    body,
+                    sweep_parameters,
+                    id_store,
+                    external_parameters,
+                )?;
                 builder.handle_loop(*count, body)?
             }
             Statement::ExecRealTime => builder.handle_exec_realtime()?,
@@ -86,7 +91,7 @@ fn create_py_execution_impl<'py>(
 struct PyStatementBuilder<'py, 'a> {
     py: Python<'py>,
     id_store: &'a NamedIdStore,
-    py_objects: &'a PyObjectStore<ExternalParameterUid>,
+    external_parameters: &'a PyObjectStore<ExternalParameterUid>,
 }
 
 impl<'py> PyStatementBuilder<'py, '_> {
@@ -111,7 +116,7 @@ impl<'py> PyStatementBuilder<'py, '_> {
             match &arg.value {
                 ExternalOrValue::ExternalParameter(uid) => {
                     let py_obj = self
-                        .py_objects
+                        .external_parameters
                         .resolve_to_python(uid)
                         .expect("Internal Error: External parameter not found");
                     dict.set_item(key, py_obj)?;

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::Result;
 use crate::ir::compilation_job::{AwgCore, DeviceKind, Signal};
-use crate::ir::{IrNode, NodeKind, PlayHold, Samples, SignalUid};
+use crate::ir::{IrNode, NodeKind, ParameterOperation, PlayHold, Samples, SignalUid};
 use crate::pulse_map::{PulseMap, PulseWaveform};
 use crate::result::{CodegenWaveform, WaveformSignatureString, WaveformStore};
 use crate::signature::{SamplesSignatureID, Uid, WaveformSignature};
@@ -253,9 +253,18 @@ fn split_compressed_waveforms(
                 if compressed_parts.is_empty() {
                     return Ok(new_nodes);
                 }
+                new_nodes.reserve_exact(compressed_parts.len());
+                let mut is_head = true;
                 for part in compressed_parts {
                     match part {
                         CompressedWaveformPart::PlayHold { offset, length } => {
+                            // A hold is never the first part: compression starts one
+                            // granule into the waveform at the earliest, so the pulse
+                            // always opens with samples and carries its side effects there.
+                            assert!(
+                                !is_head,
+                                "Internal error: Did not expect a hold as the first part of a compressed waveform."
+                            );
                             let new_event = PlayHold { length: *length };
                             let new_node =
                                 IrNode::new(NodeKind::PlayHold(new_event), node.offset() + offset);
@@ -267,6 +276,19 @@ fn split_compressed_waveforms(
                             // Compressed waveform part inherits the properties of the original play wave
                             let mut new_playwave = ob.clone();
                             new_playwave.waveform = waveform.clone();
+                            if !is_head {
+                                // Amplitude and phase apply to the pulse as a whole, and take
+                                // effect on the part that plays its first sample. Repeating them
+                                // on a later part would apply them again, mid-pulse. The
+                                // amplitude is kept as a zero increment rather than dropped, so
+                                // that the part still selects the amplitude register it plays at.
+                                new_playwave.amplitude = new_playwave
+                                    .amplitude
+                                    .map(|_| ParameterOperation::INCREMENT(0.0));
+                                new_playwave.increment_phase = None;
+                                new_playwave.increment_phase_params.clear();
+                            }
+                            is_head = false;
                             let new_node = IrNode::new(
                                 NodeKind::PlayWave(new_playwave),
                                 node.offset() + offset,

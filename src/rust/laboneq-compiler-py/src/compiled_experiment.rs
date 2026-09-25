@@ -32,7 +32,7 @@ pub(crate) struct CompiledExperiment<A: CompilerArtifact> {
 
     // Symbols
     pub id_store: Arc<NamedIdStore>,
-    pub object_store: Arc<PyObjectStore<ExternalParameterUid>>,
+    pub external_parameters: Arc<PyObjectStore<ExternalParameterUid>>,
 }
 
 pub(crate) struct ExecutionTiming {

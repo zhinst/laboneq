@@ -7,7 +7,7 @@ from __future__ import annotations
 import copy as copy_
 from collections import UserDict
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
@@ -146,6 +146,37 @@ class AcquiredResult:
         return xr.DataArray(name=handle, data=data, dims=axes_as_dims, coords=coords)
 
 
+def slice_acquired_result(
+    acquired: AcquiredResult, nt: Literal["all", "latest"] = "all"
+) -> AcquiredResult | None:
+    """Restrict a result to the requested near-time selection.
+
+    With ``nt="latest"`` the data is sliced at ``last_nt_step`` and the leading
+    near-time axes are stripped; ``None`` is returned when no near-time step
+    has completed yet. With ``nt="all"`` the result is returned unchanged.
+    """
+    if nt == "all":
+        return acquired
+    if acquired.last_nt_step is None:
+        return None
+    nt_index = tuple(acquired.last_nt_step)
+    n_nt_axes = len(nt_index)
+    assert acquired.data is not None
+    # Indexing an ndarray returns a view into `acquired.data`, which later
+    # near-time steps keep writing into; copy so the caller gets a stable
+    # snapshot instead of data that changes under their feet.
+    sliced_data = acquired.data[nt_index]
+    if isinstance(sliced_data, np.ndarray):
+        sliced_data = sliced_data.copy()
+    return AcquiredResult(
+        data=sliced_data,
+        axis_name=list(acquired.axis_name[n_nt_axes:]),
+        axis=list(acquired.axis[n_nt_axes:]),
+        last_nt_step=list(nt_index),
+        handle=acquired.handle,
+    )
+
+
 class AcquiredResults(UserDict[str, AcquiredResult]):
     """A collection of acquired results.
 
@@ -154,6 +185,31 @@ class AcquiredResults(UserDict[str, AcquiredResult]):
 
     !!! version-added "Added in version 2.16.0"
     """
+
+    def _get_sliced(
+        self, handle: str, nt: Literal["all", "latest"]
+    ) -> AcquiredResult | None:
+        """Return the result for `handle` restricted to the `nt` selection.
+
+        Stores that keep their results on a service override this
+        to fetch only the part asked for.
+
+        Returns:
+            The selected result, or `None` if no near-time step has completed
+            yet for the handle.
+
+        Raises:
+            KeyError: The handle is unknown.
+        """
+        return slice_acquired_result(self[handle], nt)
+
+    def _known_handles(self) -> set[str] | None:
+        """The handles already held here, or `None` if finding out needs a fetch.
+
+        This method is called by Results.__repr__, which must not download
+        anything just to print a count.
+        """
+        return set(self.data)
 
     def to_xarray(self, copy: bool = False) -> XarrayDataset:
         """Convert to [xarray.Dataset][].
@@ -173,6 +229,9 @@ class AcquiredResults(UserDict[str, AcquiredResult]):
 
             Use `results["result_handle"].to_array()` to convert individual results to [xarray.Dataset][].
 
+            This reads every result, so a store that fetches on demand
+            downloads all of them.
+
         Args:
             copy: If `True`, returns a copy of the data instead of a view.
 
@@ -191,7 +250,9 @@ class AcquiredResults(UserDict[str, AcquiredResult]):
         xr: Xarray = import_optional(
             "xarray", message="Cannot convert `AcquiredResults` to `xarray` object."
         )
-        datasets = [res.to_xarray(copy=copy) for res in self.data.values()]
+        # Read through the mapping, not `self.data`: a store that fetches on
+        # demand keeps only what was asked for in there.
+        datasets = [res.to_xarray(copy=copy) for res in self.values()]
         try:
             ds = xr.merge(
                 datasets, combine_attrs="drop_conflicts", compat="broadcast_equals"

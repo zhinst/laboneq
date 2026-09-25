@@ -2360,7 +2360,11 @@ impl<'py> Serializer<'py> {
 /// stored as-is in the opaque `DeviceSetup.setupDescription`; `backend` names its schema.
 ///
 /// Returns the serialized bytes as a `Vec<u8>`.
-#[instrument(level = "debug", name = "laboneq.compiler.serialize_capnp", skip_all)]
+#[instrument(
+    level = "debug",
+    name = "laboneq.compiler.serialize_experiment",
+    skip_all
+)]
 pub(crate) fn serialize_experiment(
     py: Python,
     experiment: ExperimentCapnpPy,

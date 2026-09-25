@@ -215,10 +215,14 @@ class _RemoteControllerBacking(_SessionBacking):
     def __init__(
         self,
         remote_controller: RemoteController,
+        neartime_callbacks: dict[str, Callable],
         local_service: LocalControllerService | None = None,
     ):
         self._remote_controller = remote_controller
         self._local_service = local_service
+        # Shared with the owning Session, so callbacks registered after
+        # connect() are picked up as well.
+        self._neartime_callbacks = neartime_callbacks
         self._raw_results = Results()
 
     @classmethod
@@ -252,14 +256,6 @@ class _RemoteControllerBacking(_SessionBacking):
                 "timeout is not supported when connected via a remote "
                 "controller service."
             )
-        if neartime_callbacks:
-            raise LabOneQException(
-                "Cannot connect to a remote controller service with "
-                "near-time callbacks already registered: a Python function "
-                "cannot be sent over the network. Pre-register the callback "
-                "on the controller service instead (see its '--callbacks' "
-                "option)."
-            )
         local_service: LocalControllerService | None = None
         auth_token: str | None = None
         if do_emulation:
@@ -287,14 +283,10 @@ class _RemoteControllerBacking(_SessionBacking):
             if local_service is not None:
                 local_service.stop()
             raise
-        return cls(remote_controller=remote_controller, local_service=local_service)
-
-    def assert_supports_registering_callbacks(self) -> None:
-        raise LabOneQException(
-            "Cannot register a near-time callback on a session connected "
-            "via a remote controller service: a Python function cannot "
-            "be sent over the network. Pre-register the callback on the "
-            "controller service instead (see its '--callbacks' option)."
+        return cls(
+            remote_controller=remote_controller,
+            neartime_callbacks=neartime_callbacks,
+            local_service=local_service,
         )
 
     @property
@@ -332,17 +324,22 @@ class _RemoteControllerBacking(_SessionBacking):
         legacy_session_data: LegacySessionData,
         coprocessor_payload_overrides: dict[str, bytes] | None = None,
     ):
+        # Imported lazily for the same circular-import reason as
+        # RemoteController, see the comment next to TYPE_CHECKING above.
+        from laboneq.controller.api.commons import SubmissionHandle
+
         # legacy_session_data has no remote equivalent: there is no HTTP
         # endpoint to forward it to.
-        handle = self._remote_controller.submit_experiment(
+        handle = SubmissionHandle()
+        # A failed run is released by run_experiment itself; only a completed
+        # one is still held on the service and has to be closed here.
+        self._raw_results = self._remote_controller.run_experiment(
             scheduled_experiment,
+            callbacks=self._neartime_callbacks,
+            handle=handle,
             coprocessor_payload_overrides=coprocessor_payload_overrides,
         )
-        try:
-            self._remote_controller.wait_for_experiment(handle)
-            self._raw_results = self._remote_controller.get_experiment(handle)
-        finally:
-            self._remote_controller.close_submission(handle)
+        self._remote_controller.close_submission(handle)
 
 
 def _raise_execution_errors(execution_errors: list[tuple[list[int], str, str]]) -> None:

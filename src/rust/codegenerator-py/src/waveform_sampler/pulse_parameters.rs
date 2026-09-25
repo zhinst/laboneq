@@ -49,16 +49,25 @@ pub(crate) fn pulse_parameters_to_py(
     py: Python,
     parameters: &PulseParameters,
     id_store: &NamedIdStore,
-    py_object_store: &PyObjectStore<ExternalParameterUid>,
+    external_parameters: &PyObjectStore<ExternalParameterUid>,
 ) -> PulseParametersPy {
-    let pulse_parameters =
-        pulse_parameters_to_py_dict(py, &parameters.pulse_parameters, id_store, py_object_store)
-            .unwrap();
-    let play_parameters =
-        pulse_parameters_to_py_dict(py, &parameters.play_parameters, id_store, py_object_store)
-            .unwrap();
+    let pulse_parameters = pulse_parameters_to_py_dict(
+        py,
+        &parameters.pulse_parameters,
+        id_store,
+        external_parameters,
+    )
+    .unwrap();
+    let play_parameters = pulse_parameters_to_py_dict(
+        py,
+        &parameters.play_parameters,
+        id_store,
+        external_parameters,
+    )
+    .unwrap();
     let all_parameters =
-        pulse_parameters_to_py_dict(py, &parameters.parameters, id_store, py_object_store).unwrap();
+        pulse_parameters_to_py_dict(py, &parameters.parameters, id_store, external_parameters)
+            .unwrap();
     PulseParametersPy {
         id: PulseParametersId(parameters.id),
         pulse_parameters: Arc::new(pulse_parameters.into()),

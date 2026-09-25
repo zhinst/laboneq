@@ -13,6 +13,7 @@ from laboneq.data.experiment_results import (
     AcquiredResult,
     AcquiredResults,
     ExperimentResults,
+    slice_acquired_result,
 )
 
 if TYPE_CHECKING:
@@ -171,11 +172,17 @@ class ResultsBuilder:
 
                 if averaging_mode is AveragingMode.CYCLIC:
                     acquired_data_for_handle = acquired_data_for_handle.reshape(
-                        (shots, *sliced_shape)
+                        (
+                            shots,
+                            *sliced_shape,
+                        )
                     ).mean(axis=0)
                 else:  # AveragingMode.SEQUENTIAL
                     acquired_data_for_handle = acquired_data_for_handle.reshape(
-                        (*sliced_shape, shots)
+                        (
+                            *sliced_shape,
+                            shots,
+                        )
                     ).mean(axis=-1)
 
             if (acquired_len := np.prod(acquired_data_for_handle.shape)) != (
@@ -248,10 +255,8 @@ def slice_results(
     sliced = AcquiredResults()
     for handle in handle_names:
         acquired = results[handle]
-        if selector.nt == "all":
-            sliced[handle] = acquired
-            continue
-        if acquired.last_nt_step is None:
+        result = slice_acquired_result(acquired, selector.nt)
+        if result is None:
             # Declared but not yet measured.
             sliced[handle] = AcquiredResult(
                 data=np.array([], dtype=acquired.data.dtype),
@@ -261,14 +266,7 @@ def slice_results(
                 handle=handle,
             )
             continue
-        nt_index = tuple(acquired.last_nt_step)
-        n_nt_axes = len(nt_index)
-        assert acquired.data is not None
-        sliced[handle] = AcquiredResult(
-            data=acquired.data[nt_index],
-            axis_name=list(acquired.axis_name[n_nt_axes:]),
-            axis=list(acquired.axis[n_nt_axes:]),
-            last_nt_step=acquired.last_nt_step,
-            handle=handle,
-        )
+        if result is not acquired:
+            result.handle = handle
+        sliced[handle] = result
     return sliced

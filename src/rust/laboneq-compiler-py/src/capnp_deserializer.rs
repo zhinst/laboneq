@@ -58,15 +58,17 @@ use num_complex::Complex64;
 use numeric_array::NumericArray;
 use pyo3::prelude::*;
 
+use tracing::instrument;
+
 type ExternalParameterStore = PyObjectStore<ExternalParameterUid>;
 
 /// Result of deserializing a Cap'n Proto experiment message.
-pub(crate) struct DeserializedExperiment {
+pub struct DeserializedExperiment {
     pub root: ExperimentNode,
     pub id_store: NamedIdStore,
     pub parameters: Vec<SweepParameter>,
     pub pulses: HashMap<PulseUid, PulseDef>,
-    pub external_parameter_values: ExternalParameterStore,
+    pub external_parameters: ExternalParameterStore,
 
     pub experiment_signals: Vec<ExperimentSignal>,
 
@@ -519,8 +521,7 @@ impl ChildSectionIndex {
 // === Deserializer ===
 
 /// Bundles all shared state for a single experiment deserialization pass.
-struct Deserializer<'py> {
-    py: Python<'py>,
+struct Deserializer {
     id_store: NamedIdStore,
 
     /// --- Experiment entities ---
@@ -529,7 +530,7 @@ struct Deserializer<'py> {
     pulse_ids: Vec<NamedId>,
     handle_ids: Vec<NamedId>,
     section_uid_gen: SectionUidGenerator,
-    external_parameter_values: ExternalParameterStore,
+    external_parameters: ExternalParameterStore,
     parameters: Vec<SweepParameter>,
     pulses: HashMap<PulseUid, PulseDef>,
     pulse_definition_params: HashMap<PulseUid, HashMap<PulseParameterUid, ExternalOrValue>>,
@@ -539,17 +540,16 @@ struct Deserializer<'py> {
     hqcs: HqcsDeclarations,
 }
 
-impl<'py> Deserializer<'py> {
-    fn new(py: Python<'py>) -> Self {
+impl Deserializer {
+    fn new() -> Self {
         Self {
-            py,
             id_store: NamedIdStore::new(),
             signal_ids: Vec::new(),
             parameter_ids: Vec::new(),
             pulse_ids: Vec::new(),
             handle_ids: Vec::new(),
             section_uid_gen: SectionUidGenerator::new(),
-            external_parameter_values: ExternalParameterStore::new(),
+            external_parameters: ExternalParameterStore::new(),
             parameters: Vec::new(),
             pulses: HashMap::new(),
             pulse_definition_params: HashMap::new(),
@@ -579,7 +579,7 @@ impl<'py> Deserializer<'py> {
             id_store: self.id_store,
             parameters: self.parameters,
             pulses: self.pulses,
-            external_parameter_values: self.external_parameter_values,
+            external_parameters: self.external_parameters,
             experiment_signals,
             setup_description,
             hqcs: self.hqcs,
@@ -1850,8 +1850,11 @@ impl<'py> Deserializer<'py> {
     }
 
     /// Hand an opaque value to the store and reference it by the UID it assigns.
+    ///
+    /// Attaching to the interpreter is confined to this method: it is the only
+    /// point in deserialization that touches Python.
     fn store_external(&mut self, payload: PyObjectPayload<'_>) -> Result<ExternalOrValue> {
-        let uid = self.external_parameter_values.store(self.py, payload)?;
+        let uid = Python::attach(|py| self.external_parameters.store(py, payload))?;
         Ok(ExternalOrValue::ExternalParameter(uid))
     }
 
@@ -2238,13 +2241,12 @@ impl<'py> Deserializer<'py> {
 // === Entry point ===
 
 /// Deserializes a Cap'n Proto experiment message into Rust DSL types.
-///
-/// `py` is required because `SampledPulse` stores samples as a Python numpy array.
-pub(crate) fn deserialize_experiment(
-    py: Python<'_>,
-    bytes: &[u8],
-    packed: bool,
-) -> Result<DeserializedExperiment> {
+#[instrument(
+    level = "debug",
+    name = "laboneq.compiler.deserialize_experiment",
+    skip_all
+)]
+pub(crate) fn deserialize_experiment(bytes: &[u8], packed: bool) -> Result<DeserializedExperiment> {
     let mut reader_options = capnp::message::ReaderOptions::new();
     // Raise the traversal limit well above the default (~64 MB). Experiments can
     // scale to 1,000,000+ sections, easily exceeding the default. The payload is
@@ -2256,13 +2258,13 @@ pub(crate) fn deserialize_experiment(
         let experiment = reader
             .get_root::<experiment_capnp::experiment::Reader<'_>>()
             .map_err(Error::new)?;
-        Deserializer::new(py).deserialize(&experiment)
+        Deserializer::new().deserialize(&experiment)
     } else {
         let reader = capnp::serialize::read_message_from_flat_slice(&mut &*bytes, reader_options)
             .map_err(|e| Error::new(format!("Failed to read Cap'n Proto message: {e}")))?;
         let experiment = reader
             .get_root::<experiment_capnp::experiment::Reader<'_>>()
             .map_err(Error::new)?;
-        Deserializer::new(py).deserialize(&experiment)
+        Deserializer::new().deserialize(&experiment)
     }
 }

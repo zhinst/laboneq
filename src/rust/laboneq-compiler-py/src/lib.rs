@@ -23,6 +23,7 @@ mod experiment_processor;
 mod experiment_validation;
 mod preprocessor;
 mod py_api;
+mod py_compile_pass;
 mod py_conversion;
 mod py_execution;
 mod py_experiment;

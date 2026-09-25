@@ -41,7 +41,7 @@ pub(crate) fn serialize_compiled_experiment<A: CompilerArtifact>(
     let mut builder = CompiledExperimentCapnpBuilder::new(
         &mut message,
         &compiled_experiment.id_store,
-        &compiled_experiment.object_store,
+        &compiled_experiment.external_parameters,
     );
 
     builder.serialize_metadata(&compiled_experiment.metadata);
@@ -70,14 +70,14 @@ struct CompiledExperimentCapnpBuilder<'a> {
     handle_indices: FxHashMap<HandleUid, u32>,
 
     id_store: &'a NamedIdStore,
-    object_store: &'a PyObjectStore<ExternalParameterUid>,
+    external_parameters: &'a PyObjectStore<ExternalParameterUid>,
 }
 
 impl<'a> CompiledExperimentCapnpBuilder<'a> {
     fn new(
         message: &'a mut capnp::message::Builder<capnp::message::HeapAllocator>,
         id_store: &'a NamedIdStore,
-        object_store: &'a PyObjectStore<ExternalParameterUid>,
+        external_parameters: &'a PyObjectStore<ExternalParameterUid>,
     ) -> Self {
         let exp_builder =
             message.init_root::<compiled_experiment_capnp::compiled_experiment::Builder<'a>>();
@@ -86,7 +86,7 @@ impl<'a> CompiledExperimentCapnpBuilder<'a> {
             id_store,
             parameter_indices: Default::default(),
             handle_indices: Default::default(),
-            object_store,
+            external_parameters,
         }
     }
 
@@ -235,7 +235,7 @@ impl<'a> CompiledExperimentCapnpBuilder<'a> {
 
         let ctx = ArtifactSerializerContext::new(
             self.id_store,
-            self.object_store,
+            self.external_parameters,
             &self.parameter_indices,
             &self.handle_indices,
         );
@@ -280,7 +280,7 @@ impl<'a> CompiledExperimentCapnpBuilder<'a> {
     fn serialize_artifacts<A: CompilerArtifact>(&mut self, artifacts: &A) -> Result<()> {
         let ctx = ArtifactSerializerContext::new(
             self.id_store,
-            self.object_store,
+            self.external_parameters,
             &self.parameter_indices,
             &self.handle_indices,
         );

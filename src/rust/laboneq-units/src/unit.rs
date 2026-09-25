@@ -220,23 +220,3 @@ macro_rules! quantity {
         }
     };
 }
-
-#[macro_export]
-macro_rules! quantity_max {
-    ($ident:ident, $unit:ty) => {
-        impl $ident<$unit, f64> {
-            pub const fn max_of(items: &[Self]) -> Self {
-                assert!(!items.is_empty(), "Expected non-empty `items`");
-                let mut max = items[0];
-                let mut i = 1;
-                while i < items.len() {
-                    if items[i].value > max.value {
-                        max = items[i];
-                    }
-                    i += 1;
-                }
-                max
-            }
-        }
-    };
-}

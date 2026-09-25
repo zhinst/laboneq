@@ -6,7 +6,7 @@ from __future__ import annotations
 import warnings
 from typing import TYPE_CHECKING, Generic, TypeVar, cast
 
-from laboneq._version import get_version
+from laboneq import __version__
 from laboneq.serializers._legacy.class_config import (
     classes_by_short_name,
     entity_config,
@@ -46,7 +46,7 @@ class LabOneQClassicSerializer(Generic[T], VersionedClassSerializer[T]):
                 entity_mapper=entity_mapper,
                 emit_enum_types=True,
                 omit_none_fields=omit_none_fields,
-            ) | {"__version": get_version()}
+            ) | {"__version": __version__}
         return cls._wrap(cast("JsonSerializableType", serialized))
 
     @classmethod
@@ -79,9 +79,9 @@ class LabOneQClassicSerializer(Generic[T], VersionedClassSerializer[T]):
         if not isinstance(data.data, dict):
             raise ValueError(f"'data' is not a dictionary, got {type(data.data)}.")
         version = data.data.get("__version")
-        if version is not None and version != get_version():
+        if version is not None and version != __version__:
             warnings.warn(
-                f"Deserializing data with version {version}, but current version is {get_version()}. This may lead to errors.",
+                f"Deserializing data with version {version}, but current version is {__version__}. This may lead to errors.",
                 stacklevel=2,
             )
 

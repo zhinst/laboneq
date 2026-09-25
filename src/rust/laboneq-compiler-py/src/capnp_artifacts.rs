@@ -23,7 +23,7 @@ use numeric_array::NumericArray;
 /// index tables built while serializing those shared tables.
 pub struct ArtifactSerializerContext<'a> {
     id_store: &'a NamedIdStore,
-    object_store: &'a PyObjectStore<ExternalParameterUid>,
+    external_parameters: &'a PyObjectStore<ExternalParameterUid>,
     parameter_indices: &'a FxHashMap<ParameterUid, usize>,
     handle_indices: &'a FxHashMap<HandleUid, u32>,
 }
@@ -31,13 +31,13 @@ pub struct ArtifactSerializerContext<'a> {
 impl<'a> ArtifactSerializerContext<'a> {
     pub(crate) fn new(
         id_store: &'a NamedIdStore,
-        object_store: &'a PyObjectStore<ExternalParameterUid>,
+        external_parameters: &'a PyObjectStore<ExternalParameterUid>,
         parameter_indices: &'a FxHashMap<ParameterUid, usize>,
         handle_indices: &'a FxHashMap<HandleUid, u32>,
     ) -> Self {
         Self {
             id_store,
-            object_store,
+            external_parameters,
             parameter_indices,
             handle_indices,
         }
@@ -104,7 +104,7 @@ impl<'a> ArtifactSerializerContext<'a> {
                 self.serialize_value_or_parameter_numeric(vop, builder)?;
             }
             ExternalOrValue::ExternalParameter(val) => {
-                let payload = self.object_store.resolve(&val).ok_or_else(|| {
+                let payload = self.external_parameters.resolve(&val).ok_or_else(|| {
                     capnp::Error::failed(format!(
                         "Internal error: External parameter {val:?} is missing from the object store."
                     ))
@@ -328,13 +328,13 @@ mod tests {
     /// Stores an opaque payload, then serializes a reference to it back out to capnp.
     fn write_external(payload: PyObjectPayload<'_>) -> Builder<HeapAllocator> {
         Python::attach(|py| {
-            let mut object_store = PyObjectStore::new();
-            let uid = object_store.store(py, payload).unwrap();
+            let mut external_parameters = PyObjectStore::new();
+            let uid = external_parameters.store(py, payload).unwrap();
             let id_store = NamedIdStore::new();
             let (parameter_indices, handle_indices) = (Default::default(), Default::default());
             let ctx = ArtifactSerializerContext::new(
                 &id_store,
-                &object_store,
+                &external_parameters,
                 &parameter_indices,
                 &handle_indices,
             );

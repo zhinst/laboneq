@@ -29,7 +29,7 @@ fn test_pulse_parameters_handling() {
         let capnp_data = run_experiment.call0().unwrap();
 
         let deserialized =
-            deserialize_experiment(py, capnp_data.extract::<&[u8]>().unwrap(), false).unwrap();
+            deserialize_experiment(capnp_data.extract::<&[u8]>().unwrap(), false).unwrap();
         let id_store = deserialized.id_store;
         // Test sweep parameter collection
         let parameter = deserialized.parameters.first().unwrap();

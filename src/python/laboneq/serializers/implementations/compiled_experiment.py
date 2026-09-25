@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import pybase64
 
-from laboneq._version import get_version
+from laboneq import __version__
 from laboneq.core.types.compiled_experiment import (
     CompiledExperiment,
     compiler_output_bytes,
@@ -47,7 +47,7 @@ def _check_laboneq_version(
             raise ValueError(NOT_FOUND_MSG)
         else:
             warnings.warn(NOT_FOUND_MSG, UserWarning, stacklevel=2)
-    elif serialized_laboneq_version != get_version():
+    elif serialized_laboneq_version != __version__:
         MISMATCH_MSG = (
             f"LabOne Q version mismatch. Check out the Labone Q with correct version "
             f"{serialized_laboneq_version} to load the serialized data. Otherwise, set "
@@ -84,7 +84,7 @@ class CompiledExperimentSerializer(VersionedClassSerializer[CompiledExperiment])
         return {
             "__serializer__": cls.serializer_id(),
             "__version__": cls.version(),
-            "__laboneq_version__": get_version(),
+            "__laboneq_version__": __version__,
             "__data__": {
                 "device_setup": to_dict(obj.device_setup, options),
                 "experiment": to_dict(obj.experiment, options),
@@ -137,7 +137,7 @@ class ScheduledExperimentSerializer(VersionedClassSerializer[ScheduledExperiment
         return {
             "__serializer__": cls.serializer_id(),
             "__version__": cls.version(),
-            "__laboneq_version__": get_version(),
+            "__laboneq_version__": __version__,
             "__data__": scheduled_experiment,
         }
 

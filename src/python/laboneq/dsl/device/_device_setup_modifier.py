@@ -265,9 +265,11 @@ def add_instrument(setup: DeviceSetup, instrument: Instrument):
         raise DeviceSetupInternalException(
             "Device setup instrument UIDs must be unique."
         )
-    if instrument.address in [device.address for device in setup.instruments]:
-        raise DeviceSetupInternalException("Device setup instruments must be unique.")
     if isinstance(instrument, ZIStandardInstrument):
+        if instrument.address in [device.address for device in setup.instruments]:
+            raise DeviceSetupInternalException(
+                "Device setup instruments must be unique."
+            )
         if not instrument.address:
             raise DeviceSetupInternalException("Instrument must have an address.")
         if instrument.requires_data_server:

@@ -16,6 +16,9 @@ DEFAULT_TIMEOUT_S = 10.0
 # LabOne Q release version, so the two move independently.
 PROTOCOL_VERSION = "1.0"
 
+PROTOCOL_VERSION_HEADER = "X-LabOneQ-Protocol-Version"
+"""Header carrying :data:`PROTOCOL_VERSION` on REST requests."""
+
 # How long a run may be without its client callback channel. Covers both the
 # initial attach, measured from run-eligibility, and mid-run reconnect windows.
 CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S = 60.0

@@ -85,7 +85,7 @@ pub(crate) struct WaveformSamplerPy<'a> {
     pulse_parameters: HashMap<PulseParametersId, Py<PulseParametersPy>>,
     pulse_defs: HashMap<String, Py<PyAny>>,
     id_store: &'a NamedIdStore,
-    py_object_store: &'a PyObjectStore<ExternalParameterUid>,
+    external_parameters: &'a PyObjectStore<ExternalParameterUid>,
     deduplicator: &'a PulseParameterDeduplicator,
 }
 
@@ -104,7 +104,7 @@ impl WaveformSamplerPy<'_> {
         pulse_defs: &[PulseDef],
         acquisition_type: AcquisitionType,
         dedup: &'a PulseParameterDeduplicator,
-        py_object_store: &'a PyObjectStore<ExternalParameterUid>,
+        external_parameters: &'a PyObjectStore<ExternalParameterUid>,
         id_store: &'a NamedIdStore,
     ) -> WaveformSamplerPy<'a> {
         let pulse_defs = pulse_defs
@@ -120,7 +120,7 @@ impl WaveformSamplerPy<'_> {
         let pulse_parameters: HashMap<PulseParametersId, Py<PulseParametersPy>> = dedup
             .all_parameters()
             .map(|pp| {
-                let pp_py = pulse_parameters_to_py(py, pp, id_store, py_object_store);
+                let pp_py = pulse_parameters_to_py(py, pp, id_store, external_parameters);
                 (PulseParametersId(pp.id), Py::new(py, pp_py).unwrap())
             })
             .collect();
@@ -129,7 +129,7 @@ impl WaveformSamplerPy<'_> {
             pulse_parameters,
             pulse_defs,
             id_store,
-            py_object_store,
+            external_parameters,
             deduplicator: dedup,
         }
     }
@@ -203,7 +203,7 @@ impl WaveformSamplerPy<'_> {
         self.deduplicator
             .resolve(&pulse_parameters_id.0)
             .map(|pp| {
-                pulse_parameters_to_py(py, pp, self.id_store, self.py_object_store)
+                pulse_parameters_to_py(py, pp, self.id_store, self.external_parameters)
                     .into_pyobject(py)
             })
             .expect("Internal error: Pulse parameters not found")

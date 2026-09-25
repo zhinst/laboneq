@@ -282,7 +282,7 @@ def calculate_clifford_sequence_indices(
 
     # +1 to allocate space for the recovery gate.
     clifford_indices = np.empty(shape=seq_length + 1, dtype=int)
-    clifford_indices[:-1] = rng.integers(0, 23, size=seq_length)
+    clifford_indices[:-1] = rng.integers(0, len(cliffords), size=seq_length)
 
     if cliffords is clifford_parametrized:
         # shortcut for precomputed defaults

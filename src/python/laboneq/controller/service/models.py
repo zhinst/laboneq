@@ -139,6 +139,25 @@ class ExperimentStatusResponse(BaseModel):
     )
 
 
+class AcquiredResultStructure(BaseModel):
+    """Layout and progress of one acquired result, without its data."""
+
+    axis_name: list[str | list[str]] = Field(
+        description=(
+            "Axis names, one entry per dimension of the result data; an entry is"
+            " a list of names for a parallel sweep"
+        )
+    )
+    shape: list[int] = Field(description="Shape of the result data")
+    last_nt_step: list[int] | None = Field(
+        default=None,
+        description=(
+            "Indices of the last measured near-time point, or null while the"
+            " handle has no completed near-time step"
+        ),
+    )
+
+
 class ExperimentResultsResponse(BaseModel):
     """Response from GET /v1/experiments/{uuid}/results — partial or final."""
 
@@ -150,7 +169,15 @@ class ExperimentResultsResponse(BaseModel):
             "laboneq.serializers.from_dict(). Acquired results are filtered "
             "by the query parameters; whole-run metadata (near-time callbacks, "
             "execution errors, pipeline timestamps) is present only on an "
-            "unfiltered fetch."
+            "unfiltered fetch. Empty when fields=meta was requested."
+        ),
+    )
+    handles: dict[str, AcquiredResultStructure] | None = Field(
+        default=None,
+        description=(
+            "Layout of the selected handles, without their measurements."
+            " Returned for fields=meta; with fields=data the same layout is"
+            " part of the results themselves."
         ),
     )
 

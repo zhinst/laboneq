@@ -37,7 +37,7 @@ pub fn generate_code_py(
     experiment: ExperimentIr,
     setup_description: &HardwareSetup,
     compiler_settings: &CompilerSettings,
-    py_object_store: &PyObjectStore<ExternalParameterUid>,
+    external_parameters: &PyObjectStore<ExternalParameterUid>,
 ) -> Result<SeqCGenOutput, LabOneQError> {
     let (codegen_ir, dedup) = ir_to_codegen_ir(&experiment, setup_description)?;
     let sampler = WaveformSamplerPy::new(
@@ -45,7 +45,7 @@ pub fn generate_code_py(
         &experiment.pulses,
         codegen_ir.acquisition_type.clone(),
         &dedup,
-        py_object_store,
+        external_parameters,
         experiment.id_store,
     );
     let settings = compiler_setting_to_codegenerator_settings(compiler_settings)?;
@@ -57,9 +57,9 @@ pub fn artifacts_to_py<'py>(
     py: Python<'py>,
     result: SeqCGenOutput,
     id_store: &NamedIdStore,
-    py_object_store: &PyObjectStore<ExternalParameterUid>,
+    external_parameters: &PyObjectStore<ExternalParameterUid>,
 ) -> Result<Bound<'py, PyAny>, LabOneQError> {
-    let result = SeqCGenOutputPy::new(py, result, id_store, py_object_store)?;
+    let result = SeqCGenOutputPy::new(py, result, id_store, external_parameters)?;
     let parameter_py: Bound<'_, PyAny> = py
         .import(intern!(py, "laboneq.compiler.seqc.code_generator"))?
         .getattr(intern!(py, "generate_output"))?;

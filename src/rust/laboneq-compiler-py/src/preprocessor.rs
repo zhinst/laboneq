@@ -9,9 +9,6 @@
 
 use std::sync::Arc;
 
-use pyo3::prelude::*;
-use tracing::instrument;
-
 use laboneq_dsl::types::HandleUid;
 use laboneq_error::LabOneQError;
 use laboneq_ir::signal::Signal;
@@ -40,28 +37,17 @@ pub(crate) struct PreprocessedExperiment<D, H> {
 }
 
 /// Preprocess an experiment from Cap'n Proto bytes plus device/signal configuration.
-#[instrument(
-    level = "debug",
-    name = "laboneq.compiler.preprocess_experiment",
-    skip_all
-)]
 pub(crate) fn preprocess_experiment<B: CompilerBackend>(
-    py: Python<'_>,
     capnp_data: &[u8],
     packed: bool,
     backend: &B,
 ) -> Result<PreprocessedExperiment<B::Output, B::EmulatedHqcsProgram>, LabOneQError> {
-    let mut deserialized = capnp_deserializer::deserialize_experiment(py, capnp_data, packed)?;
-    let acquisition_handles = deserialized.handles;
+    let mut deserialized = capnp_deserializer::deserialize_experiment(capnp_data, packed)?;
 
     let hqcs_program = backend
-        .process_hqcs(
-            &mut deserialized.root,
-            &deserialized.hqcs,
-            &deserialized.id_store,
-            &deserialized.parameters,
-        )
+        .process_hqcs(&mut deserialized)
         .resolve_err(&deserialized.id_store)?;
+    let acquisition_handles = deserialized.handles;
     let coprocessors = laboneq_dsl::hqcs::CoprocessorTable::try_from(&deserialized.hqcs)?;
 
     let backend_processed = backend
@@ -84,7 +70,7 @@ pub(crate) fn preprocess_experiment<B: CompilerBackend>(
         id_store: deserialized.id_store.into(),
         parameters: deserialized.parameters,
         pulses: deserialized.pulses,
-        py_object_store: deserialized.external_parameter_values.into(),
+        external_parameters: deserialized.external_parameters.into(),
     };
 
     let signals = process_setup(

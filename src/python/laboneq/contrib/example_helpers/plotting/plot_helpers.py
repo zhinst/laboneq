@@ -96,7 +96,7 @@ def plot_simulation(
     plots = prepare_signal_plots(
         compiled_experiment=compiled_experiment,
         simulation_start_time=start_time,
-        simulation_duration=length,
+        max_simulation_duration=length,
         signal_overrides=signals,
         signal_patterns=signal_names_to_show,
         integration_kernels_to_plot=integration_kernels_to_plot,

@@ -41,7 +41,8 @@ class PhysicalChannelCalibration:
             The local oscillator assigned to the signal.
             Sets the center frequency of the playback. `modulation_type` of the
             assigned `Oscillator` must be either `ModulationType.HARDWARE` or
-            `ModulationType.AUTO`. Only supported by SHFSG, SHFQA and SHFQC signals.
+            `ModulationType.AUTO`. Only supported by SHFSG, SHFQA and SHFQC signals,
+            and by the RF and QA channels on ZQCS.
             Default: `None`.
         mixer_calibration (MixerCalibration | None):
             Mixer calibration correction settings.

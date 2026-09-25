@@ -691,7 +691,17 @@ def generate_device_setup_qubits(
     if include_qubits:
         device_setup.qubits = {f"{qubit.uid}": qubit for qubit in qubits}
     if calibrate_setup:
+        # Without SHF instruments, the drive and readout lines sit on HDAWG and
+        # UHFQA channels. This is because:
+        # (i) UHFQA and SHF can never coexist
+        # (ii) an HDAWG carries drive lines only in a Gen 1 setup, flux lines otherwise
+        # HDAWG and UHFQA channels have no local oscillator of their own.
+        setup_has_lo = bool(shfsg or shfqc or shfqa)
         for qubit in qubits:
-            device_setup.set_calibration(qubit.calibration())
+            calibration = qubit.calibration()
+            if not setup_has_lo:
+                for signal_calibration in calibration.calibration_items.values():
+                    signal_calibration.local_oscillator = None
+            device_setup.set_calibration(calibration)
 
     return device_setup, qubits

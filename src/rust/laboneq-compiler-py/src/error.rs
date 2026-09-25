@@ -6,8 +6,10 @@
 //! into Python exceptions.
 
 use std::fmt::Display;
+use std::sync::Arc;
 
 use laboneq_common::named_id::{NamedIdStore, resolve_ids};
+use laboneq_error::LabOneQError;
 use laboneq_scheduler::error::Error as SchedulerError;
 use pyo3::import_exception;
 use pyo3::prelude::*;
@@ -74,7 +76,7 @@ impl From<PyErr> for Error {
     }
 }
 
-impl From<Error> for laboneq_error::LabOneQError {
+impl From<Error> for LabOneQError {
     // TODO: Actually use `LabOneQError` in the compiler instead of anyhow::Error
     fn from(error: Error) -> Self {
         let Error::Anyhow(e) = error;
@@ -82,10 +84,58 @@ impl From<Error> for laboneq_error::LabOneQError {
     }
 }
 
-impl From<laboneq_error::LabOneQError> for Error {
+impl From<LabOneQError> for Error {
     // TODO: Actually use `LabOneQError` in the compiler instead of anyhow::Error
-    fn from(error: laboneq_error::LabOneQError) -> Self {
+    fn from(error: LabOneQError) -> Self {
         anyhow::anyhow!(error).into()
+    }
+}
+
+/// A compilation failure, carrying the store that renders its interned IDs as names.
+///
+/// The pipeline works in interned IDs, so an error leaving it still names them by
+/// number. Resolving the message eagerly would flatten [`LabOneQError`]'s variants and
+/// lose what they carry -- the resource usage that drives auto-chunking, the Python
+/// exception attached as `__cause__` -- so the store travels with the error and the
+/// message is resolved once, when it becomes a Python exception.
+pub(crate) struct CompilationError {
+    error: LabOneQError,
+    /// `None` when the message holds no interned IDs, because the stage that
+    /// raised it already resolved its own -- as the preprocessor does.
+    id_store: Option<Arc<NamedIdStore>>,
+}
+
+impl CompilationError {
+    pub(crate) fn new(error: LabOneQError, id_store: Arc<NamedIdStore>) -> Self {
+        CompilationError {
+            error,
+            id_store: Some(id_store),
+        }
+    }
+}
+
+impl From<LabOneQError> for CompilationError {
+    fn from(error: LabOneQError) -> Self {
+        CompilationError {
+            error,
+            id_store: None,
+        }
+    }
+}
+
+impl From<Error> for CompilationError {
+    fn from(error: Error) -> Self {
+        LabOneQError::from(error).into()
+    }
+}
+
+impl From<CompilationError> for PyErr {
+    fn from(error: CompilationError) -> Self {
+        let CompilationError { error, id_store } = error;
+        match id_store {
+            Some(id_store) => error.to_pyerr(|msg| resolve_ids(&msg, &id_store)),
+            None => error.into(),
+        }
     }
 }
 

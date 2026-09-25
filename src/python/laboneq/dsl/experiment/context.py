@@ -16,7 +16,6 @@ class Context(abc.ABC):
 
 
 _store = threading.local()
-_store.active_contexts = []
 
 
 def get_local_contexts():
@@ -32,7 +31,8 @@ def push_context(context: Context):
 
 
 def peek_context() -> Context | None:
-    return get_local_contexts()[-1] if len(_store.active_contexts) else None
+    contexts = get_local_contexts()
+    return contexts[-1] if contexts else None
 
 
 def pop_context() -> Context:

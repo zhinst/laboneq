@@ -1,7 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{quantity, quantity_max};
+use crate::quantity;
 use std::fmt::{Display, Formatter};
 
 quantity!(Duration);
@@ -21,8 +21,6 @@ pub const fn seconds<T>(value: T) -> Duration<Second, T> {
         unit: Second,
     }
 }
-
-quantity_max!(Duration, Second);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct Sample;

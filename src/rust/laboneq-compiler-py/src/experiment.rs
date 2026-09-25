@@ -23,7 +23,7 @@ pub(crate) struct Experiment {
     pub id_store: Arc<NamedIdStore>,
     pub parameters: Vec<SweepParameter>,
     pub pulses: HashMap<PulseUid, PulseDef>,
-    pub py_object_store: Arc<PyObjectStore<ExternalParameterUid>>,
+    pub external_parameters: Arc<PyObjectStore<ExternalParameterUid>>,
 }
 
 /// Device signal definition, representing a signal in the device setup.

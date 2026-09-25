@@ -128,6 +128,7 @@ class RBExperimentSettings:
         qa_lo_frequencies: Local-oscillator frequency of each qubit's readout (QA)
             channel, keyed by qubit id. The readout IF is set to
             `readout_frequency - qa_lo_frequency`.
+        set_local_oscillator: Whether to set the local oscillators in the calibration.
         measure_pulse: Pulse used in readout signals.
         acquire_kernel: Integration kernel used in acquisition.
         acquisition_type: Acquisition mode used by the real-time acquire loop.
@@ -171,6 +172,7 @@ class RBExperimentSettings:
     sg_range: float | None
     chunk_count: int = attrs.field(default=1, validator=attrs.validators.ge(1))
     auto_chunking: bool = False
+    set_local_oscillator: bool = True
 
 
 @attrs.define
@@ -320,6 +322,7 @@ class RBExperimentBuilder:
                 settings.sg_range,
                 settings.sg_modulation_type,
                 settings.qa_modulation_type,
+                settings.set_local_oscillator,
             )
         )
         return exp
@@ -334,6 +337,7 @@ class RBExperimentBuilder:
         drive_range: float | None,
         sg_modulation_type: ModulationType,
         qa_modulation_type: ModulationType,
+        set_local_oscillator: bool,
     ):
         exp_cal = Calibration()
 
@@ -349,7 +353,9 @@ class RBExperimentBuilder:
                 oscillator=Oscillator(
                     frequency=f_drive - flo_sg, modulation_type=sg_modulation_type
                 ),
-                local_oscillator=Oscillator(frequency=flo_sg),
+                local_oscillator=(
+                    Oscillator(frequency=flo_sg) if set_local_oscillator else None
+                ),
                 range=drive_range,
             )
 
@@ -357,6 +363,8 @@ class RBExperimentBuilder:
                 oscillator=Oscillator(
                     frequency=f_ro - flo_qa, modulation_type=qa_modulation_type
                 ),
-                local_oscillator=Oscillator(frequency=flo_qa),
+                local_oscillator=(
+                    Oscillator(frequency=flo_qa) if set_local_oscillator else None
+                ),
             )
         return exp_cal

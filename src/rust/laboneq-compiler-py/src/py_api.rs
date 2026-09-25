@@ -60,7 +60,6 @@ pub fn compile_experiment<B: CompilerBackend>(
     let compiler_settings =
         py_helpers::compiler_settings_from_py_dict(backend.settings(), compiler_settings.as_ref())?;
 
-    with_tracing(|| {
-        compiler::compile_experiment(py, capnp_data, packed, compiler_settings, backend)
-    })
+    with_tracing(|| compiler::compile_experiment(capnp_data, packed, compiler_settings, backend))
+        .map_err(PyErr::from)
 }

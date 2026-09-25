@@ -11,13 +11,11 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from laboneq._version import get_version
+from laboneq._version import __version__, get_version  # noqa F401
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from importlib.metadata import EntryPoint
-
-__version__ = get_version()
 
 
 def _load_backend_plugin(ep):

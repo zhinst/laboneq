@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import copy
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import attrs
 from typing_extensions import TypeAlias, deprecated
@@ -16,7 +16,7 @@ from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from .acquired_result import AcquiredResults
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     import numpy as np
     from numpy import typing as npt
@@ -30,6 +30,15 @@ if TYPE_CHECKING:
 
 
 ErrorList: TypeAlias = list[tuple[list[int], str, str]]
+
+
+def _as_acquired_results(
+    value: AcquiredResults | Mapping[str, AcquiredResult] | None,
+) -> AcquiredResults:
+    """Accept any handle-to-result mapping, such as a plain dict."""
+    if isinstance(value, AcquiredResults):
+        return value
+    return AcquiredResults(value or {})
 
 
 @classformatter
@@ -59,6 +68,14 @@ class Results:
         results["cal_trace"]["q0"]["g"]
         results["cal_trace/q0/g"]
         ```
+
+    !!! note
+        Inside a client near-time callback the results are still on the
+        controller service. Asking which handles exist, how many there are or
+        whether one is present downloads no data. Reading a single handle, by
+        key or through `get_result`/`get_data`, downloads only that handle.
+        `results.cal_trace` and other group lookups download everything,
+        because the group they hand back holds the results.
 
     Attributes:
         experiment:
@@ -101,7 +118,9 @@ class Results:
 
     experiment: Experiment = attrs.field(default=None)
     device_setup: DeviceSetup = attrs.field(default=None)
-    acquired_results: AcquiredResults = attrs.field(factory=AcquiredResults)
+    acquired_results: AcquiredResults = attrs.field(
+        factory=AcquiredResults, converter=_as_acquired_results
+    )
     variable_results: dict[str, LoggedVariable] = attrs.field(factory=dict)
     neartime_callback_results: dict[str, list[Any]] = attrs.field(default=None)
     execution_errors: list[tuple[list[int], str, str]] = attrs.field(factory=list)
@@ -111,10 +130,10 @@ class Results:
     _data: AcquiredResults | None = attrs.field(default=None)
 
     _acquired_results_wrapper: AttributeWrapper | None = attrs.field(
-        init=False, default=None
+        init=False, default=None, eq=False
     )
     _neartime_callbacks_wrapper: AttributeWrapper | None = attrs.field(
-        init=False, default=None
+        init=False, default=None, eq=False
     )
 
     @classmethod
@@ -142,17 +161,31 @@ class Results:
         if self.neartime_callback_results is None:
             self.neartime_callback_results = {}
 
-        self._acquired_results_wrapper = AttributeWrapper(self.acquired_results)
-        self._neartime_callbacks_wrapper = AttributeWrapper(
-            self.neartime_callback_results
-        )
+    def _wrap_acquired_results(self) -> AttributeWrapper:
+        # AttributeWrapper iterates all keys of the wrapped mapping when it is
+        # built. The results mappings may fetch their content on demand (e.g.
+        # from a session while the experiment is still running), so defer
+        # building the wrappers until the data is actually accessed.
+        if self._acquired_results_wrapper is None:
+            self._acquired_results_wrapper = AttributeWrapper(self.acquired_results)
+        return self._acquired_results_wrapper
+
+    def _wrap_neartime_callbacks(self) -> AttributeWrapper:
+        if self._neartime_callbacks_wrapper is None:
+            self._neartime_callbacks_wrapper = AttributeWrapper(
+                self.neartime_callback_results
+            )
+        return self._neartime_callbacks_wrapper
 
     def __repr__(self) -> str:
+        # Printing must not start a download, so a store that has not fetched
+        # its handles yet reports "?" instead of a count.
+        handles = self.acquired_results._known_handles()
         return (
             f"<{type(self).__qualname__}"
             f" id={id(self)}"
             f" errors={bool(self.execution_errors)}"
-            f" len(acquired_results)={len(self.acquired_results)}"
+            f" len(acquired_results)={len(handles) if handles is not None else '?'}"
             f" len(neartime_callbacks)={len(self.neartime_callback_results)}"
             ">"
         )
@@ -163,7 +196,9 @@ class Results:
         yield "neartime_callbacks", self.neartime_callbacks
 
     def __contains__(self, key: object) -> bool:
-        return key in self._acquired_results_wrapper
+        if isinstance(key, str) and key in self.acquired_results:
+            return True
+        return key in self._wrap_acquired_results()
 
     def __deepcopy__(self, memo: dict) -> Results:
         return self.__class__(
@@ -177,18 +212,29 @@ class Results:
         )
 
     def __dir__(self):
-        return super().__dir__() + self._acquired_results_wrapper._attr_keys()
+        return super().__dir__() + self._wrap_acquired_results()._attr_keys()
 
     def __getattr__(self, key: object) -> AttributeWrapper | object:
         # This intentionally only looks up the keys on the wrapper and
         # not arbitrary attributes
+        #
+        # Names starting with an underscore are never result handles: dir()
+        # asks for __dict__, notebooks ask for _repr_html_. Looking those up in
+        # the results would fetch all of them. results["_name"] still works.
+        if isinstance(key, str) and key.startswith("_"):
+            raise AttributeError(key)
         try:
-            return self._acquired_results_wrapper.__getitem__(key)
+            return self[key]
         except KeyError as err:
             raise AttributeError(*err.args) from None
 
     def __getitem__(self, key: object) -> AttributeWrapper | ErrorList | object:
-        return self._acquired_results_wrapper.__getitem__(key)
+        # A handle needs no wrapper, and building one would fetch every result
+        # from a store that keeps them on a service. Checking for the handle
+        # first costs that one handle at most.
+        if isinstance(key, str) and key in self.acquired_results:
+            return self.acquired_results[key]
+        return self._wrap_acquired_results().__getitem__(key)
 
     @property
     def errors(self) -> ErrorList:
@@ -208,7 +254,7 @@ class Results:
         !!! version-added "Added in version 2.52.0"
             The `.data` attribute was added.
         """
-        return self._acquired_results_wrapper
+        return self._wrap_acquired_results()
 
     @property
     def neartime_callbacks(self) -> AttributeWrapper:
@@ -219,13 +265,15 @@ class Results:
             The name was chosen to match that used on the (now removed)
             `RunExperimentResults` class.
         """
-        return self._neartime_callbacks_wrapper
+        return self._wrap_neartime_callbacks()
 
     def _check_handle(self, handle: str) -> None:
         if handle not in self.acquired_results:
             raise LabOneQException(f"No result for handle: {handle}")
 
-    def get_result(self, handle: str) -> AcquiredResult:
+    def get_result(
+        self, handle: str, nt: Literal["all", "latest"] = "all"
+    ) -> AcquiredResult:
         """Returns the acquired result.
 
         Returns the result acquired for an 'acquire' event with the specific handle
@@ -233,18 +281,35 @@ class Results:
 
         Args:
             handle (str): The handle assigned to an 'acquire' event in the experiment definition.
+            nt: Near-time selection: `"all"` returns everything measured so
+                far, `"latest"` the slice at the most recently completed near-time step
+                with the near-time axes stripped.
 
         Returns:
             result: The acquire event result.
 
         Raises:
-            LabOneQException: No result is available for the provided handle.
+            LabOneQException: No result is available for the provided handle,
+                or `nt="latest"` was requested before any near-time step completed.
+
+        !!! warning
+            The `nt` selector is experimental and may change.
         """
+        if nt not in ("all", "latest"):
+            raise LabOneQException(f"Invalid nt={nt!r}: expected 'all' or 'latest'.")
+        try:
+            result = self.acquired_results._get_sliced(handle, nt)
+        except KeyError:
+            raise LabOneQException(f"No result for handle: {handle}") from None
+        if result is None:
+            raise LabOneQException(
+                f"No completed near-time step yet for handle: {handle}"
+            )
+        return result
 
-        self._check_handle(handle)
-        return self.acquired_results[handle]
-
-    def get_data(self, handle: str) -> npt.NDArray[Any] | np.complex128:
+    def get_data(
+        self, handle: str, nt: Literal["all", "latest"] = "all"
+    ) -> npt.NDArray[Any] | np.complex128:
         """Returns the acquired result data.
 
         Returns the result acquired for an 'acquire' event with the specific handle
@@ -252,19 +317,27 @@ class Results:
 
         Args:
             handle (str): The handle assigned to an 'acquire' event in the experiment definition.
+            nt: Near-time selection: `"all"` returns everything measured so
+                far, `"latest"` the slice at the most recently completed near-time step
+                with the near-time axes stripped.
 
         Returns:
             A multidimensional numpy array, where each dimension corresponds to a sweep
             loop nesting level, the outermost sweep being the first dimension.
 
         Raises:
-            LabOneQException: No result is available for the provided handle.
+            LabOneQException: No result is available for the provided handle,
+                or `nt="latest"` was requested before any near-time step completed.
+
+        !!! warning
+            The `nt` selector is experimental and may change.
         """
 
-        self._check_handle(handle)
-        return self.acquired_results[handle].data
+        return self.get_result(handle, nt).data
 
-    def get_axis_name(self, handle: str) -> list[str | list[str]]:
+    def get_axis_name(
+        self, handle: str, nt: Literal["all", "latest"] = "all"
+    ) -> list[str | list[str]]:
         """Returns the names of axes.
 
         Returns the list of axis names, that correspond to the dimensions of the result returned by
@@ -275,18 +348,26 @@ class Results:
 
         Args:
             handle (str): The handle assigned to an 'acquire' event in the experiment definition.
+            nt: Near-time selection: `"all"` returns everything measured so
+                far, `"latest"` the slice at the most recently completed near-time step
+                with the near-time axes stripped.
 
         Returns:
             A list of axis names. Each element may be either a string or a list of strings.
 
         Raises:
-            LabOneQException: No result is available for the provided handle.
+            LabOneQException: No result is available for the provided handle,
+                or `nt="latest"` was requested before any near-time step completed.
+
+        !!! warning
+            The `nt` selector is experimental and may change.
         """
 
-        self._check_handle(handle)
-        return self.acquired_results[handle].axis_name
+        return self.get_result(handle, nt).axis_name
 
-    def get_axis(self, handle: str) -> list[npt.NDArray[Any] | list[npt.NDArray[Any]]]:
+    def get_axis(
+        self, handle: str, nt: Literal["all", "latest"] = "all"
+    ) -> list[npt.NDArray[Any] | list[npt.NDArray[Any]]]:
         """Returns the axes grids.
 
         Returns the list, where each element represents an axis of the corresponding dimension of
@@ -297,17 +378,23 @@ class Results:
 
         Args:
             handle (str): The handle assigned to an 'acquire' event in the experiment definition.
+            nt: Near-time selection: `"all"` returns everything measured so
+                far, `"latest"` the slice at the most recently completed near-time step
+                with the near-time axes stripped.
 
         Returns:
             A list of axis grids. Each element may be either a 1D numpy array or a list of such
             arrays.
 
         Raises:
-            LabOneQException: No result is available for the provided handle.
+            LabOneQException: No result is available for the provided handle,
+                or `nt="latest"` was requested before any near-time step completed.
+
+        !!! warning
+            The `nt` selector is experimental and may change.
         """
 
-        self._check_handle(handle)
-        return self.acquired_results[handle].axis
+        return self.get_result(handle, nt).axis
 
     def get_last_nt_step(self, handle: str) -> list[int]:
         """Returns the list of axis indices of the last measured near-time point.

@@ -114,6 +114,11 @@ def connection_builder(instrument: Instrument) -> ConnectionBuilder | None:
     return model.connection_builder
 
 
+def model_by_class_name(class_name: str) -> InstrumentModel | None:
+    """The instrument registered under this class name, if any."""
+    return _registered_instruments.get(class_name)
+
+
 def model_by_descriptor_key(descriptor_key: str) -> InstrumentModel | None:
     """The instrument a descriptor names with this key, if any is registered."""
     return next(

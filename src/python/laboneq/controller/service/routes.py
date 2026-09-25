@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import json
 import logging
 import uuid as _uuid_mod
 from functools import wraps
 from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
 
 import attrs
+import numpy as np
 import orjson
 from fastapi import (
     APIRouter,
@@ -21,14 +24,23 @@ from fastapi import (
     status,
 )
 
-from laboneq._version import get_version
-from laboneq.controller.api.commons import decode_submission
+from laboneq import __version__
+from laboneq.controller.api.commons import AUTH_HEADER, AUTH_SCHEME, decode_submission
+from laboneq.controller.api.commons import parse_major_minor as _parse_major_minor
 from laboneq.controller.callback_channel import CallbackChannelBusy
-from laboneq.controller.callback_protocol import MessageType
+from laboneq.controller.callback_protocol import (
+    CALLBACK_PROTOCOL_HEADER,
+    MessageType,
+    UnsupportedProtocolVersion,
+    check_protocol_version,
+    json_default,
+)
+from laboneq.controller.constants import PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER
 from laboneq.controller.controller import SubmissionStatus
 from laboneq.controller.results import slice_results
 from laboneq.controller.service.advertised_url import advertised_base_url
 from laboneq.controller.service.models import (
+    AcquiredResultStructure,
     CallbackInfo,
     DeviceSetupResponse,
     ErrorBody,
@@ -94,20 +106,6 @@ _STATUS_MAP: dict[SubmissionStatus, ExperimentStatus] = {
 
 def _to_api_status(internal: SubmissionStatus) -> ExperimentStatus:
     return _STATUS_MAP[internal]
-
-
-def _parse_major_minor(version: str) -> tuple[int, int]:
-    """Extract ``(major, minor)`` from a version string.
-
-    Raises:
-        ValueError: If the version string cannot be parsed.
-    """
-    parts = version.split(".")
-    if len(parts) < 2:
-        raise ValueError(
-            f"Cannot parse version {version!r}: expected at least major.minor"
-        )
-    return int(parts[0]), int(parts[1])
 
 
 def get_controller_container(request: Request) -> ControllerContainer:
@@ -198,21 +196,66 @@ def _parse_flag_header(value: str | None) -> bool:
     return (value or "").strip().lower() in _TRUE_HEADER_VALUES
 
 
-def _validate_client_version(client_version: str | None, ignore_mismatch: bool) -> str:
-    """Validate the client version header value.
+def _check_ws_token(websocket: WebSocket) -> None:
+    """Apply the service token to a WebSocket; HTTP middleware does not see them."""
+    expected: str | None = websocket.app.state.auth_token
+    if expected is None:
+        return
+    scheme, _, credentials = websocket.headers.get(AUTH_HEADER, "").partition(" ")
+    if scheme.lower() != AUTH_SCHEME.lower() or not hmac.compare_digest(
+        credentials.encode(), expected.encode()
+    ):
+        raise _error_response(
+            ErrorCode.UNAUTHORIZED,
+            f"This service serves only callers presenting its token as "
+            f"'{AUTH_HEADER}: {AUTH_SCHEME} <token>'.",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+        )
 
-    Returns the parsed *client_version* string on success.
+
+def _validate_client_version(
+    client_version: str | None,
+    ignore_mismatch: bool,
+    protocol_version: str | None = None,
+) -> str:
+    """Validate the client version header, or admit by protocol version alone.
+
+    A caller with no LabOne Q client version but a *protocol_version*, e.g.,
+    a plugin host implemented by the user, is admitted or refused solely on
+    the protocol version. The LabOne Q version is irrelevant here.
+    Returns the accepted version string:
+    *protocol_version* in that path, otherwise *client_version*.
 
     Raises:
-        ServiceError: Missing, unparseable, or too-old client version.
+        ServiceError: Missing, unparseable, or too-old client version; or, in
+            the protocol-version-only path, an unparseable or unsupported
+            protocol version.
     """
+    if client_version is None and protocol_version is not None:
+        # A participant that ships no LabOne Q (a plugin host fetching results)
+        # is admitted by the service protocol version alone.
+        try:
+            major = _parse_major_minor(protocol_version)[0]
+        except ValueError as exc:
+            raise _error_response(
+                ErrorCode.VERSION_MISMATCH,
+                f"Cannot parse protocol version: {protocol_version!r}",
+            ) from exc
+        if major != _parse_major_minor(PROTOCOL_VERSION)[0]:
+            raise _error_response(
+                ErrorCode.VERSION_MISMATCH,
+                f"Unsupported protocol version {protocol_version}; this service "
+                f"speaks {PROTOCOL_VERSION}.",
+            )
+        return protocol_version
+
     if client_version is None:
         raise _error_response(
             ErrorCode.VERSION_MISMATCH,
             "Missing required header: X-LabOneQ-Client-Version",
         )
 
-    server_version = _parse_major_minor(get_version())
+    server_version = _parse_major_minor(__version__)
 
     try:
         client_parsed = _parse_major_minor(client_version)
@@ -238,7 +281,7 @@ def _validate_client_version(client_version: str | None, ignore_mismatch: bool) 
         logger.warning(
             "Client version %s is newer than server version %s.",
             client_version,
-            get_version(),
+            __version__,
         )
 
     return client_version
@@ -251,9 +294,15 @@ async def require_client_version(
     ignore_mismatch: Annotated[
         str | None, Header(alias="X-LabOneQ-Ignore-Version-Mismatch")
     ] = None,
+    protocol_version: Annotated[
+        str | None, Header(alias=PROTOCOL_VERSION_HEADER)
+    ] = None,
 ) -> str:
-    """FastAPI dependency that validates the client version header."""
-    return _validate_client_version(client_version, _parse_flag_header(ignore_mismatch))
+    """FastAPI dependency admitting a caller by client's LabOne Q version, or by protocol
+    version alone if it sends no LabOne Q version."""
+    return _validate_client_version(
+        client_version, _parse_flag_header(ignore_mismatch), protocol_version
+    )
 
 
 # =============================================================================
@@ -422,6 +471,7 @@ async def get_experiment_results(
     uuid: str,
     handles: str | None = None,
     nt: str = "all",
+    fields: str = "data",
     controller_container: ControllerContainer = Depends(get_controller_container),
     client_version: str = Depends(require_client_version),
 ) -> ExperimentResultsResponse:
@@ -432,16 +482,38 @@ async def get_experiment_results(
     recently completed near-time step. Handles that are declared but not yet
     measured come back empty.
 
+    ``fields`` then chooses how much of each selected result to return.
+    ``fields=meta`` describes the shape instead of returning data: the axis
+    names, shape and near-time progress of each handle, with no measurements, so
+    a client can find its way around the results without downloading them.
+    ``fields=callbacks`` returns the near-time callback results accumulated so far,
+    ``handles`` and ``nt`` are unused.
+
     This endpoint is experimental and its query parameters may still change.
     """
-    if nt not in ("all", "latest"):
+    if nt not in {"all", "latest"}:
         raise _error_response(
             ErrorCode.INVALID_QUERY_PARAMETER,
             f"Invalid nt={nt!r}: expected 'all' or 'latest'.",
         )
+    if fields not in {"data", "meta", "callbacks"}:
+        raise _error_response(
+            ErrorCode.INVALID_QUERY_PARAMETER,
+            f"Invalid fields={fields!r}: expected 'data', 'meta' or 'callbacks'.",
+        )
     handle_id = _get_handle_id(uuid)
     status_val = await controller_container.get_submission_status(handle_id)
     results = await controller_container.get_submission_results(handle_id)
+    if fields == "callbacks":
+        return ExperimentResultsResponse(
+            id=uuid,
+            status=_to_api_status(status_val),
+            results=orjson.loads(
+                serializers.to_json(
+                    Results(neartime_callback_results=results.neartime_callback_results)
+                )
+            ),
+        )
     # Commas separate the handles here, so a handle whose name contains one
     # cannot be requested.
     selector = ResultSelector(
@@ -456,10 +528,22 @@ async def get_experiment_results(
             f"Unknown result handle: {exc.args[0]!r}",
             status_code=400,
         ) from exc
-    # Callback results, execution errors and pipeline timestamps are
-    # only included on an unfiltered (full) fetch; partial fetches
-    # (a handle subset or nt="latest") are the lazy per-callback polls
-    # that discard everything but acquired results.
+    if fields == "meta":
+        return ExperimentResultsResponse(
+            id=uuid,
+            status=_to_api_status(status_val),
+            results={},
+            handles={
+                handle: AcquiredResultStructure(
+                    axis_name=acquired.axis_name,
+                    shape=list(np.shape(acquired.data)),
+                    last_nt_step=acquired.last_nt_step,
+                )
+                for handle, acquired in sliced.items()
+            },
+        )
+    # Callback results, execution errors and pipeline timestamps ride
+    # along only on an unfiltered (full) fetch.
     is_full = selector.handles is None and selector.nt == "all"
     partial = Results(
         acquired_results=sliced,
@@ -536,7 +620,8 @@ async def _pump_channel_outbound(
     """Forward channel messages to the socket; close it after the terminal one."""
     while True:
         message = await outbound.get()
-        await websocket.send_json(message)
+        # send_json() has no default= hook.
+        await websocket.send_text(json.dumps(message, default=json_default))
         if message.get("type") == MessageType.DONE:
             await websocket.close()
             return
@@ -555,15 +640,14 @@ async def experiment_callbacks(
 
     An experiment without client callbacks will immediately close the
     WebSocket without termination message.
+
+    Admission is by callback protocol version, not LabOne Q release version.
+    If the service was configured with a token, that token is checked, too.
     """
     await websocket.accept()
     try:
-        _validate_client_version(
-            websocket.headers.get("X-LabOneQ-Client-Version"),
-            _parse_flag_header(
-                websocket.headers.get("X-LabOneQ-Ignore-Version-Mismatch")
-            ),
-        )
+        _check_ws_token(websocket)
+        check_protocol_version(websocket.headers.get(CALLBACK_PROTOCOL_HEADER))
         channel = await controller_container.get_callback_channel(_get_handle_id(uuid))
         if channel is None:
             # No client callbacks: Close the unnecessary WebSocket connection.
@@ -579,7 +663,13 @@ async def experiment_callbacks(
             code=status.WS_1013_TRY_AGAIN_LATER, reason=str(exc)[:120]
         )
         return
-    except (ServiceError, LabOneQControllerException) as exc:
+    except (
+        ServiceError,
+        LabOneQControllerException,
+        UnsupportedProtocolVersion,
+    ) as exc:
+        # Final rejections: Send error code 1008 to signal a fatal error.
+        # A temporary failure (busy, see above) causes a retry instead.
         reason = exc.body.error.message if isinstance(exc, ServiceError) else str(exc)
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason=reason[:120])
         return

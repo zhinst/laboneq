@@ -54,6 +54,7 @@ dependencies = [
   "typeguard >= 4.5.0",
   "typing_extensions >= 4.10.0",
   "uvicorn[standard] >= 0.40.0",
+  "websockets >= 14.0",
   "zhinst-comms-schemas~=4.2.0",
   "zhinst-core~=26.7.1",          # Do not specify the build (fourth) version component for this dependency
   "zhinst-timing-models~=26.7.0",

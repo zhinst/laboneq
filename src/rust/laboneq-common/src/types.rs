@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fmt::Display;
+use std::num::NonZeroU16;
 
 mod literal;
 pub use literal::*;
@@ -23,22 +24,27 @@ impl From<u16> for PhysicalDeviceUid {
 pub struct AwgKey(pub u64);
 
 /// Physical channel address in the ZQCS rack, encoded as `shelf:slot:frontend:port`.
+/// Components are one-based; a zero component is unspecified (wildcard not supported).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct GeoLocation {
-    pub shelf: u16,
-    pub slot: u16,
-    pub frontend: u16,
-    pub port: u16,
+    pub shelf: NonZeroU16,
+    pub slot: NonZeroU16,
+    pub frontend: NonZeroU16,
+    pub port: NonZeroU16,
 }
 
-impl From<[u16; 4]> for GeoLocation {
-    fn from([shelf, slot, frontend, port]: [u16; 4]) -> Self {
-        Self {
-            shelf,
-            slot,
-            frontend,
-            port,
-        }
+impl TryFrom<[u16; 4]> for GeoLocation {
+    type Error = String;
+    fn try_from([shelf, slot, frontend, port]: [u16; 4]) -> Result<Self, Self::Error> {
+        let non_zero = |value, name: &str| {
+            NonZeroU16::new(value).ok_or_else(|| format!("Invalid geolocation key: '{shelf}:{slot}:{frontend}:{port}'; '{name}' must be non-zero"))
+        };
+        Ok(Self {
+            shelf: non_zero(shelf, "shelf")?,
+            slot: non_zero(slot, "slot")?,
+            frontend: non_zero(frontend, "frontend")?,
+            port: non_zero(port, "port")?,
+        })
     }
 }
 
@@ -46,20 +52,13 @@ impl std::str::FromStr for GeoLocation {
     type Err = String;
 
     fn from_str(port_str: &str) -> Result<Self, Self::Err> {
-        let invalid = || format!("Invalid geolocation key: '{}'", port_str);
+        let invalid = || format!("Invalid geolocation key: '{port_str}'");
         let parts: Vec<u16> = port_str
             .split(':')
             .map(|p| p.parse::<u16>().map_err(|_| invalid()))
             .collect::<Result<_, _>>()?;
-        if parts.len() != 4 {
-            return Err(invalid());
-        }
-        Ok(Self {
-            shelf: parts[0],
-            slot: parts[1],
-            frontend: parts[2],
-            port: parts[3],
-        })
+        let components: [u16; 4] = parts.try_into().map_err(|_| invalid())?;
+        Self::try_from(components)
     }
 }
 
@@ -191,15 +190,7 @@ mod geolocation_tests {
     #[test]
     fn from_str_valid() {
         let geo = GeoLocation::from_str("1:2:3:4").unwrap();
-        assert_eq!(
-            geo,
-            GeoLocation {
-                shelf: 1,
-                slot: 2,
-                frontend: 3,
-                port: 4
-            }
-        );
+        assert_eq!(geo, GeoLocation::try_from([1, 2, 3, 4]).unwrap());
     }
 
     #[test]
@@ -211,12 +202,7 @@ mod geolocation_tests {
 
     #[test]
     fn display_roundtrip() {
-        let geo = GeoLocation {
-            shelf: 1,
-            slot: 2,
-            frontend: 3,
-            port: 4,
-        };
-        assert_eq!(geo.to_string(), "1:2:3:4");
+        let result = GeoLocation::try_from([1, 2, 3, 4]).unwrap().to_string();
+        assert_eq!(result, "1:2:3:4");
     }
 }

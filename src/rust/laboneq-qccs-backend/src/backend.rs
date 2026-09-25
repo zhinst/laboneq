@@ -67,7 +67,7 @@ impl CompilerBackend for QccsBackend {
         &self,
         experiment: ExperimentIr,
         compiler_settings: &CompilerSettings,
-        py_object_store: &PyObjectStore<ExternalParameterUid>,
+        external_parameters: &PyObjectStore<ExternalParameterUid>,
         backend_data: &Self::Output,
     ) -> CompilerBackendResult<Self::CodeGenArtifact> {
         let additional_signals = backend_data.signals().map(|s| SignalChannelProperties {
@@ -110,9 +110,9 @@ impl CompilerBackend for QccsBackend {
                 experiment,
                 &setup_desc,
                 compiler_settings,
-                py_object_store,
+                external_parameters,
             )?;
-            let artifacts_py = artifacts_to_py(py, artifacts, id_store, py_object_store)?;
+            let artifacts_py = artifacts_to_py(py, artifacts, id_store, external_parameters)?;
             Ok(artifacts_py.into())
         })?;
         Ok(CodeGenArtifactQccs { inner: out })

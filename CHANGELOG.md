@@ -1,4 +1,33 @@
+# LabOne Q 26.10.0b3 (2026-09-25)
+
+## Features
+
+- Added a `run_experiment` function to the remote controllers, which submits the experiment and serves its near-time callbacks over the
+  WebSocket callback channel.
+- When a `Session` is connected to a LabOne Q controller service (i.e., the `DeviceSetup` carries the reserved controller-service server entry), `run()` now serves the session's registered near-time callbacks from the client process instead of rejecting them.
+- Added ZQCS support for `plot_simulation` and displaying signals in the Interactive Pulse Sheet Viewer.
+- Experiments that call many quantum operations now build faster. A randomized benchmarking sequence built from quantum operations builds up to 1.8 times faster, and a batch of OpenQASM programs about 1.2 times faster.
+
+## Bug Fixes
+
+- Fixed a bug where building DSL sections on worker threads failed with `AttributeError: '_thread._local' object has no attribute 'active_contexts'`. This affected experiment construction parallelized across threads, where each worker opens a section with an explicit `uid` and the main thread assembles the finished sections into the experiment.
+- Fixed a bug where a swept amplitude or swept `increment_oscillator_phase` was applied twice per sweep step on a compressible pulse. The sweep then drifted away from the requested values, and the tail of each pulse played at the wrong amplitude or phase. This affects amplitude and `increment_oscillator_phase` sweeps on the HDAWG, and `increment_oscillator_phase` sweeps on the SHFSG.
+- Fixed a bug where specifying a local oscillator on an unsupported channel type was silently ignored. This now raises a compiler error.
+- Fixed a bug where one of the single-qubit Clifford gates would never be part of the randomly generated Clifford gate sequence returned by `generate_play_rb_pulses` in the randomized benchmarking tutorial notebook.
+
+## Deprecation Notices
+
+- Getting the laboneq package version via `laboneq._version.get_version` has been deprecated and will be removed in the future. Use `laboneq.__version__` instead.
+
 # LabOne Q 26.10.0b2 (2026-09-11)
+
+## Features
+
+- `CompiledExperiment` now contains the compiler's output bytes and is serialized into a Python object view
+  when the `.scheduled_experiment` attribute is accessed.
+
+  The deprecated `laboneq.dsl.serialization.Serializer` now delegates to `laboneq.serializers` for compiled
+  experiments, so it reads and writes the same format.
 
 ## Bug Fixes
 
@@ -14,15 +43,7 @@
 
 ## Removals from the Codebase
 
-- `CompiledExperiment` now contains the compiler's output bytes and is serialized into a Python object view
-  when the `.scheduled_experiment` attribute is accessed.
-
-  The deprecated `laboneq.dsl.serialization.Serializer` now delegates to `laboneq.serializers` for compiled
-  experiments, so it reads and writes the same format.
-- Removed deprecated HDAWG_FORCE_COMMAND_TABLE compiler setting. The option had no effect and therefore has no replacement functionality.
-- Removed deprecated SHFQA_MIN_PLAYWAVE_HINT compiler setting. The option had no effect and therefore has no replacement functionality.
-- Removed deprecated SHFQA_MIN_PLAYZERO_HINT compiler setting. The option had no effect and therefore has no replacement functionality.
-- Removed deprecated SHFSG_FORCE_COMMAND_TABLE compiler setting. The option had no effect and therefore has no replacement functionality.
+- Removed deprecated `HDAWG_FORCE_COMMAND_TABLE`, `SHFQA_MIN_PLAYWAVE_HINT`, `SHFQA_MIN_PLAYZERO_HINT`, and `SHFSG_FORCE_COMMAND_TABLE` compiler settings. The option had no effect and therefore has no replacement functionality.
 - Removed empty package `laboneq.contrib.example_helpers.descriptors`.
 - Removed serialization support for `xarray.DataArray` and `xarray.Dataset` objects, which existed only in the deprecated legacy serializer. `AcquiredResult.to_xarray()` and `AcquiredResults.to_xarray()` are unaffected.
 - Removed the deprecated `CompiledExperiment.experiment_dict` attribute. It has been deprecated since version
@@ -47,8 +68,8 @@
 
 ## Removals from the Codebase
 
-- Remove deprecated methods `CompiledExperiment.replace_pulse` and `CompiledExperiment.replace_phase_increment`. Instead, modify the experiment by putting the new pulse and/or phase increment in there and recompile the experiment. NOTE: the methods `RuntimeContext.replace_pulse` and `RuntimeContext.replace_phase_increment` are preserved and can still be used to apply replacements in NT callbacks (these methods leave the compiled experiment unchanged).
-- Remove deprecated properties `CompiledExperiment.src`, `CompiledExperiment.waves`, `CompiledExperiment.recipe`, `CompiledExperiment.wave_indices`, `CompiledExperiment.command_tables`, `CompiledExperiment.schedule`. We no longer support these as top-level properties of `CompiledExperiment`. As an end user, you are not supposed to depend on this; however, for debugging or learning purposes you can still access the same information through the artifacts in the compiled experiment.
+- Removed deprecated methods `CompiledExperiment.replace_pulse` and `CompiledExperiment.replace_phase_increment`. Instead, modify the experiment by putting the new pulse and/or phase increment in there and recompile the experiment. NOTE: the methods `RuntimeContext.replace_pulse` and `RuntimeContext.replace_phase_increment` are preserved and can still be used to apply replacements in NT callbacks (these methods leave the compiled experiment unchanged).
+- Removed deprecated properties `CompiledExperiment.src`, `CompiledExperiment.waves`, `CompiledExperiment.recipe`, `CompiledExperiment.wave_indices`, `CompiledExperiment.command_tables`, `CompiledExperiment.schedule`. We no longer support these as top-level properties of `CompiledExperiment`. As an end user, you are not supposed to depend on this; however, for debugging or learning purposes you can still access the same information through the artifacts in the compiled experiment.
 - Removed support for arbitrary Python objects as pulse parameter values and near-time callback arguments.
 
   Such values were supported back when nothing serialized the experiment between compilation and execution by
@@ -312,7 +333,7 @@
 
 ## Documentation
 
-- Fix inaccurate description of the `add_reset` argument to `batch_experiment`.
+- Fixed inaccurate description of the `add_reset` argument to `batch_experiment`.
   The argument adds a *reset* operation not an *active reset* operation.
   Whether the reset is active or passive is determined by the implementation
   provided by the quantum operations of the QPU.
@@ -356,7 +377,7 @@
 
 ## Features
 
-- Produce more compact Sequencer C code in some situations involving nested sweeps.
+- Produced more compact Sequencer C code in some situations involving nested sweeps.
 - Introduced an async API for the controller, currently used internally only.
 
 ## Bug Fixes
@@ -372,9 +393,9 @@
 
 ## Features
 
-- Enable auto chunking of sweeps in case the hardware limitation is the amount of acquired results.
-- Calculate result shapes at compile time and make them available via `compiled_experiment.scheduled_experiment.result_shape_info.shapes`.
-- Transpose the last two dimensions of the shape of RAW acquisition results in case of multiple handles with the same name - before: `(..., handle, samples)`, after: `(..., samples, handle)`. This brings the axis corresponding to the multiple handles to the same location as for the case of non-RAW acquisition.
+- Enabled auto chunking of sweeps in case the hardware limitation is the amount of acquired results.
+- Calculated result shapes at compile time and made them available via `compiled_experiment.scheduled_experiment.result_shape_info.shapes`.
+- Transposed the last two dimensions of the shape of RAW acquisition results in case of multiple handles with the same name - before: `(..., handle, samples)`, after: `(..., samples, handle)`. This brings the axis corresponding to the multiple handles to the same location as for the case of non-RAW acquisition.
 - Implemented Ramsey spectroscopy experiment under `laboneq.testing.experiments`.
 
 ## Bug Fixes

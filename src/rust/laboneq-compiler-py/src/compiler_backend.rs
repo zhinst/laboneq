@@ -20,11 +20,11 @@ use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::hqcs::{self, HqcsDeclarations};
 use laboneq_dsl::types::{
     AcquisitionType, ExternalParameterUid, HandleUid, ParameterUid, PulseDef, PulseUid, SignalUid,
-    SweepParameter,
 };
 use laboneq_units::duration::{Duration, Second};
 
 // Re-export commonly used types for convenience
+pub use crate::capnp_deserializer::DeserializedExperiment;
 pub use crate::capnp_setup_description::SetupDescriptionPayload;
 pub use crate::error::Error;
 pub use crate::experiment::DeviceSignal;
@@ -112,12 +112,9 @@ pub trait CompilerBackend: Clone + Send + Sync + 'static {
     /// any other processing sees the tree. Default is to refuse anything.
     fn process_hqcs(
         &self,
-        root: &mut ExperimentNode,
-        hqcs: &HqcsDeclarations,
-        id_store: &NamedIdStore,
-        _sweep_parameters: &[SweepParameter],
+        experiment: &mut DeserializedExperiment,
     ) -> CompilerBackendResult<Self::EmulatedHqcsProgram> {
-        refuse_hqcs(root, hqcs, id_store)?;
+        refuse_hqcs(&experiment.root, &experiment.hqcs, &experiment.id_store)?;
         Ok(Self::EmulatedHqcsProgram::default())
     }
 
@@ -140,19 +137,24 @@ pub trait CompilerBackend: Clone + Send + Sync + 'static {
         &self,
         experiment: ExperimentIr,
         compiler_settings: &CompilerSettings,
-        py_object_store: &PyObjectStore<ExternalParameterUid>,
+        external_parameters: &PyObjectStore<ExternalParameterUid>,
         backend_data: &Self::Output,
     ) -> CompilerBackendResult<Self::CodeGenArtifact>;
 
-    #[instrument(name = "laboneq.compiler.generate-code", skip_all)]
+    #[instrument(level = "debug", name = "laboneq.compiler.generate-code", skip_all)]
     fn generate_code_traced(
         &self,
         experiment: ExperimentIr,
         compiler_settings: &CompilerSettings,
-        py_object_store: &PyObjectStore<ExternalParameterUid>,
+        external_parameters: &PyObjectStore<ExternalParameterUid>,
         backend_data: &Self::Output,
     ) -> CompilerBackendResult<Self::CodeGenArtifact> {
-        self.generate_code(experiment, compiler_settings, py_object_store, backend_data)
+        self.generate_code(
+            experiment,
+            compiler_settings,
+            external_parameters,
+            backend_data,
+        )
     }
 
     /// Get a feedback calculator for the given backend. The default implementation returns `Ok(None)`, indicating that no feedback calculator is available for this backend.
@@ -319,7 +321,7 @@ pub(crate) trait DynCompilerBackend: Send + Sync {
         &self,
         experiment: ExperimentIr,
         compiler_settings: &CompilerSettings,
-        py_object_store: &PyObjectStore<ExternalParameterUid>,
+        external_parameters: &PyObjectStore<ExternalParameterUid>,
         backend_data: &(dyn PreprocessedBackendData + Send + Sync),
     ) -> CompilerBackendResult<Box<dyn CodeGenArtifact + Send + Sync>>;
 
@@ -339,14 +341,14 @@ where
         &self,
         experiment: ExperimentIr,
         compiler_settings: &CompilerSettings,
-        py_object_store: &PyObjectStore<ExternalParameterUid>,
+        external_parameters: &PyObjectStore<ExternalParameterUid>,
         backend_data: &(dyn PreprocessedBackendData + Send + Sync),
     ) -> CompilerBackendResult<Box<dyn CodeGenArtifact + Send + Sync>> {
         let data = backend_data
             .as_any()
             .downcast_ref::<B::Output>()
             .expect("DynCompilerBackend: backend_data type does not match backend Output type");
-        self.generate_code_traced(experiment, compiler_settings, py_object_store, data)
+        self.generate_code_traced(experiment, compiler_settings, external_parameters, data)
             .map(|a| Box::new(a) as Box<dyn CodeGenArtifact + Send + Sync>)
     }
 

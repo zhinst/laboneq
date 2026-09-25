@@ -14,8 +14,8 @@ import numpy as np
 import orjson
 import yaml
 
+from laboneq import __version__
 from laboneq._backend_plugin import backend_import_prefixes
-from laboneq._version import get_version
 from laboneq.serializers.base import VersionedClassSerializer
 from laboneq.serializers.serializer_registry import (
     serializer_registry,
@@ -163,7 +163,7 @@ def to_dict(
 
     serialized = _serialize_object(obj, options, only_public=True)
     if isinstance(serialized, dict) and "__serializer__" in serialized:
-        serialized["__creator__"] = ["laboneq", get_version()]
+        serialized["__creator__"] = ["laboneq", __version__]
     return serialized
 
 

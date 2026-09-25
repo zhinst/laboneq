@@ -23,7 +23,7 @@ fn test_derived_parameters_calibration() {
             .unwrap();
         let capnp_data = exp_func.call0().unwrap();
         let deserialized =
-            deserialize_experiment(py, capnp_data.extract::<&[u8]>().unwrap(), false).unwrap();
+            deserialize_experiment(capnp_data.extract::<&[u8]>().unwrap(), false).unwrap();
         let id_store = deserialized.id_store;
 
         // Test that the derived parameter is registered in the experiment parameters
@@ -68,7 +68,7 @@ fn test_derived_parameters_operation_field() {
             .unwrap();
         let capnp_data = exp_func.call0().unwrap();
         let deserialized =
-            deserialize_experiment(py, capnp_data.extract::<&[u8]>().unwrap(), false).unwrap();
+            deserialize_experiment(capnp_data.extract::<&[u8]>().unwrap(), false).unwrap();
         let id_store = deserialized.id_store;
 
         let target_param_uid = id_store.get("derived_param").unwrap().into();

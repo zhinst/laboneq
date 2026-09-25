@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-from laboneq._version import get_version
+from laboneq import __version__
 from laboneq.controller.constants import CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S
 from laboneq.controller.service.app import create_app
 from laboneq.controller.service.controller_container import load_callbacks_from_module
@@ -191,7 +191,7 @@ Examples:
         "-V",
         "--version",
         action="version",
-        version=f"%(prog)s {get_version()}",
+        version=f"%(prog)s {__version__}",
     )
 
     parser.add_argument(
@@ -391,7 +391,7 @@ Examples:
         )
 
     # Print startup banner and info
-    version = get_version()
+    version = __version__
     _print_banner(version)
     print(f"  Binding to:  http://{parsed_args.host}:{parsed_args.port}")
     print(f"  API docs:    http://{parsed_args.host}:{parsed_args.port}/docs")

@@ -91,12 +91,12 @@ pub fn pulse_parameters_to_py_dict(
     py: Python,
     parameters: &HashMap<PulseParameterUid, ExternalOrValue>,
     id_store: &NamedIdStore,
-    py_objects: &PyObjectStore<ExternalParameterUid>,
+    external_parameters: &PyObjectStore<ExternalParameterUid>,
 ) -> PyResult<Py<PyDict>> {
     let dict = PyDict::new(py);
     for (key, value) in parameters.iter() {
         let key_str = id_store.resolve(*key).unwrap();
-        let value = external_or_value_to_py(py, value, id_store, py_objects)?;
+        let value = external_or_value_to_py(py, value, id_store, external_parameters)?;
         dict.set_item(key_str, value)?;
     }
     Ok(dict.into())
@@ -106,10 +106,10 @@ fn external_or_value_to_py<'py>(
     py: Python<'py>,
     value: &ExternalOrValue,
     id_store: &NamedIdStore,
-    py_objects: &PyObjectStore<ExternalParameterUid>,
+    external_parameters: &PyObjectStore<ExternalParameterUid>,
 ) -> PyResult<Bound<'py, PyAny>> {
     match value {
-        ExternalOrValue::ExternalParameter(uid) => Ok(py_objects
+        ExternalOrValue::ExternalParameter(uid) => Ok(external_parameters
             .resolve_to_python(uid)
             .expect("Internal error: Failed to resolve external parameter uid to python object")
             .bind(py))

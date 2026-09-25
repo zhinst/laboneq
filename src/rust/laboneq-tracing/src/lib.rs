@@ -26,9 +26,15 @@ use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 ///
 /// - `LABONEQ_TRACING_ENABLE`: If set to "1" or "true" (case-insensitive), enables tracing. Otherwise, tracing is disabled by default.
 /// - `LABONEQ_TRACING_IN_MEMORY_EXPORTER`: If set to "1" or "true" (case-insensitive), enables the in-memory exporter. This is disabled by default.
-/// - `_LABONEQ_DEV_TRACING_LEVEL`: The verbosity of the captured spans, analogous to a log level. Possible values: "off", "error", "warn", "info",
-///   "debug", "trace", or not set which is equivalent to "info".
-///   This variable is deliberately not set by the user facing tracing helpers - it is supposed to be used as a debug tool by LabOne Q developers.
+/// - `_LABONEQ_DEV_TRACING_LEVEL`: The verbosity of the captured spans.
+///   This variable is deliberately not set by the user facing tracing helpers - it is supposed to be used as a debug tool by LabOne Q developers. Possible values:
+///    + "off": No traces are collected.
+///    + "info": The default value. Contains general high-level traces, e.g. total compilation time, etc. This level specifies traces that are reported O(1) times per compilation job.
+///    + "debug": Traces that provide more granular but still somewhat high-level information, e.g. stages of compilation. The number of times these traces are reported during a single compilation
+///      job must be at most weakly dependent on the experiment (e.g. depends on the number of chunks, near-time sweep steps, etc.).
+///    + "trace": Most granular and low-level traces intended for debugging and troubleshooting, e.g. individual passes in the codegen. The number of such traces reported during a single compilation job
+///      is allowed to depend arbitrarily on the contents of the experiment, e.g. scale linearly on the number of qubits / channels. When enabling this level, you may need to limit your experiment
+///      size and / or increase the size of the buffer of the used opentelemetry exporter.
 const ENV_VAR_ENABLE: &str = "LABONEQ_TRACING_ENABLE";
 const ENV_VAR_IN_MEMORY_EXPORTER: &str = "LABONEQ_TRACING_IN_MEMORY_EXPORTER";
 const ENV_VAR_LEVEL: &str = "_LABONEQ_DEV_TRACING_LEVEL";

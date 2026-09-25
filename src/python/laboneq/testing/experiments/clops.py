@@ -108,6 +108,7 @@ class CLOPSExperimentSettings:
         qa_lo_frequencies: Readout signal (non-local) oscillator frequency in
             LabOne Q parlance. This determines the center frequency for the
             up/downconversion on the hardware.
+        set_local_oscillator: Whether to set the local oscillators in the calibration.
 
     Properties:
         depth: Circuit depth of a single Quantum Volume (QV) experiment. Always equal to
@@ -129,6 +130,7 @@ class CLOPSExperimentSettings:
     readout_frequencies: dict[str, float] = attrs.field()
     sg_lo_frequencies: dict[str, float] = attrs.field()
     qa_lo_frequencies: dict[str, float] = attrs.field()
+    set_local_oscillator: bool = True
 
     # Auto-initialized to ensure square circuits, can be changed if needed in future.
     depth: int = attrs.field(init=False)
@@ -199,6 +201,7 @@ class CLOPSExperimentBuilder:
             settings.sg_lo_frequencies,
             settings.readout_frequencies,
             settings.qa_lo_frequencies,
+            settings.set_local_oscillator,
         )
         return exp
 
@@ -210,6 +213,7 @@ class CLOPSExperimentBuilder:
         sg_lo_frequencies: dict[str, float],
         readout_frequencies: dict[str, float],
         qa_lo_frequencies: dict[str, float],
+        set_local_oscillator: bool,
     ):
         exp_cal = Calibration()
 
@@ -222,12 +226,16 @@ class CLOPSExperimentBuilder:
             )
             exp_cal[f"{qubit_id}_drive"] = SignalCalibration(
                 oscillator=Oscillator(frequency=f_drive - flo_sg),
-                local_oscillator=Oscillator(frequency=flo_sg),
+                local_oscillator=(
+                    Oscillator(frequency=flo_sg) if set_local_oscillator else None
+                ),
             )
 
             exp_cal[f"{qubit_id}_measure"] = SignalCalibration(
                 oscillator=Oscillator(frequency=f_ro - flo_qa),
-                local_oscillator=Oscillator(frequency=flo_qa),
+                local_oscillator=(
+                    Oscillator(frequency=flo_qa) if set_local_oscillator else None
+                ),
             )
         exp.set_calibration(exp_cal)
 

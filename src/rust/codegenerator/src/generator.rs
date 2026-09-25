@@ -551,7 +551,7 @@ fn estimate_total_execution_time(program_length: Samples, sampling_rate: f64) ->
     program_length as f64 / sampling_rate
 }
 
-#[instrument(name = "laboneq.compiler.generate-code-rs", skip_all)] // Named with `-rs` suffix to distinguish from Python wrapper function
+#[instrument(level = "debug", name = "laboneq.compiler.generate-code-rs", skip_all)] // Named with `-rs` suffix to distinguish from Python wrapper function
 pub fn generate_code<T: SampleWaveforms + SampleIntegrationKernels + Sync + Send>(
     codegen_ir: CodegenIr,
     sampler: &T,

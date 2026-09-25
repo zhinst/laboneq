@@ -133,7 +133,7 @@ def _interactive_psv_app(
             compiled_experiment=compiled_experiment,
             experiment_signals=[signal_id],
             start_time=start,
-            duration=duration,
+            max_duration=duration,
         )[0]
 
         return {

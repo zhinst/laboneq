@@ -307,6 +307,7 @@ pub(crate) fn preprocess_experiment(
 
         let sampling_rate = device_kind.sampling_rate(setup_has_shf);
 
+        check_local_oscillator(signal, device_kind)?;
         let signal_kind = signal_kind(&signal.ports, device_kind)?;
 
         backend_signals.push(BackendSignal {
@@ -646,6 +647,17 @@ fn fill_missing_device_options(experiment_view: &mut ExperimentViewWrapper) {
                 DeviceOptions::new(defaults.iter().map(|s| s.to_string()).collect());
         }
     }
+}
+
+fn check_local_oscillator(signal: &ExperimentSignal, instrument: DeviceKind) -> Result<()> {
+    if signal.calibration.lo_frequency.is_some() && !instrument.is_shf() {
+        bail!(
+            "Signal '{}' sets a local oscillator, which is unsupported on this channel \
+            type. Remove the 'local_oscillator' calibration from this signal.",
+            signal.uid.0,
+        );
+    }
+    Ok(())
 }
 
 fn signal_kind(ports: &[Port], instrument: DeviceKind) -> Result<SignalKind> {

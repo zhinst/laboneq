@@ -13,7 +13,7 @@ pub const DEFAULT_HDAWG_LEAD_DESKTOP_SETUP_2GHZ: Duration<Second> = seconds(24e-
 pub const DEFAULT_UHFQA_LEAD_PQSC: Duration<Second> = seconds(80e-9);
 pub const DEFAULT_SHFQA_LEAD_PQSC: Duration<Second> = seconds(80e-9);
 pub const DEFAULT_SHFSG_LEAD_PQSC: Duration<Second> = seconds(80e-9);
-pub const DEFAULT_ZQCS_LEAD: Duration<Second> = seconds(1200e-9);
+pub const DEFAULT_ZQCS_LEAD: Duration<Second> = seconds(1600e-9);
 
 /// Default sampling rates for various devices and channels
 pub const SHFSG_SAMPLING_RATE: Frequency<Hertz> = hertz(2e9);

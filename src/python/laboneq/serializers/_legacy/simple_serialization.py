@@ -19,7 +19,7 @@ from numpy.lib.format import read_array, write_array
 from sortedcontainers import SortedDict
 from typing_extensions import deprecated
 
-from laboneq._version import get_version
+from laboneq import __version__
 
 _logger = logging.getLogger(__name__)
 
@@ -573,7 +573,7 @@ def serialize_to_dict_with_ref(
         for k, v in entities_collector.items()
     }
     root_name = full_typename(to_serialize).split(".")[-1].lower()
-    retval = {root_name: root_object, "__version": get_version()}
+    retval = {root_name: root_object, "__version": __version__}
     if entities_collector_flat:
         retval["entities"] = entities_collector_flat
 
@@ -702,9 +702,9 @@ def deserialize_from_dict_with_ref(data, class_mapping, entity_classes, entity_m
             entity_pool[entity_key] = entity
 
     version = data.get("__version")
-    if version != get_version():
+    if version != __version__:
         warnings.warn(
-            f"Deserializing data with version {version}, but current version is {get_version()}. This may lead to errors.",
+            f"Deserializing data with version {version}, but current version is {__version__}. This may lead to errors.",
             stacklevel=2,
         )
     root_key = next(k for k, v in data.items() if k != "entities" and k != "__version")

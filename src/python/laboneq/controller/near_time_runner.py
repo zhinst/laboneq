@@ -3,13 +3,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from inspect import isawaitable
 from typing import TYPE_CHECKING, Any
 
-import numpy as np
-
+from laboneq.controller.callback_protocol import json_failure
 from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.runtime_context_impl import RuntimeContextImpl
 from laboneq.controller.toolkit_adapter import ToolkitDevices
@@ -30,28 +28,6 @@ if TYPE_CHECKING:
     from laboneq.core.types.numpy_support import NumPyArray
 
 _logger = logging.getLogger(__name__)
-
-
-def _json_safe_args(func_name: str, args: dict[str, Any]) -> dict[str, Any]:
-    """Normalize numpy scalars from sweep resolution and reject non-JSON values.
-
-    Complex values are not supported — decompose into real/imaginary parts.
-    """
-
-    def default(value: Any) -> Any:
-        if isinstance(value, np.generic):
-            return value.item()
-        raise TypeError(f"type {type(value).__name__}")
-
-    try:
-        # NaN/Infinity pass through deliberately: both ends of the channel use
-        # Python's stdlib json, which tolerates the non-standard literals.
-        return json.loads(json.dumps(args, default=default))
-    except (TypeError, ValueError) as e:
-        raise LabOneQControllerException(
-            f"Arguments of client near-time callback '{func_name}' must be "
-            f"JSON-serializable: {e}"
-        ) from e
 
 
 def _deserialize_replacement(func_name: str, payload: Any) -> Any:
@@ -156,9 +132,14 @@ class NearTimeRunner(AsyncExecutorBase):
         func_name: str,
         args: dict[str, Any],
     ) -> Any:
-        reply = await channel.invoke(
-            func_name, _json_safe_args(func_name, args), self.nt_loop_indices, None
-        )
+        failure = json_failure(args)
+        if failure is not None:
+            raise LabOneQControllerException(
+                f"Near-time callback {func_name!r} cannot be called with {failure}: "
+                f"its arguments travel as JSON. Pass a complex number as its real "
+                f"and imaginary parts, and an array as a list."
+            )
+        reply = await channel.invoke(func_name, args, self.nt_loop_indices, None)
         self._apply_callback_actions(func_name, reply.actions)
         return reply.return_value
 

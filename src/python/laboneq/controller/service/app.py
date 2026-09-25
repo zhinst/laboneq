@@ -26,11 +26,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from laboneq._version import get_version
+from laboneq import __version__
 from laboneq.controller.api.commons import AUTH_HEADER, AUTH_SCHEME
 from laboneq.controller.constants import (
     CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S,
     PROTOCOL_VERSION,
+    PROTOCOL_VERSION_HEADER,
 )
 from laboneq.controller.service.controller_container import ControllerContainer
 from laboneq.controller.service.models import (
@@ -156,7 +157,7 @@ def create_app(
         exception and exits, so whoever started the server never sees it
         otherwise.
         """
-        logger.info("Starting LabOne Q Controller Service v%s", get_version())
+        logger.info("Starting LabOne Q Controller Service v%s", __version__)
         try:
             app.state.controller_container = await ControllerContainer.create(
                 neartime_callbacks=neartime_callbacks,
@@ -175,13 +176,14 @@ def create_app(
     app = FastAPI(
         title="LabOne Q Controller Service",
         description="Remote controller service for LabOne Q quantum computing experiments",
-        version=get_version(),
+        version=__version__,
         lifespan=lifespan,
         docs_url="/docs",
         redoc_url="/redoc",
     )
 
     app.state.public_url = public_url
+    app.state.auth_token = auth_token
     app.state.startup_error = None
 
     @app.exception_handler(ServiceError)
@@ -262,7 +264,7 @@ def create_app(
             return await call_next(request)
 
     # inject server identification headers on every response.
-    _server_version = get_version()
+    _server_version = __version__
 
     @app.middleware("http")
     async def add_server_headers(
@@ -270,7 +272,7 @@ def create_app(
     ) -> Response:
         response = await call_next(request)
         response.headers["X-LabOneQ-Server-Version"] = _server_version
-        response.headers["X-LabOneQ-Protocol-Version"] = PROTOCOL_VERSION
+        response.headers[PROTOCOL_VERSION_HEADER] = PROTOCOL_VERSION
         response.headers["Accept-Post"] = "application/json"
         return response
 

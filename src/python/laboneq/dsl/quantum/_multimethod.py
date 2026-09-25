@@ -86,17 +86,26 @@ class MultiMethod(multimethod):
 
     Changes include:
     - No auto-registering signatures during dispatch.
+    - Caches resolved dispatches separately from the registered signatures.
     - `copy` method copies attributes, as well as methods.
     - Non-`QuantumElement` types are converted to `object`.
     - Can only register type signatures of equal length.
 
     Methods overwritten (in order of appearance):
+    - `__init__`
     - `register`
     - `copy`
+    - `clean`
     - `__setitem__`
     - `__missing__`
     - `__repr__`
     """
+
+    def __init__(self, func: Callable):
+        # The multimethod's keys are the registered overloads, which `copy`,
+        # `__repr__` and `docstring` all iterate. Dispatch results go here.
+        self._dispatch_cache: dict[tuple, Callable] = {}
+        super().__init__(func)
 
     def register(self, func: Callable, *types) -> Callable:
         """Register a function with type signature equal length validation."""
@@ -124,7 +133,13 @@ class MultiMethod(multimethod):
         new_multimethod.pending = self.pending.copy()
         new_multimethod.generics = self.generics.copy()
         new_multimethod._quantum_op = self._quantum_op.copy()
+        new_multimethod._dispatch_cache = {}
         return new_multimethod
+
+    def clean(self):
+        """Clear cached dispatches."""
+        super().clean()
+        self._dispatch_cache.clear()
 
     def __setitem__(self, types: tuple, func: Callable):
         # (This code is adapted from multimethod.multimethod.__setitem__)
@@ -148,10 +163,17 @@ class MultiMethod(multimethod):
         self.__doc__ = self.docstring
 
     def __missing__(self, types: tuple) -> Callable:
-        """Find and return the next applicable method without caching the types."""
-        # Check if the type signature is already in the multimethod cache
-        # (This code is adapted from multimethod.multimethod.__missing__)
+        """Return the applicable method without registering the type signature."""
         self.evaluate()
+        cache = self._dispatch_cache
+        if types not in cache:
+            cache[types] = self._resolve(types)
+        return cache[types]
+
+    def _resolve(self, types: tuple) -> Callable:
+        """Return the applicable method for a tuple of argument types."""
+        # Check if the type signature is already registered
+        # (This code is adapted from multimethod.multimethod.__missing__)
         types = _simplify_type_signature(types)  # <--- line added here
         types = tuple(map(subtype, types))
         if types in self:

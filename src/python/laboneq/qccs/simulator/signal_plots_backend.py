@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 from itertools import chain
-from typing import TYPE_CHECKING, Literal, Protocol, Sequence
+from typing import TYPE_CHECKING, Literal, Mapping, Protocol, Sequence
 
 import attrs
 import numpy as np
 
+from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types.enums import IODirection, PhysicalChannelType
 from laboneq.core.types.enums.acquisition_type import is_spectroscopy
 from laboneq.simulator.output_simulator import OutputSimulator
@@ -30,19 +31,51 @@ if TYPE_CHECKING:
 
 @attrs.define(frozen=True)
 class QCCSChannelSimulationResult(ChannelSimulationResult):
+    """Channel simulation results for QCCS experiments.
+
+    The QCCS output simulator produces data for triggers and markers in addition
+    to the standard time/samples, so these are captured here for plot preparation.
+
+    Attributes:
+        trigger: The trigger signals on this channel.
+        marker: The marker signals on this channel.
+    """
+
     trigger: np.ndarray
     marker: np.ndarray
 
 
 class QCCSSignalPlotsBackend(SignalPlotsBackend[QCCSChannelSimulationResult]):
+    """Signal plotting backend for QCCS experiments.
+
+    This implementation of ``SignalPlotsBackend`` is made for use with experiments that
+    have been compiled for QCCS instruments.
+    """
+
     def simulate_channel_output(
         self,
         *,
         compiled_experiment: CompiledExperiment,
         experiment_signals: Sequence[str],
         start_time: float,
-        duration: float,
+        max_duration: float,
     ) -> list[QCCSChannelSimulationResult]:
+        """Simulate the channel output for specified signals of a QCCS experiment.
+
+        This method produces one ``QCCSChannelSimulationResult`` for each supplied
+        experiment signal, even if the results are identical due to signal multiplexing.
+        Internally, each channel is only simulated once.
+
+        Args:
+            compiled_experiment: An experiment compiled for a QCCS instrument.
+            experiment_signals: Experiment signals for which to simulate channel output.
+            start_time: Start time of the simulation in seconds, relative to the start
+                        of the experiment.
+            max_duration: Maximum duration of the simulation in seconds.
+
+        Returns:
+            QCCS channel simulation results, one for each simulated signal.
+        """
         channels = map_experiment_signals(
             compiled_experiment=compiled_experiment,
             experiment_signals=experiment_signals,
@@ -52,14 +85,15 @@ class QCCSSignalPlotsBackend(SignalPlotsBackend[QCCSChannelSimulationResult]):
         results = {}
 
         simulator = OutputSimulator(
-            compiled_experiment, max_simulation_length=max(start_time + duration, 1e-5)
+            compiled_experiment,
+            max_simulation_length=max(start_time + max_duration, 1e-5),
         )
 
         for channel in unique_channels:
             results[channel] = simulator.get_snippet(
                 channel.uid,
                 start=start_time,
-                output_length=duration,
+                output_length=max_duration,
                 get_trigger=True,
                 get_marker=True,
             )
@@ -82,11 +116,37 @@ class QCCSSignalPlotsBackend(SignalPlotsBackend[QCCSChannelSimulationResult]):
         compiled_experiment: CompiledExperiment,
         integration_kernels_to_plot: Literal["all"] | Sequence[int],
     ) -> list[Plot]:
+        """Prepare plots from ``QCCSChannelSimulationResult`` objects.
+
+        This method takes simulation results and prepares plot data from them.
+        Different channel types result in slightly different plots. Currently,
+        the following plot types are supported:
+
+            * ``IQChannelOutputPlot``
+            * ``RFChannelOutputPlot``
+            * ``InputPlot``
+            * ``TriggerPlot``
+            * ``MarkerPlot``
+
+        Refer to their documentation for details. For adding new plot types, create
+        a class that implements the ``PlotType`` protocol and add an instance of it
+        in this function.
+
+        Once all plots have been prepared they are deduplicated (see ``deduplicate``).
+
+        Args:
+            simulated_outputs: QCCS channel simulation results, for example obtained
+                               from the ``simulate_channel_output`` method.
+            compiled_experiment: An experiment compiled for a QCCS instrument.
+            integration_kernels_to_plot: A selection mechanism for which integration
+                                         kernels to include in the plots
+                                         (see ``prepare_signal_plots``).
+        """
         kernel_samples = _integration_weights_by_signal(compiled_experiment)
 
         plot_types = [
             IQChannelOutputPlot(),
-            NonIQChannelOutputPlot(),
+            RFChannelOutputPlot(),
             InputPlot(
                 kernels=kernel_samples,
                 kernels_to_plot=integration_kernels_to_plot,
@@ -111,6 +171,7 @@ class QCCSSignalPlotsBackend(SignalPlotsBackend[QCCSChannelSimulationResult]):
 
 
 def map_channel_type(channel: PhysicalChannel, direction: IODirection) -> ChannelType:
+    """Determine ``ChannelType`` from QCCS-specific data structures."""
     if direction == IODirection.IN:
         return ChannelType.INPUT
 
@@ -123,6 +184,7 @@ def map_channel_type(channel: PhysicalChannel, direction: IODirection) -> Channe
 def map_experiment_signals(
     *, compiled_experiment: CompiledExperiment, experiment_signals: Sequence[str]
 ) -> list[Channel]:
+    """Produce ``Channel`` objects for the provided experiment signals."""
     channels = []
     for signal in experiment_signals:
         logical_signal_uid = to_logical_signal(
@@ -150,6 +212,7 @@ def map_experiment_signals(
 
 
 def to_logical_signal(*, experiment: Experiment, experiment_signal: str) -> str:
+    """Map an experiment signal to a logical signal."""
     logical_signal = experiment.signals[
         experiment_signal
     ].mapped_logical_signal_path.removeprefix("/logical_signal_groups/")
@@ -158,6 +221,8 @@ def to_logical_signal(*, experiment: Experiment, experiment_signal: str) -> str:
 
 
 class PlotType(Protocol):
+    """Protocol for plots supported by ``QCCSSignalPlotsBackend``."""
+
     def matches(self, *, result: QCCSChannelSimulationResult) -> bool: ...
     def prepare_plot(self, *, result: QCCSChannelSimulationResult) -> Plot: ...
 
@@ -167,10 +232,13 @@ def prepare_plots(
     types: Sequence[PlotType],
     result: QCCSChannelSimulationResult,
 ) -> Sequence[Plot]:
+    """Prepare plots from ``QCCSChannelSimulationResult`` objects."""
     return [pt.prepare_plot(result=result) for pt in types if pt.matches(result=result)]
 
 
 class IQChannelOutputPlot:
+    """Plot for IQ channels with two data series (real and imaginary)."""
+
     @staticmethod
     def matches(*, result: QCCSChannelSimulationResult) -> bool:
         channel = result.channel
@@ -192,7 +260,9 @@ class IQChannelOutputPlot:
         )
 
 
-class NonIQChannelOutputPlot:
+class RFChannelOutputPlot:
+    """Plot for RF channels with one data series (real)."""
+
     @staticmethod
     def matches(*, result: QCCSChannelSimulationResult) -> bool:
         channel = result.channel
@@ -214,6 +284,8 @@ class NonIQChannelOutputPlot:
 
 
 class TriggerPlot:
+    """Plot for triggers on non-QA channels with one data series."""
+
     @staticmethod
     def matches(*, result: QCCSChannelSimulationResult) -> bool:
         trigger_data = result.trigger
@@ -239,6 +311,8 @@ class TriggerPlot:
 
 
 class MarkerPlot:
+    """Plot for markers with one or two data series, depending on the result data."""
+
     @staticmethod
     def matches(*, result: QCCSChannelSimulationResult) -> bool:
         marker_data = result.marker
@@ -266,7 +340,31 @@ class MarkerPlot:
 
 
 class InputPlot:
-    def __init__(self, *, kernels, kernels_to_plot, experiment_is_spectroscopy):
+    """Plot for acquire channels.
+
+    This plot is different from the others in that it combines the data from the output
+    simulator with data from additional sources, namely the integration kernels
+    for acquire signals associated with the underlying experiment.
+
+    This type of plot is only generated for input channels and only if the underlying
+    experiment is not a spectroscopy experiment.
+
+    Args:
+        kernels: A mapping from experiment signals to their associated
+                 integration kernels.
+        kernels_to_plot: A selection mechanism for which kernels to plot
+                         (see ``prepare_signal_plots``).
+        experiment_is_spectroscopy: A boolean indicating whether the underlying
+                                    experiment is a spectroscopy experiment.
+    """
+
+    def __init__(
+        self,
+        *,
+        kernels: Mapping[str, Sequence[np.ndarray]],
+        kernels_to_plot: Literal["all"] | Sequence[int],
+        experiment_is_spectroscopy: bool,
+    ):
         self._kernels = kernels
         self._kernels_to_plot = kernels_to_plot
         self._experiment_is_spectroscopy = experiment_is_spectroscopy
@@ -288,10 +386,21 @@ class InputPlot:
 
         series = []
 
-        if self._kernels_to_plot == "all":
-            self._kernels_to_plot = np.arange(len(samples)) + 1
+        kernels_to_plot = self._kernels_to_plot
+        if kernels_to_plot == "all":
+            kernels_to_plot = np.arange(len(samples)) + 1
 
-        for k in self._kernels_to_plot:
+        if invalid_kernels := {k for k in kernels_to_plot if k > len(samples)}:
+            valid_kernels = range(1, len(samples) + 1)
+
+            raise LabOneQException(
+                "Invalid integration kernels requested for plotting channel "
+                f"{channel.uid}: {', '.join(str(x) for x in invalid_kernels)}. "
+                f"Valid choices: {', '.join(str(x) for x in valid_kernels)}. "
+                'Use "all" to plot all kernels for all selected signals.'
+            )
+
+        for k in kernels_to_plot:
             kernel = samples[k - 1]
 
             waveform = np.zeros_like(result.time, dtype=np.complex128)
@@ -379,6 +488,15 @@ def _integration_weights_by_signal(
 
 
 def deduplicate(*, plots: Sequence[Plot]) -> list[Plot]:
+    """Deduplicate plots.
+
+    Since the simulation of channels leads to duplicated plots in some cases
+    (for example multiplexed signals), some of these duplications are resolved.
+
+    !!! note
+        This implementation is likely to change in the future, deduplicating more
+        kinds of plots.
+    """
     deduplicated_plots = []
 
     for plot in plots:

@@ -15,18 +15,9 @@ from laboneq.core.types.enums.io_direction import IODirection
 from laboneq.core.types.enums.io_signal_type import IOSignalType
 from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
 from laboneq.dsl.coprocessor.inventory import CoprocessorInventoryEntry
+from laboneq.dsl.device import instrument_registry
 from laboneq.dsl.device.connection import Connection
-from laboneq.dsl.device.instruments.hdawg import HDAWG
-from laboneq.dsl.device.instruments.nonqc import NonQC
-from laboneq.dsl.device.instruments.pqsc import PQSC
-from laboneq.dsl.device.instruments.qhub import QHUB
-from laboneq.dsl.device.instruments.shfppc import SHFPPC
-from laboneq.dsl.device.instruments.shfqa import SHFQA
-from laboneq.dsl.device.instruments.shfqc import SHFQC
-from laboneq.dsl.device.instruments.shfsg import SHFSG
-from laboneq.dsl.device.instruments.uhfqa import UHFQA
 from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
-from laboneq.dsl.device.instruments.zqcs import ZQCS
 from laboneq.dsl.device.io_units.logical_signal import LogicalSignal
 from laboneq.dsl.device.io_units.physical_channel import PhysicalChannel
 from laboneq.dsl.device.logical_signal_group import LogicalSignalGroup
@@ -101,24 +92,13 @@ class ZIStandardInstrumentModel:
     device_options: str | None
     reference_clock_source: ReferenceClockSourceModel | str | None
     _target_class: ClassVar[Type] = ZIStandardInstrument
-    _instrument_map: ClassVar[dict] = {
-        "HDAWG": HDAWG,
-        "UHFQA": UHFQA,
-        "SHFQC": SHFQC,
-        "SHFSG": SHFSG,
-        "SHFPPC": SHFPPC,
-        "SHFQA": SHFQA,
-        "PQSC": PQSC,
-        "QHUB": QHUB,
-        "NonQC": NonQC,
-        "ZQCS": ZQCS,
-    }
 
     @classmethod
     def _unstructure(cls, obj):
-        if type(obj).__name__ not in cls._instrument_map:
+        model_cls = instrument_registry.model_by_class_name(type(obj).__name__)
+        if model_cls is None or model_cls.cls is not type(obj):
             raise ValueError(
-                f"Unsupported instrument type: {type(obj).__name__} when unstructuring ZIStandardInstrumentModel"
+                f"Unsupported instrument type: {type(obj).__name__} when serializing ZIStandardInstrument"
             )
         out = {
             "uid": obj.uid,
@@ -138,11 +118,11 @@ class ZIStandardInstrumentModel:
 
     @classmethod
     def _structure(cls, obj, _):
-        if obj["_instrument_type"] not in cls._instrument_map:
+        model_cls = instrument_registry.model_by_class_name(obj["_instrument_type"])
+        if model_cls is None:
             raise ValueError(
-                f"Unsupported instrument type: {obj['_instrument_type']} when structuring InstrumentModel"
+                f"Unsupported instrument type: {obj['_instrument_type']} when deserializing ZIStandardInstrument"
             )
-        instrument = cls._instrument_map[obj["_instrument_type"]]
         if obj["reference_clock_source"] is None or isinstance(
             obj["reference_clock_source"], str
         ):
@@ -162,7 +142,7 @@ class ZIStandardInstrumentModel:
             device_options=obj["device_options"],
             reference_clock_source=ref_clk_source,
         )
-        return instrument(**kwargs)
+        return model_cls.cls(**kwargs)
 
 
 @attrs.define

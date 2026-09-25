@@ -600,7 +600,7 @@ impl SeqCGenOutputPy {
         py: Python,
         mut results: SeqCGenOutput,
         id_store: &NamedIdStore,
-        py_object_store: &PyObjectStore<ExternalParameterUid>,
+        external_parameters: &PyObjectStore<ExternalParameterUid>,
     ) -> PyResult<Self> {
         let result_handle_maps = results
             .awg_results
@@ -660,7 +660,8 @@ impl SeqCGenOutputPy {
             ppc_settings: convert_ppc_settings(py, results.ppc_settings, id_store),
             requires_long_readout: requires_long_readout.into(),
             waves: create_waves(py, results.waveforms, results.waveform_store).unwrap(),
-            pulse_map: pulse_map_to_py(py, results.pulse_map, id_store, py_object_store)?.unbind(),
+            pulse_map: pulse_map_to_py(py, results.pulse_map, id_store, external_parameters)?
+                .unbind(),
         };
         Ok(output)
     }
@@ -1031,7 +1032,7 @@ fn pulse_map_to_py<'py>(
     py: Python<'py>,
     pulse_map: PulseMap,
     id_store: &NamedIdStore,
-    py_object_store: &PyObjectStore<ExternalParameterUid>,
+    external_parameters: &PyObjectStore<ExternalParameterUid>,
 ) -> PyResult<Bound<'py, PyDict>> {
     let pulse_map_entry_cls = py
         .import(intern!(py, "laboneq.data.artifacts_qccs"))?
@@ -1109,13 +1110,13 @@ fn pulse_map_to_py<'py>(
                         py,
                         &instance.parameters,
                         id_store,
-                        py_object_store,
+                        external_parameters,
                     )?;
                     let pulse_pulse_parameters = pulse_parameters_to_py_dict(
                         py,
                         &instance.pulse_parameters,
                         id_store,
-                        py_object_store,
+                        external_parameters,
                     )?;
 
                     kwargs.set_item(intern!(py, "play_pulse_parameters"), play_pulse_parameters)?;
