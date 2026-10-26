@@ -69,9 +69,11 @@ class DeviceSetup:
     !!! version-changed "Changed in version 2.54.0"
 
         The following deprecated methods for saving and loading were removed:
-            - `save`
-            - `load`
-            - `dumps`
+
+        - `save`
+        - `load`
+        - `dumps`
+
         Use the `load` and `save` methods from the `laboneq.serializers` module instead.
     """
 
@@ -87,7 +89,7 @@ class DeviceSetup:
     )
 
     #: Base URL of the LabOne Q controller service this setup dispatches to,
-    #: carried over from an instrument topology that service served.
+    #: carried over from an instrument topology served by that service.
     controller_service_url: str | None = attrs.field(default=None, init=False)
 
     #: Mediators responsible for coupling calibration of physical channel and its mapped logical signals
@@ -148,6 +150,7 @@ class DeviceSetup:
 
         Raises:
             LabOneQException:
+
                 - If an instrument with the same UID already exists.
                 - The instrument needs a dataserver and none is defined in the setup.
                 - Instrument is missing `uid` or `address`.
@@ -189,6 +192,7 @@ class DeviceSetup:
 
         Args:
             uid (str): UID of the instrument.
+
         Returns:
             Instrument with the given UID, or `None` if no such instrument was found.
         """
@@ -199,8 +203,10 @@ class DeviceSetup:
 
         Args:
             uid: UID of the signal.
+
         Returns:
             Logical signal with the UID.
+
         Raises:
             KeyError: Logical signal UID was not found.
         """

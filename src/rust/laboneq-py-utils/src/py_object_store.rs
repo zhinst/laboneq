@@ -52,7 +52,7 @@ struct StoredPyObject {
 /// Callers submit a serialized payload and get back a UID.
 /// The store deserializes the payload into a Python object only once, and returns the same UID for
 /// repeated submissions of the same payload. A UID resolves back to either the original payload
-/// ([`resolve`]) or the Python object ([`resolve_to_python`]) -- keeping the payload lets a
+/// ([`resolve`]) or the Python object ([`resolve_to_python`]). Keeping the payload lets a
 /// consumer re-emit the value in exactly the form it arrived in, without a Python round trip.
 ///
 /// UIDs are process-local -- never serialized, valid only within the run that
@@ -72,7 +72,7 @@ impl<K: Copy + Eq + Hash + From<u64>> PyObjectStore<K> {
         }
     }
 
-    /// Store the Python value `payload` denotes and return its UID.
+    /// Store the Python value denoted by `payload` and return its UID.
     ///
     /// The value is only reconstructed if the payload is not already stored, so a
     /// payload referenced from many places is deserialized once.
@@ -88,7 +88,7 @@ impl<K: Copy + Eq + Hash + From<u64>> PyObjectStore<K> {
         Ok(uid)
     }
 
-    /// Resolve the payload the value associated with the given UID was stored from.
+    /// Resolve the payload from which the value associated with the given UID was stored.
     pub fn resolve(&self, key: &K) -> Option<&OwnedPyObjectPayload> {
         self.values.get(key).map(|stored| &stored.payload)
     }

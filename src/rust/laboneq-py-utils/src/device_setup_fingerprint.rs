@@ -3,7 +3,7 @@
 
 //! This module provides a Python wrapper for the `device_setup_fingerprint` function, allowing it to be called from Python code.
 //!
-//! It defines a `TargetSetup` struct to extract the relevant information from the Python `TargetSetup` object, and a `TargetDeviceType` enum to represent the device types defined in the corresponding Python enum.
+//! It defines a `TargetSetup` struct to extract the relevant information from the Python `FingerprintSetup` object, and a `TargetDeviceType` enum to represent the members of the Python `DeviceType` enum.
 
 use std::collections::HashMap;
 
@@ -26,7 +26,7 @@ pub fn device_setup_fingerprint_py(device_setup: Bound<'_, PyAny>) -> PyResult<S
     Ok(device_setup_fingerprint(entries))
 }
 
-/// Helper struct to extract the relevant information from the Python `TargetSetup` object.
+/// Helper struct to extract the relevant information from the Python `FingerprintSetup` object.
 #[derive(FromPyObject)]
 struct TargetSetup<'py> {
     devices: Vec<TargetDevice<'py>>,
@@ -40,7 +40,7 @@ struct TargetDevice<'py> {
     is_qc: bool,
 }
 
-/// Enum representing the types defined in `TargetDeviceType` Python enum.
+/// Enum representing the members of the Python `DeviceType` enum.
 enum TargetDeviceType {
     Uhfqa,
     Hdawg,
@@ -105,7 +105,7 @@ fn to_instrument_entries(devices: Vec<TargetDevice>) -> PyResult<Vec<InstrumentE
             None => vec![],
         };
 
-        // SHFQC is a special case: TargetSetup splits SHFQC into SHFQA and SHFSG, yet it does not have SHFQA if the original SHFQC does not have any logical signals defined.
+        // SHFQC is a special case: the Python side splits an SHFQC into an SHFQA and an SHFSG, and leaves out the SHFQA if the setup gives the SHFQC no QA channels.
         if device.is_qc {
             match device.device_type {
                 TargetDeviceType::Shfsg => {

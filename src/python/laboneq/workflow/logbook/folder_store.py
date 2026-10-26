@@ -50,16 +50,11 @@ class SaveMode(Enum):
 
     The modes are:
 
-        - WARN:
-            The inputs and outputs are saved when possible. If
-            unsupported types which cannot be saved are encountered,
-            a warning message is logged.
-        - RAISE:
-            The input and outputs are always saved. If
-            unsupported types which cannot be saved are encountered,
-            an exception is raised.
-        - SKIP:
-            The task and workflow inputs and outputs are not saved.
+    - `WARN`: The inputs and outputs are saved when possible. If unsupported
+      types which cannot be saved are encountered, a warning message is logged.
+    - `RAISE`: The inputs and outputs are always saved. If unsupported types
+      which cannot be saved are encountered, an exception is raised.
+    - `SKIP`: The task and workflow inputs and outputs are not saved.
     """
 
     WARN = "WARN"
@@ -132,7 +127,7 @@ class FolderStore(LogbookStore):
             save_mode=self._save_mode,
         )
 
-    def save_mode(self, save_mode: str | SaveMode | None = None):
+    def save_mode(self, save_mode: str | SaveMode | None = None) -> SaveMode:
         """Set or retrieve the saving mode.
 
         Arguments:
@@ -140,7 +135,7 @@ class FolderStore(LogbookStore):
                 The new save mode to set or `None` to leave the
                 save mode unchanged.
 
-        Return:
+        Returns:
             The set or existing save mode.
         """
         if save_mode is not None:

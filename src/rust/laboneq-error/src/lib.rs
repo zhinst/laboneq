@@ -64,7 +64,7 @@ impl ContextualError {
 
     // Instead of this, we could implement From<T>, but we don't do it on purpose. We don't
     // want automatic conversion of everything that qualifies as error into plain ContextualError,
-    // but rather want it to be concious choice. See LabOneQError doc for more details.
+    // but rather want it to be conscious choice. See LabOneQError doc for more details.
     pub fn from_err<T>(err: T) -> Self
     where
         T: StdError + Send + Sync + 'static,
@@ -192,7 +192,7 @@ impl From<pyo3::PyErr> for LabOneQError {
 impl LabOneQError {
     // Instead of this, we could implement From<T>, but we don't do it on purpose. The automatic
     // conversion is implemented for specific variants only, and From<T> would interfere with that.
-    // If you need conversion to the generic variant, you have to do the concious choice of calling this method manually
+    // If you need conversion to the generic variant, you have to do the conscious choice of calling this method manually
     pub fn from_err<T>(err: T) -> Self
     where
         T: StdError + Send + Sync + 'static,
@@ -223,6 +223,21 @@ impl LabOneQError {
                 ),
             }
         })
+    }
+
+    #[cfg(feature = "pyo3")]
+    pub fn from_pyerr(py: pyo3::Python<'_>, err: pyo3::PyErr) -> Self {
+        use pyo3::types::PyAnyMethods;
+
+        if !err.is_instance_of::<ResourceLimitationError>(py) {
+            return err.into();
+        }
+        let usage = err
+            .value(py)
+            .getattr(pyo3::intern!(py, "usage"))
+            .ok()
+            .and_then(|v| v.extract().ok());
+        ResourceExhaustionError::new(err.to_string(), usage).into()
     }
 }
 
@@ -257,7 +272,7 @@ macro_rules! laboneq_error {
 #[macro_export]
 macro_rules! bail {
     ($($arg:tt)*) => {
-        return core::result::Result::Err($crate::error!($($arg)*).into());
+        return core::result::Result::Err($crate::error!($($arg)*).into())
     };
 }
 
@@ -265,7 +280,7 @@ macro_rules! bail {
 macro_rules! bail_resource_usage {
     // Internal helper - terminal case when we hit the usage
     (@collect_args [$fmt:literal $(, $($args:tt)*)?], usage=$usage:expr) => {
-        return core::result::Result::Err($crate::resource_usage::ResourceExhaustionError::new(format!($fmt $(, $($args)*)?), $usage).into());
+        return core::result::Result::Err($crate::resource_usage::ResourceExhaustionError::new(format!($fmt $(, $($args)*)?), $usage).into())
     };
 
     // Internal helper - collect one more token and recurse
@@ -275,7 +290,7 @@ macro_rules! bail_resource_usage {
 
     // Case 1: String literal and number (using semicolon separator)
     ($msg:literal, usage=$usage:expr) => {
-        return core::result::Result::Err($crate::resource_usage::ResourceExhaustionError::new($msg, $usage).into());
+        return core::result::Result::Err($crate::resource_usage::ResourceExhaustionError::new($msg, $usage).into())
     };
 
     // Case 2: Format specification with arguments and a usage

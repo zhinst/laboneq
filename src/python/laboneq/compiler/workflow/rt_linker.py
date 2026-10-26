@@ -11,7 +11,6 @@ from laboneq.compiler.workflow.compiler_output import (
 )
 
 if TYPE_CHECKING:
-    from laboneq.compiler import CompilerSettings
     from laboneq.compiler.common.iface_compiler_output import (
         RTCompilerOutputContainer,
     )
@@ -43,21 +42,11 @@ def merge_compiler_runs(
     )
 
 
-def repeat_previous(
+def repeat_run(
     this: CombinedRTCompilerOutputContainer,
-    previous: RTCompilerOutputContainer,
-    previous_step_indices: list[int],
+    run: RTCompilerOutputContainer,
+    step_indices: list[int],
 ):
-    get_compiler_hooks(this.backend).linker().repeat_previous(
-        this.combined_output, previous.codegen_output, previous_step_indices
-    )
-
-
-def finalize(
-    this: CombinedRTCompilerOutputContainer,
-    settings: CompilerSettings,
-    uses_chunking: bool,
-):
-    get_compiler_hooks(this.backend).linker().finalize(
-        this.combined_output, settings, uses_chunking
+    get_compiler_hooks(this.backend).linker().repeat_run(
+        this.combined_output, run.codegen_output, step_indices
     )

@@ -26,6 +26,7 @@ impl SpanBufferPy {
                 if let Ok(mut guard) = store.lock() {
                     let spans: Vec<String> = guard
                         .drain_spans()
+                        .map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err.to_string()))?
                         .map(|span_data| {
                             let span_json = span_to_json(&span_data).unwrap();
                             serde_json::to_string(&span_json).unwrap()

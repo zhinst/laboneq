@@ -22,7 +22,6 @@ class _ContextObjectCacheStorage(threading.local):
 
 _contexts_pulse = _ContextObjectCacheStorage()
 _contexts_section = _ContextObjectCacheStorage()
-_contexts_coprocessor = _ContextObjectCacheStorage()
 _contexts_stream = _ContextObjectCacheStorage()
 _contexts_variable = _ContextObjectCacheStorage()
 
@@ -32,7 +31,6 @@ def create_caches() -> Generator[ObjectCache, None, None]:
     with (
         PulseCache.create_object_cache(),
         SectionCache.create_object_cache(),
-        CoprocessorCache.create_object_cache(),
         StreamCache.create_object_cache(),
         VariableCache.create_object_cache(),
     ):
@@ -86,9 +84,9 @@ class ObjectCache(Generic[_T]):
         Arguments:
             key: The key to look up.
 
-        Return:
+        Returns:
             None if the object is not in the cache,
-            otherwise the stored pulse object.
+                otherwise the stored pulse object.
         """
 
         return self._storage.get(key)
@@ -101,7 +99,7 @@ class ObjectCache(Generic[_T]):
 
         Returns:
             None if the pulse is not present, otherwise
-            the key the pulse is stored under.
+                the key the pulse is stored under.
         """
 
         return self._id_map.get(id(obj))
@@ -184,13 +182,6 @@ class PulseCache(ObjectCache[Pulse]):
 class SectionCache(ObjectCache[Section]):
     _contexts: _ContextObjectCacheStorage = _contexts_section
     _key_prefix: str = "s"
-
-
-class CoprocessorCache(ObjectCache):
-    """Identity cache for HQCS `Coprocessor` cross-references."""
-
-    _contexts: _ContextObjectCacheStorage = _contexts_coprocessor
-    _key_prefix: str = "c"
 
 
 class StreamCache(ObjectCache):

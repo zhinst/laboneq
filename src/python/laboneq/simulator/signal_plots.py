@@ -50,11 +50,11 @@ def prepare_signal_plots(
 
     With ``simulation_start_time`` and ``max_simulation_duration`` it is possible to
     control which time slice of the experiment is simulated and plotted. Note that the
-    ``max_simulation_duration`` parameter is only a maximum, depending on the backend the
+    ``max_simulation_duration`` parameter is only a maximum. Depending on the backend, the
     resulting plots may show a shorter time frame.
 
-    Another parameter that exists mostly for compatibility with the interface that
-    ``plot_simulation`` provides is ``integration_kernels_to_plot``. It influences what is
+    ``integration_kernels_to_plot`` is another parameter that exists mostly for
+    compatibility with the interface of ``plot_simulation``. It influences what is
     plotted for "acquire-type" experiment signals. It is most commonly used with
     ``"all"``, which means that all integration kernels for all signals are plotted.
     Alternatively a list of integers may be supplied, for example ``[1, 2]`` will plot
@@ -77,8 +77,8 @@ def prepare_signal_plots(
 
     Returns:
         ``Plot`` objects resulting from the selected signals. One signal may
-        result in more than one plot, but multiple signals may also appear in a single
-        plot, this depends on the backend implementation.
+            result in more than one plot, but multiple signals may also appear in a
+            single plot, this depends on the backend implementation.
     """
     selected_experiment_signals = select_experiment_signals(
         compiled_experiment=compiled_experiment,
@@ -310,7 +310,7 @@ class SignalPlotsBackend(ABC, Generic[ChannelSimulationResultT]):
 
         Returns:
             Channel simulation results. Each backend must implement and support its own
-            subclass of ``ChannelSimulationResult``.
+                subclass of ``ChannelSimulationResult``.
         """
 
     @abstractmethod

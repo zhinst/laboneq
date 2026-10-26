@@ -13,25 +13,19 @@ from enum import Enum
 class AcquisitionType(Enum):
     """Acquisition type
 
-    The following acquisition types supported:
+    The following acquisition types are supported:
 
-        INTEGRATION:
-            Returns acquired signal after demodulation and integration, using weighting vectors (kernel) up to 4096 points.
-
-        SPECTROSCOPY_IQ:
-            Returns acquired signal after demodulation and integration, using oscillator frequency (not limited to 4096 points).
-
-        SPECTROSCOPY_PSD:
-            Power Spectral density (PSD) mode. PSD is calculated on the hardware.
-
-        SPECTROSCOPY:
-            Same as `SPECTROSCOPY_IQ`.
-
-        DISCRIMINATION:
-            Returns the list of qubit states determined from demodulated and integrated signal after thresholding.
-
-        RAW:
-            Returns raw data after ADC up to 4096 samples. Only a single raw acquire event within an averaging loop per experiment is allowed.
+    - `INTEGRATION`: Returns the acquired signal after demodulation and integration,
+      using weighting vectors (kernel) up to 4096 points.
+    - `SPECTROSCOPY_IQ`: Returns the acquired signal after demodulation and
+      integration, using the oscillator frequency (not limited to 4096 points).
+    - `SPECTROSCOPY_PSD`: Power spectral density (PSD) mode. The PSD is calculated
+      on the hardware.
+    - `SPECTROSCOPY`: Same as `SPECTROSCOPY_IQ`.
+    - `DISCRIMINATION`: Returns the list of qubit states determined from the
+      demodulated and integrated signal after thresholding.
+    - `RAW`: Returns raw data after the ADC, up to 4096 samples. Only a single raw
+      acquire event within an averaging loop per experiment is allowed.
 
     !!! version-changed "Changed in version 2.9"
         Added `SPECTROSCOPY_IQ` (same as `SPECTROSCOPY`)

@@ -30,13 +30,13 @@ class ErrorCode(str, Enum):
     CONTROLLER_ERROR = "CONTROLLER_ERROR"
     INVALID_EXPERIMENT_UUID = "INVALID_EXPERIMENT_UUID"
     INVALID_EXPERIMENT_PAYLOAD = "INVALID_EXPERIMENT_PAYLOAD"
-    NOT_CONFIGURED = "NOT_CONFIGURED"
     VERSION_MISMATCH = "VERSION_MISMATCH"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     UNAUTHORIZED = "UNAUTHORIZED"
     UNKNOWN_RESULT_HANDLE = "UNKNOWN_RESULT_HANDLE"
     INVALID_QUERY_PARAMETER = "INVALID_QUERY_PARAMETER"
     UNKNOWN_CALLBACK = "UNKNOWN_CALLBACK"
+    NOT_READY = "NOT_READY"
 
 
 # =============================================================================
@@ -58,9 +58,9 @@ class DeviceSetupResponse(BaseModel):
 class InstrumentTopologyResponse(BaseModel):
     """Response from GET /v1/instrumenttopology."""
 
-    instrument_topology: dict[str, Any] = Field(
+    instrument_topology: dict[str, Any] | None = Field(
         description=(
-            "Serialized InstrumentTopology object. "
+            "Serialized InstrumentTopology object, or null if none is configured. "
             "Deserialize with laboneq.serializers.from_dict()."
         )
     )

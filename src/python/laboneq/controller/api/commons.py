@@ -10,7 +10,10 @@ import httpx
 import pybase64
 
 from laboneq.controller.api.lazy_results import AcquiredResultStructure
-from laboneq.controller.utilities.exception import LabOneQControllerException
+from laboneq.controller.utilities.exception import (
+    HardwareNotReadyError,
+    LabOneQControllerException,
+)
 from laboneq.core.exceptions import LabOneQException
 from laboneq.serializers import from_dict, to_dict
 
@@ -169,16 +172,38 @@ def fetch_neartime_callback_results(
     return dict(results.neartime_callback_results or {})
 
 
+def readyz_not_ready_reason(resp: httpx.Response) -> str | None:
+    """Return the reason a `/readyz` response gives for not being ready, or None."""
+    if resp.status_code == httpx.codes.OK:
+        return None
+    try:
+        checks = resp.json()["checks"]
+        reasons = [
+            f"{name}: {state}" for name, state in checks.items() if state != "ok"
+        ]
+    except (ValueError, KeyError, TypeError, AttributeError):
+        reasons = []
+    return "; ".join(reasons) or f"{resp.status_code}: {resp.text}"
+
+
 def reraise_controller_exception(resp: httpx.Response) -> None:
-    """Reconstruct and raise LabOneQControllerException from a structured 500 body."""
+    """Raise the exception that a structured 5xx error body reports, if any.
+
+    Raises:
+        LabOneQControllerException: The body reports a controller error.
+        HardwareNotReadyError: The body reports hardware that cannot run
+            experiments now.
+    """
     try:
         error = resp.json().get("error", {})
-        if error.get("code") == "CONTROLLER_ERROR":
-            raise LabOneQControllerException(error.get("message", resp.text))
-    except LabOneQControllerException:
-        raise
+        message = error.get("message", resp.text)
+        code = error.get("code")
     except Exception:
-        pass
+        return
+    if code == "CONTROLLER_ERROR":
+        raise LabOneQControllerException(message)
+    if code == "NOT_READY":
+        raise HardwareNotReadyError(message)
 
 
 class SubmissionHandle:

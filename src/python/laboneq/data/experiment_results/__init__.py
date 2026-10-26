@@ -26,6 +26,7 @@ if TYPE_CHECKING:
         XarrayDataArray,
         XarrayDataset,
     )
+    from laboneq.dsl.result.logged_variable import LoggedVariable
 
 
 @classformatter
@@ -196,7 +197,7 @@ class AcquiredResults(UserDict[str, AcquiredResult]):
 
         Returns:
             The selected result, or `None` if no near-time step has completed
-            yet for the handle.
+                yet for the handle.
 
         Raises:
             KeyError: The handle is unknown.
@@ -288,5 +289,8 @@ class ExperimentResults:
 
     # Pipeline job timestamps, by device channel id, then job id
     pipeline_jobs_timestamps: dict[str, list[float]] = field(default_factory=dict)
+
+    #: Recorded history of logged variables.
+    variable_results: dict[str, LoggedVariable] = field(default_factory=dict)
 
     execution_payload_hash: str | None = None

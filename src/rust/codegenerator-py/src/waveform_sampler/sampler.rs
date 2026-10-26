@@ -36,8 +36,8 @@ use codegenerator::{Result, ir::Samples};
 use super::pulse_parameters::{PulseParametersPy, pulse_parameters_to_py};
 use super::signature::create_waveform_description;
 
-// This is used as a workaround for the SHFQA requiring that for sampled pulses, abs(s) < 1.0 must hold
-// to be able to play pulses with an amplitude of 1.0, we scale complex pulses by this factor
+// The SHFQA requires abs(s) < 1.0 for sampled pulses. As a workaround, to be able to play pulses
+// with an amplitude of 1.0, we scale complex pulses by this factor
 const SHFQA_COMPLEX_SAMPLE_SCALING: f64 = 1.0 - 1e-10;
 
 #[pyclass(name = "PlayHold")]

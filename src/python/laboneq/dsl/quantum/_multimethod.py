@@ -33,6 +33,7 @@ def _simplify_type_signature(types: tuple) -> tuple:
     """Replace non-QuantumElement types with object in the type signature.
 
     For union types, simplify each member of the union:
+
     - If all members are QuantumElement subclasses, preserve the union
     - If some members are QuantumElement subclasses and others are not,
       replace non-QuantumElement members with object
@@ -85,6 +86,7 @@ class MultiMethod(multimethod):
     The original `multimethod` package can be found [here](https://pypi.org/project/multimethod/).
 
     Changes include:
+
     - No auto-registering signatures during dispatch.
     - Caches resolved dispatches separately from the registered signatures.
     - `copy` method copies attributes, as well as methods.
@@ -92,6 +94,7 @@ class MultiMethod(multimethod):
     - Can only register type signatures of equal length.
 
     Methods overwritten (in order of appearance):
+
     - `__init__`
     - `register`
     - `copy`

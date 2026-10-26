@@ -68,9 +68,9 @@ class PulseFunctional(Pulse):
     The `pulse_parameters` supplied should be appropriate to the pulse `function` and
     may consist of:
 
-        - `int`, `float`, `complex`, `str`, `bytes`, `bool`, `None` or `laboneq.dsl.Parameter`
-        - lists of the above
-        - dictionaries of the above with `str` keys
+    - `int`, `float`, `complex`, `str`, `bytes`, `bool`, `None` or `laboneq.dsl.Parameter`
+    - lists of the above
+    - dictionaries of the above with `str` keys
 
     The lists and dictionaries may be nested and need not have homogeneous value types.
     A `laboneq.dsl.Parameter`, however, must be the pulse parameter value itself: nested
@@ -120,8 +120,8 @@ class PulseFunctional(Pulse):
 
         Returns:
             A numpy array of the functional pulse as provided by the functional definition,
-            evaluated over the interval given by the input x.
-            The parameters `length` and `amplitude` do not have an effect in the evaluation.
+                evaluated over the interval given by the input x. The parameters
+                `length` and `amplitude` do not have an effect in the evaluation.
         """
         if x is None:
             x = np.linspace(-1, 1, 201)
@@ -140,11 +140,11 @@ class PulseFunctional(Pulse):
                 Defaults to 2Gs/s.
 
         Returns:
-            A real-valued numpy array corresponding to the sampled time values.
-            A complex valued numpy array corresponding to the functional pulse evaluated
-            with the given pulse parameters, including `length` and `amplitude`. The
-            output corresponds to the functional pulse in the form it will be used to
-            create a pulse envelope in time.
+            time: A real-valued numpy array of the sampled time values.
+            samples: A complex-valued numpy array of the functional pulse
+                evaluated with the given pulse parameters, including `length` and
+                `amplitude`. The output corresponds to the functional pulse in the form
+                it will be used to create a pulse envelope in time.
         """
         if sampling_rate is None:
             sampling_rate = 2e9

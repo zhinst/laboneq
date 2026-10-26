@@ -24,8 +24,8 @@ class Block(abc.ABC):
 
     Classes inheriting from `Block` must define the following methods:
 
-        - `execute()`: A method that executes the block and it's children defined
-            in `Block.body`.
+    - `execute()`: A method that executes the block and its children defined
+      in `Block.body`.
 
     Arguments:
         parameters: Expected input parameters of the block.

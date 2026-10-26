@@ -4,6 +4,7 @@
 //! The Python module exposed by this crate.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use pyo3::prelude::*;
 use pyo3::wrap_pyfunction;
@@ -11,6 +12,7 @@ use pyo3::wrap_pyfunction;
 use laboneq_dsl::types::{NumericLiteral, ParameterUid};
 use laboneq_error::LabOneQError;
 
+use crate::error::CompilationError;
 use crate::py_experiment::ExperimentPy;
 use crate::py_pulse_sheet_schedule::PulseSheetSchedulePy;
 use crate::rt_compiler::{RealTimeCompilerInput, compile_realtime};
@@ -67,7 +69,8 @@ fn compile_realtime_py(
         compiler_settings: &experiment.compiler_settings,
     };
 
-    let result = compile_realtime(rt_input)?;
+    let result = compile_realtime(rt_input)
+        .map_err(|e| CompilationError::new(e, Arc::clone(&experiment.inner.id_store)))?;
 
     let result_py = RealTimeCompilerOutputPy {
         used_parameters: result

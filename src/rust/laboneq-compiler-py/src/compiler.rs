@@ -16,7 +16,7 @@ use crate::compiler_backend::{CombinedOutput, CompilerBackend};
 use crate::error::{CompilationError, ResolveErr};
 use crate::execution::{Execution, create_execution};
 use crate::preprocessor::{PreprocessedExperiment, preprocess_experiment};
-use crate::py_compile_pass::{CompilePass, CompilePassOutput};
+use crate::py_compile_pass::CompilePass;
 use crate::real_time_loop::real_time_loop_properties;
 
 /// Compile an experiment from Cap'n Proto bytes into serialized `CompiledExperiment` bytes.
@@ -96,11 +96,16 @@ fn compile_whole_or_with_chunks<B: CompilerBackend>(
         processed.inner,
         processed.signals,
         processed.backend_data,
-        compiler_settings,
+        compiler_settings.clone(),
         &execution,
     )?;
 
-    let (output, chunk_count) = run_chunked(&pass, chunking_mode)?;
+    let compile = |chunk_count| -> Result<_, LabOneQError> {
+        let mut output = pass.compile(chunk_count)?;
+        backend.finish_attempt(&mut output.combined_output, &compiler_settings, chunk_count)?;
+        Ok(output)
+    };
+    let (output, chunk_count) = run_chunked(chunking_mode, compile)?;
 
     // Resolve the raw acquisition lengths and result shapes from the combined output.
     let raw_acquisition_lengths = output
@@ -114,7 +119,7 @@ fn compile_whole_or_with_chunks<B: CompilerBackend>(
         max_step_execution_time: output.combined_output.max_execution_time_per_step()?,
     };
 
-    let backend_output = backend.finalize(output.combined_output, processed.hqcs_program)?;
+    let backend_output = backend.produce_output(output.combined_output, processed.hqcs_program)?;
 
     Ok(CompiledExperiment {
         device_setup_fingerprint: processed.device_setup_fingerprint,
@@ -145,16 +150,17 @@ fn compile_whole_or_with_chunks<B: CompilerBackend>(
 
 /// Run the compilation pass, retrying with more chunks while auto-chunking is
 /// still allowed to grow. Returns the output and the chunk count that produced it.
-fn run_chunked<B: CompilerBackend>(
-    pass: &CompilePass<B>,
+fn run_chunked<T>(
     chunking_mode: Option<ChunkingMode>,
-) -> Result<(CompilePassOutput<B::CombinedOutput>, Option<u32>), LabOneQError> {
+    compile: impl Fn(Option<u32>) -> Result<T, LabOneQError>,
+) -> Result<(T, Option<u32>), LabOneQError> {
+    let compile_once = |chunk_count| compile(chunk_count).map(|output| (output, chunk_count));
     let mut auto_chunking = match chunking_mode {
         None => {
-            return compile_once(pass, None).map_err(|e| with_hint(e, RESOURCE_LIMIT_MSG));
+            return compile_once(None).map_err(|e| with_hint(e, RESOURCE_LIMIT_MSG));
         }
         Some(ChunkingMode::Manual { chunk_count }) => {
-            return compile_once(pass, sanitize_chunk_count(chunk_count.get()))
+            return compile_once(sanitize_chunk_count(chunk_count.get()))
                 .map_err(|e| with_hint(e, RESOURCE_LIMIT_MSG));
         }
         Some(ChunkingMode::Auto(auto_chunking)) => auto_chunking,
@@ -163,7 +169,7 @@ fn run_chunked<B: CompilerBackend>(
     loop {
         let requested = auto_chunking.initial_chunk_count.get();
         laboneq_log::debug!("Attempting to compile with {} chunks", requested);
-        match compile_once(pass, sanitize_chunk_count(requested)) {
+        match compile_once(sanitize_chunk_count(requested)) {
             Ok(result) => {
                 laboneq_log::info!("Auto-chunked sweep divided into {} chunks", requested);
                 return Ok(result);
@@ -191,14 +197,6 @@ fn run_chunked<B: CompilerBackend>(
             Err(e) => return Err(e),
         }
     }
-}
-
-fn compile_once<B: CompilerBackend>(
-    pass: &CompilePass<B>,
-    chunk_count: Option<u32>,
-) -> Result<(CompilePassOutput<B::CombinedOutput>, Option<u32>), LabOneQError> {
-    pass.compile(chunk_count)
-        .map(|output| (output, chunk_count))
 }
 
 /// A chunk count of 1 is equivalent to not chunking at all.

@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from laboneq.dsl.calibration import MixerCalibration
     from laboneq.dsl.calibration.amplifier_pump import AmplifierPump
     from laboneq.dsl.calibration.oscillator import Oscillator
+    from laboneq.dsl.calibration.output_routing import OutputRoute
     from laboneq.dsl.calibration.precompensation import Precompensation
     from laboneq.dsl.device.io_units.logical_signal import (
         LogicalSignalRef,
@@ -373,7 +374,13 @@ class ExperimentSignal(Calibratable):
             self.calibration.amplifier_pump = value
 
     @property
-    def added_outputs(self):
+    def added_outputs(self) -> list[OutputRoute] | None:
+        """The outputs added to the port of the signal's physical channel
+        or `None` if none are added.
+
+        Only available on SHFSG and SHFQC instruments with the Output Router and
+        Adder (RTR) option.
+        """
         return self.calibration.added_outputs if self.is_calibrated() else None
 
     @added_outputs.setter

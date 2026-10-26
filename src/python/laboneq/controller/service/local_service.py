@@ -202,9 +202,9 @@ class LocalControllerService:
 
         A server that dies during startup takes the reason with it: uvicorn logs
         whatever the lifespan raised and exits with `Server.started` still
-        `False`. Left at that, emulated devices that failed to connect would be
-        indistinguishable from a service that is merely slow, and the caller
-        would see nothing but a startup timeout. `app` carries the lifespan's
+        `False`. Without further handling, emulated devices that failed to
+        connect would be indistinguishable from a service that is merely slow,
+        and the caller would see nothing but a startup timeout. `app` carries the lifespan's
         error, so the failure can be reported for what it is.
         """
         deadline = time.monotonic() + self._STARTUP_TIMEOUT_S

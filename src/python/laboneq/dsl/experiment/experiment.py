@@ -24,7 +24,6 @@ from .section import AcquireLoopRt, Case, Match, Section, Sweep
 if TYPE_CHECKING:
     from laboneq.core.types.enums.section_timing_mode import SectionTimingMode
     from laboneq.dsl.calibration.calibration import Calibration
-    from laboneq.dsl.coprocessor.coprocessor import Coprocessor
     from laboneq.dsl.coprocessor.inventory import CoprocessorInventoryEntry
     from laboneq.dsl.coprocessor.stream import _Stream
     from laboneq.dsl.device.io_units.logical_signal import LogicalSignalRef
@@ -54,6 +53,18 @@ def _convert_signals(
                 signals_dict[s.uid] = s
         return signals_dict
     return signals
+
+
+def _convert_coprocessors(coprocessors: list[str] | None) -> list[str]:
+    if coprocessors is None:
+        return []
+    labels = list(coprocessors)
+    if len(set(labels)) != len(labels):
+        duplicates = {label for label in labels if labels.count(label) > 1}
+        raise LabOneQException(
+            f"Coprocessor(s) declared more than once: {sorted(duplicates)}."
+        )
+    return labels
 
 
 @final
@@ -96,10 +107,11 @@ class Experiment:
     !!! version-changed "Changed in version 2.54.0"
 
         The following deprecated methods for saving and loading were removed:
-            - `load`
-            - `save`
-            - `load_signal_map`
-            - `save_signal_map`
+
+        - `load`
+        - `save`
+        - `load_signal_map`
+        - `save_signal_map`
 
         Use the `load` and `save` functions from the `laboneq.simple` module instead.
     """
@@ -113,7 +125,8 @@ class Experiment:
     epsilon: float = attrs.field(default=0.0)
     sections: list[Section] = attrs.field(factory=list)
 
-    coprocessors: dict[str, Coprocessor] = attrs.field(factory=dict)
+    coprocessors: list[str] = attrs.field(factory=list, converter=_convert_coprocessors)
+    coprocessor_payloads: dict[str, bytes] = attrs.field(factory=dict)
     coprocessor_mappings: dict[str, str | CoprocessorInventoryEntry] = attrs.field(
         factory=dict
     )
@@ -146,6 +159,34 @@ class Experiment:
         signal = ExperimentSignal(uid=uid, map_to=connect_to)
         self.signals[signal.uid] = signal
         return signal
+
+    def add_coprocessor(
+        self,
+        uid: str,
+        connect_to: str | CoprocessorInventoryEntry | None = None,
+    ) -> str:
+        """Add a coprocessor to the experiment.
+
+        Arguments:
+            uid:
+                The label of the new coprocessor.
+            connect_to:
+                The device setup's coprocessor this one shall be mapped to, or its
+                inventory key. Defaults to None, meaning that there is no mapping
+                defined yet.
+
+        Returns:
+            uid:
+                The label of the added coprocessor.
+
+        See also [map_coprocessor][laboneq.dsl.experiment.experiment.Experiment.map_coprocessor].
+        """
+        if uid in self.coprocessors:
+            raise LabOneQException(f"Coprocessor with id {uid} already exists.")
+        self.coprocessors.append(uid)
+        if connect_to is not None:
+            self.map_coprocessor(uid, connect_to)
+        return uid
 
     def add(self, section: Section):
         """Add a sweep, a section or an acquire loop to the experiment.
@@ -214,17 +255,25 @@ class Experiment:
 
     def map_coprocessor(
         self,
-        experiment_coprocessor: str | Coprocessor,
+        experiment_coprocessor: str,
         setup_coprocessor: str | CoprocessorInventoryEntry,
     ) -> None:
-        """Map a coprocessor handle to an inventory entry (or instance).
+        """Map a declared coprocessor to an inventory entry (or its key).
 
         May be called multiple times; last call wins.
-        """
-        from laboneq.dsl.coprocessor.coprocessor import Coprocessor
 
-        if isinstance(experiment_coprocessor, Coprocessor):
-            experiment_coprocessor = experiment_coprocessor.label
+        Arguments:
+            experiment_coprocessor:
+                The label of a coprocessor declared on this experiment.
+            setup_coprocessor:
+                The device setup's inventory entry, or its key.
+        """
+        if experiment_coprocessor not in self.coprocessors:
+            raise LabOneQException(
+                f"map_coprocessor(...): {experiment_coprocessor!r} is not a "
+                f"coprocessor of this experiment. "
+                f"Available: {sorted(self.coprocessors)}."
+            )
         self.coprocessor_mappings[experiment_coprocessor] = setup_coprocessor
 
     def reset_signal_map(self, signal_map: dict[str, LogicalSignalRef] | None = None):
@@ -455,15 +504,17 @@ class Experiment:
                 Defaults to `None`, meaning no change is made and the phase remains continuous.
             pulse_parameters (dict):
                 Dictionary with user pulse function parameters (re)binding.
+            precompensation_clear (bool):
+                Clear the precompensation filter during the pulse.
             marker (dict):
                 Dictionary with markers to play. Example: `marker={"marker1": {"enable": True}}`
 
         !!! note
             The ``pulse_parameters`` values may consist of:
 
-                - `int`, `float`, `complex`, `str`, `bytes`, `bool`, `None` or `laboneq.dsl.Parameter`
-                - lists of the above
-                - dictionaries of the above with `str` keys
+            - `int`, `float`, `complex`, `str`, `bytes`, `bool`, `None` or `laboneq.dsl.Parameter`
+            - lists of the above
+            - dictionaries of the above with `str` keys
 
             The lists and dictionaries may be nested and need not have homogeneous value types.
             A `laboneq.dsl.Parameter`, however, must be the pulse parameter value itself: nested
@@ -661,9 +712,9 @@ class Experiment:
         !!! note
             The argument values may consist of:
 
-                - `int`, `float`, `complex`, `str`, `bytes`, `bool`, `None` or `laboneq.dsl.Parameter`
-                - lists of the above
-                - dictionaries of the above with `str` keys
+            - `int`, `float`, `complex`, `str`, `bytes`, `bool`, `None` or `laboneq.dsl.Parameter`
+            - lists of the above
+            - dictionaries of the above with `str` keys
 
             The lists and dictionaries may be nested and need not have homogeneous value types.
             A `laboneq.dsl.Parameter`, however, must be the argument value itself: nested inside
@@ -695,8 +746,8 @@ class Experiment:
         Sections need to open a scope in the following way:
 
         ``` py
-            with exp.sweep(...):
-                # here come the operations that shall be executed in the sweep section
+        with exp.sweep(...):
+            # here come the operations that shall be executed in the sweep section
         ```
 
         !!! note
@@ -815,8 +866,8 @@ class Experiment:
         Sections need to open a scope in the following way:
 
         ``` py
-            with exp.acquire_loop_rt(...):
-                # here come the operations that shall be executed in the acquire_loop_rt section
+        with exp.acquire_loop_rt(...):
+            # here come the operations that shall be executed in the acquire_loop_rt section
         ```
 
         Arguments:
@@ -925,8 +976,8 @@ class Experiment:
         Sections need to open a scope in the following way:
 
         ``` py
-            with exp.section(...):
-                # here come the operations that shall be executed in the section
+        with exp.section(...):
+            # here come the operations that shall be executed in the section
         ```
 
         !!! note
@@ -970,24 +1021,24 @@ class Experiment:
         Each value is another `dict` of the form:
 
         ``` py
-            {"state": value}
+        {"state": value}
         ```
 
         `value` is a bit field that enables the individual trigger signals (on the
         devices that feature more than a single one).
 
         ``` py
-            {"state": 1}  # raise trigger signal 1
-            {"state": 0b10}  # raise trigger signal 2 (on supported devices)
-            {"state": 0b11}  # raise both trigger signals
+        {"state": 1}  # raise trigger signal 1
+        {"state": 0b10}  # raise trigger signal 2 (on supported devices)
+        {"state": 0b11}  # raise both trigger signals
         ```
 
         As a more complete example, to fire a trigger pulse on the first port associated
         with signal `"drive_line"`, call:
 
         ``` py
-            with exp.section(..., trigger={"drive_line": {"state": 0b01}}):
-                ...
+        with exp.section(..., trigger={"drive_line": {"state": 0b01}}):
+            ...
         ```
 
         When trigger signals on the same signal are issued in nested sections, the values
@@ -1105,8 +1156,8 @@ class Experiment:
         Match needs to open a scope in the following way:
 
         ``` py
-            with exp.match_local(...):
-                # here come the different branches to be selected
+        with exp.match_local(...):
+            # here come the different branches to be selected
         ```
 
         !!! note
@@ -1142,8 +1193,8 @@ class Experiment:
         Match needs to open a scope in the following way:
 
         ``` py
-            with exp.match_global(...):
-                # here come the different branches to be selected
+        with exp.match_global(...):
+            # here come the different branches to be selected
         ```
 
         !!! note
@@ -1217,8 +1268,8 @@ class Experiment:
         Match needs to open a scope in the following way:
 
         ``` py
-            with exp.match(...):
-                # here come the different branches to be selected
+        with exp.match(...):
+            # here come the different branches to be selected
         ```
 
         !!! note
@@ -1264,8 +1315,8 @@ class Experiment:
         Case needs to open a scope in the following way:
 
         ``` py
-            with exp.case(...):
-                # here come the operations that shall be executed in the section
+        with exp.case(...):
+            # here come the operations that shall be executed in the section
         ```
 
         !!! note

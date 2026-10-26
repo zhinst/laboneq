@@ -5,126 +5,96 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from laboneq.qccs.setup import DeviceType
-from laboneq.qccs.setup_converter import (
-    convert_device_setup_to_setup,
-)
+from laboneq.core.exceptions import LabOneQException
+from laboneq.core.path import remove_logical_signal_prefix
+from laboneq.core.types.enums import IOSignalType
+from laboneq.dsl.device.instruments import NonQC
+from laboneq.dsl.device.instruments.zi_standard_instrument import ZIStandardInstrument
 
 if TYPE_CHECKING:
-    from laboneq.core.types.enums.io_direction import IODirection
-    from laboneq.core.types.enums.physical_channel_type import PhysicalChannelType
-    from laboneq.core.types.enums.reference_clock_source import ReferenceClockSource
+    from laboneq.dsl.device.connection import Connection
     from laboneq.dsl.device.device_setup import DeviceSetup
-    from laboneq.qccs.setup import Setup
 
 
-@dataclass
-class DeviceInfo:
-    uid: str
-    device_type: DeviceType
-    options: str = field(default_factory=str)
-    reference_clock_source: ReferenceClockSource | None = None
-
-
-@dataclass
-class PhysicalChannelInfo:
-    uid: str
-    device_uid: str
-    ports: list[str]
-
-    channel_direction: IODirection
-    channel_type: PhysicalChannelType
-
-
-@dataclass
-class InternalConnectionInfo:
-    from_instrument: str
-    from_port: str
-    to_instrument: str
-    to_port: str
+#: Connection types that wire one instrument to another.
+_INTERNAL_CONNECTION_TYPES = (IOSignalType.ZSYNC, IOSignalType.DIO, IOSignalType.PPC)
 
 
 def build(device_setup: DeviceSetup) -> SimpleNamespace:
-    """The QCCS setup description for `device_setup`."""
-    setup = convert_device_setup_to_setup(device_setup)
+    """Builds the QCCS setup description."""
+    instruments = [
+        instrument
+        for instrument in device_setup.instruments
+        if isinstance(instrument, ZIStandardInstrument)
+        and not isinstance(instrument, NonQC)
+    ]
+    signals = _signals(instruments)
     return SimpleNamespace(
-        instruments=[_to_instrument(device) for device in _build_devices(setup)],
-        signals=[
-            SimpleNamespace(
-                uid=physical_channel.uid,
-                ports=physical_channel.ports,
-                instrument_uid=physical_channel.device_uid,
-            )
-            for physical_channel in _build_physical_channels(setup)
-        ],
-        internal_connections=_build_internal_connections(setup),
+        instruments=[_instrument(i) for i in instruments],
+        signals=list(signals.values()),
+        internal_connections=_pump_connections(instruments, signals),
     )
 
 
-def _to_instrument(device: DeviceInfo) -> SimpleNamespace:
+def _instrument(instrument: ZIStandardInstrument) -> SimpleNamespace:
+    options = instrument.device_options
+    clock = instrument.reference_clock_source
     return SimpleNamespace(
-        uid=device.uid,
-        device_type=device.device_type.name,
-        options=device.options.upper().split("/") if device.options else [],
-        reference_clock_source=device.reference_clock_source.name
-        if device.reference_clock_source
-        else None,
+        uid=instrument.uid,
+        device_type=instrument.calc_driver(),
+        options=options.upper().split("/") if options else [],
+        reference_clock_source=clock.name if clock else None,
     )
 
 
-def _build_devices(setup: Setup) -> list[DeviceInfo]:
-    """The setup's managed instruments."""
-    devices = []
-    for instrument in setup.instruments:
-        if instrument.device_type == DeviceType.UNMANAGED:
-            continue
-        device = DeviceInfo(
-            uid=instrument.uid,
-            device_type=instrument.device_type,
-            options=instrument.device_options or "",
-            reference_clock_source=instrument.reference_clock.source,
-        )
-        devices.append(device)
-    return devices
-
-
-def _build_physical_channels(setup: Setup) -> list[PhysicalChannelInfo]:
-    """The physical channels of the setup's managed instruments, one per logical signal."""
-    signals = []
-    for instrument in setup.instruments:
-        if instrument.device_type == DeviceType.UNMANAGED:
-            continue
+def _signals(instruments: list[ZIStandardInstrument]) -> dict[str, SimpleNamespace]:
+    signals: dict[str, SimpleNamespace] = {}
+    for instrument in instruments:
         for conn in instrument.connections:
-            physical_channel = conn.physical_channel
-            logical_signal = conn.logical_signal
-            signals.append(
-                PhysicalChannelInfo(
-                    uid=logical_signal.path(),
-                    device_uid=instrument.uid,
-                    ports=[p.path for p in physical_channel.ports],
-                    channel_direction=physical_channel.direction,
-                    channel_type=physical_channel.type,
-                )
+            if conn.signal_type in _INTERNAL_CONNECTION_TYPES:
+                continue
+            uid = _signal_uid(conn)
+            signal = signals.setdefault(
+                uid, SimpleNamespace(uid=uid, ports=[], instrument_uid=instrument.uid)
             )
+            paths = _port_paths(cast("str", conn.local_port))
+            signal.ports.extend(path for path in paths if path not in signal.ports)
     return signals
 
 
-def _build_internal_connections(setup: Setup) -> list[InternalConnectionInfo]:
-    """The setup's SHFPPC internal connections."""
-    internal_connections = []
-    for conn in setup.setup_internal_connections:
-        if conn.from_instrument.device_type != DeviceType.SHFPPC:
-            continue
-        internal_connections.append(
-            InternalConnectionInfo(
-                from_instrument=conn.from_instrument.uid,
-                from_port=conn.from_port.path,
-                to_instrument=conn.to_instrument.uid,
-                to_port=conn.to_port.path,
+def _pump_connections(
+    instruments: list[ZIStandardInstrument], signals: dict[str, SimpleNamespace]
+) -> list[SimpleNamespace]:
+    connections: list[SimpleNamespace] = []
+    for instrument in instruments:
+        for conn in instrument.connections:
+            if conn.signal_type != IOSignalType.PPC:
+                continue
+            uid = _signal_uid(conn)
+            target = signals.get(uid)
+            if target is None:
+                raise LabOneQException(f"Logical signal '{uid}' not found.")
+            connections.extend(
+                SimpleNamespace(
+                    from_instrument=instrument.uid,
+                    from_port=conn.local_port,
+                    to_instrument=target.instrument_uid,
+                    to_port=port,
+                )
+                for port in target.ports
             )
-        )
-    return internal_connections
+    return connections
+
+
+def _signal_uid(conn: Connection) -> str:
+    return remove_logical_signal_prefix(cast("str", conn.remote_path))
+
+
+def _port_paths(port: str) -> list[str]:
+    # A UHFQA readout input spans both signal inputs.
+    if port.startswith("QAS/"):
+        return ["SIGINS/0", "SIGINS/1"]
+    return [port]

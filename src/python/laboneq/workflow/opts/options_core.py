@@ -85,11 +85,12 @@ def task_options(
 ) -> type:
     """Decorator to make a class a task options class.
 
-    cls:
-        The class to decorate
-    base_class:
-        The base class for the decorated class, default is `WorkflowOptions`.
-        Must be a subclass of `TaskOptions`.
+    Args:
+        cls:
+            The class to decorate
+        base_class:
+            The base class for the decorated class, default is `TaskOptions`.
+            Must be a subclass of `TaskOptions`.
     """
 
     @wraps(cls)

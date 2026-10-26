@@ -95,8 +95,8 @@ impl From<LabOneQError> for Error {
 ///
 /// The pipeline works in interned IDs, so an error leaving it still names them by
 /// number. Resolving the message eagerly would flatten [`LabOneQError`]'s variants and
-/// lose what they carry -- the resource usage that drives auto-chunking, the Python
-/// exception attached as `__cause__` -- so the store travels with the error and the
+/// lose what they carry: the resource usage that drives auto-chunking, and the Python
+/// exception attached as `__cause__`. So the store travels with the error, and the
 /// message is resolved once, when it becomes a Python exception.
 pub(crate) struct CompilationError {
     error: LabOneQError,

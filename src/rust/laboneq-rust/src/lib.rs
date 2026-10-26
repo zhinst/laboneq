@@ -49,5 +49,14 @@ fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
     modules.set_item("laboneq._rust.compiled_experiment", &compiled_experiment)?;
     m.add_submodule(&compiled_experiment)?;
 
+    // The feature is internal-only; the public tree parses OpenQASM in Python.
+    #[cfg(feature = "openqasm3")]
+    {
+        let openqasm3 = PyModule::new(py, "openqasm3")?;
+        openqasm3_py::register(&openqasm3, "laboneq._rust.openqasm3")?;
+        modules.set_item("laboneq._rust.openqasm3", &openqasm3)?;
+        m.add_submodule(&openqasm3)?;
+    }
+
     Ok(())
 }

@@ -201,7 +201,7 @@ pub enum IsLiveTarget {
 
 pub fn find_hqcs_declaration(hqcs: &HqcsDeclarations) -> Option<&'static str> {
     if !hqcs.coprocessors.is_empty() {
-        return Some("coprocessor handles");
+        return Some("coprocessors");
     }
     if !hqcs.streams.is_empty() {
         return Some("streams");
@@ -221,6 +221,7 @@ pub fn find_hqcs_construct(node: &ExperimentNode, id_store: &NamedIdStore) -> Op
     match &node.kind {
         Operation::Send(_) => return Some("send operation".to_owned()),
         Operation::MarkStale(_) => return Some("mark_stale operation".to_owned()),
+        Operation::Ensure(_) => return Some("ensure operation".to_owned()),
         Operation::DoUntil(do_until) => {
             let name = id_store.resolve(do_until.uid.0).unwrap_or("<unknown>");
             return Some(format!("do_until section '{name}'"));
@@ -238,7 +239,7 @@ pub fn find_hqcs_construct(node: &ExperimentNode, id_store: &NamedIdStore) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operation::{DoUntil, MarkStale, MarkStaleTarget, Match, Operation, Send};
+    use crate::operation::{DoUntil, Ensure, MarkStale, MarkStaleTarget, Match, Operation, Send};
     use crate::types::{SectionUid, StreamUid, VariableUid};
 
     fn store() -> NamedIdStore {
@@ -347,7 +348,7 @@ mod tests {
             label: "gpu".into(),
             payload: vec![],
         });
-        assert_eq!(find_hqcs_declaration(&hqcs), Some("coprocessor handles"));
+        assert_eq!(find_hqcs_declaration(&hqcs), Some("coprocessors"));
     }
 
     #[test]
@@ -369,6 +370,19 @@ mod tests {
         assert_eq!(
             find_hqcs_construct(&root, &id_store),
             Some("do_until section 'wait'".to_owned())
+        );
+    }
+
+    #[test]
+    fn finds_ensure() {
+        let mut root = ExperimentNode::new(Operation::Root);
+        root.children
+            .push(ExperimentNode::new(Operation::Ensure(Ensure {
+                condition: Predicate::IsLive(IsLiveTarget::Variable(VariableUid(0))),
+            })));
+        assert_eq!(
+            find_hqcs_construct(&root, &store()),
+            Some("ensure operation".to_owned())
         );
     }
 

@@ -255,11 +255,12 @@ class OrjsonSerializer:
 
         Current options set are:
 
-            * OPT_SORT_KEYS
-            * OPT_SERIALIZE_NUMPY
+        * OPT_SORT_KEYS
+        * OPT_SERIALIZE_NUMPY
 
         The method `self.default` is passed to `orjson.dump(..., default=...)`.
-            * `self.default`
+
+        * `self.default`
         """
         return orjson.dumps(
             obj,

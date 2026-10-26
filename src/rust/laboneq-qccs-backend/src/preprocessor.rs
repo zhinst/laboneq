@@ -129,7 +129,7 @@ impl QccsBackendPreprocessedData {
         &self.device_kinds
     }
 
-    /// The options the instrument the device belongs to was ordered with.
+    /// The options ordered with the instrument that the device belongs to.
     pub(crate) fn device_options(&self, device_uid: DeviceUid) -> Option<&DeviceOptions> {
         self.device_options.get(&device_uid)
     }
@@ -383,8 +383,8 @@ fn contains_option(
         .is_some_and(|options| options.contains(option))
 }
 
-/// Pair each device signal with the device and channel information the oscillator
-/// modulation resolution needs. `backend_signals` describes the same signals in the
+/// Pair each device signal with the device and channel information needed by the
+/// oscillator modulation resolution. `backend_signals` describes the same signals in the
 /// same order as `device_signals`.
 fn signal_oscillators<'a>(
     device_signals: &'a mut [DeviceSignal],

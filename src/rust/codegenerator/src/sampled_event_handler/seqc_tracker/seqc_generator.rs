@@ -506,8 +506,8 @@ impl SeqCGenerator {
                 violation_type: ViolationType::Minimum(self.device_traits.min_play_wave as Samples),
             });
         }
-        let add_statement = |_self: &mut SeqCGenerator, n: Samples| {
-            _self.statements.push(
+        let add_statement = |generator: &mut SeqCGenerator, n: Samples| {
+            generator.statements.push(
                 SeqCStatement::PlayZeroOrHold {
                     num_samples: n,
                     hold,
@@ -516,9 +516,9 @@ impl SeqCGenerator {
             );
         };
         let flush_deferred_calls =
-            |_self: &mut SeqCGenerator, deferred_calls: &mut Option<&mut SeqCGenerator>| {
+            |generator: &mut SeqCGenerator, deferred_calls: &mut Option<&mut SeqCGenerator>| {
                 if let Some(def_calls) = deferred_calls {
-                    _self.append_statements_from(def_calls);
+                    generator.append_statements_from(def_calls);
                     def_calls.clear();
                 }
             };

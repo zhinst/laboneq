@@ -325,7 +325,7 @@ mod tests {
     use super::peek_backend_name;
     use laboneq_capnp::compiled_experiment::v1::compiled_experiment_capnp::compiled_experiment;
 
-    /// A message carrying nothing but `metadata.createdBy` -- all `peek_backend_name` reads.
+    /// A message carrying nothing but `metadata.createdBy` -- the only field that `peek_backend_name` reads.
     fn message_created_by(created_by: &str) -> Vec<u8> {
         let mut message = capnp::message::Builder::new_default();
         message

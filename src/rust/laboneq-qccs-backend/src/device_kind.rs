@@ -31,7 +31,7 @@ impl DeviceKind {
         matches!(self, Self::Shfqa | Self::Shfsg)
     }
 
-    /// The rate a device of this model plays samples at. An HDAWG is clocked
+    /// The rate at which a device of this model plays samples. An HDAWG is clocked
     /// down when it shares the setup with an SHF device.
     pub(crate) fn sampling_rate(&self, setup_has_shf: bool) -> Frequency<Hertz> {
         match self {

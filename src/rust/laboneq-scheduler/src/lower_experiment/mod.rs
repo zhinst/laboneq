@@ -173,7 +173,10 @@ fn lower_to_ir_impl<T: SignalInfo + Sized>(
             panic!("Internal error: Near-time callbacks cannot exist in real-time.")
         }
         Operation::SetNode(_) => panic!("Internal error: Set node cannot exist in real-time."),
-        Operation::Send(_) | Operation::MarkStale(_) | Operation::DoUntil(_) => Err(Error::new(
+        Operation::Send(_)
+        | Operation::MarkStale(_)
+        | Operation::Ensure(_)
+        | Operation::DoUntil(_) => Err(Error::new(
             "Internal error: HQCS operations must be lowered or refused before scheduling.",
         )),
     }
@@ -219,7 +222,7 @@ fn lower_sweep<T: SignalInfo + Sized>(
         .loop_info()
         .ok_or_else(|| Error::new("Expected a loop"))?;
 
-    // If this is a paremeter sweep, derive the loop's iteration count from the length of the parameter(s),
+    // If this is a parameter sweep, derive the loop's iteration count from the length of the parameter(s),
     // instead of taking `Sweep.count`. This way we account for parameter slicing due to chunking.
     if let Some(param) = loop_info.parameters.first() {
         let len = ctx.sweep_parameter(param)?.len();

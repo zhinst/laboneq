@@ -3,14 +3,9 @@
 
 //! Python bindings for laboneq compiler.
 
-#[cfg(test)]
-mod test_py;
-
 pub mod capnp_artifacts;
 mod capnp_compiled_experiment;
 pub(crate) mod capnp_deserializer;
-mod capnp_py_types;
-pub(crate) mod capnp_serializer;
 pub mod capnp_setup_description;
 mod chunking_mode;
 mod compiled_experiment;
@@ -24,7 +19,6 @@ mod experiment_validation;
 mod preprocessor;
 mod py_api;
 mod py_compile_pass;
-mod py_conversion;
 mod py_execution;
 mod py_experiment;
 mod py_helpers;
@@ -36,5 +30,5 @@ mod rt_compiler;
 mod setup_processor;
 mod signal_view;
 
-pub use py_api::{compile_experiment, serialize_experiment};
+pub use py_api::compile_experiment;
 pub use py_module::create_py_module;

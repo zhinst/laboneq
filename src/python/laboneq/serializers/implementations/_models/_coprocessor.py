@@ -10,7 +10,6 @@ from typing import ClassVar, Type, Union
 import attrs
 import pybase64
 
-from laboneq.dsl.coprocessor.coprocessor import Coprocessor
 from laboneq.dsl.coprocessor.stream import (
     InboundStream,
     OutboundStream,
@@ -44,7 +43,6 @@ from laboneq.dsl.variable.types import (
     _VarType,
 )
 from laboneq.serializers._cache import (
-    CoprocessorCache,
     StreamCache,
     VariableCache,
 )
@@ -142,34 +140,22 @@ def _structure_initial(value):
 
 
 # ---------------------------------------------------------------------------
-# Coprocessor.payload encoding (str | bytes | None, kept unambiguous)
+# Coprocessor payloads (opaque bytes, keyed by coprocessor label)
 # ---------------------------------------------------------------------------
 
 
-def _unstructure_payload(payload):
-    if payload is None:
-        return {"kind": "none"}
-    if isinstance(payload, str):
-        return {"kind": "str", "value": payload}
-    if isinstance(payload, bytes):
-        return {
-            "kind": "bytes",
-            "value": pybase64.b64encode(payload).decode("ascii"),
-        }
-    raise TypeError(
-        f"Coprocessor.payload must be str, bytes, or None; got {type(payload).__name__!r}"
-    )
+def unstructure_payloads(payloads: dict[str, bytes]) -> dict[str, str]:
+    return {
+        label: pybase64.b64encode(payload).decode("ascii")
+        for label, payload in payloads.items()
+    }
 
 
-def _structure_payload(d):
-    kind = d["kind"]
-    if kind == "none":
-        return None
-    if kind == "str":
-        return d["value"]
-    if kind == "bytes":
-        return pybase64.b64decode(d["value"].encode("ascii"))
-    raise ValueError(f"Unknown Coprocessor payload kind {kind!r}")
+def structure_payloads(payloads: dict[str, str]) -> dict[str, bytes]:
+    return {
+        label: pybase64.b64decode(payload.encode("ascii"))
+        for label, payload in payloads.items()
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -222,30 +208,6 @@ class VariableModel:
         )
         var.log_handle = obj.get("log_handle")
         return var
-
-
-# ---------------------------------------------------------------------------
-# Coprocessor (cached)
-# ---------------------------------------------------------------------------
-
-
-@CoprocessorCache.cache
-@attrs.define
-class CoprocessorModel:
-    _target_class: ClassVar[Type] = Coprocessor
-
-    @classmethod
-    def _unstructure(cls, obj):
-        return {"label": obj.label, "payload": _unstructure_payload(obj.payload)}
-
-    @classmethod
-    def _structure(cls, obj, _):
-        # Bypass Coprocessor.__init__ — it requires an active experiment context
-        # and self-registers. Deserialization restores a detached handle.
-        cp = object.__new__(Coprocessor)
-        cp.label = obj["label"]
-        cp._payload = _structure_payload(obj["payload"])
-        return cp
 
 
 # ---------------------------------------------------------------------------
@@ -395,12 +357,8 @@ def _unstructure_stream(obj):
     return {
         "uid": obj.uid,
         "schema": conv.unstructure(obj.schema, StructModel),
-        "src": conv.unstructure(obj.src, CoprocessorModel)
-        if obj.src is not None
-        else None,
-        "dst": conv.unstructure(obj.dst, CoprocessorModel)
-        if obj.dst is not None
-        else None,
+        "src": obj.src,
+        "dst": obj.dst,
         "link": obj.link,
         "fields": {
             n: conv.unstructure(a, FieldAccessorModelUnion)
@@ -417,16 +375,8 @@ def _structure_stream(obj, target_class):
     stream = object.__new__(target_class)
     stream.uid = obj.get("uid")
     stream.schema = conv.structure(obj["schema"], StructModel)
-    stream.src = (
-        conv.structure(obj["src"], CoprocessorModel)
-        if obj.get("src") is not None
-        else None
-    )
-    stream.dst = (
-        conv.structure(obj["dst"], CoprocessorModel)
-        if obj.get("dst") is not None
-        else None
-    )
+    stream.src = obj.get("src")
+    stream.dst = obj.get("dst")
     stream.link = obj.get("link")
     stream.fields = {
         n: conv.structure(fd, FieldAccessorModelUnion)

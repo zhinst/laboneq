@@ -41,16 +41,6 @@ from laboneq.serializers.implementations._models._calibration import (
 from ._common import collect_models, make_laboneq_converter, register_models
 from ._compiled_experiment import register_compiler_artifact_plugin
 
-_ORJSON_OPTIONS = orjson.OPT_SERIALIZE_NUMPY
-
-
-def artifacts_codegen_to_json_bytes(artifacts: ArtifactsCodegen) -> bytes:
-    return orjson.dumps(serialize_artifacts_qccs(artifacts), option=_ORJSON_OPTIONS)
-
-
-def artifacts_codegen_from_json_bytes(data: bytes) -> ArtifactsCodegen:
-    return deserialize_artifacts_qccs(orjson.loads(data))
-
 
 class AWGSignalTypeModel(Enum):
     IQ = "iq"

@@ -118,6 +118,11 @@ pub trait CompilerBackend: Clone + Send + Sync + 'static {
         Ok(Self::EmulatedHqcsProgram::default())
     }
 
+    /// Lower HQCS operations retained for result-shape extraction.
+    fn lower_hqcs_for_scheduler(&self, _root: &mut ExperimentNode) -> CompilerBackendResult<()> {
+        Ok(())
+    }
+
     /// The sequence the PRNG draws for a given seed and range.
     ///
     /// One PRNG setup can hold several nested loops that draw from the same
@@ -179,9 +184,29 @@ pub trait CompilerBackend: Clone + Send + Sync + 'static {
         obj: &Bound<'_, PyAny>,
     ) -> CompilerBackendResult<Self::CombinedOutput>;
 
-    /// Finalize the compilation output from the linked [`CombinedOutput`], producing
-    /// the final [`CompilerArtifact`].
-    fn finalize(
+    /// Finishes one compilation attempt on the linked [`CombinedOutput`].
+    ///
+    /// The compiler makes one attempt per chunk count it tries, so this method may run
+    /// several times, each on a freshly linked output. Returning
+    /// [`LabOneQError::ResourceExhaustion`] rejects the attempt, and automatic
+    /// chunking retries with more chunks. `chunk_count` is the number of chunks the
+    /// sweep is split into, or `None` when the sweep is not chunked. It is never `Some(1)`.
+    /// Does nothing by default.
+    ///
+    /// [`LabOneQError::ResourceExhaustion`]: laboneq_error::LabOneQError::ResourceExhaustion
+    fn finish_attempt(
+        &self,
+        _combined: &mut Self::CombinedOutput,
+        _compiler_settings: &CompilerSettings,
+        _chunk_count: Option<u32>,
+    ) -> CompilerBackendResult<()> {
+        Ok(())
+    }
+
+    /// Produces the [`CompilerArtifact`] from the [`CombinedOutput`] of the accepted
+    /// attempt. Runs exactly once, after [`finish_attempt`](Self::finish_attempt)
+    /// succeeded on that output.
+    fn produce_output(
         &self,
         combined: Self::CombinedOutput,
         hqcs_program: Self::EmulatedHqcsProgram,

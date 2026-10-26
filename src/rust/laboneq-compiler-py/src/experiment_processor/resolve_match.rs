@@ -96,8 +96,8 @@ struct MatchDevice {
 
 /// Whether the match can take feedback without leaving the physical device.
 ///
-/// It can when the acquiring device supports local feedback and every signal the
-/// match plays on sits on that same physical device.
+/// It can when the acquiring device supports local feedback and every signal played
+/// by the match sits on that same physical device.
 fn local_feedback_possible(feedback_signal: &SignalView, match_devices: &[MatchDevice]) -> bool {
     feedback_signal.device_traits().supports_local_feedback
         && match_devices.len() == 1

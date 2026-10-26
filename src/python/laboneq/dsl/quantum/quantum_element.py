@@ -4,10 +4,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Union
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, List
 
 import attrs
-from typing_extensions import deprecated
 
 from laboneq.core.path import remove_logical_signal_prefix
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
@@ -16,8 +15,6 @@ from laboneq.dsl.device.io_units import LogicalSignal
 from laboneq.dsl.experiment import ExperimentSignal
 
 if TYPE_CHECKING:
-    import os
-
     from laboneq.dsl.device import DeviceSetup, LogicalSignalGroup
 
 
@@ -33,9 +30,11 @@ class QuantumParameters:
         For reliable serialization, the objects in the `custom` dictionary and the
         attributes added by subclasses need to be supported by the LabOne Q serializer.
         Examples of supported types include:
+
         - Python types: list, dict, tuple, int, float, bool, str
         - NumPy types: np.integer, np.ndarray
         - `QuantumParameter` objects
+
         For more information on the currently supported objects for serialization,
         please see the [serializers documentation](https://docs.zhinst.com/labone_q_user_manual/core/functionality_and_concepts/09_serialization/tutorials/00_serialization.html).
     """
@@ -407,40 +406,3 @@ class QuantumElement:
             A new parameter instance.
         """
         return cls.PARAMETERS_TYPE(**parameters)
-
-    @classmethod
-    @deprecated(
-        "The .load method is deprecated. Use `q = laboneq.serializers.load(filename)` instead.",
-        category=FutureWarning,
-    )
-    def load(cls, filename: Union[str, bytes, os.PathLike]) -> "QuantumElement":
-        """
-        Loads a QuantumElement object from a JSON file.
-
-        Args:
-            filename: The name of the JSON file to load the QuantumElement object from.
-
-        !!! version-changed "Deprecated in version 2.43.0."
-            Use `q = laboneq.serializers.load(filename)` instead.
-        """
-        from laboneq import serializers
-
-        return serializers.load(filename)
-
-    @deprecated(
-        "The .save method is deprecated. Use `laboneq.serializers.save(q, filename)` instead.",
-        category=FutureWarning,
-    )
-    def save(self, filename: Union[str, bytes, os.PathLike]):
-        """
-        Save a QuantumElement object to a JSON file.
-
-        Args:
-            filename: The name of the JSON file to save the QuantumElement object.
-
-        !!! version-changed "Deprecated in version 2.43.0."
-            Use `laboneq.serializers.save(q, filename)` instead.
-        """
-        from laboneq import serializers
-
-        serializers.save(self, filename)

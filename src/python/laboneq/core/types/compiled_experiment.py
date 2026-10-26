@@ -50,12 +50,13 @@ class CompiledExperiment:
         The `scheduled_experiment` constructor argument was removed. Obtain a
         `CompiledExperiment` by compiling an experiment.
 
-    !!! version-changed "Removed in version 26.10.0"
+    !!! version-removed "Removed in version 26.10.0"
         The `.experiment_dict` attribute, deprecated since version 2.14.0,
         was removed. Use `.experiment` instead.
 
     !!! version-changed "Changed in version 2.54.0"
         The following deprecated methods for saving and loading were removed:
+
         - `load`
         - `save`
 
@@ -131,11 +132,11 @@ class CompiledExperiment:
         """Attach a payload to a coprocessor, post-compile.
 
         Takes precedence over the payload declared in the experiment body with
-        `Coprocessor.set_payload(...)`.
+        the DSL function of the same name.
 
         Args:
-            coprocessor_label: The coprocessor label, as declared in the
-                experiment body.
+            coprocessor_label: The coprocessor label, as declared with
+                `@experiment(coprocessors=[...])`.
             payload: Opaque to LabOne Q.
 
         Raises:

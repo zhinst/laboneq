@@ -22,7 +22,7 @@ class AutomationNode:
         depends_on: A set of automation node IDs on which the node depends.
         layer_key: The key of the parent layer.
         status: The status of the automation node.
-        error: Holds the message of the exception that occured during execution.
+        error: Holds the message of the exception that occurred during execution.
         max_fail_count: The maximum number of allowed failures.
         time_valid: The time for which the automation node is reliably valid.
         time_until_invalid: The time until the automation node is invalid.

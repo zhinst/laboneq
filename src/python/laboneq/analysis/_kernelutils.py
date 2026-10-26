@@ -71,7 +71,7 @@ def calculate_integration_kernels_thresholds(
     Raises:
         ValueError: If any element of `state_traces` contains NaN values.
 
-    !!! version-changed "Added in version 2.26.0"
+    !!! version-added "Added in version 2.26.0"
         Added extended functionality to additionally supply threshold information.
     """
     from zhinst.utils.shfqa.multistate import QuditSettings

@@ -10,9 +10,9 @@ and the wire strings have one place to change.
 
 The channel carries its own version, separate from the service protocol version
 in :mod:`laboneq.controller.constants` and from any LabOne Q release version.
-A participant that the controller does not ship, and therefore cannot update,
-is compatible by this version alone, admitted over the channel's own
-handshake header rather than a LabOne Q version check.
+The controller cannot update a participant that it does not ship. Such a
+participant is compatible by this version alone. It is admitted over the
+channel's own handshake header rather than a LabOne Q version check.
 """
 
 from __future__ import annotations
@@ -62,7 +62,7 @@ def json_failure(value: Any) -> str | None:
 
     Returns:
         None if the value can be serialized to JSON; otherwise, a string explaining
-        why *value* cannot be serialized to JSON."""
+            why *value* cannot be serialized to JSON."""
     try:
         json.dumps(value, default=json_default)
     except (TypeError, ValueError) as exc:

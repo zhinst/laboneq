@@ -320,14 +320,14 @@ where
                         e
                     ))
                 })?;
-            // We also add three latency cycles here, which then, in the code generator, will
-            // be subtracted again for the latency argument of executeTableEntry. The reason
-            // is that there is an additional latency of three cycles from the execution
-            // of the command in the sequencer until the arrival of the chosen waveform in
-            // the wave player queue. For now, we look at the time the pulse is played
-            // (arrival time of data in register + 3), which also simplifies phase
-            // calculation for software modulated signals, and take care of subtracting it
-            // later
+            // We also add three latency cycles here. The code generator subtracts them
+            // again for the latency argument of executeTableEntry. The reason is that
+            // there is an additional latency of three cycles from the execution of the
+            // command in the sequencer until the arrival of the chosen waveform in the
+            // wave player queue. For now, we look at the time the pulse is played
+            // (arrival time of data in register + 3) and take care of subtracting it
+            // later. Looking at the time the pulse is played also simplifies phase
+            // calculation for software modulated signals.
             let time_of_pulse_played = time_of_arrival_at_register + EXECUTETABLEENTRY_LATENCY;
             let sequencer_rate = signal.sampling_rate / signal.sample_multiple as f64;
             let sg_seq_dt_for_latency = 1.0 / (2.0 * sequencer_rate);
@@ -519,12 +519,12 @@ mod tests {
     impl FeedbackModel for MockFeedbackModel {
         fn get_latency(
             &self,
-            _acquisition_end_samples: Samples,
+            acquisition_end_samples: Samples,
             _qa_device: &FeedbackDevice,
             _sg_device: &FeedbackDevice,
             _local_feedback: bool,
         ) -> Result<Samples, Error> {
-            Ok((_acquisition_end_samples / 8) as Samples)
+            Ok((acquisition_end_samples / 8) as Samples)
         }
     }
 

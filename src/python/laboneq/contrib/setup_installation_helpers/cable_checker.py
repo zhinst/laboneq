@@ -333,7 +333,7 @@ def check_cable_experiment(
 
     Returns:
         Tuple[Experiment, DeviceSetup]: The experiment and the device setup to
-        be used with a Session object.
+            be used with a Session object.
 
     Usage:
 

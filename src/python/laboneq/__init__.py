@@ -51,9 +51,9 @@ def _check_for_superseded_backends(backend_eps: Iterable[EntryPoint]) -> None:
 
     A renamed backend package keeps its predecessor's entry point registered
     until the obsolete distribution is uninstalled, so both claim the same
-    backend name. Whichever loads second either registers over the first or
-    dies on a module the old install no longer ships, decided by nothing more
-    than entry point ordering.
+    backend name. Entry point ordering alone decides which one loads second.
+    That one either registers over the first or dies on a module that the old
+    install no longer ships.
 
     Reporting the clash rather than picking a winner is deliberate. A wrong
     pick compiles experiments against a stale backend, which is worse than

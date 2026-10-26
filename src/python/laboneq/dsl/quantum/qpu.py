@@ -22,8 +22,6 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING, Any, Sequence
 
-from typing_extensions import deprecated
-
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.quantum.qpu_topology import QPUTopology
 from laboneq.dsl.quantum.quantum_element import QuantumElement
@@ -124,20 +122,6 @@ class QPU:
     In short, a `QPU` defines the device physics and a `DeviceSetup` defines the control
     hardware being used.
 
-    !!! version-changed "Deprecated in version 2.52.0."
-        The argument `qubits` was deprecated and replaced with the argument `quantum_elements`.
-
-    !!! version-added "Added in version 2.60.0"
-        The `quantum_operations` argument may now also be of type
-        `list[type[QuantumOperations]]`. In this case, the list of `QuantumOperations`
-        classes is automatically combined into a single class. If the
-        `QuantumOperations` classes have methods with the same name, these are
-        dispatched based on their simplified type signatures.
-
-    !!! version-changed "Deprecated in version 24.4.0"
-        The `measure_section_length` method is moved to the implementations
-        of `QuantumOperations` for qubit types where this is property meaningful.
-
     Arguments:
         quantum_elements: The quantum elements to run the experiments on. By passing a
             dictionary, quantum elements may be organized into groups, which are
@@ -147,6 +131,10 @@ class QPU:
             single quantum operations class.
 
     Attributes:
+        quantum_elements: The quantum elements on the QPU, including those of all
+            groups.
+        quantum_operations: The quantum operations of the QPU. Several quantum
+            operations classes passed on creation are combined into one instance.
         groups: The groups of quantum elements on the QPU.
         topology: The topology information for the QPU.
 
@@ -474,34 +462,6 @@ class QPU:
                 self[key].update(**params_dict)
             elif isinstance(key, tuple):
                 self.topology.update_edge(*key, **params_dict)
-
-    @staticmethod
-    @deprecated(
-        "`QPU.measure_section_length` is deprecated and will be removed in "
-        "LabOne Q 26.7.0. The functionality has been moved to implementations of "
-        "`QuantumOperations` for qubit types where this property is meaningful.",
-        category=FutureWarning,
-    )
-    def measure_section_length(quantum_elements: QuantumElements) -> float:
-        """Calculates the length of the measure section for multiplexed readout.
-
-        In order to allow the quantum elements to have different readout and/or integration
-        lengths, the measure section length needs to be fixed to the longest one
-        across the quantum elements used in the experiment.
-
-        Args:
-            quantum_elements:
-                The quantum elements that are being measured.
-
-        Returns:
-            The length of the multiplexed-readout measure section.
-        """
-        # TODO: Only works on the TunableTransmonQubit from laboneq_applications
-        #       currently.
-        return max(
-            [q.readout_integration_parameters()[1]["length"] for q in quantum_elements]
-            + [q.readout_parameters()[1]["length"] for q in quantum_elements]
-        )
 
 
 @classformatter

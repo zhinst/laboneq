@@ -9,6 +9,6 @@ mod experiment;
 pub mod pulse_sheet_schedule;
 pub mod signal;
 
-pub use experiment::ExperimentIr;
+pub use experiment::{ExperimentIr, ParameterLookup};
 // Re-export for convenience
 pub use laboneq_units::tinysample::TinySamples;

@@ -6,7 +6,6 @@ from __future__ import annotations
 from copy import copy
 from functools import wraps
 
-from laboneq.core.exceptions import LabOneQException
 from laboneq.dsl.experiment import Experiment
 from laboneq.dsl.experiment.context import (
     Context,
@@ -25,14 +24,6 @@ class ExperimentContext(Context):
 
     def add(self, section):
         self.experiment.sections.append(section)
-
-    def register_coprocessor(self, coprocessor) -> None:
-        """Register a Coprocessor handle on the current experiment."""
-        if coprocessor.label in self.experiment.coprocessors:
-            raise LabOneQException(
-                f"Coprocessor '{coprocessor.label}' defined multiple times"
-            )
-        self.experiment.coprocessors[coprocessor.label] = coprocessor
 
     def register_stream(self, stream) -> None:
         """Register an HQCS stream on the current experiment."""
@@ -55,7 +46,7 @@ class ExperimentContext(Context):
 
 
 class ExperimentContextManager:
-    def __init__(self, *, uid=None, name=None, signals=None):
+    def __init__(self, *, uid=None, name=None, signals=None, coprocessors=None):
         self.kwargs = {}
         if uid is not None:
             self.kwargs["uid"] = uid
@@ -63,6 +54,8 @@ class ExperimentContextManager:
             self.kwargs["name"] = name
         if signals is not None:
             self.kwargs["signals"] = signals
+        if coprocessors is not None:
+            self.kwargs["coprocessors"] = coprocessors
 
     def replace(self, update_kwargs=None):
         ctx_manager = copy(self)

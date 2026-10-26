@@ -20,10 +20,23 @@ if TYPE_CHECKING:
     )
 
 
+def _migrate_user_defined(parameters: dict) -> None:
+    """Move the `user_defined` parameters from old serializations to `custom`.
+
+    `TransmonParameters.user_defined` was deprecated in version 2.58.0 in
+    favour of `QuantumParameters.custom` and has been removed in version
+    26.10.0. Entries of `user_defined` take precedence over entries of
+    `custom` with the same name.
+    """
+    user_defined = parameters.pop("user_defined", None)
+    if user_defined:
+        parameters.setdefault("custom", {}).update(user_defined)
+
+
 @serializer(types=[QuantumParameters], public=True)
 class QuantumParametersSerializer(VersionedClassSerializer[QuantumParameters]):
     SERIALIZER_ID = "laboneq.serializers.implementations.QuantumParametersSerializer"
-    VERSION = 2
+    VERSION = 3
 
     @classmethod
     def to_dict(
@@ -39,6 +52,14 @@ class QuantumParametersSerializer(VersionedClassSerializer[QuantumParameters]):
         }
 
     @classmethod
+    def from_dict_v3(
+        cls,
+        serialized_data: JsonSerializableType,
+        options: DeserializationOptions | None = None,
+    ) -> QuantumParameters:
+        return cls.from_dict_v2(serialized_data, options)
+
+    @classmethod
     def from_dict_v2(
         cls,
         serialized_data: JsonSerializableType,
@@ -50,7 +71,9 @@ class QuantumParametersSerializer(VersionedClassSerializer[QuantumParameters]):
             base_cls=QuantumParameters,
             prefix_restrictions=None,  # user subclasses may live in any package; base_cls is the guard
         )
-        return qp_cls(**from_dict(data["parameters"]))
+        parameters = from_dict(data["parameters"])
+        _migrate_user_defined(parameters)
+        return qp_cls(**parameters)
 
     # v2 added the custom parameter to the QuantumParameters base class.
     # v1 is guaranteed to not have the custom parameter so that older versions
@@ -209,7 +232,7 @@ class QuantumParametersDictSerializer(VersionedClassSerializer[QuantumParameters
 @serializer(types=[QuantumElement], public=True)
 class QuantumElementSerializer(VersionedClassSerializer[QuantumElement]):
     SERIALIZER_ID = "laboneq.serializers.implementations.QuantumElementSerializer"
-    VERSION = 1
+    VERSION = 2
 
     @classmethod
     def to_dict(
@@ -232,7 +255,7 @@ class QuantumElementSerializer(VersionedClassSerializer[QuantumElement]):
         }
 
     @classmethod
-    def from_dict_v1(
+    def from_dict_v2(
         cls,
         serialized_data: JsonSerializableType,
         options: DeserializationOptions | None = None,
@@ -248,11 +271,17 @@ class QuantumElementSerializer(VersionedClassSerializer[QuantumElement]):
             base_cls=QuantumParameters,
             prefix_restrictions=None,  # user subclasses may live in any package; base_cls is the guard
         )
+        parameters = from_dict(data["parameters"])
+        _migrate_user_defined(parameters)
         return qe_cls(
             uid=data["uid"],
             signals=data["signals"],
-            parameters=param_cls(**from_dict(data["parameters"])),
+            parameters=param_cls(**parameters),
         )
+
+    # v2 removed the user_defined parameter from TransmonParameters. Its
+    # contents are moved into the custom parameter when v1 is loaded.
+    from_dict_v1 = from_dict_v2
 
 
 class QuantumElementContainer:

@@ -171,7 +171,7 @@ class OpenQASMTranspiler:
             options:
                 Optional settings for the LabOne Q Experiment.
 
-                Default: [SingleProgramOptions]()
+                Default: [SingleProgramOptions][]
 
                 Accepts also a dictionary with following items:
 
@@ -189,7 +189,7 @@ class OpenQASMTranspiler:
                     If an acquisition type is passed here, it overrides
                     any value set by a pragma.
                     If the acquisition type is not specified, it defaults
-                    to [enums.AcquisitionType.INTEGRATION]().
+                    to [enums.AcquisitionType.INTEGRATION][laboneq.core.types.enums.acquisition_type.AcquisitionType.INTEGRATION].
 
                 **reset_oscillator_phase**:
                     When true, reset all oscillators at the start of every
@@ -269,9 +269,10 @@ class OpenQASMTranspiler:
         append a measurement of all qubits to the end of each program. This can be controlled
         via `add_measurement` option.
 
-        Note: Using `set_frequency` or specifying the acquisition type via a
-        `pragma zi.acquisition_type` statement within an OpenQASM program is not
-        supported in batch mode. It will log a warning if these are encountered.
+        !!! note
+            Using `set_frequency` or specifying the acquisition type via a
+            `pragma zi.acquisition_type` statement within an OpenQASM program is not
+            supported in batch mode. It will log a warning if these are encountered.
 
         The supplied mapping parameters for OpenQASM definitions are shared among the programs.
         Individual parameter mapping per program cannot be done.
@@ -302,7 +303,7 @@ class OpenQASMTranspiler:
             options:
                 Optional settings for the LabOne Q Experiment.
 
-                Default: [MultiProgramOptions]()
+                Default: [MultiProgramOptions][]
 
                 Accepts also a dictionary with the following items:
 
@@ -320,7 +321,7 @@ class OpenQASMTranspiler:
                     If an acquisition type is passed here, it overrides
                     any value set by a pragma.
                     If the acquisition type is not specified, it defaults
-                    to [enums.AcquisitionType.INTEGRATION]().
+                    to [enums.AcquisitionType.INTEGRATION][laboneq.core.types.enums.acquisition_type.AcquisitionType.INTEGRATION].
 
                 **reset_oscillator_phase**:
                     When true, reset all oscillators at the start of every
@@ -338,24 +339,26 @@ class OpenQASMTranspiler:
                 **batch_execution_mode**:
                     The execution mode for the sequence of programs. Can be any of the following:
 
-                    * `nt`: The individual programs are dispatched by software.
-                    * `pipeline`: The individual programs are dispatched by the sequence pipeliner.
-                    * `rt`: All the programs are combined into a single real-time program.
+                * `nt`: The individual programs are dispatched by software.
+                * `pipeline`: The individual programs are dispatched by the sequence pipeliner.
+                * `rt`: All the programs are combined into a single real-time program.
 
-                    `rt` offers the fastest execution, but is limited by device memory.
-                    In comparison, `pipeline` introduces non-deterministic delays between
-                    programs of up to a few 100 microseconds. `nt` is the slowest.
+                `rt` offers the fastest execution, but is limited by device memory.
+                In comparison, `pipeline` introduces non-deterministic delays between
+                programs of up to a few 100 microseconds. `nt` is the slowest.
 
                 **add_reset**:
                     If `True`, a reset operation for each qubit is added to the beginning of each program.
 
-                    Note: Requires a `reset(qubit)` operation to be defined in the `QuantumOperations`
+                !!! note
+                    Requires a `reset(qubit)` operation to be defined in the `QuantumOperations`
                     of the `QPU`.
 
                 **add_measurement**:
                     If `True`, add measurement at the end of each program for all qubits used.
 
-                    Note: Requires `measure(qubit, handle: str)` operation to be defined for each qubit, where `handle`
+                !!! note
+                    Requires `measure(qubit, handle: str)` operation to be defined for each qubit, where `handle`
                     is the key specified for the qubit in the `qubit_map` parameter (e.g. `q0`) or
                     `<key>[N]` in the case of an qubit register as a list of qubits (e.g. `q[0]`, `q[1]`, ..., `q[N]`,
                     where `N` represents the qubit index in the supplied register).
@@ -366,6 +369,7 @@ class OpenQASMTranspiler:
 
                 **pipeline_chunk_count**:
                     The number of pipeline chunks to divide the experiment into.
+
                 **automated_chunking**:
                     Whether to enable automated chunking when the compiler hits hardware resource limitations.
 

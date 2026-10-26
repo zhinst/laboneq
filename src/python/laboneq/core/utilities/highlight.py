@@ -39,9 +39,9 @@ def pygmentize(
         lexer:
             The name of the pygments lexer to use.
 
-    Return:
+    Returns:
         If `f` is not None, the decorated function. Otherwise, a new decorator
-        with partial arguments supplied.
+            with partial arguments supplied.
     """
     if f is None:
         return functools.partial(pygmentize, lexer=lexer)

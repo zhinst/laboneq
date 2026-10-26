@@ -48,7 +48,7 @@ def create_qasm_experiment(
         options:
             Optional settings for the LabOne Q Experiment.
 
-            Default: [SingleProgramOptions]()
+            Default: [SingleProgramOptions][laboneq.openqasm3.SingleProgramOptions]
 
             Accepts also a dictionary with following items:
 
@@ -66,7 +66,7 @@ def create_qasm_experiment(
                 If an acquisition type is passed here, it overrides
                 any value set by a pragma.
                 If the acquisition type is not specified, it defaults
-                to [enums.AcquisitionType.INTEGRATION]().
+                to [enums.AcquisitionType.INTEGRATION][laboneq.core.types.enums.acquisition_type.AcquisitionType.INTEGRATION].
 
             **reset_oscillator_phase**:
                 When true, reset all oscillators at the start of every
@@ -122,7 +122,7 @@ def create_qasm_batch_experiment(
         options:
             Optional settings for the LabOne Q Experiment.
 
-            Default: [MultiProgramOptions]()
+            Default: [MultiProgramOptions][laboneq.openqasm3.MultiProgramOptions]
 
             Accepts also a dictionary with the following items:
 
@@ -140,7 +140,7 @@ def create_qasm_batch_experiment(
                 If an acquisition type is passed here, it overrides
                 any value set by a pragma.
                 If the acquisition type is not specified, it defaults
-                to [enums.AcquisitionType.INTEGRATION]().
+                to [enums.AcquisitionType.INTEGRATION][laboneq.core.types.enums.acquisition_type.AcquisitionType.INTEGRATION].
 
             **reset_oscillator_phase**:
                 When true, reset all oscillators at the start of every
@@ -169,7 +169,8 @@ def create_qasm_batch_experiment(
             **do_reset**:
                 If `True`, an active reset operation is added to the beginning of each program.
 
-            Note: Requires `reset(qubit)` operation to be defined for each qubit.
+            !!! note
+                Requires `reset(qubit)` operation to be defined for each qubit.
 
             **add_measurement**:
                 If `True`, add measurement at the end of each program for all qubits used.
@@ -177,7 +178,9 @@ def create_qasm_batch_experiment(
                 `'meas{qasm_qubit_name}'` where `qasm_qubit_name` is the key specified for the
                 qubit in the `qubit_map` parameter.
 
-            Note: Requires `measure(qubit, handle: str)` operation to be defined for each qubit.
+            !!! note
+                Requires `measure(qubit, handle: str)` operation to be defined for each
+                qubit.
 
             **pipeline_chunk_count**:
                 The number of pipeline chunks to divide the experiment into.

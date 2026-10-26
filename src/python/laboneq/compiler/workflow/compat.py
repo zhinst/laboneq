@@ -60,7 +60,8 @@ class _CapnpBuilder:
             uid=src.uid,
             sections=src.sections,
             experiment_signals=experiment_signals,
-            coprocessors=list(src.coprocessors.values()),
+            coprocessors=list(src.coprocessors),
+            coprocessor_payloads=dict(src.coprocessor_payloads),
             coprocessor_mappings=list(src.coprocessor_mappings.items()),
             streams=list(src.streams),
         )

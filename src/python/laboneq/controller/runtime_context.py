@@ -78,7 +78,7 @@ class RuntimeContext(Protocol):
 
         !!! Attention
             This accessor is provided for better
-            performance, unlike `get_result` it doesn't make a copy, but instead returns the reference to the live
+            performance. Unlike `get_result`, it doesn't make a copy, but instead returns the reference to the live
             result object being updated during the session run. Care must be taken for not modifying this object from
             the user code, otherwise behavior is undefined.
         """

@@ -130,7 +130,7 @@ class SweepParameter(_ParameterArithmeticMixin, Parameter):
         Operations that create parameters of different shapes to the ones they
         are driven by will be rejected by raising a [ValueError][].
 
-    !!! version-changed "Changed in 2.14.0"
+    !!! version-changed "Changed in version 2.14.0"
         Support for applying numpy ufuncs (e.g. ``np.sin``) was added.
     """
 
@@ -200,7 +200,7 @@ class LinearSweepParameter(_ParameterArithmeticMixin, Parameter):
         See [SweepParameter][laboneq.dsl.parameter.SweepParameter] for a
         complete description.
 
-    !!! version-changed "Changed in 2.14.0"
+    !!! version-changed "Changed in version 2.14.0"
         Support for applying numpy ufuncs (e.g. ``np.sin``) was
         added.
     """

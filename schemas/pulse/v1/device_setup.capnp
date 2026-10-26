@@ -12,6 +12,6 @@ struct DeviceSetup {
 
   setupDescription @1 :AnyPointer;
   # Backend-specific setup description, opaque to this schema.
-  # The concrete struct type is the one the backend named by `backend` defines;
+  # The backend named by `backend` defines the concrete struct type;
   # decode with that backend's reader.
 }

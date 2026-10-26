@@ -11,8 +11,8 @@ from laboneq.controller.attribute_value_tracker import (
     AttributeName,
     DeviceAttribute,
 )
+from laboneq.controller.devices.device_base import DeviceBase
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.devices.ppchannel import PPChannel
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.data.calibration import CancellationSource

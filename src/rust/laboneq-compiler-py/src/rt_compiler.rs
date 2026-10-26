@@ -58,7 +58,7 @@ pub(crate) fn compile_realtime(
         )
         .map_err(|e| laboneq_error::laboneq_error!("{e}"))?;
 
-    let _t = laboneq_log::StageTiming::start("Schedule");
+    let timing = laboneq_log::StageTiming::start("Schedule");
     let mut parameter_store = create_parameter_store(input.parameters);
     let experiment = input.experiment;
     let result = schedule_experiment(
@@ -77,7 +77,7 @@ pub(crate) fn compile_realtime(
         feedback_calculator.as_ref(),
     )
     .map_err(|e| laboneq_error::laboneq_error!("{e}"))?;
-    drop(_t);
+    drop(timing);
 
     let ir = ExperimentIr {
         root: result.root,
@@ -86,17 +86,18 @@ pub(crate) fn compile_realtime(
         acquisition_type: result.acquisition_type,
         id_store: &experiment.id_store,
         signals: input.signals,
+        near_time_parameters: &parameter_store,
     };
     let pulse_sheet_schedule = prepare_schedule(&ir, input.compiler_settings);
 
-    let _t = laboneq_log::StageTiming::start("Code generation");
+    let timing = laboneq_log::StageTiming::start("Code generation");
     let code_gen_output = input.backend.generate_code_dyn(
         ir,
         input.compiler_settings,
         &input.experiment.external_parameters,
         input.backend_data,
     )?;
-    drop(_t);
+    drop(timing);
 
     let out = RealTimeCompilerOutput {
         used_parameters: parameter_store.empty_queries(),

@@ -42,7 +42,7 @@ struct CompiledExperiment {
 
   artifacts @6 :AnyPointer;
   # Backend-specific compilation artifacts, opaque to this schema.
-  # The concrete struct type is the one the backend named by `metadata.createdBy` writes;
+  # The backend named by `metadata.createdBy` writes the concrete struct type;
   # decode with that backend's reader.
 
   # --- Results ---
@@ -60,8 +60,8 @@ struct CompiledExperiment {
   # --- Coprocessors ---
 
   coprocessors @10 :List(CoprocessorBinding);
-  # Coprocessors the experiment declared, each bound to a device-setup inventory slot.
-  # Coprocessors the experiment left unmapped are absent.
+  # Coprocessors declared by the experiment, each bound to a device-setup inventory slot.
+  # Coprocessors left unmapped by the experiment are absent.
 }
 
 struct Metadata {
@@ -113,7 +113,7 @@ struct CoprocessorBinding {
   # `compiled.set_coprocessor_payload(label, ...)` and error messages.
 
   inventoryKey @1 :Text;
-  # Device-setup inventory key `label` is mapped to.
+  # Device-setup inventory key that `label` is mapped to.
 
   payload @2 :Data;
   # Payload declared in the experiment body.

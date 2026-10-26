@@ -244,15 +244,18 @@ class QuantumOperations:
         BASE_OPS:
             (class attribute) A dictionary of names and `MultiMethod` objects that
             define the base operations provided.
+        qpu:
+            The QPU attached to the quantum operations, or `None` if none is
+            attached. See `attach_qpu` and `detach_qpu`.
 
     !!! version-changed "Changed in version 2.60.0"
-            The `BASE_OPS` class attribute is of type `dict[str, MultiMethod] | None`,
-            instead of `dict[str, Callable] | None`. A `MultiMethod` is a dictionary of
-            functions that is keyed by their simplified type signatures. To call a
-            function directly, please specify the `simplified_type_signature`, which is
-            the tuple of simplified types used for function dispatching. For example,
-            for a quantum operation that was defined without type hints, you can
-            replace `self.BASE_OPS[op_name]` with `self.BASE_OPS[op_name][()]`.
+        The `BASE_OPS` class attribute is of type `dict[str, MultiMethod] | None`,
+        instead of `dict[str, Callable] | None`. A `MultiMethod` is a dictionary of
+        functions that is keyed by their simplified type signatures. To call a
+        function directly, please specify the `simplified_type_signature`, which is
+        the tuple of simplified types used for function dispatching. For example,
+        for a quantum operation that was defined without type hints, you can
+        replace `self.BASE_OPS[op_name]` with `self.BASE_OPS[op_name][()]`.
     """
 
     QUBIT_TYPES: ClassVar[
@@ -597,7 +600,7 @@ class Operation:
 
         Returns:
             A LabOne Q section built by the operation, or a list of
-            LabOne Q sections if the operation is broadcast.
+                LabOne Q sections if the operation is broadcast.
         """
         return self._call(args, kw)
 
@@ -696,9 +699,9 @@ class Operation:
 
         Returns:
             If omit_section is false, a list of LabOne Q sections for each of the
-            broadcast operations.
-            If omit_section is true, a list of `None`s for each of the broadcast
-            operations.
+                broadcast operations.
+                If omit_section is true, a list of `None`s for each of the broadcast
+                operations.
         """
         # Broadcasting requires that all operation arguments do not accept lists
         # or tuples of values (when not broadcasting), so we find all such lists
@@ -800,10 +803,10 @@ class Operation:
 
         Returns:
             If omit_section is false, a LabOne Q section containing the operation.
-            If omit_section is true, no section is returned and the operation is
-            added to the existing section context.
-            If broadcasting, a list of created sections or a list of `None` values
-            is returned.
+                If omit_section is true, no section is returned and the operation is
+                added to the existing section context.
+                If broadcasting, a list of created sections or a list of `None` values
+                is returned.
         """
         qubits = _qubits_from_args(args)
         qubits_with_incorrect_type = [
@@ -884,8 +887,8 @@ class Operation:
 
         Returns:
             If omit_section is false, a LabOne Q section containing the operation.
-            If omit_section is true, no section is returned and the operation is
-            added to the existing section context.
+                If omit_section is true, no section is returned and the operation is
+                added to the existing section context.
         """
         if self._op_marker.broadcast and any(
             isinstance(arg, (list, tuple)) for arg in args
@@ -956,7 +959,6 @@ class Operation:
         """Return the docstring of the underlying operation(s).
 
         Returns:
-            The source code of the underlying operation.
             The docstring of the underlying operation(s).
         """
         doc_list = []

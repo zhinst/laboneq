@@ -19,7 +19,8 @@ use super::seqc_tracker::wave_index_tracker::{SignalType, WaveIndexTracker};
 use super::shfppc_sweeper_config_tracker::SHFPPCSweeperConfigTracker;
 use super::{AwgEventList, FeedbackRegisterIndex, Samples, SeqcResults};
 use crate::Result;
-use crate::ir::compilation_job::{AwgKey, AwgKind, ChannelIndex, DeviceKind, TriggerMode};
+use crate::handle_feedback_registers::{FeedbackConfig, FeedbackSource};
+use crate::ir::compilation_job::{AwgKind, ChannelIndex, DeviceKind, TriggerMode};
 use crate::ir::experiment::{AcquisitionType, Handle, SweepCommand};
 use crate::ir::{OscillatorFrequencySweepStep, ParameterOperation, SignalUid};
 use crate::sample_waveforms::WaveDeclaration;
@@ -27,7 +28,7 @@ use core::str;
 use indexmap::IndexMap;
 use laboneq_common::device_traits::{HDAWG_SAMPLING_RATE_WITHOUT_SHF, UHFQA_SAMPLING_RATE};
 use laboneq_error::{bail, laboneq_error};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 type WaveIndex = u32;
 type UserRegister = u16;
@@ -337,7 +338,7 @@ struct SampledEventHandler<'a> {
     declarations_generator: SeqCGenerator,
     function_defs_generator: SeqCGenerator,
     wave_indices: WaveIndexTracker,
-    qa_signals_by_handle: &'a HashMap<Handle, (SignalUid, AwgKey)>,
+    feedback_config: &'a FeedbackConfig,
     feedback_register: Option<FeedbackRegisterIndex>,
     feedback_register_layout: &'a FeedbackRegisterLayout,
     feedback_register_config: FeedbackRegisterConfig,
@@ -361,7 +362,7 @@ struct SampledEventHandler<'a> {
 impl<'a> SampledEventHandler<'a> {
     pub(crate) fn new(
         awg: &'a Awg,
-        qa_signals_by_handle: &'a HashMap<Handle, (SignalUid, AwgKey)>,
+        feedback_config: &'a FeedbackConfig,
         feedback_register: Option<FeedbackRegisterIndex>,
         feedback_register_layout: &'a FeedbackRegisterLayout,
         emit_timing_comments: bool,
@@ -394,7 +395,7 @@ impl<'a> SampledEventHandler<'a> {
             declarations_generator,
             function_defs_generator,
             wave_indices: WaveIndexTracker::new(),
-            qa_signals_by_handle,
+            feedback_config,
             feedback_register_layout,
             feedback_register_config: FeedbackRegisterConfig::default(),
             awg,
@@ -820,13 +821,13 @@ impl<'a> SampledEventHandler<'a> {
         self.add_required_delay(start)?;
 
         if matches!(self.awg.device_kind, DeviceKind::HDAWG) {
-            self._handle_set_oscillator_frequency_hdawg(data)
+            self.handle_set_oscillator_frequency_hdawg(data)
         } else {
-            self._handle_set_oscillator_frequency_shf(start, data)
+            self.handle_set_oscillator_frequency_shf(start, data)
         }
     }
 
-    fn _handle_set_oscillator_frequency_hdawg(
+    fn handle_set_oscillator_frequency_hdawg(
         &mut self,
         data: &OscillatorFrequencySweepStep,
     ) -> Result<()> {
@@ -860,7 +861,7 @@ impl<'a> SampledEventHandler<'a> {
         Ok(())
     }
 
-    fn _handle_set_oscillator_frequency_shf(
+    fn handle_set_oscillator_frequency_shf(
         &mut self,
         start: Samples,
         data: &OscillatorFrequencySweepStep,
@@ -1277,7 +1278,13 @@ impl<'a> SampledEventHandler<'a> {
     }
 
     fn add_feedback_config(&mut self, handle: &Handle, local: bool) {
-        let (qa_signal, qa_signal_awg) = &self.qa_signals_by_handle[handle];
+        let FeedbackSource {
+            signal: qa_signal,
+            awg_key: qa_signal_awg,
+        } = self
+            .feedback_config
+            .feedback_source(handle)
+            .expect("Internal error: Missing feedback source for handle");
         let mut index_select = None;
         let (codeword_bitshift, width, mask) = if local {
             let register = &FeedbackRegister::Local {
@@ -1729,7 +1736,7 @@ impl<'a> SampledEventHandler<'a> {
 pub(crate) fn handle_sampled_events(
     awg_events: AwgEventList,
     awg: &Awg,
-    qa_signals_by_handle: &HashMap<Handle, (SignalUid, AwgKey)>,
+    feedback_config: &FeedbackConfig,
     wave_declarations: &[WaveDeclaration],
     feedback_register: Option<FeedbackRegisterIndex>,
     feedback_register_layout: &FeedbackRegisterLayout,
@@ -1739,7 +1746,7 @@ pub(crate) fn handle_sampled_events(
 ) -> Result<SeqcResults> {
     let mut handler = SampledEventHandler::new(
         awg,
-        qa_signals_by_handle,
+        feedback_config,
         feedback_register,
         feedback_register_layout,
         emit_timing_comments,

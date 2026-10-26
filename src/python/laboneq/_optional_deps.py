@@ -43,8 +43,8 @@ def import_optional(
 
     Returns:
         Module if the module is installed.
-        `None` if `allow_missing` is `True` and module
-        is not found.
+            `None` if `allow_missing` is `True` and module
+            is not found.
 
     Raises:
         ModuleNotFoundError: When module is not found

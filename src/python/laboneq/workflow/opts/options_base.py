@@ -66,6 +66,7 @@ def option_field(
             custom validators are used. When not provided or None,
             a basic validator is used that performs type checking for
             the following types:
+
             - Non-generic types: int, str, float, etc.
             - Union, Optional
             - Generic types: List, Dict, Tuple, Set, Callable, etc. Only

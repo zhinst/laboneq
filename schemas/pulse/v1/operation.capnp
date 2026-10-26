@@ -46,6 +46,9 @@ struct Operation {
 
     markStale @9 :MarkStaleOp;
     # HQCS: open an acceptance window on a stream-bound variable or pulse.
+
+    ensure @10 :EnsureOp;
+    # HQCS: assert a condition, e.g. that a stream-bound variable is live.
   }
 }
 
@@ -258,6 +261,10 @@ struct MarkStaleOp {
     pulse @1 :Common.Id;
     # Index into `Experiment.pulses`.
   }
+}
+
+struct EnsureOp {
+  condition @0 :Coprocessor.Predicate;
 }
 
 # ========================================================================================

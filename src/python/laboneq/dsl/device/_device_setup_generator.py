@@ -207,7 +207,7 @@ def make_zi_devices(
 def _make_connection(
     signal_type_kw: str, remote_path: str, local_ports: list[str]
 ) -> InternalConnection | SignalConnection:
-    """Build the connection one decoded descriptor entry denotes."""
+    """Build the connection denoted by one decoded descriptor entry."""
     if signal_type_kw == T_TO:
         return InternalConnection(to=remote_path, from_port=local_ports)
     return SignalConnection(
@@ -254,8 +254,8 @@ def make_unmanaged_instrument(
 
 
 def _unmanaged_instrument(device_type: str, **fields) -> Instrument:
-    """Build the instrument a device type no registered instrument claims falls
-    back to."""
+    """Build the instrument that a device type falls back to when no registered
+    instrument claims it."""
     factory = registry.unmanaged_instrument_factory()
     if factory is None:
         raise LabOneQException(

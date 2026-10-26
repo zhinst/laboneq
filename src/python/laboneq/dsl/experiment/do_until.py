@@ -73,6 +73,6 @@ def do_until(
 
     Returns:
         A context manager that auto-attaches the new `DoUntilSection` to
-        the enclosing experiment or section on `__exit__`.
+            the enclosing experiment or section on `__exit__`.
     """
     return DoUntilSectionContextManager(condition, max_count=max_count, uid=uid)

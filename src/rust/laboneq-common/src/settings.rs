@@ -3,8 +3,8 @@
 
 //! Compiler settings: the accepted keys and the values the caller passed.
 //!
-//! Whoever reads a setting declares it as a [`SettingSpec`], the frontend for
-//! the settings it reads itself, each backend for its own. One validation pass
+//! Whoever reads a setting declares it as a [`SettingSpec`]. The frontend declares
+//! the settings it reads itself, and each backend declares its own. One validation pass
 //! checks the caller's keys and values against all declarations.
 
 use std::collections::HashMap;
@@ -188,8 +188,8 @@ impl Settings {
     }
 
     /// # Panics
-    /// If `key` was not declared with a boolean default. Reading a setting one
-    /// did not declare is a bug in the reader, not something a caller can
+    /// If `key` was not declared with a boolean default. Reading a setting that
+    /// was not declared is a bug in the reader, not something a caller can
     /// provoke.
     pub fn bool(&self, key: &str) -> bool {
         self.opt_bool(key).unwrap_or_else(|| undeclared(key))

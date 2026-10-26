@@ -9,11 +9,11 @@ laboneq.workflow package.
 Type hints
 ----------
 
-* [Qubits]()
+* [Qubits][]
 
     Either a single qubit or a sequence of qubits.
 
-* [SimpleDict]()
+* [SimpleDict][]
 
     Simple dictionaries are used for artifact metadata and serializer
     options, allowing these to themselves be serialized easily, especially

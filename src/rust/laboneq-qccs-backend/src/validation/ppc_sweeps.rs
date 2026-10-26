@@ -66,7 +66,7 @@ impl<'a> PpcSweepRules<'a> {
         Ok(())
     }
 
-    /// Collect the AWGs whose signals a section triggers.
+    /// Collect the AWGs whose signals are triggered by a section.
     fn digest_section_triggers(&mut self, triggers: &[Trigger]) {
         for trigger in triggers {
             let Some(signal) = self.data.signal(trigger.signal) else {

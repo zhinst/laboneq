@@ -155,12 +155,14 @@ def _structure_np_or_list_np(obj, _) -> numpy.ndarray | list[numpy.ndarray]:
 def make_converter():
     converter = make_laboneq_converter()
 
-    # NOTE! Because of 1. The data structure for some fields is not completely defined in the original code,
-    # 2. To cut some corners during the new serializer implementation; for some objects we still resort to
-    # the old serializer for now. Hence, we manually register custom hooks for them.
-    # We have to register these custom hooks first, otherwise the automatic hooks generated for parent attrs
-    # classes (via make_dict_unstructure_fn / make_dict_structure_fn) silently assume some default repr based
-    # implementation which does not get overridden if custom hooks are registered later.
+    # NOTE! For some objects we still resort to the old serializer for now, for two reasons:
+    # 1. The data structure for some fields is not completely defined in the original code.
+    # 2. To cut some corners during the new serializer implementation.
+    # Hence, we manually register custom hooks for them.
+    # We have to register these custom hooks first. Otherwise, the automatic hooks for parent attrs classes
+    # silently assume some default repr based implementation, which does not get overridden if custom hooks
+    # are registered later. The automatic hooks are generated via make_dict_unstructure_fn /
+    # make_dict_structure_fn.
     # Note: CompilerArtifact is now handled via the plugin registry in CompilerArtifactModel
     for cls in [Statement, dict[str, Any] | None]:
         converter.register_unstructure_hook(cls, _old_serialize)

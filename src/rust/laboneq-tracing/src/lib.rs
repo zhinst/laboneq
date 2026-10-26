@@ -35,11 +35,15 @@ use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 ///    + "trace": Most granular and low-level traces intended for debugging and troubleshooting, e.g. individual passes in the codegen. The number of such traces reported during a single compilation job
 ///      is allowed to depend arbitrarily on the contents of the experiment, e.g. scale linearly on the number of qubits / channels. When enabling this level, you may need to limit your experiment
 ///      size and / or increase the size of the buffer of the used opentelemetry exporter.
+/// - `_LABONEQ_DEV_TRACING_BUFFER_SIZE`: The number of spans the in-memory exporter holds.
+///   This variable is deliberately not exposed via user facing tracing helpers, and is not advertized in any error messages - it is a debug tool for LabOne Q developers.
 const ENV_VAR_ENABLE: &str = "LABONEQ_TRACING_ENABLE";
 const ENV_VAR_IN_MEMORY_EXPORTER: &str = "LABONEQ_TRACING_IN_MEMORY_EXPORTER";
 const ENV_VAR_LEVEL: &str = "_LABONEQ_DEV_TRACING_LEVEL";
+const ENV_VAR_BUFFER_SIZE: &str = "_LABONEQ_DEV_TRACING_BUFFER_SIZE";
 
 const DEFAULT_LEVEL: LevelFilter = LevelFilter::INFO;
+const DEFAULT_BUFFER_SIZE: usize = 10000;
 
 /// Checks if tracing is enabled by reading the `LABONEQ_TRACING_ENABLE` environment variable.
 pub fn tracing_is_enabled() -> bool {
@@ -67,6 +71,15 @@ fn tracing_level() -> LevelFilter {
     }
 }
 
+/// The number of spans the in-memory exporter holds before an overflow fails the export.
+pub(crate) fn tracing_buffer_size() -> usize {
+    env::var(ENV_VAR_BUFFER_SIZE)
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .filter(|&size| size > 0)
+        .unwrap_or(DEFAULT_BUFFER_SIZE)
+}
+
 /// Configures tracing for the duration of the provided closure.
 ///
 /// This function is meant to be called once at the beginning of the program execution,
@@ -84,7 +97,7 @@ where
     // Currently we must force flush the dispatcher manually to ensure the traces are written.
     // TODO: This means that between every call to `with_tracing` a new tracer provider is created.
     // Find a way to reuse the same tracer provider across multiple calls, or avoid multiple calls to `with_tracing`.
-    if let Some(t) = &state._otel
+    if let Some(t) = &state.otel
         && settings.force_flush
     {
         let _ = t.force_flush();
@@ -127,12 +140,12 @@ fn build_settings() -> Option<TracingConfig> {
 
 struct TracingState {
     dispatch: Dispatch,
-    _otel: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
+    otel: Option<opentelemetry_sdk::trace::SdkTracerProvider>,
 }
 
 impl Drop for TracingState {
     fn drop(&mut self) {
-        if let Some(otel) = &self._otel {
+        if let Some(otel) = &self.otel {
             let _ = otel.force_flush();
         }
     }
@@ -154,6 +167,6 @@ fn init_dispatcher(config: TracingConfig) -> TracingState {
     let dispatch = Dispatch::new(registry);
     TracingState {
         dispatch,
-        _otel: Some(otel_tracer),
+        otel: Some(otel_tracer),
     }
 }

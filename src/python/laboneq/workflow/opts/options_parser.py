@@ -33,9 +33,9 @@ def _get_argument_types(
 ) -> set[type]:
     """Get the type of the parameter for a function-like object.
 
-    Return:
+    Returns:
         A set containing the parameter's types. Empty set if the parameter
-        does not exist or does not have a type hint.
+            does not exist or does not have a type hint.
     """
     globals_ = getattr(fn, "__globals__", {})
     locals_ = globals_
@@ -118,13 +118,13 @@ def get_and_validate_param_type(
     The function-like object must have an `parameter` with a type hint,
     following any of the following patterns:
 
-        * `Union[type, None]`
-        * `type | None`
-        * `Optional[type]`.
+    * `Union[type, None]`
+    * `type | None`
+    * `Optional[type]`.
 
     Returns:
         Type of the parameter if it exists and satisfies the above
-        conditions, otherwise `None`.
+            conditions, otherwise `None`.
 
     Raises:
         ValueError: When the type hint contains a subclass of `type_check`, but
@@ -164,6 +164,7 @@ def check_type(
     """Check if the value conforms to common types.
 
     The types are as follows:
+
     - Non-generic types: int, str, float, etc.
     - Union
     - Literal
@@ -177,7 +178,7 @@ def check_type(
 
     Returns:
         True if the value conforms to the type hint or type cannot be resolved.
-        False otherwise.
+            False otherwise.
     """
     if isinstance(t, str):
         try:

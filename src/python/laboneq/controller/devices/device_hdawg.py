@@ -13,11 +13,11 @@ from laboneq.controller.attribute_value_tracker import (
     AttributeName,
     DeviceAttribute,
 )
-from laboneq.controller.devices.device_utils import FloatWithTolerance, NodeCollector
-from laboneq.controller.devices.device_zi import (
+from laboneq.controller.devices.device_base import (
     DeviceBase,
     delay_to_rounded_samples,
 )
+from laboneq.controller.devices.device_utils import FloatWithTolerance, NodeCollector
 from laboneq.controller.devices.hdawg_core import HDAwgCore
 from laboneq.controller.devices.node_control import (
     Command,

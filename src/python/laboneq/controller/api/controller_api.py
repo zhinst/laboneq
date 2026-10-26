@@ -6,6 +6,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
+from laboneq.controller.constants import READY_TIMEOUT_S
+
 if TYPE_CHECKING:
     from laboneq.controller.api.commons import SubmissionHandle
     from laboneq.controller.controller import SubmissionStatus
@@ -27,8 +29,27 @@ class ControllerAPI(ABC):
         """Retrieve the device setup describing the hardware the controller is connected to."""
 
     @abstractmethod
-    def get_instrument_topology(self) -> InstrumentTopology:
-        """Retrieve the instrument topology describing the hardware layout."""
+    def get_instrument_topology(self) -> InstrumentTopology | None:
+        """Retrieve the instrument topology describing the hardware layout.
+
+        Returns None if no instrument topology is configured.
+
+        Raises:
+            HardwareNotReadyError: The hardware cannot run experiments now.
+        """
+
+    @abstractmethod
+    def get_not_ready_reason(self) -> str | None:
+        """Return why the controller cannot run experiments now, or None if it can."""
+
+    @abstractmethod
+    def wait_until_ready(self, timeout_s: float = READY_TIMEOUT_S):
+        """Return once the controller can run experiments.
+
+        Raises:
+            HardwareNotReadyError: The controller still cannot run experiments
+                after `timeout_s`. The message gives the last reason.
+        """
 
     @abstractmethod
     def submit_experiment(
@@ -41,6 +62,9 @@ class ControllerAPI(ABC):
 
         The handle is returned immediately and can be used to track the submission status.
         Optional unique handle can be provided to track the submission. If not provided, a new handle is generated.
+
+        Raises:
+            HardwareNotReadyError: The hardware cannot run experiments now.
         """
 
     @abstractmethod

@@ -1,8 +1,8 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-//! Rules a QCCS experiment must satisfy, on top of the ones the compiler
-//! checks for every backend.
+//! Rules that a QCCS experiment must satisfy, in addition to the rules checked
+//! by the compiler for every backend.
 //!
 //! The compiler has already refused a signal whose device cannot do what the
 //! signal asks of it, so these rules only refine what it accepted.

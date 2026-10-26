@@ -50,24 +50,24 @@ class Results:
     the `acquired_results` are also accessible directly on the result object
     itself using either attribute or dictionary-like item lookup.
 
-    For example::
+    For example:
 
-        ```python
-        results = Results(
-            acquired_results={
-                "cal_trace/q0/g": AcquiredResult(
-                    data=numpy.array([1, 2, 3]),
-                    axis_name=["Amplitude"],
-                    axis=[numpy.array([0, 1, 2])],
-                ),
-            },
-        )
+    ```python
+    results = Results(
+        acquired_results={
+            "cal_trace/q0/g": AcquiredResult(
+                data=numpy.array([1, 2, 3]),
+                axis_name=["Amplitude"],
+                axis=[numpy.array([0, 1, 2])],
+            ),
+        },
+    )
 
-        # These all return the same data:
-        results.cal_trace.q0.g
-        results["cal_trace"]["q0"]["g"]
-        results["cal_trace/q0/g"]
-        ```
+    # These all return the same data:
+    results.cal_trace.q0.g
+    results["cal_trace"]["q0"]["g"]
+    results["cal_trace/q0/g"]
+    ```
 
     !!! note
         Inside a client near-time callback the results are still on the
@@ -84,15 +84,18 @@ class Results:
             The device setup on which the experiment was run. Deprecated.
         acquired_results:
             The acquired results, organized by handle.
+        variable_results:
+            The recorded values of logged variables, organized by the handle
+            they were logged under.
         neartime_callback_results:
             Dictionary of the results of near-time callbacks by their name.
         execution_errors:
             A list of errors that occurred during the execution of the experiment.
             Entries are tuples of:
 
-                * the indices of the loops where the error occurred
-                * the experiment section uid
-                * the error message
+            * the indices of the loops where the error occurred
+            * the experiment section uid
+            * the error message
         pipeline_jobs_timestamps:
             The timestamps of all pipeline jobs, in seconds. Organized by signal, then pipeline job id.
 
@@ -106,11 +109,13 @@ class Results:
 
     !!! version-removed "Removed in version 2.54.0"
         The following deprecated methods for saving and loading were removed:
+
         - `load`
         - `save`
+
         Use the `load` and `save` functions from the `laboneq.simple` module instead.
 
-    !!! version-changed "Deprecated in version 2.52.0."
+    !!! version-changed "Deprecated in version 2.52.0"
         The `experiment`, `device_setup` and `compiled_experiment` attributes
         were deprecated in version 2.52.0 and are only populated when
         requested via `Session` or `Session.run`.
@@ -323,7 +328,7 @@ class Results:
 
         Returns:
             A multidimensional numpy array, where each dimension corresponds to a sweep
-            loop nesting level, the outermost sweep being the first dimension.
+                loop nesting level, the outermost sweep being the first dimension.
 
         Raises:
             LabOneQException: No result is available for the provided handle,
@@ -384,7 +389,7 @@ class Results:
 
         Returns:
             A list of axis grids. Each element may be either a 1D numpy array or a list of such
-            arrays.
+                arrays.
 
         Raises:
             LabOneQException: No result is available for the provided handle,

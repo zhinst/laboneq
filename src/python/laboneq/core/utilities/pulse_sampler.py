@@ -160,9 +160,9 @@ def sample_pulse(
 
     Returns:
         The sampled, scaled and possibly modulated waveform as a single ndarray.
-        For `signal_type == "iq"` the array is complex-valued, carrying I in the real
-        and Q in the imaginary part. For every other signal type the imaginary part
-        carries no information, and a real-valued array is returned.
+            For `signal_type == "iq"` the array is complex-valued, carrying I in the
+            real and Q in the imaginary part. For every other signal type the imaginary
+            part carries no information, and a real-valued array is returned.
 
     Raises:
         ValueError: Invalid combination of arguments
@@ -278,8 +278,8 @@ def sample_markers(
 
     Returns:
         A dict with a "samples_marker1" and/or "samples_marker2" entry for each marker
-        that sampled to something. Markers that sample to nothing are omitted, so the
-        dict is empty when there are no markers.
+            that sampled to something. Markers that sample to nothing are omitted, so
+            the dict is empty when there are no markers.
 
     Raises:
         LabOneQException: A marker is configured inconsistently with its pulse.

@@ -181,6 +181,12 @@ pub enum MarkStaleTarget {
     Pulse(PulseUid),
 }
 
+/// Asserts that `condition` holds at this point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ensure {
+    pub condition: Predicate,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DoUntil {
     pub uid: SectionUid,
@@ -209,6 +215,7 @@ pub enum Operation {
     SetNode(SetNode),
     Send(Send),
     MarkStale(MarkStale),
+    Ensure(Ensure),
     DoUntil(DoUntil),
 }
 
@@ -291,7 +298,8 @@ impl Operation {
             | Operation::NearTimeCallback(_)
             | Operation::SetNode(_)
             | Operation::Send(_)
-            | Operation::MarkStale(_) => None,
+            | Operation::MarkStale(_)
+            | Operation::Ensure(_) => None,
         }
     }
 
@@ -342,6 +350,7 @@ impl Operation {
             | Operation::SetNode(_)
             | Operation::Send(_)
             | Operation::MarkStale(_)
+            | Operation::Ensure(_)
             | Operation::DoUntil(_) => None,
         }
     }
@@ -371,6 +380,7 @@ impl Operation {
             | Operation::RealTimeBoundary
             | Operation::Send(_)
             | Operation::MarkStale(_)
+            | Operation::Ensure(_)
             | Operation::DoUntil(_) => Ok(()),
         }
     }

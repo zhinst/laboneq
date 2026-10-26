@@ -16,8 +16,6 @@ from laboneq.compiler.common.iface_compiler_output import (
 )
 from laboneq.compiler.common.iface_linker import ILinker
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.utilities import seqc_compile
-from laboneq.core.utilities.seqc_compile import SeqCCompileItem
 from laboneq.data.artifacts_qccs import (
     COMPLEX_USAGE,
     ArtifactsCodegen,
@@ -29,7 +27,6 @@ from laboneq.data.nt_step_key import NtStepKey
 
 if TYPE_CHECKING:
     import laboneq._rust.codegenerator as codegen_rs
-    from laboneq.compiler import CompilerSettings
     from laboneq.compiler.common.integration_times import IntegrationTimes
     from laboneq.core.types.enums.wave_type import WaveType
     from laboneq.data.artifacts_qccs import (
@@ -73,6 +70,8 @@ class CombinedRTOutputSeqC(CombinedOutput):
     measurements: list[codegen_rs.Measurement] = field(default_factory=list)
     _total_execution_time: float = 0
     _max_execution_time_per_step: float = 0
+    # SeqC ref of the program each AWG runs after the latest linked step
+    _loaded_seqc_refs: dict[AwgKey, str] = field(default_factory=dict)
     integration_unit_allocations: dict[
         AwgKey, list[codegen_rs.IntegrationUnitAllocation]
     ] = field(default_factory=dict)
@@ -298,6 +297,7 @@ class SeqCLinker(ILinker):
             neartime_steps=SeqCLinker.make_neartime_execution_step(
                 output, step_indices
             ),
+            _loaded_seqc_refs=_seqc_refs(output),
             parameter_phase_increment_map=parameter_phase_increment_map,
             measurements=output.measurements,
             integration_unit_allocations=output.integration_unit_allocations,
@@ -369,6 +369,7 @@ class SeqCLinker(ILinker):
                 and _deep_compare(previous_integration_weights, new_integration_weights)
             ):
                 # No change in this iteration
+                seqc_program.filename = previous.src[awg].filename
                 continue
 
                 # todo: this can be more fine-grained. Maybe only the waveforms changed,
@@ -397,10 +398,11 @@ class SeqCLinker(ILinker):
             if new_integration_weights is not None:
                 this.integration_weights[seqc_name] = new_integration_weights
             this.waves.update(new_waves)
-            this._max_execution_time_per_step = max(
-                this._max_execution_time_per_step, new.total_execution_time
-            )
-            this._total_execution_time += new.total_execution_time
+
+        this._max_execution_time_per_step = max(
+            this._max_execution_time_per_step, new.total_execution_time
+        )
+        this._total_execution_time += new.total_execution_time
 
         for (
             new_device_id,
@@ -422,6 +424,7 @@ class SeqCLinker(ILinker):
                 in merged_ids
             ):
                 this.neartime_steps.append(new_neartime_execution_step)
+        this._loaded_seqc_refs = _seqc_refs(new)
 
     @staticmethod
     def make_neartime_execution_step(
@@ -444,34 +447,31 @@ class SeqCLinker(ILinker):
         return neartime_execution_steps
 
     @staticmethod
-    def repeat_previous(
+    def repeat_run(
         this: CombinedRTOutputSeqC,
-        previous: SeqCGenOutput,
-        previous_step_indices: list[int],
+        run: SeqCGenOutput,
+        step_indices: list[int],
     ):
-        this._total_execution_time += previous.total_execution_time
-
-    @staticmethod
-    def finalize(
-        this: CombinedRTOutputSeqC, settings: CompilerSettings, uses_chunking: bool
-    ):
-        seqc_items = [
-            SeqCCompileItem(
-                dev_type=seqc_program.dev_type,
-                dev_opts=seqc_program.dev_opts,
-                awg_index=seqc_program.awg_index,
-                sequencer=seqc_program.sequencer,
-                sampling_rate=seqc_program.sampling_rate,
-                code=seqc_program.src,
-                filename=seqc_program.filename,
-                pipeliner=uses_chunking,
+        for awg, seqc_program in run.src.items():
+            if this._loaded_seqc_refs[awg] == seqc_program.filename:
+                continue
+            assert isinstance(awg.awg_id, int)
+            this.neartime_steps.append(
+                NeartimeStep(
+                    device_id=awg.device_id,
+                    awg_id=awg.awg_id,
+                    seqc_ref=seqc_program.filename,
+                    wave_indices_ref=seqc_program.filename,
+                    kernel_indices_ref=seqc_program.filename,
+                    key=NtStepKey(tuple(step_indices)),
+                )
             )
-            for seqc_program in this.src.values()
-            if seqc_program.dev_type is not None
-        ]
-        seqc_compile.awg_compile(seqc_items, settings)
-        for seqc_item in seqc_items:
-            this.src[seqc_item.filename].elf = seqc_item.elf
+        this._loaded_seqc_refs = _seqc_refs(run)
+        this._total_execution_time += run.total_execution_time
+
+
+def _seqc_refs(output: SeqCGenOutput) -> dict[AwgKey, str]:
+    return {awg: seqc_program.filename for awg, seqc_program in output.src.items()}
 
 
 def _make_seqc_name(awg: AwgKey, step_indices: list[int]) -> str:

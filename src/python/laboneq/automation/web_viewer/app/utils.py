@@ -96,6 +96,7 @@ def export_graph_to_json(automation: Automation) -> dict[str, Any]:
 
     The JSON structure follows the NetworkX node-link format with additional
     attributes for visualization:
+
     - nodes: list of node dicts with id, key, status, layer, elements, x, y
     - links: list of edge dicts with source and target (numeric node IDs)
     - version: hash of graph state for change detection

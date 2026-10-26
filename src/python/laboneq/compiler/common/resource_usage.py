@@ -25,7 +25,7 @@ class ResourceLimitationErrorCollector:
     """Shared functionality to collect and raise resource usage errors.
 
     Currently, an instance of this class keeps track of the max resource usage submitted to it.
-    It is usefull because we do not need to raise a ResourceLimitationError immediately, but
+    It is useful because we do not need to raise a ResourceLimitationError immediately, but
     collect and raise the error with the most sever violation.
     """
 

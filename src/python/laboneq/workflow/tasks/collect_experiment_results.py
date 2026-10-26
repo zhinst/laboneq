@@ -35,7 +35,7 @@ def combine_results(results: list[Results]) -> Results:
 
     Returns:
         An instance of `Results` with all the data in the individual
-        `Results` instances combined.
+            `Results` instances combined.
     """
     combined_results = _combine_results(results)
     workflow.save_artifact("combine_results.output", combined_results)

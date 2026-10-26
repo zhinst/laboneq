@@ -221,8 +221,8 @@ fn sort_nodes(nodes: &mut Vec<(Option<u16>, &mut ir::IrNode)>) {
 ///     * Frame change does not overlap with any of the waveforms within a case block
 pub(crate) fn insert_frame_changes(mut nodes: Vec<(Option<u16>, &mut ir::IrNode)>) -> Result<()> {
     // Sort so that the waveforms are always before frame change if they happen at the same time.
-    // This is due to the fact that a frame change with the same starting time as a length-0 waveform, can potentially be
-    // after the waveform in the source tree.
+    // This is because a frame change can potentially be after a length-0 waveform with the same starting time
+    // in the source tree.
     // Then whenever a frame change is encountered, a waveform starting at the same time or before
     // is already seen.
     sort_nodes(&mut nodes);

@@ -63,7 +63,7 @@ impl<'a> ParameterResolver<'a> {
 
     /// Returns the value of a near-time parameter in the current near-time step.
     ///
-    /// If the requested paramter is not a near-time parameter, return `None`.
+    /// If the requested parameter is not a near-time parameter, return `None`.
     pub(crate) fn near_time_value(&self, uid: &ParameterUid) -> Option<NumericLiteral> {
         self.nt_parameters.get(uid).copied()
     }

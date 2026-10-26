@@ -63,3 +63,9 @@ impl ParameterStoreBuilder {
         }
     }
 }
+
+impl laboneq_ir::ParameterLookup for ParameterStore {
+    fn value(&self, uid: ParameterUid) -> Option<NumericLiteral> {
+        self.get(&uid).copied()
+    }
+}

@@ -201,7 +201,7 @@ class ResultsBuilder:
                 ]
 
             if self._rt_loop_properties.chunk_count is None or chunk_index is not None:
-                # if chunking is not used, or used and the incomming
+                # if chunking is not used, or used and the incoming
                 # data is for a single chunk only
 
                 shaped_acquired_data_for_handle = np.reshape(

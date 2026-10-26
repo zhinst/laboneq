@@ -30,7 +30,7 @@ impl ChunkingInfo {
 
 /// Restricts the experiment's sweep parameters to the current chunk.
 ///
-/// TODO: In future consider chunking the sweep itself direclty, instead of
+/// TODO: In future consider chunking the sweep itself directly, instead of
 /// working around it like this. Will perhaps need a refactor.
 pub(crate) fn slice_chunked_parameters(
     ir: &ExperimentNode,

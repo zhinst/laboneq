@@ -39,7 +39,7 @@ class ExperimentBuilder:
     experiment object directly as the first argument.
 
     If needed, the experiment calibration may be accessed within
-    `exp_func` using [laboneq.dsl.experiment.builtins.experiment_calibration]()
+    `exp_func` using [laboneq.dsl.experiment.builtins.experiment_calibration][]
     when `context=True`.
 
     The set of qubits is detected by inspecting the arguments supplied when the
@@ -51,7 +51,7 @@ class ExperimentBuilder:
     Qubits in tuples or lists containing a mix of qubits and non-qubits are
     ignored.
 
-    During the detection, any instance of [laboneq.simple.QuantumElement]()
+    During the detection, any instance of [laboneq.simple.QuantumElement][]
     or its sub-classes is considered a qubit.
 
     Arguments:
@@ -172,8 +172,8 @@ def qubit_experiment(
 
     Returns:
         If `exp_func` is given, returns `exp_func` wrapped in an `ExperimentBuilder`.
-        Otherwise returns a partial evaluation of `qubit_experiment` with the other
-        parameters already set.
+            Otherwise returns a partial evaluation of `qubit_experiment` with the other
+            parameters already set.
 
     Examples:
         ```python

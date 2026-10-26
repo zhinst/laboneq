@@ -3,77 +3,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from enum import Enum, auto
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
-
-from laboneq.data import EnumReprMixin
 
 if TYPE_CHECKING:
     from numpy.typing import ArrayLike
-
-    from laboneq.core.types.enums import ReferenceClockSource
-
-# Added when SHFQC is split into virtual SHFSG & SHFQA
-# SHFQC(uid="shfqc") --> SHFSG(uid="shfqc_sg"), SHFQA(uid="shfqc")
-VIRTUAL_SHFSG_UID_SUFFIX = "_sg"
-
-
-#
-# Enums
-#
-class TargetDeviceType(EnumReprMixin, Enum):
-    UHFQA = auto()
-    HDAWG = auto()
-    SHFQA = auto()
-    SHFSG = auto()
-    SHFPPC = auto()
-    PQSC = auto()
-    QHUB = auto()
-    NONQC = auto()
-    ZQCS = auto()
-
-
-#
-# Data Classes
-#
-@dataclass
-class TargetServer:
-    uid: str
-    host: str
-    port: int
-
-
-class TargetChannelType(EnumReprMixin, Enum):
-    UNKNOWN = auto()
-    IQ = auto()
-    RF = auto()
-
-
-@dataclass
-class TargetChannelCalibration:
-    channel_type: TargetChannelType
-    ports: list[str]
-    voltage_offset: float | None
-
-
-@dataclass
-class TargetDevice:
-    uid: str
-    # uid of the server in `TargetSetup.servers` this device is reached through
-    server: str | None
-    device_serial: str
-    device_type: TargetDeviceType
-    device_options: str | None
-    interface: str
-    has_signals: bool
-    connected_outputs: dict[str, list[int]]
-    internal_connections: list[str] = field(default_factory=list)
-    calibrations: list[TargetChannelCalibration] | None = None
-    is_qc: bool = False
-    qc_with_qa: bool = False
-    qc_with_sg: bool = False
-    reference_clock_source: ReferenceClockSource | None = None
 
 
 @dataclass
@@ -91,10 +25,3 @@ class WaveForm:
     sampling_rate: float | None = None
     length_samples: int | None = None
     samples: ArrayLike | None = None
-
-
-@dataclass
-class TargetSetup:
-    uid: str | None = None
-    servers: list[TargetServer] = field(default_factory=list)
-    devices: list[TargetDevice] = field(default_factory=list)

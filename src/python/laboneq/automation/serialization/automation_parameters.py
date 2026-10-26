@@ -100,8 +100,7 @@ def save_automation_parameters_to_file(
 def _convert_linspace(params: dict) -> None:
     """Converts `__linspace__` entries to `np.linspace` objects.
 
-    Any `__linspace__` entry in the parameters dictionary, which has `start`, `stop`,
-    and `num` keys with `float`, `float`, and `int` values, is automatically converted
+    Any `__linspace__` entry in the parameters dictionary is automatically converted
     into a `np.linspace(start, stop, num)` object (in-place).
 
     Arguments:
@@ -124,6 +123,7 @@ def load_automation_parameters_from_file(file: str | Path) -> dict:
     Load automation parameters from the given file.
 
     The following converters are applied to the automation parameters:
+
     - `_convert_linspace`
 
     Arguments:

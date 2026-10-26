@@ -17,7 +17,7 @@ use laboneq_dsl::types::{
 use laboneq_py_utils::py_object_store::{OwnedPyObjectPayload, PyObjectStore};
 use numeric_array::NumericArray;
 
-/// Bundles the state a [`CompilerArtifact`](crate::compiler_backend::CompilerArtifact)
+/// Bundles the state that a [`CompilerArtifact`](crate::compiler_backend::CompilerArtifact)
 /// needs to serialize its own capnp artifacts consistently with the rest of
 /// `CompiledExperiment`: the symbol table, and the `parameters`/`acquisitionHandles`
 /// index tables built while serializing those shared tables.
@@ -219,8 +219,8 @@ fn write_elements<T, const N: usize>(
 ) -> capnp::Result<()> {
     // A capnp Data field holds at most 4 GiB.
     let data = builder.init_data(narrow(vals.len() * N, "data")?);
-    for (slot, value) in data.chunks_exact_mut(N).zip(vals) {
-        slot.copy_from_slice(&encode(value));
+    for (slot, value) in data.as_chunks_mut::<N>().0.iter_mut().zip(vals) {
+        *slot = encode(value);
     }
     Ok(())
 }
@@ -257,8 +257,8 @@ mod tests {
         message
     }
 
-    /// Asserts the on-wire encoding element by element, since `data` is opaque bytes that
-    /// only the deserializer's dtype-driven chunking gives meaning to -- a wrong element
+    /// Asserts the on-wire encoding element by element, since `data` is opaque bytes, given
+    /// meaning only by the deserializer's dtype-driven chunking -- a wrong element
     /// width or byte order would decode into plausible-looking garbage rather than fail.
     #[track_caller]
     fn assert_encodes_to(
@@ -273,10 +273,7 @@ mod tests {
 
         assert_eq!(reader.get_dtype().unwrap(), dtype);
         let data = reader.get_data().unwrap();
-        let words: Vec<[u8; 8]> = data
-            .chunks_exact(8)
-            .map(|c| c.try_into().unwrap())
-            .collect();
+        let words = data.as_chunks::<8>().0.to_vec();
         assert_eq!(words, expected);
         // `length` counts elements, not bytes: complex packs two words per element.
         assert_eq!(

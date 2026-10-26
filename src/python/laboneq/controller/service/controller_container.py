@@ -20,6 +20,7 @@ from laboneq.controller.api.commons import SubmissionHandle
 from laboneq.controller.callback_channel import CallbackChannel
 from laboneq.controller.constants import CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S
 from laboneq.controller.recipe_processor import collect_neartime_callback_names
+from laboneq.controller.utilities.exception import LabOneQControllerException
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -190,8 +191,7 @@ class ControllerContainer:
 
     Construct via :meth:`create` — the classmethod performs the hardware
     connection and returns a ready-to-use container.  Direct instantiation
-    raises :class:`RuntimeError`; connection failures propagate so the
-    service aborts startup rather than running disconnected.
+    raises :class:`RuntimeError`.
     """
 
     def __init__(
@@ -225,6 +225,11 @@ class ControllerContainer:
     ) -> ControllerContainer:
         """Connect to hardware and return a ready-to-use container.
 
+        If the connection fails, returns the container with an unconnected
+        `AsyncLocalController`, which reports the failure through
+        `get_not_ready_reason`.
+        Under emulation, a failed connection raises.
+
         Argument combinations:
 
         - ``device_setup`` alone — use the setup as-is (addresses from its
@@ -254,7 +259,8 @@ class ControllerContainer:
         Raises:
             ValueError: Invalid combination of *device_setup*, *dataserver*,
                 and *do_emulation*.
-            Exception: Any failure from the controller factory propagates.
+            LabOneQControllerException: The connection failed under emulation.
+            Exception: Any failure from the controller factory.
         """
         if do_emulation and device_setup is None and instrument_topology is None:
             raise ValueError(
@@ -285,11 +291,16 @@ class ControllerContainer:
             timeout=None,
             instrument_topology=instrument_topology,
         )
-        logger.info(
-            "Connected to hardware (emulation=%s, reset_devices=%s)",
-            do_emulation,
-            reset_devices,
-        )
+        not_ready_reason = await controller.get_not_ready_reason()
+        if not_ready_reason is None:
+            logger.info(
+                "Connected to hardware (emulation=%s, reset_devices=%s)",
+                do_emulation,
+                reset_devices,
+            )
+        elif do_emulation:
+            # Emulation connects to nothing, so its failure is a configuration error.
+            raise LabOneQControllerException(not_ready_reason)
         return cls(
             _token=_CREATE_TOKEN,
             controller=controller,
@@ -333,10 +344,17 @@ class ControllerContainer:
         """Return the server's device setup."""
         return self._device_setup
 
-    @property
-    def instrument_topology(self) -> InstrumentTopology | None:
-        """Return the server's instrument topology, or None if not configured."""
-        return self._controller.instrument_topology
+    async def get_not_ready_reason(self) -> str | None:
+        """Return why the hardware cannot run experiments now, or None if it can."""
+        return await self._controller.get_not_ready_reason()
+
+    async def get_instrument_topology(self) -> InstrumentTopology | None:
+        """Return the server's instrument topology, or None if not configured.
+
+        Raises:
+            HardwareNotReadyError: The hardware cannot run experiments now.
+        """
+        return await self._controller.get_instrument_topology()
 
     @property
     def registered_callback_names(self) -> list[str]:
@@ -378,6 +396,7 @@ class ControllerContainer:
                 the coprocessor label declared in the experiment.
 
         Raises:
+            HardwareNotReadyError: The hardware cannot run experiments now.
             LabOneQControllerException: an error occurs during submission.
         """
         callback_channel = None

@@ -25,7 +25,6 @@ SHF_OUTPUT_MUTE_MIN_DURATION: float = 280e-9
 @dataclass(frozen=True)
 class CompilerSettings:
     # NOTE: The rest of the settings are processed in the Rust compiler.
-    LOG_REPORT: bool = True
     IGNORE_RESOURCE_LIMITATION_ERRORS: bool = False
 
     @classmethod

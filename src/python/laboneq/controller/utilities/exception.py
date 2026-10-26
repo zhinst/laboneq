@@ -17,5 +17,14 @@ class LabOneQControllerException(LabOneQException):
             self.__cause__ = cause
 
 
+class HardwareNotReadyError(LabOneQControllerException):
+    """The hardware cannot run experiments now."""
+
+    def __init__(self, message: str):
+        # The hardware recovers from this state, and callers report it or retry.
+        # Skip the critical log of `LabOneQControllerException.__init__`.
+        LabOneQException.__init__(self, message)
+
+
 class UnknownCallbackError(LabOneQControllerException):
     """The experiment references an unknown near-time callback."""

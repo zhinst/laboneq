@@ -272,10 +272,10 @@ class CLOPSExperimentBuilder:
         measure_pulse = pl.const(length=settings.readout_length)
         acquire_kernel = pl.const(length=settings.readout_length)
         template_id_handle = SweepParameter(
-            uid="template_id", values=range(settings.n_template)
+            uid="template_id", values=list(range(settings.n_template))
         )
         repetition_id_handle = SweepParameter(
-            uid="repetition_id", values=range(settings.n_repeat)
+            uid="repetition_id", values=list(range(settings.n_repeat))
         )
         n_average = settings.n_average
         depth = settings.depth

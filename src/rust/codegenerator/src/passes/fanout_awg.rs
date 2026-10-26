@@ -118,7 +118,7 @@ fn build_awg_ir(node: &IrNode, parent_offset: Samples, ctx: &Context<'_>, nodes:
             // if any of them are relevant to the AWG.
             //
             // If any of the branches are relevant, we need to ensure that
-            // all branches have a length equal to the Match node length and the
+            // all branches have a length equal to the Match node length, and that the
             // zero-length and empty branches are filled with placeholder pulses to ensure
             // correct timing.
             let length = obj.length;

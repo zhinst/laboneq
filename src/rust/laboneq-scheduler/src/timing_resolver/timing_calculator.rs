@@ -217,8 +217,8 @@ fn schedule_root(
 /// regular section.
 ///
 /// First, we schedule all PPC sweep steps and oscillator sweep steps. They always
-/// can happen in parallel, because they they are not observable (they cannot
-/// overlap with any pulses (or even acquisitions).
+/// can happen in parallel, because they are not observable: they cannot
+/// overlap with any pulses or even acquisitions.
 ///
 /// Finally, we insert the phase resets. These do have observable side effects:
 ///

@@ -260,7 +260,8 @@ struct MatchSection {
 
   sectionTimingMode @8 :SectionTimingMode;
   # Timing mode for this match section. Controls whether rounding of the match
-  # section's total length (derived as the maximum of its case branches) is allowed.
+  # section's total length is allowed. The total length is derived as the maximum of
+  # its case branches.
 }
 
 struct CaseSection {

@@ -25,7 +25,11 @@ from fastapi import (
 )
 
 from laboneq import __version__
-from laboneq.controller.api.commons import AUTH_HEADER, AUTH_SCHEME, decode_submission
+from laboneq.controller.api.commons import (
+    AUTH_HEADER,
+    AUTH_SCHEME,
+    decode_submission,
+)
 from laboneq.controller.api.commons import parse_major_minor as _parse_major_minor
 from laboneq.controller.callback_channel import CallbackChannelBusy
 from laboneq.controller.callback_protocol import (
@@ -54,6 +58,7 @@ from laboneq.controller.service.models import (
     SubmitExperimentResponse,
 )
 from laboneq.controller.utilities.exception import (
+    HardwareNotReadyError,
     LabOneQControllerException,
     UnknownCallbackError,
 )
@@ -166,6 +171,12 @@ def map_service_errors(fn: Callable[..., Any]) -> Callable[..., Any]:
             raise
         except UnknownCallbackError as exc:
             raise _error_response(ErrorCode.UNKNOWN_CALLBACK, str(exc)) from exc
+        except HardwareNotReadyError as exc:
+            raise _error_response(
+                ErrorCode.NOT_READY,
+                str(exc),
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from exc
         except LabOneQControllerException as exc:
             raise _error_response(
                 ErrorCode.CONTROLLER_ERROR,
@@ -331,8 +342,8 @@ def _with_controller_service_url(
 
     A `DeviceSetup` built from the returned topology submits experiments to this
     service rather than driving hardware directly. The address is the full base
-    URL the client reached this service under, so that the scheme and any path
-    prefix survive a reverse or authenticating proxy (see
+    URL under which the client reached this service, so that the scheme and any
+    path prefix survive a reverse or authenticating proxy (see
     `advertised_base_url`).
 
     The configured topology never carries one of its own: a topology file cannot
@@ -350,27 +361,17 @@ def _with_controller_service_url(
     "/instrumenttopology",
     response_model=InstrumentTopologyResponse,
     tags=["system"],
-    responses={
-        400: {
-            "model": ErrorResponse,
-            "description": "Topology not configured on this server",
-        },
-    },
 )
+@map_service_errors
 async def get_instrument_topology(
     request: Request,
     controller_container: ControllerContainer = Depends(get_controller_container),
 ) -> InstrumentTopologyResponse:
-    """Return the instrument topology configured on this server."""
-    if controller_container.instrument_topology is None:
-        raise _error_response(
-            ErrorCode.NOT_CONFIGURED,
-            "No instrument topology configured on this server",
-            status_code=400,
-        )
-    topology = _with_controller_service_url(
-        controller_container.instrument_topology, request
-    )
+    """Return the instrument topology configured on this server, or null if none is."""
+    instrument_topology = await controller_container.get_instrument_topology()
+    if instrument_topology is None:
+        return InstrumentTopologyResponse(instrument_topology=None)
+    topology = _with_controller_service_url(instrument_topology, request)
     serialized = serializers.to_dict(topology)
     assert isinstance(serialized, dict), (
         "Expected instrument topology to serialize to a dict"
@@ -552,7 +553,7 @@ async def get_experiment_results(
         pipeline_jobs_timestamps=results.pipeline_jobs_timestamps if is_full else {},
     )
     # Serialize via to_json (orjson + the numpy-aware to_json_dict fallback),
-    # not to_dict, whose embedded complex arrays FastAPI's encoder cannot handle.
+    # not to_dict: FastAPI's encoder cannot handle the complex arrays that to_dict embeds.
     return ExperimentResultsResponse(
         id=uuid,
         status=_to_api_status(status_val),
@@ -656,9 +657,9 @@ async def experiment_callbacks(
         outbound = channel.attach()
     except CallbackChannelBusy as exc:
         # Transient: a transport is still attached, typically a stale one whose
-        # unclean disconnect the service has not yet noticed. Close with "try
-        # again later" so a reconnecting client retries instead of treating this
-        # as a permanent rejection and aborting the run.
+        # unclean disconnect has not yet been noticed by the service. Close with
+        # "try again later" so a reconnecting client retries instead of treating
+        # this as a permanent rejection and aborting the run.
         await websocket.close(
             code=status.WS_1013_TRY_AGAIN_LATER, reason=str(exc)[:120]
         )
@@ -676,7 +677,7 @@ async def experiment_callbacks(
     # Sending needs its own task even though callbacks and replies alternate.
     # While a callback is outstanding this loop sits in receive(), so a run
     # cancelled or failed in the meantime could not get its terminal message
-    # out; and between callbacks a lone loop would wait on the queue and miss a
+    # out. Between callbacks, a lone loop would wait on the queue and miss a
     # dropped socket, leaving the channel attached and the reconnecting client
     # turned away until the next callback.
     sender = asyncio.create_task(_pump_channel_outbound(websocket, outbound))

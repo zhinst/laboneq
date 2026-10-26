@@ -25,22 +25,20 @@ class ExternResult:
     needs to play a section, perform a measurement or other operations in
     addition to returning a result.
 
-    Arguments:
-    ---------
-        result:
+    Args:
+        result (Any):
             The result returned by the extern function.
-        handle:
+        handle (str | None):
             The measurement handle that holds the result returned by
             the extern function. Only one of handle or result
             may be specified.
-        section:
+        section (Section | None):
             The section the extern function would like to have played at the
             point in the OpenQASM function where it is called. Sections cannot
             be played inside an expression -- the call to the extern must be
             directly a statement or the right-hand side of an assignment.
 
     Attributes:
-    ----------
         result (Any):
             The result returned by the extern function.
         handle (str | None):

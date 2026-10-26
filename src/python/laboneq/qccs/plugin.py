@@ -15,8 +15,8 @@ class QCCSBackendPlugin(BackendPlugin):
         _register_compiler_hooks()
         register_instruments()
         _register_artifact_deserializer()
+        _register_controller_backend()
         _register_signal_plots_backend()
-        _register_target_setup_builder()
 
 
 def _register_compiler_hooks() -> None:
@@ -37,17 +37,17 @@ def _register_artifact_deserializer() -> None:
     register_deserializer(BACKEND_NAME, qccs.deserialize)
 
 
+def _register_controller_backend() -> None:
+    """Register the QCCS controller backend under the QCCS backend name."""
+    from laboneq.controller.controller_backend import register_controller_backend
+    from laboneq.qccs.controller.backend import QCCSControllerBackend
+
+    register_controller_backend(BACKEND_NAME, QCCSControllerBackend)
+
+
 def _register_signal_plots_backend() -> None:
     """Register the signal plotting backend for QCCS"""
     from laboneq.qccs.simulator.signal_plots_backend import QCCSSignalPlotsBackend
     from laboneq.simulator.signal_plots import backends
 
     backends.register(backend=QCCSSignalPlotsBackend(), name=BACKEND_NAME)
-
-
-def _register_target_setup_builder() -> None:
-    """Register how the controller builds the QCCS view of a device setup."""
-    from laboneq.controller.target_setup import register_target_setup_builder
-    from laboneq.qccs.controller.target_setup import build
-
-    register_target_setup_builder(BACKEND_NAME, build)

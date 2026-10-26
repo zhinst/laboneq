@@ -10,6 +10,8 @@ CONNECT_CHECK_HOLDOFF = 10  # sec
 
 DEFAULT_TIMEOUT_S = 10.0
 
+READY_TIMEOUT_S = 120.0
+
 # Version of the controller service protocol, reported in the
 # X-LabOneQ-Protocol-Version header. Anything that talks to the service without
 # being shipped alongside it is compatible by this version rather than by a

@@ -1,0 +1,31 @@
+[package]
+name = "laboneq-experiment-py"
+description = "Python DSL experiment -> Cap'n Proto Experiment serializer"
+authors.workspace = true
+documentation.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+name = "laboneq_experiment_py"
+crate-type = ["lib"]
+
+[dependencies]
+capnp = { workspace = true }
+num-complex = { workspace = true }
+pyo3 = { workspace = true }
+tracing = { workspace = true }
+
+laboneq-capnp = { workspace = true }
+laboneq-error = { workspace = true, features = ["pyo3"] }
+laboneq-log = { workspace = true }
+laboneq-opentelemetry-python = { workspace = true }
+laboneq-py-utils = { workspace = true }
+laboneq-tracing = { workspace = true }
+numeric-array = { workspace = true, features = ["pyo3"] }

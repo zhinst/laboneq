@@ -6,14 +6,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
-from laboneq.controller.devices.device_zi import DeviceBase
-
 if TYPE_CHECKING:
     import zhinst.core
     from zhinst.toolkit import Session as TKSession
     from zhinst.toolkit.driver.devices import DeviceType
 
-    from laboneq.controller.devices.device_zi import DeviceZI
+    from laboneq.controller.devices.device_base import DeviceBase
 
 
 class ToolkitDevices(Mapping):
@@ -26,12 +24,8 @@ class ToolkitDevices(Mapping):
         devices: Mapping of devices in the device setup.
     """
 
-    def __init__(self, devices: dict[str, DeviceZI] | None = None):
-        self._devices = (
-            {u: d for u, d in devices.items() if isinstance(d, DeviceBase)}
-            if devices
-            else {}
-        )
+    def __init__(self, devices: dict[str, DeviceBase] | None = None):
+        self._devices = dict(devices) if devices else {}
         self._tk_sessions: dict[tuple[str, int], TKSession] = {}
 
     def _tk_session(

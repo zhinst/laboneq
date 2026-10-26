@@ -11,15 +11,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from laboneq._rust import compiler as compiler_rs
-    from laboneq.compiler.common.iface_compiler_output import CombinedOutput
     from laboneq.compiler.common.iface_linker import ILinker
-    from laboneq.data.scheduled_experiment import CompilerArtifact
     from laboneq.dsl.device.device_setup import DeviceSetup
-
-
-@dataclass
-class CompiledOutputParams:
-    combined_compiler_output: CombinedOutput
 
 
 @dataclass
@@ -48,11 +41,6 @@ class CompilerHooks(ABC):
 
     @staticmethod
     @abstractmethod
-    def compiled_output(args: CompiledOutputParams) -> CompilerArtifact:
-        """Generate the backend-specific compiler artifacts from the combined compiler output."""
-
-    @staticmethod
-    @abstractmethod
     def compiler_module() -> compiler_rs: ...
 
     @staticmethod
@@ -71,7 +59,7 @@ class CompilerHooks(ABC):
 
         Returns:
             The setup description and the signal map that resolves experiment signal
-            uids to this backend's channel identifiers.
+                uids to this backend's channel identifiers.
         """
 
 

@@ -41,6 +41,17 @@ $ pip install --upgrade --pre laboneq
 If you instead would like to install from source, you will additionally need to install
 a Rust toolchain. For this, follow the instructions on [rustup.rs](https://rustup.rs/).
 
+## Applications Library
+
+The [LabOne Q Applications Library](https://github.com/zhinst/laboneq-applications)
+provides experiments, analyses and quantum elements built on LabOne Q. It is a separate
+package, released together with LabOne Q, which you install from
+[PyPI](https://pypi.org/project/laboneq-applications/) through:
+
+```sh
+$ pip install --upgrade laboneq-applications
+```
+
 ## Documentation
 
 Find the LabOne Q Manual here:

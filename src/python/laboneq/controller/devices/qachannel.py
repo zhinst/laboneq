@@ -21,12 +21,12 @@ from laboneq.controller.devices.async_support import (
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.core_base import SHFBaseProtocol, SHFChannelBase
-from laboneq.controller.devices.device_shf_base import check_synth_frequency
-from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.device_zi import (
+from laboneq.controller.devices.device_base import (
     RawReadoutData,
     delay_to_rounded_samples,
 )
+from laboneq.controller.devices.device_shf_base import check_synth_frequency
+from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.recipe_processor import (
     AwgKey,
     get_artifacts,

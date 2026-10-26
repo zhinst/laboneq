@@ -100,9 +100,9 @@ def _resolve_signal_connection_ports(
 
     If the single entry is already a literal port on `dev`, it is returned
     unchanged. If it matches neither a literal port nor a known logical
-    signal, it is also returned unchanged for `ZQCS` (which has no fixed
-    port vocabulary and treats it as a brand-new port name), and raises for
-    every other instrument type.
+    signal, it is also returned unchanged for `ZQCS`, which has no fixed
+    port vocabulary and treats it as a brand-new port name. For every other
+    instrument type, the function raises.
     """
     [port] = connection.ports
     port_uids = [p.uid for p in dev.ports]

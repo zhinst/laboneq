@@ -16,8 +16,6 @@ from laboneq.compiler.workflow.compiler_hooks import (
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
     from laboneq.compiler.common.iface_linker import ILinker
-    from laboneq.compiler.workflow.compiler_hooks import CompiledOutputParams
-    from laboneq.data.scheduled_experiment import CompilerArtifact
     from laboneq.dsl.device.device_setup import DeviceSetup
 
 
@@ -37,12 +35,6 @@ class CompilerHooksSeqC(CompilerHooks):
         from laboneq.compiler.seqc.linker import SeqCLinker
 
         return SeqCLinker
-
-    @staticmethod
-    def compiled_output(args: CompiledOutputParams) -> CompilerArtifact:
-        from laboneq.compiler.seqc.artifact_generator import populate_codegen_artifacts
-
-        return populate_codegen_artifacts(args.combined_compiler_output)
 
     @staticmethod
     def build_setup_description(

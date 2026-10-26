@@ -109,8 +109,10 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
         inputs: dict[str, Any] | None = None,
         externs: dict[str, Callable | str] | None = None,
         namespace: None | NamespaceStack = None,
+        relative_calibration_spans: bool = True,
     ):
         self.qubits = qubits
+        self._relative_calibration_spans = relative_calibration_spans
         # Default operations used when supplied `qops` does not implement them.
         self._default_ops = _DefaultOperations()
         # NOTE: The workaround of extern port declaration in the importer
@@ -643,17 +645,15 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
                 try:
                     section = self.transpile(statement, uid_hint="defcal").section
                 except OpenQasmException as e:
-                    # Spans on exceptions from inside cal and defcal blocks
-                    # are relative to the cal block and not the original qasm
-                    # source so we need to update them here:
-                    prefix_length = len(
-                        f"defcal {defcal_name} {' '.join(qubit_names)} {{",
-                    )
-                    e.mark = _convert_openpulse_span(
-                        statement.span,
-                        e.mark,
-                        prefix_length,
-                    )
+                    if self._relative_calibration_spans:
+                        prefix_length = len(
+                            f"defcal {defcal_name} {' '.join(qubit_names)} {{",
+                        )
+                        e.mark = _convert_openpulse_span(
+                            statement.span,
+                            e.mark,
+                            prefix_length,
+                        )
                     raise
 
                 reserved_qubits = [self.qubits[qubit] for qubit in qubit_names]
@@ -672,11 +672,8 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
         try:
             return self._transpile(statement, uid_hint="calibration")
         except OpenQasmException as e:
-            # Spans on exceptions from inside cal and defcal blocks
-            # are relative to the cal block and not the original qasm
-            # source so we need to update them here:
-            prefix_length = len("cal {")
-            e.mark = _convert_openpulse_span(statement.span, e.mark, prefix_length)
+            if self._relative_calibration_spans:
+                e.mark = _convert_openpulse_span(statement.span, e.mark, len("cal {"))
             raise
 
     def _handle_cal_expression(self, statement: ast.ExpressionStatement):

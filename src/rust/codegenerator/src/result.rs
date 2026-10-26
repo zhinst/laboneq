@@ -62,7 +62,7 @@ pub struct AwgCodeGenerationResult {
     pub(crate) pulse_map: PulseMap,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SequencerType {
     Qa,
     Sg,

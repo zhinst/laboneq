@@ -162,8 +162,8 @@ impl<'a> SignalOscillator<'a> {
 /// Acquisitions performed by the experiment, as far as oscillator resolution is concerned.
 #[derive(Debug)]
 struct Acquisitions {
-    /// Acquisition type of the experiment's real-time averaging loop, of which the compiler
-    /// accepts exactly one; the first found is therefore the only one.
+    /// Acquisition type of the experiment's real-time averaging loop. The compiler accepts
+    /// exactly one such loop, so the first found is the only one.
     ///
     /// Once several real-time executions are supported, the modulation will have to be
     /// resolved per execution rather than once for the whole experiment.

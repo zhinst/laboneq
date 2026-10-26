@@ -18,8 +18,8 @@ from laboneq.controller.versioning import (
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from laboneq.controller.devices.device_base import DeviceQualifier
     from laboneq.controller.devices.device_setup_dao import DeviceSetupDAO
-    from laboneq.controller.devices.device_zi import DeviceQualifier
 
 
 def calc_dev_type(device_qualifier: DeviceQualifier) -> str:

@@ -47,7 +47,7 @@ class ZIStandardInstrument(Instrument):
     )
 
     #: The backend that compiles and runs this instrument. Matches the name
-    #: the backend's compiler hooks register under.
+    #: under which the backend's compiler hooks register.
     backend: ClassVar[str] = "qccs"
 
     requires_data_server: ClassVar[bool] = True

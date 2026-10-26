@@ -98,10 +98,9 @@ pub(crate) fn allocate_oscillators(awg: &AwgCore) -> Result<HashMap<SignalUid, u
     // Sort by channel for stable ordering.
     hw_modulated_signals.sort_by(|a, b| a.0.channels.cmp(&b.0.channels));
 
-    // TODO(2K): This is a workaround for the case where measure and
-    // acquire signals on the same QA AWG, or two RF signals on the
-    // same HD AWG have different oscillators, but the same fixed
-    // frequency. In principle, this shouldn't be allowed, but previous
+    // TODO(2K): This is a workaround for two signals that have different
+    // oscillators, but the same fixed frequency: measure and acquire
+    // signals on the same QA AWG, or two RF signals on the same HD AWG. In principle, this shouldn't be allowed, but previous
     // code did allow it, and there are test cases relying on it.
     if hw_modulated_signals.len() == 2
         && signal_can_share_osc(hw_modulated_signals[0].1, hw_modulated_signals[1].1)
@@ -118,7 +117,7 @@ pub(crate) fn allocate_oscillators(awg: &AwgCore) -> Result<HashMap<SignalUid, u
     let mut signal_osc_index = HashMap::with_capacity(hw_modulated_signals.len());
     let mut osc_uid_to_index = HashMap::new();
 
-    // Exception: for SHFQA generator slot N is hardwired to
+    // Exception: for SHFQA, generator slot N is hardwired to
     // oscillator N, so IQ (generator) signals must claim oscillator N before integration
     // signals on the same channel, regardless of the oscillator specified.
     if awg.device_kind() == &DeviceKind::SHFQA {

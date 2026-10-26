@@ -55,6 +55,8 @@ class Automation:
             instance is initialized and updated when an automation instance is run
             completely, using `self.run()`. This timestamp is used for organizing the
             folder store and may be manually updated using `self.update_timestamp()`.
+        ROOT_NODE: The node at the root of the node graph of every automation.
+        ROOT_LAYER: The layer at the root of the layer graph of every automation.
     """
 
     ROOT_NODE: ClassVar[RootNode] = RootNode()
@@ -124,10 +126,10 @@ class Automation:
         The automation status is derived from the statuses of its layers.
 
         Aggregation rules in precedence order:
-            `EMTPY`:
+            `EMPTY`:
                 No layers have been added yet.
             `ERROR`:
-                An error has occured in the execution of a layer.
+                An error has occurred in the execution of a layer.
             `RUNNING`:
                 The automation has any running layers/nodes.
             `READY`:
@@ -676,7 +678,7 @@ class Automation:
     def _apply_logic(
         self, layer: AutomationLayer, logic: AutomationLogic
     ) -> tuple[str | None, dict]:
-        """Perfom checks if the logic is applicable and run the logic executable.
+        """Perform checks if the logic is applicable and run the logic executable.
 
         Arguments:
             layer: The layer on which to apply the logic.

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::ir::{Samples, compilation_job::DeviceKind};
+use crate::result::SequencerType;
 
 /// Device specific traits for code generation.
 #[derive(Debug)]
@@ -30,6 +31,15 @@ pub struct DeviceTraits {
     pub max_ct_entries: Option<u16>,
     pub scope_max_segments: Option<u16>,
     pub max_result_vector_length: Option<usize>,
+    /// Sequencer flavour the device's SeqC program must be compiled for.
+    pub sequencer_type: SequencerType,
+    /// Whether the emitted SeqC program must carry the sampling rate.
+    pub seqc_requires_sampling_rate: bool,
+    /// Mixer gains (diagonal, off-diagonal) applied when calibration omits them.
+    pub default_mixer_gains: Option<(f64, f64)>,
+    /// Whether an input and an output channel of the same index share a
+    /// physical port, and therefore must agree on their port mode.
+    pub shares_input_output_port: bool,
 }
 
 pub(crate) const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
@@ -57,6 +67,10 @@ pub(crate) const HDAWG_TRAITS: DeviceTraits = DeviceTraits {
     max_ct_entries: Some(1024),
     scope_max_segments: None,
     max_result_vector_length: None,
+    sequencer_type: SequencerType::Auto,
+    seqc_requires_sampling_rate: true,
+    default_mixer_gains: Some((1.0, 0.0)),
+    shares_input_output_port: false,
 };
 
 pub(crate) const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -84,6 +98,10 @@ pub(crate) const UHFQA_TRAITS: DeviceTraits = DeviceTraits {
     max_ct_entries: None,
     scope_max_segments: Some(1),
     max_result_vector_length: Some(1 << 20),
+    sequencer_type: SequencerType::Auto,
+    seqc_requires_sampling_rate: false,
+    default_mixer_gains: None,
+    shares_input_output_port: false,
 };
 
 pub(crate) const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
@@ -115,6 +133,10 @@ pub(crate) const SHFSG_TRAITS: DeviceTraits = DeviceTraits {
     max_ct_entries: Some(4096),
     scope_max_segments: None,
     max_result_vector_length: None,
+    sequencer_type: SequencerType::Sg,
+    seqc_requires_sampling_rate: false,
+    default_mixer_gains: None,
+    shares_input_output_port: false,
 };
 
 pub(crate) const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
@@ -147,6 +169,10 @@ pub(crate) const SHFQA_TRAITS: DeviceTraits = DeviceTraits {
     max_ct_entries: None,
     scope_max_segments: Some(1024),
     max_result_vector_length: Some(1 << 19),
+    sequencer_type: SequencerType::Qa,
+    seqc_requires_sampling_rate: false,
+    default_mixer_gains: None,
+    shares_input_output_port: true,
 };
 
 pub(crate) fn scope_memory_size_samples(device_type: DeviceKind, is_shfqc: bool) -> usize {

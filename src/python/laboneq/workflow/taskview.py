@@ -24,9 +24,9 @@ class TaskView(Sequence):
     The class is a `Sequence` of tasks, however item lookup
     is modified to support the following cases:
 
-        - Lookup by index and slicing
-        - Lookup by name (string)
-        - Lookup by name and slicing
+    - Lookup by index and slicing
+    - Lookup by name (string)
+    - Lookup by name and slicing
     """
 
     def __init__(self, tasks: list[TaskResult | WorkflowResult] | None = None) -> None:

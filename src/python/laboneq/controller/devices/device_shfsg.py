@@ -79,7 +79,7 @@ class DeviceSHFSG(SHFSGMixIn, DeviceSHFBase):
     def qc_sg_channels_active(self) -> bool:
         """Whether SHFQC has SG channels configured in the current setup.
 
-        It is relevant to determine whether the configured SHFQC this device represents has active SG channels,
+        It is relevant to determine whether the configured SHFQC represented by this device has active SG channels,
         since `DeviceSHFSG` is created whether or not the SHFQC has SG channels, and some functionality (e.g. trigger configuration) depends on that.
         """
         return self.options.qc_with_sg

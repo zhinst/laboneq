@@ -54,6 +54,10 @@ class AutomationLayerResult:
 class AutomationLayer(ABC):
     """A layer in the automation framework.
 
+    Each attribute from `error` to `timestamp` maps the key of each node in the
+    layer to that node's value. Assigning a dictionary to one of them, except
+    `error`, updates the nodes it names.
+
     Attributes:
         function: The layer function.
         node_keys: The node keys.
@@ -62,9 +66,18 @@ class AutomationLayer(ABC):
         skip_passed: Skip running nodes with `PASSED` status.
         sequential: Whether to execute the layer sequentially.
         parameters: The layer parameters. When a layer is added to an automation,
-            these are merged with any matching parameters from the automation to
-            produce the final layer parameters, with these taking precedence.
+            the layer parameters are merged with any matching parameters from the
+            automation to produce the final layer parameters. The layer parameters
+            take precedence.
         results: The layer results.
+        error: The message of the exception that occurred while running each node.
+        max_fail_count: The maximum number of allowed failures of each node.
+        time_valid: The time for which each node is reliably valid.
+        time_until_invalid: The time until each node is invalid.
+        fail_count: The number of failed runs of each node.
+        pass_count: The number of passed runs of each node.
+        timestamp: The time each node was last run, formatted as
+            '%Y%m%dT%H%M%S'.
     """
 
     function: Callable | None

@@ -27,9 +27,8 @@ def register_pulse_functional(sampler: Callable, name: str | None = None):
     The sampler function must have the following signature:
 
     ``` py
-
-        def sampler(x: ndarray, **pulse_params: Any) -> ndarray:
-            pass
+    def sampler(x: ndarray, **pulse_params: Any) -> ndarray:
+        pass
     ```
 
     The vector ``x`` marks the points where the pulse function is to be evaluated. The
@@ -38,9 +37,9 @@ def register_pulse_functional(sampler: Callable, name: str | None = None):
     The argument ``pulse_params`` contains the parameters passed via the `play(...)`
     command's `pulse_parameters` argument. The parameter values may consist of:
 
-        - `int`, `float`, `complex`, `str`, `bytes`, `bool`, `None` or `laboneq.dsl.Parameter`
-        - lists of the above
-        - dictionaries of the above with `str` keys
+    - `int`, `float`, `complex`, `str`, `bytes`, `bool`, `None` or `laboneq.dsl.Parameter`
+    - lists of the above
+    - dictionaries of the above with `str` keys
 
     The lists and dictionaries may be nested and need not have homogeneous value types.
     A `laboneq.dsl.Parameter`, however, must be the pulse parameter value itself: nested inside
@@ -52,23 +51,24 @@ def register_pulse_functional(sampler: Callable, name: str | None = None):
     it to `bytes` and deserialize it inside the sampler:
 
     ``` py
+    import numpy as np
 
-        import numpy as np
 
-        @pulse_library.register_pulse_functional
-        def my_pulse(x, **kwargs):
-            # bytes -> ndarray, preserving the exact dtype
-            coefficients = np.frombuffer(kwargs["coefficients"], dtype=np.float64)
-            return np.polyval(coefficients, x)
+    @pulse_library.register_pulse_functional
+    def my_pulse(x, **kwargs):
+        # bytes -> ndarray, preserving the exact dtype
+        coefficients = np.frombuffer(kwargs["coefficients"], dtype=np.float64)
+        return np.polyval(coefficients, x)
 
-        p = my_pulse("p", coefficients=np.array([0.1, -0.5, 1.0]).tobytes())
+
+    p = my_pulse("p", coefficients=np.array([0.1, -0.5, 1.0]).tobytes())
     ```
 
     In addition, ``pulse_params``  also contains the following keys:
 
-        - ``length``: the true length of the pulse
-        - ``amplitude``: the true amplitude of the pulse
-        - ``sampling_rate``: the sampling rate
+    - ``length``: the true length of the pulse
+    - ``amplitude``: the true amplitude of the pulse
+    - ``sampling_rate``: the sampling rate
 
     Typically, the sampler function should discard ``length`` and ``amplitude``, and
     instead assume that the pulse extends from -1 to 1, and that it has unit
@@ -85,15 +85,15 @@ def register_pulse_functional(sampler: Callable, name: str | None = None):
         pulse_factory (function):
             A factory function for new ``Pulse`` objects.
             The return value has the following signature:
-            ``` py
 
-                def <name>(
-                    uid: str = None,
-                    length: float = 100e-9,
-                    amplitude: float = 1.0,
-                    **pulse_parameters: Any,
-                ):
-                    pass
+            ``` py
+            def <name>(
+                uid: str = None,
+                length: float = 100e-9,
+                amplitude: float = 1.0,
+                **pulse_parameters: Any,
+            ):
+                pass
             ```
     """
     if name is None:
@@ -359,6 +359,8 @@ def sampled_pulse(
     Arguments:
         samples (numpy.ndarray): waveform envelope data.
         uid (str): Unique identifier of the created pulse.
+        can_compress (bool): Whether the compiler should attempt to compress
+            the pulse.
 
     Returns:
         pulse (Pulse): Pulse based on the provided sample values.
@@ -377,6 +379,8 @@ def sampled_pulse_real(
     Arguments:
         samples (numpy.ndarray): Real valued data.
         uid (str): Unique identifier of the created pulse.
+        can_compress (bool): Whether the compiler should attempt to compress
+            the pulse.
 
     Returns:
         pulse (Pulse): Pulse based on the provided sample values.
@@ -403,6 +407,8 @@ def sampled_pulse_complex(
     Args:
         samples (numpy.ndarray): Complex valued data.
         uid (str): Unique identifier of the created pulse.
+        can_compress (bool): Whether the compiler should attempt to compress
+            the pulse.
 
     Returns:
         pulse (Pulse): Pulse based on the provided sample values.
@@ -427,11 +433,11 @@ def pulse_sampler(name: str) -> Callable:
 
     For example in:
 
-        ```python
-        @register_pulse_functional
-        def const(x, **_):
-            return numpy.ones_like(x)
-        ```
+    ```python
+    @register_pulse_functional
+    def const(x, **_):
+        return numpy.ones_like(x)
+    ```
 
     the sampler is the *undecorated* function `const`. Calling
     `pulse_sampler("const")` will return this undecorated function.
@@ -442,7 +448,7 @@ def pulse_sampler(name: str) -> Callable:
     Arguments:
         name: The name of the sampler to return.
 
-    Return:
+    Returns:
         The sampler function.
     """
     return _pulse_samplers[name]
@@ -457,11 +463,11 @@ def pulse_factory(name: str) -> Callable:
 
     For example, in:
 
-        ```python
-        @register_pulse_functional
-        def const(x, **_):
-            return numpy.ones_like(x)
-        ```
+    ```python
+    @register_pulse_functional
+    def const(x, **_):
+        return numpy.ones_like(x)
+    ```
 
     the factory is the *decorated* function `const`. Calling
     `pulse_factory("const")` will return this decorated function. This is
@@ -470,7 +476,7 @@ def pulse_factory(name: str) -> Callable:
     Arguments:
         name: The name of the factory to return.
 
-    Return:
+    Returns:
         The factory function.
     """
     return _pulse_factories[name]

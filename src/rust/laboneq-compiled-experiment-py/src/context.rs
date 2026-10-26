@@ -30,10 +30,10 @@ pub(crate) fn text_to_string(reader: capnp::text::Reader<'_>) -> Result<&str> {
 
 /// The `CompiledExperiment.parameters`/`acquisitionHandles` tables, decoded once up front:
 /// each entry's name plus (for parameters) its full values array, indexed by capnp position
-/// -- the same indices `execution` and result shapes reference.
+/// -- the same indices that `execution` and result shapes reference.
 ///
 /// Passed to the backend's [`crate::ArtifactsDeserializer`] so backend-specific artifacts
-/// can resolve the same parameter/handle references `execution` and result shapes do.
+/// can resolve the same parameter/handle references as `execution` and result shapes do.
 pub struct DeserializerContext {
     /// The name of each parameter, indexed by capnp position.
     pub parameter_names: Vec<String>,
@@ -157,28 +157,20 @@ pub fn decode_numeric_array<'py>(
 
     match dtype {
         values_capnp::NumericDType::Float64 => {
-            let vals: Vec<f64> = data
-                .chunks_exact(8)
-                .map(|c| f64::from_le_bytes(c.try_into().unwrap()))
-                .collect();
+            let (words, _) = data.as_chunks::<8>();
+            let vals: Vec<f64> = words.iter().map(|&w| f64::from_le_bytes(w)).collect();
             Ok(PyArray1::from_vec(py, vals).into_bound_py_any(py)?)
         }
         values_capnp::NumericDType::Int64 => {
-            let vals: Vec<i64> = data
-                .chunks_exact(8)
-                .map(|c| i64::from_le_bytes(c.try_into().unwrap()))
-                .collect();
+            let (words, _) = data.as_chunks::<8>();
+            let vals: Vec<i64> = words.iter().map(|&w| i64::from_le_bytes(w)).collect();
             Ok(PyArray1::from_vec(py, vals).into_bound_py_any(py)?)
         }
         values_capnp::NumericDType::Complex128 => {
-            let vals: Vec<Complex64> = data
-                .chunks_exact(16)
-                .map(|c| {
-                    Complex64::new(
-                        f64::from_le_bytes(c[..8].try_into().unwrap()),
-                        f64::from_le_bytes(c[8..].try_into().unwrap()),
-                    )
-                })
+            let (pairs, _) = data.as_chunks::<8>().0.as_chunks::<2>();
+            let vals: Vec<Complex64> = pairs
+                .iter()
+                .map(|&[re, im]| Complex64::new(f64::from_le_bytes(re), f64::from_le_bytes(im)))
                 .collect();
             Ok(PyArray1::from_vec(py, vals).into_bound_py_any(py)?)
         }

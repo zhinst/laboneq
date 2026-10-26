@@ -21,7 +21,12 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
-from fastapi import APIRouter, FastAPI, status
+from fastapi import (
+    APIRouter,
+    FastAPI,
+    Request,  # noqa: TC002 - required at runtime for FastAPI injection
+    status,
+)
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -45,7 +50,7 @@ from laboneq.controller.service.routes import ServiceError, router
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
-    from fastapi import Request, Response
+    from fastapi import Response
 
     from laboneq.data.instrument_topology import InstrumentTopology
     from laboneq.dsl.device import DeviceSetup
@@ -71,16 +76,20 @@ async def livez() -> dict[str, str]:
     response_model=ReadyzResponse,
     responses={503: {"model": ReadyzResponse, "description": "Not ready"}},
 )
-async def readyz() -> Response:
+async def readyz(request: Request) -> Response:
     """Readiness probe — 200 when the server can accept experiments, 503 otherwise.
 
-    The server is connected by the time the lifespan finishes, so reaching
-    this handler already implies hardware connectivity.  Only queue-level
-    backpressure signals need to be added here.
+    The ``hardware`` check gives the reason the hardware cannot run experiments,
+    e.g. an unreachable ZQCS system or one that is not coherent.
     """
+    controller_container: ControllerContainer = request.app.state.controller_container
+    hardware_not_ready = await controller_container.get_not_ready_reason()
     # TODO: surface queue-depth limits / backpressure signals once defined.
-    checks: dict[str, str] = {"queue": "ok"}
-    all_ok = True
+    checks: dict[str, str] = {
+        "queue": "ok",
+        "hardware": "ok" if hardware_not_ready is None else hardware_not_ready,
+    }
+    all_ok = hardware_not_ready is None
 
     body = ReadyzResponse(
         status="ok" if all_ok else "unavailable",
@@ -130,8 +139,9 @@ def create_app(
             stays detached longer than this many seconds.
 
     Returns:
-        Configured FastAPI application. Should it fail to start up, the reason
-        is left on ``app.state.startup_error``, which is ``None`` otherwise.
+        Configured FastAPI application. If the application fails to start up,
+            the reason is left in ``app.state.startup_error``, which is ``None``
+            otherwise.
 
     Example:
         Basic usage::
@@ -151,11 +161,10 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         """Manage application lifecycle.
 
-        Connects to hardware on startup; a connection failure propagates and
-        aborts server startup rather than running in a degraded state. It is
-        also recorded on `app.state.startup_error`: an ASGI server logs the
-        exception and exits, so whoever started the server never sees it
-        otherwise.
+        Connects to hardware on startup.  If connecting fails, the service
+        starts anyway.  Records a failure that aborts startup in
+        `app.state.startup_error`.  An ASGI server only logs the exception and
+        exits, so whoever started the server would not see it otherwise.
         """
         logger.info("Starting LabOne Q Controller Service v%s", __version__)
         try:

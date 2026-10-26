@@ -48,7 +48,7 @@ def compile_experiment(
         experiment:
             The LabOne Q DSL experiment to compile.
         options:
-            The options for this task as an instance of [CompileExperimentOptions].
+            The options for this task as an instance of [CompileExperimentOptions][].
 
     Returns:
         [CompiledExperiment][laboneq.core.types.compiled_experiment.CompiledExperiment]

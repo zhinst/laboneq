@@ -100,15 +100,6 @@ class DeviceType(DeviceTraits, Enum):
         min_lo_frequency=1e9,
         max_lo_frequency=8.5e9,
     )
-    ZQCS = DeviceTraits(
-        str_value="zqcs",
-        sampling_rate=2.0e9,
-        min_play_wave=4,
-        sample_multiple=4,
-        channels_per_awg=1,
-        oscillator_set_latency=36e-9,
-        reset_osc_duration=32e-9,
-    )
 
     def __repr__(self):
         cls_name = self.__class__.__name__

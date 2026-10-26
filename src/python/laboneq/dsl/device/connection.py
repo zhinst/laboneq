@@ -44,6 +44,8 @@ class SignalConnection:
             or a `LogicalSignal` object) may be given instead of a list of
             raw ports; it then resolves to the raw port(s) already backing
             that signal.
+        group: The logical signal group, the `<group>` part of `uid`.
+        name: The logical signal name, the `<name>` part of `uid`.
     """
 
     uid: str
@@ -75,6 +77,7 @@ class InternalConnection:
     Attributes:
         to: UID of the instrument or signal to which the device is connected to.
         from_port: From which port the connection is made in the source device.
+        ports: `from_port` as a list, empty if `from_port` is `None`.
     """
 
     to: str
@@ -96,74 +99,64 @@ class InternalConnection:
 
 
 def create_connection(
-    ports: Iterable[str] | str | LogicalSignalRef | None = None, **kwargs
+    ports: Iterable[str] | str | LogicalSignalRef | None = None,
+    *,
+    to_signal: str | None = None,
+    to_instrument: str | None = None,
+    type: str | None = None,
+    signal_type: str | None = None,
 ) -> SignalConnection | InternalConnection:
-    """Create a connection.
+    """Creates a connection from instrument ports to a signal or another instrument.
+
+    Give exactly one of `to_signal` or `to_instrument`.
 
     Args:
-        ports: Ports of the target instrument. A single already-defined
-            logical signal (as its uid/path string or a `LogicalSignal`
-            object) may be given instead, in which case the connection
-            resolves to the raw port(s) already backing that signal.
-
-    Keyword Args:
-        Only one of the following can exist:
-
-            - to_instrument: If the connection is to another instrument
-                Takes one instrument port.
-
-            - to_signal: If the connection is to a signal
-                The number of allowed ports depends on the instrument and its port.
-
-        type: Optional argument, can be used to specify a signal type, allowed values are "iq", "rf" or "acquire"
+        ports: Ports of the source instrument. A single existing logical
+            signal, as its uid/path string or a `LogicalSignal`, may be
+            given instead. The connection then resolves to the ports
+            backing that signal. Only supported with `to_signal`.
+        to_signal: Uid of the logical signal to connect to, in the format
+            `<group>/<name>`. The number of allowed ports depends on the
+            instrument and port.
+        to_instrument: Uid of the instrument to connect to. Takes one port.
+        type: Signal type, one of `"iq"`, `"rf"` or `"acquire"`. Only used
+            with `to_signal`.
 
     Returns:
-        Created connection.
+        A `SignalConnection` for `to_signal`, an `InternalConnection` for
+            `to_instrument`.
 
     Raises:
-        ValueError:
-         - Either none or both 'to_instrument' and 'to_signal' defined.
-         - 'to_instrument' was given more than one port.
-         - 'to_signal' input format is invalid.
+        ValueError: If neither or both of `to_signal` and `to_instrument`
+            are given, if `ports` holds more than one `LogicalSignal`, if a
+            `LogicalSignal` is combined with `to_instrument`, or if
+            `to_signal` is not in the format `<group>/<name>`.
     """
-    if "to_instrument" in kwargs and "to_signal" in kwargs:
-        raise ValueError(
-            "Get both 'to_instrument' and 'to_signal'. Use only either one of them."
-        )
-    if "to_instrument" in kwargs:
-        to = kwargs["to_instrument"]
+    if (to_signal is None) == (to_instrument is None):
+        raise ValueError("Give exactly one of 'to_signal' or 'to_instrument'.")
+    if to_instrument is not None:
         if isinstance(ports, LogicalSignal):
             raise ValueError(
                 "A LogicalSignal reference for 'ports' is only supported "
                 "when connecting to a signal ('to_signal'), not to an "
                 "instrument ('to_instrument')."
             )
-        return InternalConnection(to, from_port=ports)
-    if "to_signal" in kwargs:
-        to = kwargs["to_signal"]
-        if ports is None:
-            ports = []
-        elif isinstance(ports, str):
-            ports = [ports]
-        elif isinstance(ports, LogicalSignal):
-            ports = [resolve_logical_signal_ref(ports)]
-        elif isinstance(ports, Iterable):
-            for p in ports:
-                if isinstance(p, LogicalSignal):
-                    raise ValueError(
-                        "Only a single LogicalSignal is allowed for 'ports'."
-                    )
-        if "signal_type" in kwargs:
-            warnings.warn(
-                "Argument 'signal_type' of 'create_connection' has been renamed to 'type'.",
-                FutureWarning,
-                stacklevel=2,
-            )
-            kwargs["type"] = kwargs["signal_type"]
-            del kwargs["signal_type"]
-        if "type" in kwargs:
-            signal_type = kwargs["type"]
-        else:
-            signal_type = None
-        return SignalConnection(uid=to, ports=list(ports), type=signal_type)
-    raise ValueError("Either 'to_instrument' or 'to_signal' must be defined.")
+        return InternalConnection(to_instrument, from_port=ports)
+    if ports is None:
+        ports = []
+    elif isinstance(ports, str):
+        ports = [ports]
+    elif isinstance(ports, LogicalSignal):
+        ports = [resolve_logical_signal_ref(ports)]
+    elif isinstance(ports, Iterable):
+        for p in ports:
+            if isinstance(p, LogicalSignal):
+                raise ValueError("Only a single LogicalSignal is allowed for 'ports'.")
+    if signal_type is not None:
+        warnings.warn(
+            "Argument 'signal_type' of 'create_connection' has been renamed to 'type'.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        type = signal_type
+    return SignalConnection(uid=to_signal, ports=list(ports), type=type)

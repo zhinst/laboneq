@@ -77,7 +77,7 @@ impl CompilerSettings {
         })
     }
 
-    /// The settings a compile runs with when the caller passes none.
+    /// The settings used by the compiler when the caller passes none.
     pub fn defaults(backend_settings: &[SettingSpec]) -> Self {
         CompilerSettings::parse(backend_settings, [])
             .expect("the declared settings should be consistent with each other")

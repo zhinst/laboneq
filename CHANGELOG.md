@@ -1,3 +1,89 @@
+# LabOne Q 26.10.0b4 (2026-10-16)
+
+## Features
+
+- LabOne Q now parses OpenQASM 3 programs with a faster parser built into the wheels. It accepts language versions 3.0 to 3.2 and rejects a construct newer than the version a program declares. Source installs from GitHub fall back to the `openqasm3` and `openpulse` packages, and `LABONEQ_OPENQASM_PARSER` forces either `builtin` or `openpulse`.
+- The QCCS resource usage report logged at compile time now lists, for each near-time step, only the AWGs whose program changes in that step, so its rows add up to the reported total. It no longer repeats every AWG in every step.
+
+## Bug Fixes
+
+- Fixed a bug where type checkers rejected imports such as `from laboneq.dsl.enums import AveragingMode`. The public names of `laboneq.dsl.enums` are now declared in `__all__`.
+- Fixed a bug where an experiment with a `match` on a near-time sweep parameter failed to compile when the cases used different near-time sweep parameters.
+- Fixed a bug where a near-time step that returns to an earlier real-time program ran the previous step's program instead, e.g., in an outer near-time sweep around an inner one. Fixed `CompiledExperiment.estimated_runtime` for near-time sweeps.
+- Fixed a bug where an intermittent `module 'zhinst' has no attribute 'core'` error occurred in the first compilation in a Python process.
+
+## Documentation
+
+- Added two notebooks for the emulated coprocessor under `resources/examples/hqcs/`:
+  `emulated_coprocessor.ipynb` walks through streams, kernels, the
+  `send`/`emit`/`mark_stale` handshake, where a logged variable's shape comes from, and
+  the compiler's refusals. `bayesian_rabi_tuneup.ipynb` is the Rabi tuneup example,
+  migrated from a non-runnable sketch to an experiment that compiles and runs against
+  the emulated coprocessor.
+
+## Deprecation Notices
+
+- Support for Python 3.10 is deprecated and will be removed in the upcoming beta releases and in v27.01. Please upgrade to Python 3.11 or newer.
+
+## Removals from the Codebase
+
+- The `QPU.measure_section_length` method has been removed. The functionality has been moved to implementations of `QuantumOperations` for qubit types where this property is meaningful.
+- The `QuantumElement.load` and `QuantumElement.save` methods have been removed after deprecation in version 2.43.0. Instead use `save(q, filename)` and `load(filename)` from `laboneq.serializers`.
+- The `use_async_api` argument of `Session.connect` has been removed after deprecation in version 2.52.0. It had no effect.
+- The `user_defined` attribute in `TransmonParameters` has been removed after deprecation in version 2.58.0. Use the `custom` attribute from the `QuantumParameters` parent class instead. Quantum elements and quantum parameters serialized earlier still load; their `user_defined` entries are moved into `custom`.
+
+## Applications Library
+
+### Features
+
+- Adds an AC Stark shift vs. power experiment.
+
+  In this experiment, qubit spectroscopy is performed while the
+  amplitude of an off-resonant qubit drive is varied. This
+  variation causes a shift in the qubit frequency.
+
+  By fitting the relationship between the frequency shift and
+  the amplitude, we can determine the qubit frequency with
+  greater precision.
+- Added the ZQCS tunable transmon demo platform at `laboneq_applications.qpu_types.tunable_transmon.demo_platform_zqcs`.
+- The single-qubit randomized benchmarking experiment no longer routes its Clifford sequences through OpenQASM. Parsing the OpenQASM text back was the largest cost of building the experiment, and dropping it makes `create_experiment` about ten times faster. The `experiment_workflow` interface and the pulses it produces are unchanged; inside it, `create_sq_rb_qasm` is now `generate_clifford_sequences` and returns the gates themselves, `create_experiment` takes them as `clifford_sequences`, and `add_qasm_operations` and `get_gate_map` are gone, the latter because `generate_clifford_sequences` now applies the default gate map itself.
+- Experiments now accept a 1D sweep for a single quantum element passed in a list, such as `[q0]`, the same as for a bare quantum element.
+- **Breaking change:** The power and voltage range quantum element parameters now default to `None` instead of a fixed value. These ranges are instrument specific, so the library no longer imposes a default: when a parameter is `None`, the range configured on the instrument is used.
+- Added a coupled-transmon demo platform, `laboneq_applications.contrib.qpu_types.demo_platform_coupled_transmons`, which builds tunable transmon qubits connected in a chain by tunable couplers, including the QPU topology edges required by the coupler-mediated two-qubit gates and experiments.
+- Added a qubit-driven flavor to the tunable-coupler CZ gate: `CzParameters` gained an optional `control_pulse` describing a parametric flux drive on the qubit, and `TunableCouplerOperations` gained the `iswap` and `discharge_coupler` quantum operations, with the accompanying `IswapParameters`.
+- Added a two-qubit interleaved randomized benchmarking workflow (`two_qubit_coupler_irb`), in `laboneq_applications.contrib.experiments.two_qubit.two_qubit_irb` with its analysis workflow in `laboneq_applications.contrib.analysis.two_qubit.two_qubit_irb`.
+- Added the `coupler_flux_range` parameter to `TunableCouplerParameters`, which controls the output range for the flux control line.
+- Added the `qubit_spectroscopy_qflux` experiment workflow and its analysis workflow (`laboneq_applications.contrib.experiments.qubit_spectroscopy_qflux` and `laboneq_applications.contrib.analysis.qubit_spectroscopy_qflux`), which sweep the qubit drive frequency against the amplitude of a flux pulse applied to the qubit flux line, in order to map out the flux dependence of the qubit transition frequency.
+- Added the `resonator_spectroscopy_amplitude_qflux` experiment workflow (`laboneq_applications.contrib.experiments.resonator_spectroscopy_amplitude_qflux`), which sweeps the readout frequency against the amplitude of a flux pulse applied to the qubit flux line. The workflow accepts multiple qubits, which are swept in parallel. Since the experiment sweeps the frequency of the hardware oscillator of the readout line, parallel execution is only possible for qubits whose measure lines use distinct QA channels.
+- Added the `update_qpu_edges` task, which updates the parameters of QPU topology edges. It behaves like `update_qpu`, but accepts the edge keys as strings of the form `"tag:source_node_uid:target_node_uid"` instead of tuples, so that analysis tasks can return edge parameters in a form the logbook stores can serialize.
+- Added the chevron, JAZZ and phase-correction calibration workflows for the qubit-driven CZ gate, in `laboneq_applications.contrib.experiments.two_qubit` and `laboneq_applications.contrib.analysis.two_qubit`.
+- Extended the `set_frequency` quantum operation to be compatible with ZQCS.
+- The resonator spectroscopy experiment workflows (`resonator_spectroscopy` and `resonator_spectroscopy_amplitude`) now accept multiple qubits, whose readout frequencies are swept in parallel. Since these experiments sweep the frequency of the hardware oscillator of the readout line, parallel execution is only possible for qubits whose measure lines use distinct QA channels. The workflows raise a clear error when two of the requested qubits share a QA channel. The former `qubit` argument of these workflows (and of the resonator spectroscopy analysis workflow) is deprecated: it still works and raises a `FutureWarning`; use `qubits` instead.
+- `TunableTransmonOperations` now has the operation `flux_pulse`, which plays a pulse on the qubit flux line. The pulse parameters come from the new qubit parameter `flux_pulse`, a constant pulse by default.
+
+### Bug Fixes
+
+- Fixed a bug where the time-traces analysis workflow assumed that the acquisition instrument samples at 2 GSa/s. This is correct for the SHFQA but not for the ZQCS (4 GSa/s). The correct sampling rate is now calculated by the workflow, or can be set explicitly using the `sampling_rate` option.
+- Fixed a bug where `TunableCoupler` and `BosonicQubit` always applied a 0 Hz local oscillator and `PortMode.LF` to their `flux` / `swap_drive` lines. **Breaking change:** For a line driven by an SG channel, set the new `flux_on_sg_channel` / `swap_drive_on_sg_channel` parameter to `True`; leave it `False` for a line on a baseband channel.
+- Fixed a bug where the `resonator_spectroscopy`, `resonator_spectroscopy_amplitude` and `dispersive_shift` experiments rejected any `acquisition_type` other than `AcquisitionType.SPECTROSCOPY`. Since ZQCS has no spectroscopy mode and uses `AcquisitionType.INTEGRATION` instead, these experiments now accept either. The default remains `AcquisitionType.SPECTROSCOPY`, which continues to work on ZQCS, where the compiler switches to integration mode and issues a warning.
+- Fixed a bug where the measurement QNDness experiment workflow led to an error when `do_analysis` was set to `False`.
+- Fixed a bug where the name for the signal propagation delay experiment workflow was unspecified.
+- Fixed a bug where the resonator photons time-resolved `contrib` experiment incorrectly used qubits instead of validated qubits in the `create_experiment` task.
+- Fixed a bug where the TWPA `calibrate_cancellation` experiment selected the wrong readout local oscillator frequency. The readout local oscillator frequency is now set based on the pump frequency.
+- Fixed a bug where the `set_readout_amplitude` quantum operation of the tunable transmons marked the whole experiment calibration, instead of the calibration of the measure line, when guarding against being called twice on the same signal. As a result, setting the readout amplitude of a second qubit in the same experiment raised a `RuntimeError`. The guard is now per measure line, so the readout amplitude of several qubits can be set in one experiment.
+
+### Documentation
+
+- Added a how-to guide on calibrating a CZ gate with tunable couplers.
+- Improved the memory spectroscopy how-to guide and added five how-to guides for bosonic qubit experiments: [Displacement Calibration](https://docs.zhinst.com/labone_q_user_manual/applications_library/how-to-guides/sources/01a_bosonic_qubits/02_displacement_calibration.html), [Selective Transmon Rx Calibration](https://docs.zhinst.com/labone_q_user_manual/applications_library/how-to-guides/sources/01a_bosonic_qubits/03_selective_transmon_rx_calibration.html), [SWAP Calibration](https://docs.zhinst.com/labone_q_user_manual/applications_library/how-to-guides/sources/01a_bosonic_qubits/04_swap_calibration.html), [Wigner Tomography](https://docs.zhinst.com/labone_q_user_manual/applications_library/how-to-guides/sources/01a_bosonic_qubits/05_wigner_tomography.html), and [SNAP Calibration](https://docs.zhinst.com/labone_q_user_manual/applications_library/how-to-guides/sources/01a_bosonic_qubits/06_snap_calibration.html).
+
+### Deprecation Notices
+
+- The validation and conversion functions in `laboneq_applications.core.validation` have been deprecated.
+  Use `laboneq_applications.conversion` instead.
+- The Applications Library is now developed and released together with LabOne Q, and its version always matches the LabOne Q version. Its release notes are part of the LabOne Q release notes. The [`laboneq-applications`](https://github.com/zhinst/laboneq-applications) repository on GitHub receives its source code and its release notes with each release, and installing the package with `pip install laboneq-applications` is unchanged. The branches of that repository now follow those of the LabOne Q repository: releases go to `main`, and patch releases to `release-X.Y` branches such as `release-26.10`. It no longer gets `release-X.Y.X` branches or a branch for each beta release.
+- `validate_length_qubits_sweeps()` and `convert_qubits_to_lists()` from `laboneq_applications.core.validation` are deprecated. Instead use `validate_and_convert_qubits_sweeps` from the same module.
+
 # LabOne Q 26.10.0b3 (2026-09-25)
 
 ## Features

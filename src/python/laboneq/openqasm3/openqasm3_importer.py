@@ -8,7 +8,6 @@ import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Callable
 
-import openpulse
 from openpulse import ast
 
 from laboneq.core.path import remove_logical_signal_prefix
@@ -24,6 +23,7 @@ from laboneq.openqasm3.namespace import (
     NamespaceStack,
 )
 from laboneq.openqasm3.openqasm_error import OpenQasmException
+from laboneq.openqasm3.parse import calibration_spans_are_relative, parse
 from laboneq.openqasm3.visitor import TranspilerVisitor
 
 if TYPE_CHECKING:
@@ -115,7 +115,7 @@ class OpenQasm3Importer:
     def program_to_ast(self, text: str) -> ast.Program:
         """Convert OpenQASM program into an AST tree."""
         text = self._preprocess(text)
-        tree = openpulse.parse(text)
+        tree = parse(text)
         assert isinstance(tree, ast.Program)
         return tree
 
@@ -138,6 +138,7 @@ class OpenQasm3Importer:
             inputs=self.supplied_inputs,
             externs=self.supplied_externs,
             namespace=self.scope,
+            relative_calibration_spans=calibration_spans_are_relative(parent),
         )
         # Quantum operations auto-add their section to the active DSL context.
         # The transpiled sections are wired into the returned section instead,
@@ -167,7 +168,7 @@ def exp_from_qasm(
 ) -> Experiment:
     """
     !!! version-changed "Deprecated in version 2.43.0"
-        Use [OpenQASMTranspiler]() instead.
+        Use [OpenQASMTranspiler][] instead.
 
     Create an experiment from an OpenQASM program.
 
@@ -197,7 +198,7 @@ def exp_from_qasm(
             any value set by a pragma.
 
             If the acquisition type is not specified, it defaults
-            to [AcquisitionType.INTEGRATION]().
+            to [AcquisitionType.INTEGRATION][laboneq.core.types.enums.acquisition_type.AcquisitionType.INTEGRATION].
         reset_oscillator_phase:
             When true, reset all oscillators at the start of every
             acquisition loop iteration.
@@ -259,7 +260,7 @@ def exp_from_qasm_list(
 ) -> Experiment:
     """
     !!! version-changed "Deprecated in version 2.43.0"
-        Use [OpenQASMTranspiler]() instead.
+        Use [OpenQASMTranspiler][] instead.
 
     Process a list of openQASM programs into a single LabOne Q experiment that
     executes the QASM snippets sequentially.

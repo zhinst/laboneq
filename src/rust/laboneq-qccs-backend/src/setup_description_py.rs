@@ -1,7 +1,7 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-//! Encodes the QCCS setup description from the Python objects the payload builder assembles.
+//! Encodes the QCCS setup description from the Python objects assembled by the payload builder.
 
 use capnp::any_pointer;
 use capnp::message::TypedBuilder;

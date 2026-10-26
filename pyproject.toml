@@ -6,12 +6,13 @@ build-backend = "maturin"
 name = "laboneq"
 dynamic = ["version"] # Version is fetched from workspace Cargo.toml
 description = "Zurich Instruments LabOne Q software framework for quantum computing control"
-license = "Apache-2.0"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
   { name = "Zurich Instruments Development Team", email = "info@zhinst.com" },
 ]
+
+license = "Apache-2.0"
 keywords = ["quantum", "sdk", "zhinst"]
 classifiers = [
   "Environment :: Console",
@@ -40,7 +41,7 @@ dependencies = [
   "networkx >= 3.4.2",
   "numpy >= 2",
   "openpulse ~= 1.0.1",
-  "openqasm3 ~= 1.0.0",
+  "openqasm3 ~= 1.0.1",
   "orjson >= 3.9.15",
   "pybase64 >= 1.3.2",
   "pycparser >= 2.21",
@@ -140,12 +141,13 @@ zhinst-utils = false
 zhinst-comms-schemas = false
 zhinst-comms = false
 
-[tool.uv.sources]
-
 [tool.maturin]
 manifest-path = "./src/rust/laboneq-rust/Cargo.toml"
 module-name = "laboneq._rust"
-features = ["pyo3/extension-module"]
+features = [
+  "pyo3/extension-module",
+
+]
 python-source = "src/python"
 include = [
   # **/ prefix is used to work around a bug that causes include pattern
@@ -167,6 +169,7 @@ compatibility = "manylinux2014"
 line-length = 88
 exclude = [
   ".cargo",
+
   ".eggs",
   ".git",
   ".ruff_cache",
@@ -357,6 +360,17 @@ ignore_errors = true
 name = "LabOne Q"
 filename = "CHANGELOG.md"
 directory = "newsfragments"
+# The folder of the "Applications Library" section below, not a news fragment.
+ignore = ["applications"]
+
+[[tool.towncrier.section]]
+name = ""
+path = ""
+
+# Changes to laboneq-applications, collected in newsfragments/applications.
+[[tool.towncrier.section]]
+name = "Applications Library"
+path = "applications"
 
 [[tool.towncrier.type]]
 directory = "feature"

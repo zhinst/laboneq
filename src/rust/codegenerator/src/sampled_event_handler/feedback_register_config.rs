@@ -6,9 +6,9 @@
 /// # Attributes
 ///
 /// * `local`: Whether the feedback is local (on the SHFQC) or not (i.e., via the PQSC)
-/// * `register_index_select`: What index (aka 2 bit group) of the feedback register the PQSC transmits to
-///   the generator. Is None for local feedback.
-/// * `codeword_bitshift`: The shift into the codeword the generator receives from the
+/// * `register_index_select`: The index (aka 2 bit group) of the feedback register that is transmitted
+///   by the PQSC to the generator. Is None for local feedback.
+/// * `codeword_bitshift`: The shift into the codeword received by the generator from the
 ///   bus for decoding the measurement result.
 /// * `codeword_bitmask`: The bitmask used for decoding the measurement result after applying the
 ///   shift.

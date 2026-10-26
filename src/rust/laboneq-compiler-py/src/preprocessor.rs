@@ -81,6 +81,7 @@ pub(crate) fn preprocess_experiment<B: CompilerBackend>(
     .resolve_err(&experiment.id_store)?;
 
     process_experiment(&mut experiment, &signals).resolve_err(&experiment.id_store)?;
+
     validate_experiment(
         &experiment,
         &signals,
@@ -95,6 +96,10 @@ pub(crate) fn preprocess_experiment<B: CompilerBackend>(
         backend,
     )
     .resolve_err(&experiment.id_store)?;
+
+    backend
+        .lower_hqcs_for_scheduler(&mut experiment.root)
+        .resolve_err(&experiment.id_store)?;
 
     let res = PreprocessedExperiment {
         inner: experiment,

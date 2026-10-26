@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
 @attrs.frozen
 class LoggedVariable:
-    """Recorded trajectory of a logged variable.
+    """Recorded history of a logged variable.
 
     One entry in Results.variable_results.
 

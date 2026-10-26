@@ -16,6 +16,7 @@ opentelemetry-otlp = { workspace = true, features = ["http-proto"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["registry", "std"] }
 tracing-opentelemetry = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true

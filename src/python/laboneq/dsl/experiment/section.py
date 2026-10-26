@@ -396,6 +396,10 @@ class AcquireLoopRt(Section):
             Default: [AveragingMode.CYCLIC][laboneq.core.types.enums.averaging_mode.AveragingMode].
         count (int):
             Number of loops to perform.
+        execution_type (ExecutionType):
+            Always
+            [ExecutionType.REAL_TIME][laboneq.core.types.enums.execution_type.ExecutionType].
+            Should not be altered.
         repetition_mode (RepetitionMode):
             Repetition method. One of fastest, constant and auto.
             Default: [RepetitionMode.FASTEST][laboneq.core.types.enums.repetition_mode.RepetitionMode]
@@ -409,11 +413,6 @@ class AcquireLoopRt(Section):
     [AcquireLoopRt][laboneq.dsl.experiment.section.AcquireLoopRt] inherits
     all the attributes of
     [Section][laboneq.dsl.experiment.section.Section].
-
-    The execution type of [AcquireLoopRt][laboneq.dsl.experiment.section.AcquireLoopRt]
-    sections is always
-    [ExecutionType.REAL_TIME][laboneq.core.types.enums.execution_type.ExecutionType]
-    and should not be altered.
     """
 
     # Type of the acquisition. One of integration trigger, spectroscopy, discrimination, demodulation and RAW. The default acquisition type is INTEGRATION.

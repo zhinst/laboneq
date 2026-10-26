@@ -31,7 +31,7 @@ class SingleProgramOptions:
             any value set by a pragma.
 
             If the acquisition type is not specified, it defaults
-            to [AcquisitionType.INTEGRATION]().
+            to [AcquisitionType.INTEGRATION][laboneq.core.types.enums.acquisition_type.AcquisitionType.INTEGRATION].
         reset_oscillator_phase:
             When true, reset all oscillators at the start of every
             acquisition loop iteration.
@@ -79,7 +79,7 @@ class MultiProgramOptions(SingleProgramOptions):
             any value set by a pragma.
 
             If the acquisition type is not specified, it defaults
-            to [AcquisitionType.INTEGRATION]().
+            to [AcquisitionType.INTEGRATION][laboneq.core.types.enums.acquisition_type.AcquisitionType.INTEGRATION].
         reset_oscillator_phase:
             When true, reset all oscillators at the start of every
             acquisition loop iteration.

@@ -16,7 +16,7 @@ use std::{
 // This a number chosen by hunch to allow compression improvements that can be done
 // for common experiments with up to 2 nested sweeps, while also preventing the
 // compressor to do too many rounds for pathological cases.
-// If you have found a worthwile example/motivation, feel free to change this number.
+// If you have found a worthwhile example/motivation, feel free to change this number.
 const HASH_COMPRESSION_MAX_ROUNDS: usize = 3;
 
 #[derive(PartialEq, Clone, Debug)]
@@ -154,7 +154,7 @@ fn compress_hashes<T: CostFunction>(
     let mut compression_result = input_hashes;
     for _ in 0..max_rounds {
         let compression_result_next_round =
-            _compress_hashes_one_round(&compression_result, cost_function);
+            compress_hashes_one_round(&compression_result, cost_function);
         match compression_result_next_round {
             None => break,
             Some(compressed) => compression_result = compressed,
@@ -176,7 +176,7 @@ fn compress_hashes<T: CostFunction>(
 //     when reaching the end of the current best, compress away
 //
 // Returns the compression result, or None if any compression was not found/done.
-fn _compress_hashes_one_round<T: CostFunction>(
+fn compress_hashes_one_round<T: CostFunction>(
     hashes: &[HashOrRun],
     cost_function: &T,
 ) -> Option<Vec<HashOrRun>> {
@@ -589,7 +589,7 @@ mod tests {
     struct CountingCostFunction {
         // Wraps another cost function
         cost_fn: Box<dyn CostFunction>,
-        // Tracks the costs of computing the costs, by assuming that it is linear to the lenght of the word
+        // Tracks the costs of computing the costs, by assuming that it is linear to the length of the word
         cumulative_costs: RefCell<usize>,
     }
     impl CostFunction for CountingCostFunction {

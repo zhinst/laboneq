@@ -1,7 +1,7 @@
 # Copyright 2026 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""HQCS section-level operation IR nodes: _Send, _MarkStale."""
+"""HQCS section-level operation IR nodes: _Send, _MarkStale, _Ensure."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from typing import Any
 import attrs
 
 if typing.TYPE_CHECKING:
+    from laboneq.dsl.coprocessor.predicate import _IsLive
     from laboneq.dsl.coprocessor.stream import _Stream
     from laboneq.dsl.experiment.pulse import Pulse
     from laboneq.dsl.variable import Variable
@@ -32,3 +33,13 @@ class _MarkStale:
     """
 
     target: Variable | Pulse
+
+
+@attrs.define
+class _Ensure:
+    """An `ensure(condition)` operation attached to a section.
+
+    Asserts that `condition` holds at this point.
+    """
+
+    condition: _IsLive

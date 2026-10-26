@@ -34,13 +34,13 @@ class BackendPlugin(ABC):
         """Register the backend with LabOne Q.
 
         This method is called once during laboneq import. It should:
-        - Register device types with ``DeviceFactory.register_device()``
+
         - Register compiler hooks via ``register_compiler_hooks()``
         - Register the deserializer for the backend's own compiler output via
-          ``laboneq.core.compiler_output.register_deserializer()``, under the backend name its
+          ``laboneq.core.compiler_output.register_deserializer()``, under the backend name that its
           compiler stamps into the compiled bytes
-        - Register how the device setup is translated into a controller's payload
-          via ``laboneq.controller.target_setup.register_target_setup_builder()``
+        - Register the controller backend via
+          ``laboneq.controller.controller_backend.register_controller_backend()``
         - Register logger namespaces via ``register_logger_namespace()``
         - Register instrumentors via ``LabOneQInstrumentor.register_instrumentor()``
         - Register serializers or other framework extensions

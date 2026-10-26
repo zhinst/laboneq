@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from laboneq.data.execution_payload import VIRTUAL_SHFSG_UID_SUFFIX
+from laboneq.core.utilities.shfqc import VIRTUAL_SHFSG_UID_SUFFIX
 from laboneq.dsl.device.instruments.shfqc import SHFQC
 from laboneq.dsl.device.io_units.physical_channel import PhysicalChannel
 from laboneq.simulator.seqc_parser import simulate
@@ -120,7 +120,6 @@ class OutputSimulator:
             the `get_snippet` method instead.
 
     Examples:
-
         Example showing how to compile an experiment and make use of the
         output simulator:
 

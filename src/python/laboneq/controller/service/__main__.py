@@ -7,6 +7,7 @@ Run the service with:
 
 .. code-block:: console
 
+    laboneq-controller --zqcs http://host.example.com/system-name
     laboneq-controller --dataserver 192.168.1.50
     laboneq-controller --dataserver 192.168.1.50 --devicesetup lab_setup.json
     laboneq-controller --devicesetup lab_setup.json --emulation
@@ -42,7 +43,7 @@ from laboneq import __version__
 from laboneq.controller.constants import CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S
 from laboneq.controller.service.app import create_app
 from laboneq.controller.service.controller_container import load_callbacks_from_module
-from laboneq.data.instrument_topology import InstrumentTopology
+from laboneq.data.instrument_topology import InstrumentEntry, InstrumentTopology
 from laboneq.data.instrument_topology_yaml import load_instrument_topology
 from laboneq.serializers import from_json
 
@@ -154,6 +155,67 @@ def _parse_public_url(value: str) -> str:
     return value
 
 
+def _parse_zqcs(value: str) -> str:
+    """Validate the zqup URL of a ZQCS system.
+
+    Args:
+        value: URL in the form ``http://host[:port][/system]``.
+
+    Returns:
+        *value* without a trailing slash.
+
+    Raises:
+        argparse.ArgumentTypeError: If the value is not a usable zqup URL.
+    """
+    try:
+        parsed = urlsplit(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"Invalid ZQCS URL {value!r}: {exc}") from exc
+
+    # The ZQCS driver connects to the SCM over plain HTTP only.
+    if parsed.scheme != "http":
+        raise argparse.ArgumentTypeError(
+            f"Invalid ZQCS URL {value!r}: expected an http:// URL"
+        )
+    if not parsed.hostname:
+        raise argparse.ArgumentTypeError(
+            f"Invalid ZQCS URL {value!r}: host must not be empty"
+        )
+    if parsed.query or parsed.fragment:
+        raise argparse.ArgumentTypeError(
+            f"Invalid ZQCS URL {value!r}: must not carry a query or fragment"
+        )
+    return value.rstrip("/")
+
+
+def _with_zqcs_address(
+    topology: InstrumentTopology | None, url: str
+) -> InstrumentTopology:
+    """Place the ZQCS of *topology* at *url*.
+
+    Sets the address of the topology's ZQCS instrument, or adds one if there is
+    none.  Without a topology, builds one holding only that ZQCS.
+
+    Raises:
+        ValueError: If the topology has more than one ZQCS instrument.
+    """
+    if topology is None:
+        topology = InstrumentTopology()
+    zqcs = [i for i in topology.instruments if i.device_type == "ZQCS"]
+    if len(zqcs) > 1:
+        raise ValueError(
+            "the instrument topology has more than one ZQCS instrument: "
+            f"{[i.uid for i in zqcs]}"
+        )
+    if zqcs:
+        zqcs[0].address = url
+    else:
+        topology.instruments.append(
+            InstrumentEntry(uid="zqcs", device_type="ZQCS", address=url, options=[])
+        )
+    return topology
+
+
 def main(args: list[str] | None = None) -> NoReturn:
     """Run the LabOne Q Controller Service.
 
@@ -166,6 +228,13 @@ def main(args: list[str] | None = None) -> NoReturn:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
+  # Serve a ZQCS system through its zqup URL
+  laboneq-controller --zqcs http://host.example.com/system-name
+
+  # Serve a ZQCS system with predefined connections; the URL overrides the
+  # ZQCS address in the topology
+  laboneq-controller --zqcs http://host.example.com/system-name --instrumenttopology topology.yaml
+
   # Start service with the dataserver address
   laboneq-controller --dataserver 192.168.1.50
 
@@ -204,6 +273,15 @@ Examples:
         type=int,
         default=8080,
         help="Port to bind to (default: 8080)",
+    )
+    parser.add_argument(
+        "--zqcs",
+        metavar="URL",
+        type=_parse_zqcs,
+        help="zqup URL of a ZQCS system, e.g. http://host.example.com/system-name.  "
+        "Serves this one ZQCS without predefined connections; clients define "
+        "them.  Combined with --instrumenttopology, overrides the address of the "
+        "topology's ZQCS instrument, or adds one if it has none.",
     )
     parser.add_argument(
         "--dataserver",
@@ -294,18 +372,19 @@ Examples:
     ):
         parser.error("--emulation requires --devicesetup or --instrumenttopology")
 
-    # Validate: at least one of --dataserver, --devicesetup, or
-    # --instrumenttopology must be provided
     if (
-        not parsed_args.dataserver
+        not parsed_args.zqcs
+        and not parsed_args.dataserver
         and not parsed_args.devicesetup
         and not parsed_args.instrumenttopology
     ):
         parser.error(
-            "at least one of --dataserver, --devicesetup, or "
-            "--instrumenttopology is required, --instrumenttopology "
-            "cannot be combined with the other two"
+            "one of --zqcs, --dataserver, --devicesetup or --instrumenttopology "
+            "is required"
         )
+
+    if parsed_args.zqcs and (parsed_args.dataserver or parsed_args.devicesetup):
+        parser.error("--zqcs cannot be combined with --dataserver or --devicesetup")
 
     # Validate: --instrumenttopology cannot be combined with --devicesetup or
     # --dataserver
@@ -359,7 +438,7 @@ Examples:
             sys.exit(1)
         logger.info("Device setup loaded from %s", parsed_args.devicesetup)
 
-    # Load instrument topology file if provided
+    # Load the instrument topology from file if provided
     instrument_topology = None
     if parsed_args.instrumenttopology:
         topo_path = Path(parsed_args.instrumenttopology)
@@ -390,6 +469,14 @@ Examples:
             "Instrument topology loaded from %s", parsed_args.instrumenttopology
         )
 
+    if parsed_args.zqcs:
+        try:
+            instrument_topology = _with_zqcs_address(
+                instrument_topology, parsed_args.zqcs
+            )
+        except ValueError as e:
+            parser.error(f"--zqcs: {e}")
+
     # Print startup banner and info
     version = __version__
     _print_banner(version)
@@ -397,7 +484,9 @@ Examples:
     print(f"  API docs:    http://{parsed_args.host}:{parsed_args.port}/docs")
     if parsed_args.public_url:
         print(f"  Public URL:  {parsed_args.public_url}")
-    if dataserver:
+    if parsed_args.zqcs:
+        print(f"  ZQCS:        {parsed_args.zqcs}")
+    elif dataserver:
         print(f"  Dataserver:  {':'.join(dataserver)}")
     else:
         print("  Dataserver:  None (emulation mode)")
@@ -411,6 +500,8 @@ Examples:
         print("  Callbacks:   None registered")
     if device_setup is not None:
         print(f"  Setup:       {parsed_args.devicesetup}")
+    elif parsed_args.zqcs:
+        print("  Setup:       One ZQCS without connections")
     elif instrument_topology is not None:
         print(
             f"  Setup:       Built from instrument topology "

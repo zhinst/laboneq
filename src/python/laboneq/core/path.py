@@ -23,7 +23,7 @@ def is_abs(path: str):
 
     Returns:
         True, if the string starts with a leading separator character. Else
-        returns false.
+            returns false.
     """
     return path.startswith(Separator)
 
@@ -57,7 +57,7 @@ def starts_with(path: str, prefix: str, ignore_abs_path: bool = False):
 
     Returns:
         True, if the given path starts with the given prefix text. False, if it
-        does not.
+            does not.
     """
     if ignore_abs_path and is_abs(path):
         path = path[1:]

@@ -7,8 +7,8 @@ import logging
 from enum import IntEnum
 from typing import TYPE_CHECKING
 
+from laboneq.controller.devices.device_base import DeviceBase
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.device_zi import DeviceBase
 from laboneq.controller.devices.node_control import (
     Command,
     Condition,

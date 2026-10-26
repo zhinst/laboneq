@@ -4,10 +4,6 @@
 from __future__ import annotations
 
 import abc
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from laboneq.compiler import CompilerSettings
 
 
 class ILinker(abc.ABC):
@@ -23,10 +19,5 @@ class ILinker(abc.ABC):
 
     @staticmethod
     @abc.abstractmethod
-    def repeat_previous(this, previous, previous_step_indices: list[int]):
-        raise NotImplementedError
-
-    @staticmethod
-    @abc.abstractmethod
-    def finalize(this, settings: CompilerSettings, uses_chunking: bool):
+    def repeat_run(this, run, step_indices: list[int]):
         raise NotImplementedError

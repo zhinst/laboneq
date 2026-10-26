@@ -16,6 +16,21 @@ from laboneq.core.types.enums import (
     SectionTimingMode,
 )
 
+__all__ = [
+    "AcquisitionType",
+    "AveragingMode",
+    "CarrierType",
+    "DSLVersion",
+    "ExecutionType",
+    "IODirection",
+    "IOSignalType",
+    "ModulationType",
+    "PortMode",
+    "RepetitionMode",
+    "SectionAlignment",
+    "SectionTimingMode",
+]
+
 
 def enum_repr(self):
     cls_name = self.__class__.__name__

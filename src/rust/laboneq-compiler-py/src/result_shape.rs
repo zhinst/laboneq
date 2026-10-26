@@ -21,7 +21,7 @@ use laboneq_dsl::types::AveragingMode;
 use laboneq_dsl::types::HandleUid;
 use laboneq_dsl::types::ParameterUid;
 
-use laboneq_dsl::operation::{Acquire, AveragingLoop, Match};
+use laboneq_dsl::operation::{Acquire, AveragingLoop, DoUntil, Match};
 use laboneq_dsl::types::SignalUid;
 use laboneq_dsl::types::{MatchTarget, SweepParameter};
 
@@ -302,6 +302,7 @@ impl<B: CompilerBackend> ResultShapeExtractor<'_, B> {
             Operation::Sweep(op) => self.visit_regular_loop(node, op)?,
             Operation::PrngSetup(op) => self.visit_setup_prng(node, op)?,
             Operation::PrngLoop(op) => self.visit_prng_loop(node, op)?,
+            Operation::DoUntil(op) => self.visit_do_until(node, op)?,
             Operation::Match(op) => self.visit_match(node, op)?,
             Operation::Acquire(op) => self.visit_acquire(node, op)?,
             _ => self.generic_visit(node)?,
@@ -401,6 +402,23 @@ impl<B: CompilerBackend> ResultShapeExtractor<'_, B> {
             is_chunked: false,
             axis_names: vec![op.sample_uid.into()],
             axis_points: vec![AxisValues::Explicit(NumericArray::Integer64(values).into())],
+            sweep_parameters: vec![],
+        };
+
+        self.loop_stack.push(entry);
+        self.generic_visit(node)?;
+        self.loop_stack.pop();
+        Ok(())
+    }
+
+    /// The emulated `do_until` executes once and contributes one result axis.
+    fn visit_do_until(&mut self, node: &ExperimentNode, op: &DoUntil) -> Result<()> {
+        const ITERATIONS: NonZero<u32> = NonZero::new(1).unwrap();
+        let entry = LoopEntry {
+            count: ITERATIONS,
+            is_chunked: false,
+            axis_names: vec![op.uid.into()],
+            axis_points: vec![AxisValues::Shots(ITERATIONS.get() as usize)],
             sweep_parameters: vec![],
         };
 

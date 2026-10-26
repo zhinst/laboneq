@@ -49,6 +49,9 @@ class UidGenerator:
         GLOBAL_NAMESPACE:
             The additional prefix used by the `GLOBAL_UID_GENERATOR`.
             It's value is `"__"`.
+        is_global:
+            Whether this is the global unique identifier generator, which
+            prefixes every identifier with `GLOBAL_NAMESPACE`.
     """
 
     GLOBAL_NAMESPACE: str = "__"

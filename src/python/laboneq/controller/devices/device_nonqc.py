@@ -1,7 +1,7 @@
 # Copyright 2019 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-from laboneq.controller.devices.device_zi import DeviceBase
+from laboneq.controller.devices.device_base import DeviceBase
 
 
 class DeviceNonQC(DeviceBase):

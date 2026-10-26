@@ -17,11 +17,12 @@ class BlockVisitor:
     This class is meant to be subclassed.
 
     Subclasses can implement custom visitor method for each block type.
-    The format for naming the methods are `visit_<block type lowercase>`
+    The format for naming the methods are `visit_<block type lowercase>`.
+    For example, to write a visitor method for `WorkflowBlock`:
 
-        For example, to write a visitor method for `WorkflowBlock`:
-
-            `def visit_workflowblock(self, block):`
+    ```python
+    def visit_workflowblock(self, block): ...
+    ```
 
     The visitor method should visit or call `.generic_visit()` to visit the
     children.

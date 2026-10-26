@@ -15,8 +15,9 @@ from laboneq.serializers.implementations._models._calibration import (
     remove_high_pass_clearing,
 )
 from laboneq.serializers.implementations._models._coprocessor import (
-    CoprocessorModel,
     StreamModel,
+    structure_payloads,
+    unstructure_payloads,
 )
 from laboneq.serializers.implementations._models._experiment import (
     AllSectionModel,
@@ -48,15 +49,11 @@ class ExperimentSerializer(VersionedClassSerializer[Experiment]):
     ) -> JsonSerializableType:
         from laboneq.dsl.coprocessor.inventory import CoprocessorInventoryEntry
 
-        # Coprocessor state is serialized before the streams, and the streams
-        # before the sections, so that the identity caches are populated when a
-        # _Send / _MarkStale / DoUntilSection node resolves its $ref. Variables
-        # and Pulses are cached transitively via the stream field accessors.
+        # The streams are serialized before the sections, so that the identity
+        # caches are populated when a _Send / _MarkStale / _Ensure /
+        # DoUntilSection node resolves its $ref. Variables and Pulses are
+        # cached transitively via the stream field accessors.
         with create_caches():
-            coprocessors_d = {
-                label: _converter.unstructure(cp, CoprocessorModel)
-                for label, cp in obj.coprocessors.items()
-            }
             streams_d = [
                 _converter.unstructure(stream, StreamModel) for stream in obj.streams
             ]
@@ -86,7 +83,8 @@ class ExperimentSerializer(VersionedClassSerializer[Experiment]):
                 "version": _converter.unstructure(obj.version),
                 "epsilon": obj.epsilon,
                 "sections": sections,
-                "coprocessors": coprocessors_d,
+                "coprocessors": list(obj.coprocessors),
+                "coprocessor_payloads": unstructure_payloads(obj.coprocessor_payloads),
                 "coprocessor_mappings": mappings_d,
                 "streams": streams_d,
             },
@@ -100,25 +98,13 @@ class ExperimentSerializer(VersionedClassSerializer[Experiment]):
     ) -> Experiment:
         data = serialized_data["__data__"]
 
-        # Reconstruct coprocessors, then streams (which materialize and cache the
-        # Variables and Pulses bound to their field accessors), then sections —
-        # the same order as serialization, so every $ref resolves from cache.
+        # Reconstruct the streams (which materialize and cache the Variables and
+        # Pulses bound to their field accessors) before the sections — the same
+        # order as serialization, so every $ref resolves from cache.
         with create_caches():
-            coprocessors = {
-                label: _converter.structure(cp_d, CoprocessorModel)
-                for label, cp_d in data.get("coprocessors", {}).items()
-            }
             streams = [
                 _converter.structure(sd, StreamModel) for sd in data.get("streams", [])
             ]
-            coprocessor_mappings = {
-                label: (
-                    _converter.structure(target, CoprocessorModel)
-                    if isinstance(target, dict)
-                    else target
-                )
-                for label, target in data.get("coprocessor_mappings", {}).items()
-            }
             sections = [
                 _converter.structure(section, AllSectionModel)
                 for section in data["sections"]
@@ -134,8 +120,11 @@ class ExperimentSerializer(VersionedClassSerializer[Experiment]):
             version=_converter.structure(data["version"], DSLVersion),
             epsilon=data["epsilon"],
             sections=sections,
-            coprocessors=coprocessors,
-            coprocessor_mappings=coprocessor_mappings,
+            coprocessors=data.get("coprocessors", []),
+            coprocessor_payloads=structure_payloads(
+                data.get("coprocessor_payloads", {})
+            ),
+            coprocessor_mappings=dict(data.get("coprocessor_mappings", {})),
             streams=streams,
         )
 

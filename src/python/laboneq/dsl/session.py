@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import logging
 import sys
-import warnings
 from abc import ABC, abstractmethod
 from copy import deepcopy
 from textwrap import indent
@@ -13,9 +12,10 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Union
 
 from laboneq import laboneq_logging
 from laboneq.controller import Controller, LabOneQControllerException
+from laboneq.controller.constants import READY_TIMEOUT_S
 from laboneq.controller.runtime_context_impl import LegacySessionData
-from laboneq.controller.target_setup import build_target_setup
 from laboneq.controller.toolkit_adapter import ToolkitDevices
+from laboneq.controller.utilities.exception import HardwareNotReadyError
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types import CompiledExperiment
 from laboneq.core.utilities.compile_experiment import compile_experiment
@@ -40,6 +40,8 @@ if TYPE_CHECKING:
         LogicalSignalRef,
     )
     from laboneq.dsl.experiment import Experiment
+
+_logger = logging.getLogger(__name__)
 
 
 class ConnectionState:
@@ -69,9 +71,12 @@ class _SessionBacking(ABC):
     delegates to the active backing instead of branching on which kind it is.
     """
 
-    @property
-    def setup_description(self) -> SetupDescription | None:
-        """Setup description discovered while connecting, if any."""
+    def fetch_setup_description(self) -> SetupDescription | None:
+        """Return the setup description of the instruments, if any.
+
+        Fetches it first if connecting could not. If the instruments cannot run
+        experiments, logs a warning and returns the last fetched one.
+        """
         return None
 
     @property
@@ -98,6 +103,10 @@ class _SessionBacking(ABC):
     @abstractmethod
     def disconnect(self) -> None:
         """Tear down the connection."""
+
+    @abstractmethod
+    def wait_until_ready(self, timeout_s: float) -> None:
+        """Return once the instruments can run experiments."""
 
     @abstractmethod
     def disable_outputs(
@@ -142,9 +151,8 @@ class _LocalControllerBacking(_SessionBacking):
         disable_runtime_checks: bool,
         timeout: float | None,
     ) -> _LocalControllerBacking:
-        target_setup = build_target_setup(device_setup)
         controller = Controller(
-            target_setup=target_setup,
+            device_setup=device_setup,
             ignore_version_mismatch=ignore_version_mismatch,
             neartime_callbacks=neartime_callbacks,
         )
@@ -160,8 +168,19 @@ class _LocalControllerBacking(_SessionBacking):
         )
         return cls(controller=controller, toolkit_devices=toolkit_devices)
 
-    @property
-    def setup_description(self) -> SetupDescription | None:
+    def fetch_setup_description(self) -> SetupDescription | None:
+        try:
+            self._controller.ensure_setup_description()
+        except HardwareNotReadyError as e:
+            setup_description = self._controller.setup_description
+            if setup_description is None:
+                _logger.warning("%s No setup description is available.", e)
+            else:
+                _logger.warning(
+                    "%s Using the last fetched setup description, which may be stale.",
+                    e,
+                )
+            return setup_description
         return self._controller.setup_description
 
     @property
@@ -173,6 +192,9 @@ class _LocalControllerBacking(_SessionBacking):
 
     def disconnect(self) -> None:
         self._controller.disconnect()
+
+    def wait_until_ready(self, timeout_s: float) -> None:
+        self._controller.wait_until_ready(timeout_s)
 
     def disable_outputs(
         self,
@@ -208,8 +230,8 @@ class _RemoteControllerBacking(_SessionBacking):
     """Submits experiments to a running controller service over HTTP,
     instead of driving hardware directly.
 
-    Under `do_emulation`, the service submitted to is one this backing starts
-    on localhost and owns, rather than the one the setup points at.
+    Under `do_emulation`, this backing starts and owns a service on localhost
+    and submits to it, rather than to the service the setup points at.
     """
 
     def __init__(
@@ -306,6 +328,9 @@ class _RemoteControllerBacking(_SessionBacking):
             if self._local_service is not None:
                 self._local_service.stop()
                 self._local_service = None
+
+    def wait_until_ready(self, timeout_s: float) -> None:
+        self._remote_controller.wait_until_ready(timeout_s)
 
     def disable_outputs(
         self,
@@ -431,21 +456,23 @@ class Session:
 
         !!! version-changed "Changed in version 2.54.0"
             The following deprecated methods for saving and loading were removed:
-                - `load`
-                - `save`
-                - `save_signal_map`
-                - `load_signal_map`
-                - `save_results`
-                - `save_experiment`
-                - `load_experiment`
-                - `save_device_setup`
-                - `load_device_setup`
-                - `save_device_calibration`
-                - `load_device_calibration`
-                - `save_compiled_experiment`
-                - `load_compiled_experiment`
-                - `save_experiment_calibration`
-                - `load_experiment_calibration`
+
+            - `load`
+            - `save`
+            - `save_signal_map`
+            - `load_signal_map`
+            - `save_results`
+            - `save_experiment`
+            - `load_experiment`
+            - `save_device_setup`
+            - `load_device_setup`
+            - `save_device_calibration`
+            - `load_device_calibration`
+            - `save_compiled_experiment`
+            - `load_compiled_experiment`
+            - `save_experiment_calibration`
+            - `load_experiment_calibration`
+
             Use the `load` and `save` functions from the `laboneq.simple` module instead.
 
         !!! version-added "Added in version 2.52.0"
@@ -518,10 +545,10 @@ class Session:
         Usage:
 
         ``` pycon
-            >>> session.connect()
-            >>> session.devices["device_hdawg"].awgs[0].outputs[0].amplitude(1)
-            >>> session.devices["DEV1234"].awgs[0].outputs[0].amplitude()
-            1
+        >>> session.connect()
+        >>> session.devices["device_hdawg"].awgs[0].outputs[0].amplitude(1)
+        >>> session.devices["DEV1234"].awgs[0].outputs[0].amplitude()
+        1
         ```
         """
         if self._backing is None:
@@ -569,7 +596,6 @@ class Session:
         do_emulation=False,
         ignore_version_mismatch=False,
         reset_devices=False,
-        use_async_api: bool | None = None,
         disable_runtime_checks: bool = True,
         timeout: float | None = None,
     ) -> ConnectionState:
@@ -595,8 +621,6 @@ class Session:
 
             reset_devices (bool): Load the factory preset after connecting for device which support it.
 
-            use_async_api (bool): Enable the async backend of LabOne Q controller. Defaults to `True`.
-
             disable_runtime_checks (bool): Disable the runtime checks performed
                 by device firmware. Defaults to `True`.
 
@@ -606,15 +630,6 @@ class Session:
             connection_state:
                 The connection state of the session.
         """
-        if use_async_api is not None:
-            warnings.warn(
-                "The 'use_async_api' argument currently has no effect and "
-                "will be removed in version 2.53.0. Please adjust your code to not supply this "
-                "argument.",
-                FutureWarning,
-                stacklevel=2,
-            )
-
         self._ignore_version_mismatch = ignore_version_mismatch
         # Tear down any previous backing before building a new one: reassigning
         # `self._backing` below would otherwise abandon it while it still holds
@@ -646,11 +661,6 @@ class Session:
                 timeout=timeout,
             )
 
-        if not do_emulation:
-            setup_description = self._backing.setup_description
-            if setup_description is not None:
-                self._device_setup.setup_description = setup_description
-
         self._connection_state.connected = True
         return self._connection_state
 
@@ -669,6 +679,18 @@ class Session:
             # after us.
             self._backing = None
         return self._connection_state
+
+    def wait_until_ready(self, timeout: float = READY_TIMEOUT_S):
+        """Returns once the instruments can run experiments.
+
+        Args:
+            timeout: How long to wait, in seconds.
+
+        Raises:
+            HardwareNotReadyError: The instruments still cannot run experiments
+                after `timeout`. The message gives the last reason.
+        """
+        self._assert_connected().wait_until_ready(timeout)
 
     def disable_outputs(
         self,
@@ -732,6 +754,10 @@ class Session:
             compiler_settings: Extra options passed to the compiler.
         """
         self._experiment_definition = experiment
+        if self._backing is not None and not self._connection_state.emulated:
+            setup_description = self._backing.fetch_setup_description()
+            if setup_description is not None:
+                self._device_setup.setup_description = setup_description
         self._compiled_experiment = compile_experiment(
             device_setup=self.device_setup,
             experiment=self.experiment,
@@ -833,6 +859,7 @@ class Session:
             raw_results = backing.raw_results
             self._last_results = Results(
                 acquired_results=raw_results.acquired_results,
+                variable_results=getattr(raw_results, "variable_results", {}),
                 neartime_callback_results=raw_results.neartime_callback_results,
                 execution_errors=raw_results.execution_errors,
                 pipeline_jobs_timestamps=raw_results.pipeline_jobs_timestamps,

@@ -3,9 +3,9 @@
 
 //! Deserializes Cap'n Proto binary format to Rust DSL experiment types.
 //!
-//! Reads Cap'n Proto messages produced by `capnp_serializer` and reconstructs
-//! the internal `ExperimentNode`, `NamedIdStore`, sweep parameters, and pulse
-//! definitions used by the compiler.
+//! Reads Cap'n Proto `Experiment` messages and reconstructs the internal
+//! `ExperimentNode`, `NamedIdStore`, sweep parameters, and pulse definitions
+//! used by the compiler.
 //!
 //! Reference handling: Signals, sweep parameters, pulses, and acquisition
 //! handles are referenced by zero-based indices mapped to `uid`/`name` strings.
@@ -34,8 +34,8 @@ use laboneq_dsl::hqcs::{
     Predicate, StreamDecl, StreamEndpoint, StreamFieldDecl, VarType, VariableDecl, VariableValue,
 };
 use laboneq_dsl::operation::{
-    Acquire, AveragingLoop, Case, Delay, DoUntil, ExternalOrValue, MarkStale, MarkStaleTarget,
-    Match, NearTimeCallback, Operation, PlayPulse, PrngLoop, PrngSetup, Reserve,
+    Acquire, AveragingLoop, Case, Delay, DoUntil, Ensure, ExternalOrValue, MarkStale,
+    MarkStaleTarget, Match, NearTimeCallback, Operation, PlayPulse, PrngLoop, PrngSetup, Reserve,
     ResetOscillatorPhase, Section, Send, SendArg, SetNode, Sweep, ValueEntry,
 };
 use laboneq_dsl::signal_calibration::{
@@ -838,20 +838,18 @@ impl Deserializer {
                         let data = inline.get_data().map_err(Error::new)?;
 
                         let samples = if is_complex {
-                            let complex: Vec<Complex64> = data
-                                .chunks_exact(16)
-                                .map(|chunk| {
-                                    let re = f64::from_le_bytes(chunk[..8].try_into().unwrap());
-                                    let im = f64::from_le_bytes(chunk[8..].try_into().unwrap());
-                                    Complex64::new(re, im)
+                            let (pairs, _) = data.as_chunks::<8>().0.as_chunks::<2>();
+                            let complex: Vec<Complex64> = pairs
+                                .iter()
+                                .map(|&[re, im]| {
+                                    Complex64::new(f64::from_le_bytes(re), f64::from_le_bytes(im))
                                 })
                                 .collect();
                             NumericArray::Complex64(complex)
                         } else {
-                            let floats: Vec<f64> = data
-                                .chunks_exact(8)
-                                .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
-                                .collect();
+                            let (words, _) = data.as_chunks::<8>();
+                            let floats: Vec<f64> =
+                                words.iter().map(|&w| f64::from_le_bytes(w)).collect();
                             NumericArray::Float64(floats)
                         };
                         PulseKind::Sampled(SampledPulse { samples })
@@ -1014,7 +1012,9 @@ impl Deserializer {
         section_name: &str,
     ) -> Result<DoUntil> {
         let condition_reader = reader.get_condition().map_err(Error::new)?;
-        let condition = self.deserialize_predicate(&condition_reader, section_name)?;
+        let condition = self.deserialize_predicate(&condition_reader, &|| {
+            format!("do_until section '{section_name}'")
+        })?;
         Ok(DoUntil {
             uid: section_uid,
             condition,
@@ -1025,19 +1025,18 @@ impl Deserializer {
     fn deserialize_predicate(
         &mut self,
         reader: &coprocessor_capnp::predicate::Reader<'_>,
-        section_name: &str,
+        owner: &dyn Fn() -> String,
     ) -> Result<Predicate> {
         use coprocessor_capnp::predicate::Which;
         match reader.which().map_err(Error::new)? {
-            Which::Unspecified(()) => Err(Error::new(format!(
-                "do_until section '{section_name}' has no exit condition set"
-            ))),
+            Which::Unspecified(()) => Err(Error::new(format!("{} has no condition set", owner()))),
             Which::Comparison(cmp) => {
                 let variable = self.resolve_variable_index(cmp.get_variable())?;
                 let op = match cmp.get_op().map_err(Error::new)? {
                     coprocessor_capnp::CmpOp::Unspecified => {
                         return Err(Error::new(format!(
-                            "do_until section '{section_name}' has no comparison operator set"
+                            "{} has no comparison operator set",
+                            owner()
                         )));
                     }
                     coprocessor_capnp::CmpOp::Eq => CmpOp::Eq,
@@ -1093,6 +1092,22 @@ impl Deserializer {
             Which::Pulse(idx) => MarkStaleTarget::Pulse(PulseUid(self.resolve_pulse_index(idx)?)),
         };
         Ok(MarkStale { target })
+    }
+
+    fn deserialize_ensure_op(
+        &mut self,
+        reader: &operation_capnp::ensure_op::Reader<'_>,
+        parent_section_name: &str,
+    ) -> Result<Ensure> {
+        let condition_reader = reader.get_condition().map_err(Error::new)?;
+        let owner = || {
+            format!(
+                "ensure in {}",
+                section_label_for_errors(parent_section_name)
+            )
+        };
+        let condition = self.deserialize_predicate(&condition_reader, &owner)?;
+        Ok(Ensure { condition })
     }
 
     // === Section tree deserialization ===
@@ -1484,6 +1499,10 @@ impl Deserializer {
                 let mark_stale = mark_stale.map_err(Error::new)?;
                 Operation::MarkStale(self.deserialize_mark_stale_op(&mark_stale)?)
             }
+            Which::Ensure(ensure) => {
+                let ensure = ensure.map_err(Error::new)?;
+                Operation::Ensure(self.deserialize_ensure_op(&ensure, parent_section_name)?)
+            }
             Which::None(()) => {
                 let label = section_label_for_errors(parent_section_name);
                 return Err(Error::new(format!("Operation in {label} has no kind set")));
@@ -1663,8 +1682,7 @@ impl Deserializer {
         };
 
         // Per-operation kernel parameter overrides → Acquire.parameters.
-        // Only pad to kernel length when no kernel parameters were provided (matching
-        // py_conversion: None → pad, provided → use as-is).
+        // Only pad to kernel length when no kernel parameters were provided.
         let kernel_params = reader.get_kernel_parameters().map_err(Error::new)?;
         let mut parameters = Vec::with_capacity(kernel_params.len() as usize);
         for param_map in kernel_params.iter() {
@@ -2268,3 +2286,6 @@ pub(crate) fn deserialize_experiment(bytes: &[u8], packed: bool) -> Result<Deser
         Deserializer::new().deserialize(&experiment)
     }
 }
+
+#[cfg(test)]
+mod tests;

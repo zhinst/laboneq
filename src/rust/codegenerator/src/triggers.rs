@@ -10,9 +10,9 @@ use crate::ir;
 
 /// Resample state at given times, when state changes are known at independently defined times.
 ///
-/// Given a progression of state changes over discrete (integer) time, specified as a SortedDict of (time, state),
-/// and a collection of events, given as an iterable containing the times at which to sample, determine, for each event,
-/// the state at the time the event happens.
+/// For each event, determine the state at the time the event happens.
+/// The state changes are given as a progression over discrete (integer) time, specified as a SortedDict of (time, state).
+/// The events are given as an iterable containing the times at which to sample.
 /// Returns a SortedDict of (time, state_tuple) where the times are the times from the events,
 /// and state_tuple is the corresponding (time, state) tuple taken from the state_progression.
 ///

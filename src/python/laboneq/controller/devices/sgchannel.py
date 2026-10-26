@@ -19,12 +19,12 @@ from laboneq.controller.devices.async_support import (
 )
 from laboneq.controller.devices.awg_pipeliner import AwgPipeliner
 from laboneq.controller.devices.core_base import SHFBaseProtocol, SHFChannelBase
+from laboneq.controller.devices.device_base import delay_to_rounded_samples
 from laboneq.controller.devices.device_shf_base import (
     OPT_OUTPUT_ROUTER_ADDER,
     check_synth_frequency,
 )
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.device_zi import delay_to_rounded_samples
 from laboneq.controller.recipe_processor import (
     get_elf,
     get_initialization_by_device_uid,

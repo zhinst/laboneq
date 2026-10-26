@@ -89,7 +89,7 @@ pub(crate) fn discard_unusable_amplifier_pumps(
 
 /// Whether an SHFPPC could be wired to the signal, i.e. it is a QA input line.
 ///
-/// The same condition [`parse_ppc_connections`] demands of a connection's target.
+/// The same condition that [`parse_ppc_connections`] demands of a connection's target.
 fn can_host_ppc(ports: &[Port]) -> bool {
     !ports.is_empty()
         && ports

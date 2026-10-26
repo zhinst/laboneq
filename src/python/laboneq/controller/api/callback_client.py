@@ -54,9 +54,9 @@ def preflight_client_callbacks(
 ) -> set[str]:
     """Validate the client near-time callbacks of an experiment before submission.
 
-    Callbacks on the controller service are not checked here; only calls
-    whose name is provided in *callbacks* are dispatched to the client, and
-    those must have JSON-serializable arguments — complex values are not
+    Callbacks on the controller service are not checked here. Only calls
+    whose name is provided in *callbacks* are dispatched to the client.
+    These calls must have JSON-serializable arguments. Complex values are not
     supported and must be decomposed into real/imaginary parts. Returns the
     names of the client-served callbacks; an empty set means the client has
     nothing to serve and skips the callback channel.
@@ -232,7 +232,7 @@ class ClientCallbackSession:
 
         `asyncio.run` cannot be used here. It refuses to start when the calling
         thread already runs a loop, which is the normal state in a Jupyter
-        kernel, and it would hand each invocation a new loop, so a callback
+        kernel. It would also hand each invocation a new loop, so a callback
         could not keep a connection open from one near-time step to the next.
         """
         if self._loop is None:

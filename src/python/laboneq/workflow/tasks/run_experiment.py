@@ -102,7 +102,7 @@ def _are_results_compatible(
 
     Returns:
         Return a boolean indicating whether the result to validate is compatible
-        with the target result.
+            with the target result.
     """
     # are the keys of the result to validate a subset of the keys of the target result?
     keys_match = (
@@ -136,6 +136,20 @@ class RunExperimentOptions:
         return_legacy_results:
             Alias for `include_results_metadata`. Deprecated.
             Default: False.
+        inject_results:
+            Results loaded from previously serialized LabOne Q runs, returned in
+            place of the measured results. A dictionary with the keys:
+
+            - `use`: When to inject the results: `"no"` (never), `"emulation"`
+              (only when the session runs in emulation mode) or `"always"`.
+            - `paths`: The files to load the results from. Results from several
+              files are combined.
+            - `check_shapes`: Whether to verify that the injected results match
+              the shapes of the experiment results.
+
+            The sweep points are not injected, so pass the sweep points that
+            the loaded results were measured with.
+            Default: `{"paths": [], "use": "emulation", "check_shapes": True}`.
 
     !!! version-added "Added in version 2.52.0"
         The option `include_results_metadata` was added.
@@ -218,7 +232,7 @@ def run_experiment(
         session: The connected session to use for running the experiment.
         compiled_experiment: The compiled experiment to run.
         options:
-            The options for this task as an instance of [RunExperimentOptions].
+            The options for this task as an instance of [RunExperimentOptions][].
 
     Returns:
         The measurement results.

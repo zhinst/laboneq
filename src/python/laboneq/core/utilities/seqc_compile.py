@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import concurrent.futures
+import functools
 import logging
 import os
 import re
@@ -18,6 +18,8 @@ from laboneq.compiler.common.resource_usage import (
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from laboneq.compiler import CompilerSettings
 
 _logger = logging.getLogger(__name__)
@@ -36,16 +38,16 @@ class SeqCCompileItem:
     elf: bytes | None = None
 
 
-def seqc_compile_one(item: SeqCCompileItem):
+def _compile_one(
+    item: SeqCCompileItem,
+    compile_seqc: Callable[..., tuple[bytes, dict]],
+    core_error: type[Exception],
+):
     if item.code is None:
         return
 
-    # Only SeqC generation needs the compiled `zhinst.core`.
-    import zhinst.core
-    from zhinst.core.errors import CoreError as LabOneCoreError
-
     try:
-        elf, extra = zhinst.core.compile_seqc(
+        elf, extra = compile_seqc(
             item.code,
             item.dev_type,
             options=item.dev_opts,
@@ -55,7 +57,7 @@ def seqc_compile_one(item: SeqCCompileItem):
             samplerate=item.sampling_rate,
             pipeliner=item.pipeliner,
         )
-    except LabOneCoreError as exc:
+    except core_error as exc:
         raise LabOneQException(
             f"{item.filename}: AWG compilation failed.\n{str(exc)}"
         ) from None
@@ -85,11 +87,6 @@ def seqc_compile_one(item: SeqCCompileItem):
             f"(e.g. enable or increase chunking, or reduce pulse variations).",
             usage=usage,
         )
-
-
-async def seqc_compile_async(item: SeqCCompileItem):
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, seqc_compile_one, item)
 
 
 def _process_errors(errors: list[BaseException], settings: CompilerSettings):
@@ -147,12 +144,23 @@ def _process_errors(errors: list[BaseException], settings: CompilerSettings):
 
 
 def awg_compile(awg_data: list[SeqCCompileItem], settings: CompilerSettings):
+    # Only SeqC generation needs the compiled `zhinst.core`. The workers must not
+    # import it themselves. When several threads import a submodule at once, one
+    # of them can get it from `sys.modules` before the parent package has the
+    # submodule as an attribute.
+    from zhinst.core import compile_seqc
+    from zhinst.core.errors import CoreError
+
+    compile_one = functools.partial(
+        _compile_one, compile_seqc=compile_seqc, core_error=CoreError
+    )
+
     # Compile in parallel:
     _logger.debug("Started compilation of AWG programs...")
     max_workers_str = os.environ.get("LABONEQ_AWG_COMPILER_MAX_WORKERS")
     max_workers = None if max_workers_str is None else int(max_workers_str)
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(seqc_compile_one, item) for item in awg_data]
+        futures = [executor.submit(compile_one, item) for item in awg_data]
         concurrent.futures.wait(futures)
         errors = [
             future.exception() for future in futures if future.exception() is not None

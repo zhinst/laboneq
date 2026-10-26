@@ -155,9 +155,9 @@ def resolve_to_value(ref: Reference, states: dict, *, only_ref: bool = False) ->
 
     The resolve order is following:
 
-        * Look value from `states`
-        * Iterate over overwritten values and return the first one that
-            exists in `states` or is constant
+    * Look value from `states`
+    * Iterate over overwritten values and return the first one that
+        exists in `states` or is constant
 
     Arguments:
         ref: Root reference

@@ -20,7 +20,7 @@ class GateStore:
     """A mapping store between OpenQASM statements and LabOne Q.
 
     !!! version-changed "Deprecated in version 2.43.0"
-        Use [OpenQASMTranspiler]() and [quantum.QuantumOperations]() instead.
+        Use [OpenQASMTranspiler][] and [quantum.QuantumOperations][] instead.
     """
 
     def __init__(self):

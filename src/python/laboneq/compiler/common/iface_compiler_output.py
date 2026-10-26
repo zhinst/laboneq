@@ -36,9 +36,9 @@ class CombinedOutput:
                         and outside a sweep, the one outside happens more rarely hence its handle also appears in a few entries
                         in the map only.
                         Furthermore, the set of handles for an index is allowed to be empty, which means this result
-                        does not correspond to any handle. This can happen because of some pecularities of instruments,
-                        such as launching integration units independently not being possible, which means if only one
-                        unit needs to produce results all the others are launched with it producind NaN results.
+                        does not correspond to any handle. This can happen because of some peculiarities of instruments.
+                        For example, launching integration units independently is not possible with QCCS instruments. So if only one
+                        unit needs to produce results, all the others are launched with it and produce NaN results.
     """
 
 

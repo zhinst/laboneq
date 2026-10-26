@@ -13,8 +13,8 @@ use crate::Result;
 use crate::device_kind::DeviceKind;
 use crate::preprocessor::{QccsBackendPreprocessedData, SignalProperties};
 use crate::validation::NodeContext;
-/// Checks the operations of a QCCS experiment against what the device playing
-/// them supports.
+/// Checks the operations of a QCCS experiment against what is supported by the
+/// device playing them.
 pub(super) struct OperationRules<'a> {
     data: &'a QccsBackendPreprocessedData,
     signal_pulse_map: HashMap<SignalUid, HashSet<PulseUid>>,

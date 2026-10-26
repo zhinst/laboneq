@@ -1,5 +1,5 @@
 [workspace.package]
-version = "26.10.0-b3"
+version = "26.10.0-b4"
 authors = ["Zurich Instruments AG <info@zhinst.com>"]
 edition = "2024"
 publish = false
@@ -13,6 +13,7 @@ members = [
   "src/rust/*",
 
 ]
+
 resolver = "2"
 
 [workspace.dependencies]
@@ -62,12 +63,12 @@ twox-hash = { version = "2.1.2", default-features = false, features = [
   "xxhash3_128",
   "alloc",
 ] }
-opentelemetry = { version = "0.32.0", default-features = false }
-opentelemetry_sdk = { version = "0.32.0", default-features = false }
-opentelemetry-otlp = { version = "0.32.0", default-features = false }
+opentelemetry = { version = "0.33.0", default-features = false }
+opentelemetry_sdk = { version = "0.33.0", default-features = false }
+opentelemetry-otlp = { version = "0.33.0", default-features = false }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false }
-tracing-opentelemetry = { version = "0.33.0", default-features = false }
+tracing-opentelemetry = { version = "0.34.0", default-features = false }
 
 # 1st party
 codegenerator = { path = "src/rust/codegenerator" }
@@ -84,6 +85,7 @@ codegenerator-utils = { path = "src/rust/codegenerator-utils" }
 laboneq-capnp = { path = "src/rust/laboneq-capnp" }
 laboneq-capnp-build = { path = "src/rust/laboneq-capnp-build" }
 laboneq-compiled-experiment-py = { path = "src/rust/laboneq-compiled-experiment-py" }
+laboneq-experiment-py = { path = "src/rust/laboneq-experiment-py" }
 laboneq-qccs-codegen-artifacts-py = { path = "src/rust/laboneq-qccs-codegen-artifacts-py" }
 laboneq-common = { path = "src/rust/laboneq-common" }
 laboneq-units = { path = "src/rust/laboneq-units" }
@@ -95,10 +97,13 @@ laboneq-tracing = { path = "src/rust/laboneq-tracing" }
 
 [workspace.lints.rust]
 ambiguous_negative_literals = "warn"
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(feature, values("openqasm3"))',
+] }
 unused_qualifications = "deny"
-explicit-outlives-requirements = "warn"
+explicit_outlives_requirements = "warn"
 redundant_lifetimes = "warn"
-single-use-lifetimes = "warn"
+single_use_lifetimes = "warn"
 unreachable_pub = "warn"
 
 [workspace.lints.clippy]
@@ -111,4 +116,6 @@ clone_on_ref_ptr = "warn"
 missing_assert_message = "allow"               # todo: warn
 multiple_crate_versions = "allow"
 todo = "warn"
+used_underscore_binding = "warn"
+used_underscore_items = "warn"
 verbose_file_reads = "warn"

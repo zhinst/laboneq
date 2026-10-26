@@ -17,7 +17,7 @@ from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.qachannel import QAChannel, SHFQAMixIn
 from laboneq.controller.utilities.for_each import for_each
 from laboneq.core.types.enums.acquisition_type import is_spectroscopy
-from laboneq.data.execution_payload import VIRTUAL_SHFSG_UID_SUFFIX
+from laboneq.core.utilities.shfqc import to_sg_uid
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
         DeviceAttribute,
         DeviceAttributesView,
     )
-    from laboneq.controller.devices.device_zi import RawReadoutData
+    from laboneq.controller.devices.device_base import RawReadoutData
     from laboneq.controller.recipe_processor import (
         AwgType,
         RecipeData,
@@ -145,9 +145,7 @@ class DeviceSHFQA(SHFQAMixIn, DeviceSHFBase):
             self._has_awg_in_use(recipe_data)
             # TODO(2K): Remove this workaround once SHFQC is correctly modelled in the controller.
             or self.options.is_qc is True
-            and self._has_awg_in_use(
-                recipe_data, device_uid=self.uid + VIRTUAL_SHFSG_UID_SUFFIX
-            )
+            and self._has_awg_in_use(recipe_data, device_uid=to_sg_uid(self.uid))
         )
         await self._set_hw_sync(hw_sync=hw_sync, emit_trigger=self._emit_trigger)
 

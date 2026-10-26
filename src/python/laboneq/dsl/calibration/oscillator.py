@@ -42,6 +42,9 @@ class Oscillator:
     modulated with the oscillator assigned to that channel.
 
     Attributes:
+        uid (str):
+            Unique identifier. If left blank, a new unique ID will be
+            generated.
         frequency (float):
             The oscillator frequency. Units: Hz.
         modulation_type (ModulationType):
@@ -59,10 +62,10 @@ class Oscillator:
         carrier_type (CarrierType):
             Deprecated. The carrier type is no longer used. Default: `CarrierType.RF`.
 
-            !!! version-changed "Deprecated in 2.7"
+            !!! version-changed "Deprecated in version 2.7"
                 The `carrier_type` has no effect.
 
-            !!! version-changed "Changed in 2.16"
+            !!! version-changed "Changed in version 2.16"
                 `ModulationType.AUTO` now is more sensibly resolved. Previously it would
                  always fall back to `SOFTWARE`.
 

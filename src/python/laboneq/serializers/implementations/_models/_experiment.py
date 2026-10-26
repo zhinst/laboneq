@@ -20,7 +20,7 @@ from laboneq.core.types.enums.execution_type import ExecutionType
 from laboneq.core.types.enums.repetition_mode import RepetitionMode
 from laboneq.core.types.enums.section_alignment import SectionAlignment
 from laboneq.core.types.enums.section_timing_mode import SectionTimingMode
-from laboneq.dsl.coprocessor.operations import _MarkStale, _Send
+from laboneq.dsl.coprocessor.operations import _Ensure, _MarkStale, _Send
 from laboneq.dsl.coprocessor.predicate import _IsLive
 from laboneq.dsl.experiment.acquire import Acquire
 from laboneq.dsl.experiment.call import Call
@@ -672,10 +672,33 @@ class _MarkStaleModel:
         return _MarkStale(target=_structure_hqcs_target(obj.get("target")))
 
 
+@attrs.define
+class _EnsureModel:
+    """Model for `_Ensure` operations (`ensure(condition)` in a section).
+
+    The condition is an `is_live(...)` predicate whose target is
+    cross-referenced by `$ref` via its identity cache.
+    """
+
+    condition: dict | None
+    _target_class: ClassVar[Type] = _Ensure
+
+    @classmethod
+    def _unstructure(cls, obj):
+        return {"condition": _unstructure_hqcs_condition(obj.condition)}
+
+    @classmethod
+    def _structure(cls, obj, _):
+        condition = _structure_hqcs_condition(obj.get("condition"))
+        assert condition is not None
+        return _Ensure(condition=condition)
+
+
 _operation_types = [
     AcquireModel,
     CallModel,
     DelayModel,
+    _EnsureModel,
     _MarkStaleModel,
     PlayPulseModel,
     ReserveModel,
@@ -688,6 +711,7 @@ OperationModel = Union[
     AcquireModel,
     CallModel,
     DelayModel,
+    _EnsureModel,
     _MarkStaleModel,
     PlayPulseModel,
     ReserveModel,
@@ -835,8 +859,8 @@ def _structure_section_model(d, _, _converter: Converter):
     return structure_union_generic_type(d, _section_types, _converter)
 
 
-def _unstructure_do_until_condition(condition) -> dict | None:
-    """Serialize a DoUntilSection condition.
+def _unstructure_hqcs_condition(condition) -> dict | None:
+    """Serialize the condition of a DoUntilSection or an `_Ensure`.
 
     - `_IsLive`: target (`Variable` or `Pulse`) cross-referenced by `$ref`.
     - Comparison predicates: not yet serializable; stored as `None`.
@@ -849,7 +873,7 @@ def _unstructure_do_until_condition(condition) -> dict | None:
     return None
 
 
-def _structure_do_until_condition(d: dict | None):
+def _structure_hqcs_condition(d: dict | None):
     if d is None:
         return None
     return _IsLive(target=_structure_hqcs_target(d.get("target")))
@@ -878,7 +902,7 @@ def _unstructure_do_until_section(obj: "DoUntilSection", _converter: Converter) 
         "trigger": obj.trigger,
         "section_timing_mode": _converter.unstructure(obj.section_timing_mode),
         "on_system_grid": obj.on_system_grid,
-        "condition": _unstructure_do_until_condition(obj.condition),
+        "condition": _unstructure_hqcs_condition(obj.condition),
         "max_count": obj.max_count,
     }
 
@@ -903,7 +927,7 @@ def _structure_do_until_section(d: dict, _converter: Converter) -> "DoUntilSecti
             d.get("section_timing_mode"), SectionTimingModeModel | None
         ),
         on_system_grid=d.get("on_system_grid"),
-        condition=_structure_do_until_condition(d.get("condition")),
+        condition=_structure_hqcs_condition(d.get("condition")),
         max_count=d.get("max_count", 1),
     )
     return section

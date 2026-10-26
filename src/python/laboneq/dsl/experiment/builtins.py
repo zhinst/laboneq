@@ -41,6 +41,7 @@ if typing.TYPE_CHECKING:
 
     from laboneq.core.types.enums.section_timing_mode import SectionTimingMode
     from laboneq.dsl import Parameter
+    from laboneq.dsl.coprocessor.inventory import CoprocessorInventoryEntry
     from laboneq.dsl.device.io_units import LogicalSignal
     from laboneq.dsl.enums import ExecutionType
     from laboneq.dsl.experiment import (
@@ -65,6 +66,7 @@ __all__ = [
     "experiment",
     "experiment_calibration",
     "for_each",
+    "map_coprocessor",
     "map_signal",
     "match",
     "measure",
@@ -804,6 +806,7 @@ def experiment(
     | list[ExperimentSignal]
     | list[str]
     | None = None,
+    coprocessors: list[str] | None = None,
 ) -> ExperimentContextManager:
     """Returns an experiment context manager.
 
@@ -828,11 +831,17 @@ def experiment(
             decorator, in which case it will default to the name of the decorated function.
         signals:
             Experiment signals, if any.
+        coprocessors:
+            Labels of the coprocessors the experiment talks to, if any. A label is
+            bound to a coprocessor of the device setup with
+            [map_coprocessor][laboneq.dsl.experiment.experiment.Experiment.map_coprocessor].
 
     Returns:
         A new experiment context manager.
     """
-    return ExperimentContextManager(uid=uid, name=name, signals=signals)
+    return ExperimentContextManager(
+        uid=uid, name=name, signals=signals, coprocessors=coprocessors
+    )
 
 
 def experiment_calibration() -> Calibration:
@@ -893,6 +902,25 @@ def map_signal(experiment_signal: str, logical_signal: LogicalSignal | str):
         directly on the experiment after it is created.
     """
     _active_experiment().map_signal(experiment_signal, logical_signal)
+
+
+def map_coprocessor(
+    experiment_coprocessor: str,
+    setup_coprocessor: str | CoprocessorInventoryEntry,
+) -> None:
+    """Map a coprocessor on the active experiment to a device setup coprocessor.
+
+    Arguments:
+        experiment_coprocessor:
+            The label of a coprocessor declared on the active experiment.
+        setup_coprocessor:
+            The device setup's inventory entry, or its key.
+
+    !!! note
+        One can also call [Experiment.map_coprocessor][laboneq.dsl.experiment.experiment.Experiment.map_coprocessor]
+        directly on the experiment after it is created.
+    """
+    _active_experiment().map_coprocessor(experiment_coprocessor, setup_coprocessor)
 
 
 def prng_setup(range: int, seed=1, uid=None, name=None):

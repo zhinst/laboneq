@@ -15,8 +15,8 @@ from laboneq.controller.devices.async_support import (
     _gather,
 )
 from laboneq.controller.devices.core_base import CoreBase
+from laboneq.controller.devices.device_base import RawReadoutData
 from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.device_zi import RawReadoutData
 from laboneq.controller.recipe_processor import (
     AwgKey,
     HWModulation,

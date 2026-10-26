@@ -3,7 +3,8 @@
 
 use pyo3::{prelude::*, types::PyDict};
 
-use laboneq_compiler_py::{compile_experiment, serialize_experiment};
+use laboneq_compiler_py::compile_experiment;
+use laboneq_experiment_py::serialize_experiment;
 use laboneq_qccs_backend::{BACKEND_NAME, QccsBackend, setup_description_py};
 
 /// Serialize a Python experiment object to Cap'n Proto bytes, with `setup_description` in the
@@ -19,13 +20,7 @@ pub(crate) fn serialize_experiment_py(
     let setup_description = message.get_root_as_reader().map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!("Invalid setup description: {e}"))
     })?;
-    Ok(serialize_experiment(
-        py,
-        experiment,
-        BACKEND_NAME,
-        setup_description,
-        packed,
-    )?)
+    serialize_experiment(py, experiment, BACKEND_NAME, setup_description, packed)
 }
 
 /// Build an experiment from Cap'n Proto bytes plus device/signal configuration, and

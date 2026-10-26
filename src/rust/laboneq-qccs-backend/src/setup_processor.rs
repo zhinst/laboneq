@@ -30,7 +30,7 @@ pub(crate) struct AwgDevices {
     /// This UID is used to group virtual devices that share the same
     /// physical hardware, enabling proper device detection.
     pub physical_uids: HashMap<DeviceUid, PhysicalDeviceUid>,
-    /// The options the instrument each device belongs to was ordered with.
+    /// The options ordered with the instrument that each device belongs to.
     pub options: HashMap<DeviceUid, DeviceOptions>,
     pub reassigned_signals: Vec<ReassignedSignal>,
     /// Devices that form one half of an SHFQC, which appears as a virtual
@@ -109,7 +109,7 @@ struct SignalProperties<'a> {
     ports: Vec<&'a Port>,
 }
 
-/// The AWG devices one instrument provides, and the models they are.
+/// The AWG devices provided by one instrument, and the models they are.
 struct InstrumentDevices {
     devices: Vec<(DeviceUid, DeviceKind)>,
     reassigned_signals: Vec<ReassignedSignal>,

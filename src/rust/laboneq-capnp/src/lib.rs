@@ -5,6 +5,8 @@
 
 #![allow(unused_qualifications)]
 #![allow(unreachable_pub)]
+#![allow(clippy::used_underscore_binding)]
+#![allow(clippy::used_underscore_items)]
 
 pub mod artifacts;
 pub mod convert;

@@ -11,16 +11,14 @@
 //!
 //! TODO: Remove once the compilation workflow is driven from Rust.
 
+use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use pyo3::{PyTypeInfo, intern};
 
 use std::sync::Arc;
 
 use laboneq_common::compiler_settings::CompilerSettings;
-use laboneq_error::{
-    LabOneQError, PyErrorWithContext, ResourceLimitationError, WithContext, bail_resource_usage,
-};
+use laboneq_error::{LabOneQError, PyErrorWithContext, WithContext};
 use laboneq_ir::pulse_sheet_schedule::PulseSheetSchedule;
 use laboneq_ir::signal::Signal;
 
@@ -45,7 +43,6 @@ pub(crate) struct CompilePass<B: CompilerBackend> {
     backend: B,
     experiment: Py<ExperimentPy>,
     execution: Py<PyAny>,
-    compiler_settings: Py<PyAny>,
 }
 
 impl<B: CompilerBackend> CompilePass<B> {
@@ -59,7 +56,6 @@ impl<B: CompilerBackend> CompilePass<B> {
         execution: &Execution,
     ) -> Result<Self, LabOneQError> {
         Python::attach(|py| {
-            let settings_py = create_compiler_settings_py(py, &compiler_settings)?.unbind();
             let execution = create_py_execution(
                 py,
                 execution,
@@ -79,7 +75,6 @@ impl<B: CompilerBackend> CompilePass<B> {
                 backend,
                 experiment: Py::new(py, experiment)?,
                 execution,
-                compiler_settings: settings_py,
             })
         })
     }
@@ -92,7 +87,9 @@ impl<B: CompilerBackend> CompilePass<B> {
         Python::attach(|py| {
             let output = self.call_compile(py, chunk_count)?;
             Ok(CompilePassOutput {
-                combined_output: self.backend.combined_output_from_py(&output.artifacts)?,
+                combined_output: self
+                    .backend
+                    .combined_output_from_py(&output.combined_output)?,
                 pulse_sheet_schedule: output
                     .schedule
                     .map(|obj| -> PyResult<_> {
@@ -119,20 +116,11 @@ impl<B: CompilerBackend> CompilePass<B> {
         kwargs.set_item(intern!(py, "execution"), &self.execution)?;
         kwargs.set_item(intern!(py, "chunk_count"), chunk_count)?;
         kwargs.set_item(intern!(py, "backend"), self.backend.name())?;
-        kwargs.set_item(intern!(py, "compiler_settings"), &self.compiler_settings)?;
 
-        match compile_fn.call((), Some(&kwargs)) {
-            Ok(result) => Ok(result.extract()?),
-            Err(e) if e.is_instance(py, &ResourceLimitationError::type_object(py)) => {
-                let usage = e
-                    .value(py)
-                    .getattr(intern!(py, "usage"))
-                    .ok()
-                    .and_then(|v: Bound<'_, PyAny>| v.extract().ok());
-                bail_resource_usage!("{}", e.to_string(), usage = usage);
-            }
-            Err(e) => Err(rebuild_error_chain(py, e)),
-        }
+        let result = compile_fn
+            .call((), Some(&kwargs))
+            .map_err(|e| rebuild_error_chain(py, e))?;
+        Ok(result.extract()?)
     }
 }
 
@@ -145,8 +133,13 @@ impl<B: CompilerBackend> CompilePass<B> {
 ///
 /// TODO: Python is removed as middle man, this workaround is no longer needed.
 fn rebuild_error_chain(py: Python<'_>, error: PyErr) -> LabOneQError {
+    let wrapped = match LabOneQError::from_pyerr(py, error) {
+        LabOneQError::PythonException(wrapped) => wrapped,
+        other => return other,
+    };
+    let error = wrapped.py_err();
     let Some(cause) = error.cause(py) else {
-        return error.into();
+        return LabOneQError::PythonException(wrapped);
     };
     error.set_cause(py, None);
     let mut cause: PyErrorWithContext = cause.into();
@@ -154,26 +147,9 @@ fn rebuild_error_chain(py: Python<'_>, error: PyErr) -> LabOneQError {
     LabOneQError::PythonException(cause)
 }
 
-fn create_compiler_settings_py<'py>(
-    py: Python<'py>,
-    compiler_settings: &CompilerSettings,
-) -> PyResult<Bound<'py, PyAny>> {
-    let compiler_settings_py = py
-        .import(intern!(py, "laboneq.compiler.common.compiler_settings"))?
-        .getattr(intern!(py, "CompilerSettings"))?;
-
-    let kwargs = PyDict::new(py);
-    kwargs.set_item(intern!(py, "LOG_REPORT"), compiler_settings.log_report)?;
-    kwargs.set_item(
-        intern!(py, "IGNORE_RESOURCE_LIMITATION_ERRORS"),
-        compiler_settings.ignore_resource_exhaustion,
-    )?;
-    compiler_settings_py.call((), Some(&kwargs))
-}
-
 /// The output of the Python function `compile_whole_or_with_chunks`.
 #[derive(FromPyObject, Debug)]
 struct CompilationOutputPy<'py> {
-    artifacts: Bound<'py, PyAny>,
+    combined_output: Bound<'py, PyAny>,
     schedule: Option<Bound<'py, PyAny>>,
 }

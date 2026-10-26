@@ -16,19 +16,19 @@ from laboneq.controller.devices.device_uhfqa import DeviceUHFQA
 from laboneq.controller.utilities.exception import LabOneQControllerException
 
 if TYPE_CHECKING:
+    from laboneq.controller.devices.device_base import DeviceBase
     from laboneq.controller.devices.device_setup_dao import (
         DeviceQualifier,
         ServerQualifier,
     )
-    from laboneq.controller.devices.device_zi import DeviceZI
     from laboneq.controller.versioning import SetupCaps
 
 
 class DeviceFactory:
-    _registered_devices: dict[str, type[DeviceZI]] = {}
+    _registered_devices: dict[str, type[DeviceBase]] = {}
 
     @classmethod
-    def register_device(cls, driver: str, dev_class: type[DeviceZI]):
+    def register_device(cls, driver: str, dev_class: type[DeviceBase]):
         driver_key = driver.upper()
         existing = cls._registered_devices.get(driver_key)
         if existing is not None:
@@ -46,7 +46,7 @@ class DeviceFactory:
         server_qualifier: ServerQualifier,
         device_qualifier: DeviceQualifier,
         setup_caps: SetupCaps,
-    ) -> DeviceZI:
+    ) -> DeviceBase:
         dev_class = cls._registered_devices.get(device_qualifier.driver.upper())
         if dev_class is None:
             raise LabOneQControllerException(

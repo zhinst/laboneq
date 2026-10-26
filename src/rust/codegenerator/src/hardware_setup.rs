@@ -23,7 +23,7 @@ pub struct HardwareSetup {
 }
 
 impl HardwareSetup {
-    /// A device, as the setup this experiment targets defines it.
+    /// A device, as defined by the setup that this experiment targets.
     pub(crate) fn device(&self, uid: DeviceUid) -> Result<&SetupDevice> {
         self.devices
             .iter()

@@ -13,12 +13,12 @@ from laboneq.controller.attribute_value_tracker import (
     AttributeName,
 )
 from laboneq.controller.devices.async_support import _gather
-from laboneq.controller.devices.device_utils import NodeCollector
-from laboneq.controller.devices.device_zi import (
+from laboneq.controller.devices.device_base import (
     DeviceBase,
     RawReadoutData,
     delay_to_rounded_samples,
 )
+from laboneq.controller.devices.device_utils import NodeCollector
 from laboneq.controller.devices.node_control import (
     Command,
     Response,

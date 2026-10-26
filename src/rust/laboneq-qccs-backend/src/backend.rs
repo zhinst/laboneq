@@ -1,6 +1,7 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use pyo3::types::PyDict;
 use pyo3::{intern, prelude::*};
 
 use codegenerator_py::{
@@ -156,7 +157,32 @@ impl CompilerBackend for QccsBackend {
         Ok(QccsCombinedOutput(obj.clone().unbind()))
     }
 
-    fn finalize(
+    fn finish_attempt(
+        &self,
+        combined: &mut Self::CombinedOutput,
+        compiler_settings: &CompilerSettings,
+        chunk_count: Option<u32>,
+    ) -> CompilerBackendResult<()> {
+        Python::attach(|py| {
+            let kwargs = PyDict::new(py);
+            kwargs.set_item(intern!(py, "log_report"), compiler_settings.log_report)?;
+            kwargs.set_item(
+                intern!(py, "ignore_resource_limitation_errors"),
+                compiler_settings.ignore_resource_exhaustion,
+            )?;
+            kwargs.set_item(intern!(py, "uses_chunking"), chunk_count.is_some())?;
+            output_module(py)?
+                .call_method(
+                    intern!(py, "finish_attempt"),
+                    (combined.0.bind(py),),
+                    Some(&kwargs),
+                )
+                .map_err(|e| LabOneQError::from_pyerr(py, e))?;
+            Ok(())
+        })
+    }
+
+    fn produce_output(
         &self,
         combined: Self::CombinedOutput,
         _hqcs_program: (),
@@ -164,15 +190,19 @@ impl CompilerBackend for QccsBackend {
         laboneq_compiler_py::compiler_backend::CompilationOutput<Self::CompilerArtifact>,
     > {
         Python::attach(|py| {
-            let obj = combined.0.bind(py);
-            let artifacts_py = obj.call_method0(intern!(py, "get_artifacts"))?;
+            let artifacts = output_module(py)?
+                .call_method1(intern!(py, "produce_output"), (combined.0.bind(py),))?;
             Ok(laboneq_compiler_py::compiler_backend::CompilationOutput {
                 artifacts: CompilationArtifactsQccs {
-                    artifacts: artifacts_py.into(),
+                    artifacts: artifacts.into(),
                 },
             })
         })
     }
+}
+
+fn output_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
+    py.import(intern!(py, "laboneq.qccs.compiler.output"))
 }
 
 /// QCCS's linked real-time compilation output. Still fully backed by the Python

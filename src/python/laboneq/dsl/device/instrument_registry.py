@@ -20,8 +20,8 @@ DescriptorConnectionDecoder = Callable[
     [str, str, list[str]], InternalConnection | SignalConnection
 ]
 
-#: Builds the instrument for a device type no registered instrument claims, from
-#: that device type and the fields the setup description gives for it.
+#: Builds the instrument for a device type that no registered instrument claims,
+#: from that device type and the fields the setup description gives for it.
 UnmanagedInstrumentFactory = Callable[..., Instrument]
 
 
@@ -85,8 +85,8 @@ def register_instrument(
 
 
 def register_unmanaged_instrument(factory: UnmanagedInstrumentFactory) -> None:
-    """Register the instrument that device types no other instrument claims
-    fall back to.
+    """Register the instrument that device types fall back to when no other
+    instrument claims them.
 
     Args:
         factory: Builds the instrument from that device type and the fields the
@@ -99,7 +99,8 @@ def register_unmanaged_instrument(factory: UnmanagedInstrumentFactory) -> None:
 
 
 def unmanaged_instrument_factory() -> UnmanagedInstrumentFactory | None:
-    """The instrument device types no registered instrument claims fall back to."""
+    """The instrument that device types fall back to when no registered
+    instrument claims them."""
     return _registered_unmanaged_instrument
 
 

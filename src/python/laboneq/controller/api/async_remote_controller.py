@@ -36,6 +36,7 @@ from laboneq.controller.api.commons import (
     fetch_neartime_callback_results,
     fetch_result_structure,
     raise_on_failed_run,
+    readyz_not_ready_reason,
     reraise_controller_exception,
     ws_url,
 )
@@ -48,8 +49,13 @@ from laboneq.controller.callback_protocol import (
     CALLBACK_PROTOCOL_VERSION,
     json_default,
 )
-from laboneq.controller.constants import PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER
+from laboneq.controller.constants import (
+    PROTOCOL_VERSION,
+    PROTOCOL_VERSION_HEADER,
+    READY_TIMEOUT_S,
+)
 from laboneq.controller.controller import SubmissionStatus
+from laboneq.controller.utilities.exception import HardwareNotReadyError
 from laboneq.dsl.result.results import Results
 from laboneq.serializers import from_dict
 
@@ -68,8 +74,10 @@ _CHANNEL_BUSY_TIMEOUT_S = 30.0
 
 
 class AsyncRemoteController(AsyncControllerAPI):
-    #: Total time to wait for the controller service to become ready on connect.
-    _READYZ_TIMEOUT_S: float = 60.0
+    #: Total time to wait for the controller service to come up on connect.
+    _LIVEZ_TIMEOUT_S: float = 60.0
+    #: Delay between successive liveness polls.
+    _LIVEZ_POLL_INTERVAL_S: float = 0.5
     #: Delay between successive readiness polls.
     _READYZ_POLL_INTERVAL_S: float = 0.5
 
@@ -107,17 +115,18 @@ class AsyncRemoteController(AsyncControllerAPI):
             ).lower()
 
     async def _connect(self):
-        await self._wait_until_ready()
+        await self._wait_until_live()
 
-    async def _wait_until_ready(self) -> None:
-        """Poll the controller service's `/readyz` endpoint until it is ready.
+    async def _wait_until_live(self) -> None:
+        """Poll the controller service's `/livez` endpoint until the service is up.
 
         The service may still be starting up (connecting to hardware, or
         booting in emulation mode) when the client first tries to reach it;
-        retry until it reports ready or `_READYZ_TIMEOUT_S` elapses.
+        retry until `/livez` answers or `_LIVEZ_TIMEOUT_S` elapses.
+        `get_not_ready_reason` reports whether the service can run experiments.
         """
-        url = f"{self._remote_url}/readyz"
-        deadline = time.monotonic() + self._READYZ_TIMEOUT_S
+        url = f"{self._remote_url}/livez"
+        deadline = time.monotonic() + self._LIVEZ_TIMEOUT_S
         last_error = "no response received"
         while True:
             try:
@@ -130,10 +139,10 @@ class AsyncRemoteController(AsyncControllerAPI):
                 last_error = str(exc)
             if time.monotonic() >= deadline:
                 raise APIError(
-                    f"Controller service at {self._remote_url} did not become "
-                    f"ready within {self._READYZ_TIMEOUT_S:.0f}s: {last_error}"
+                    f"Controller service at {self._remote_url} did not come up "
+                    f"within {self._LIVEZ_TIMEOUT_S:.0f}s: {last_error}"
                 )
-            await asyncio.sleep(self._READYZ_POLL_INTERVAL_S)
+            await asyncio.sleep(self._LIVEZ_POLL_INTERVAL_S)
 
     async def aclose(self):
         pass
@@ -142,11 +151,30 @@ class AsyncRemoteController(AsyncControllerAPI):
         data = await self._request_json("GET", "v1/devicesetup")
         return cast("DeviceSetup", from_dict(data["device_setup"]))
 
-    async def get_instrument_topology(self) -> InstrumentTopology:
+    async def get_instrument_topology(self) -> InstrumentTopology | None:
         data = await self._request_json("GET", "v1/instrumenttopology")
         if data.get("instrument_topology") is None:
-            raise APIError("Server has no instrument topology configured")
+            return None
         return cast("InstrumentTopology", from_dict(data["instrument_topology"]))
+
+    async def get_not_ready_reason(self) -> str | None:
+        try:
+            async with httpx.AsyncClient(transport=self._transport) as client:
+                resp = await client.get(
+                    f"{self._remote_url}/readyz", headers=self._headers
+                )
+        except httpx.HTTPError as exc:
+            return f"Cannot reach the controller service at {self._remote_url}: {exc}"
+        return readyz_not_ready_reason(resp)
+
+    async def wait_until_ready(self, timeout_s: float = READY_TIMEOUT_S):
+        deadline = time.monotonic() + timeout_s
+        while (reason := await self.get_not_ready_reason()) is not None:
+            if time.monotonic() >= deadline:
+                raise HardwareNotReadyError(
+                    f"Not ready after {timeout_s:g} s. {reason}"
+                )
+            await asyncio.sleep(self._READYZ_POLL_INTERVAL_S)
 
     async def submit_experiment(
         self,
@@ -181,7 +209,7 @@ class AsyncRemoteController(AsyncControllerAPI):
     ) -> Results:
         """Submit an experiment, serve its client near-time callbacks, and fetch results.
 
-        Callbacks the controller service does not itself provide are dispatched
+        Callbacks not provided by the controller service itself are dispatched
         to the matching entry in *callbacks*; their arguments are checked for
         JSON-serializability before submission. Experiments with no client-served
         callbacks fall back to plain submit-and-poll.
@@ -270,9 +298,9 @@ class AsyncRemoteController(AsyncControllerAPI):
     ) -> Done:
         """Serve callback messages over the WebSocket until the run ends.
 
-        Reconnects with backoff after a disconnect; between attempts the run
-        status is probed over REST so a run that ended while the socket was
-        down terminates the loop (an unreachable service raises instead).
+        Reconnects with backoff after a disconnect. Between attempts, the run
+        status is probed over REST, so that a run that ended while the socket
+        was down terminates the loop. An unreachable service raises instead.
         A channel that another client keeps occupied is given up on after
         `_CHANNEL_BUSY_TIMEOUT_S`.
         """

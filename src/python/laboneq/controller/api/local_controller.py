@@ -3,14 +3,16 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
-from laboneq.controller.api.commons import APIError, SubmissionRegistry
+import attrs
+
+from laboneq.controller.api.commons import SubmissionRegistry
 from laboneq.controller.api.controller_api import ControllerAPI
-from laboneq.controller.constants import DEFAULT_TIMEOUT_S
+from laboneq.controller.constants import DEFAULT_TIMEOUT_S, READY_TIMEOUT_S
 from laboneq.controller.controller import Controller
-from laboneq.controller.target_setup import build_target_setup
 from laboneq.dsl.result.results import Results
 
 if TYPE_CHECKING:
@@ -21,6 +23,9 @@ if TYPE_CHECKING:
     from laboneq.data.instrument_topology import InstrumentTopology
     from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.dsl.device.device_setup import DeviceSetup
+
+
+_logger = logging.getLogger(__name__)
 
 
 class LocalController(ControllerAPI):
@@ -37,40 +42,51 @@ class LocalController(ControllerAPI):
         timeout_s: float | None = None,
         instrument_topology: InstrumentTopology | None = None,
     ) -> LocalController:
-        """Create an instance of the Controller."""
-        if timeout_s is None:
-            timeout_s = DEFAULT_TIMEOUT_S
-        target_setup = build_target_setup(device_setup)
+        """Create an instance of the LocalController and connect it.
+
+        Returns the instance even if connecting fails. `get_not_ready_reason`
+        then reports the failure, and the controller tries again in the
+        background when it needs the instruments, at most every
+        `Controller._RECONNECT_HOLDOFF_S` seconds. With `reset_devices`, the
+        first successful connect resets the instruments, and no later one does.
+        """
         if neartime_callbacks is None:
             neartime_callbacks = {}
         controller = Controller(
-            target_setup=target_setup,
+            device_setup=device_setup,
             ignore_version_mismatch=ignore_version_mismatch,
             neartime_callbacks=neartime_callbacks,
         )
         controller.start()
-        controller.connect(
-            do_emulation=do_emulation,
-            reset_devices=reset_devices,
-            disable_runtime_checks=disable_runtime_checks,
-            timeout_s=timeout_s,
-        )
-        return LocalController(
+        local_controller = LocalController(
             device_setup=device_setup,
             controller=controller,
             instrument_topology=instrument_topology,
+            do_emulation=do_emulation,
         )
+        try:
+            controller.connect(
+                do_emulation=do_emulation,
+                reset_devices=reset_devices,
+                disable_runtime_checks=disable_runtime_checks,
+                timeout_s=DEFAULT_TIMEOUT_S if timeout_s is None else timeout_s,
+            )
+        except Exception as e:
+            _logger.warning("Cannot connect to the instruments: %s", e)
+        return local_controller
 
     def __init__(
         self,
         device_setup: DeviceSetup,
         controller: Controller,
         instrument_topology: InstrumentTopology | None = None,
+        do_emulation: bool = True,
     ):
         self._device_setup = device_setup
         # Keep reference to avoid garbage collection
         self._controller = controller
         self._instrument_topology = instrument_topology
+        self._do_emulation = do_emulation
         self._submissions = SubmissionRegistry()
 
     def close(self):
@@ -84,15 +100,24 @@ class LocalController(ControllerAPI):
     def get_default_devicesetup(self) -> DeviceSetup:
         return self._device_setup
 
-    @property
-    def instrument_topology(self) -> InstrumentTopology | None:
-        """Return the instrument topology, or None if not configured."""
-        return self._instrument_topology
-
-    def get_instrument_topology(self) -> InstrumentTopology:
+    def get_instrument_topology(self) -> InstrumentTopology | None:
         if self._instrument_topology is None:
-            raise APIError("No instrument topology configured")
-        return self._instrument_topology
+            return None
+        self._controller.ensure_setup_description()
+        # A client rebuilds a `DeviceSetup` from the topology, and compiles for it
+        # with the setup description. Emulation has no instruments to fetch one from.
+        setup_description = self._controller.setup_description
+        if self._do_emulation or setup_description is None:
+            return self._instrument_topology
+        return attrs.evolve(
+            self._instrument_topology, setup_description=setup_description
+        )
+
+    def get_not_ready_reason(self) -> str | None:
+        return self._controller.get_not_ready_reason()
+
+    def wait_until_ready(self, timeout_s: float = READY_TIMEOUT_S):
+        self._controller.wait_until_ready(timeout_s)
 
     @property
     def neartime_callbacks(self) -> dict[str, Callable]:

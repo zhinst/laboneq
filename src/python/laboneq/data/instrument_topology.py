@@ -48,9 +48,9 @@ class InstrumentTopology:
     connections: list[ConnectionEntry] = attrs.Factory(list)
     setup_description: SetupDescription | None = None
     #: Base URL of the LabOne Q controller service that served this topology,
-    #: e.g. ``https://lab.example.com/laboneq``. A `DeviceSetup` built from a
-    #: topology carrying one dispatches experiments to that service instead of
-    #: driving hardware directly (see `Session.connect`). Set by the service on
+    #: e.g. ``https://lab.example.com/laboneq``. If a topology carries this URL,
+    #: a `DeviceSetup` built from it dispatches experiments to that service instead
+    #: of driving hardware directly (see `Session.connect`). Set by the service on
     #: the topology it serves; never part of a topology file.
     controller_service_url: str | None = None
 

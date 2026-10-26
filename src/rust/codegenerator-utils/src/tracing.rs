@@ -30,12 +30,12 @@ impl Default for ParallelTraceContext {
     }
 }
 
-// Macro to generate traced calls with custom span names
+// Macro to generate traced calls with custom span names.
 #[macro_export]
 macro_rules! par_trace {
-    ($trace_ctx:expr, $span_name:literal, $f:expr) => {
+    ($trace_ctx:expr, $level:expr, $span_name:literal, $f:expr) => {
         tracing::dispatcher::with_default(&$trace_ctx.dispatch, || {
-            tracing::info_span!(parent: &$trace_ctx.parent, $span_name).in_scope(|| $f)
+            tracing::span!(parent: &$trace_ctx.parent, $level, $span_name).in_scope(|| $f)
         })
     };
 }

@@ -3,10 +3,8 @@
 
 from __future__ import annotations
 
-import abc
 import logging
 import time
-from builtins import frozenset
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -21,7 +19,6 @@ from .parameter_store import ParameterStore
 
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
-    from laboneq.compiler import CompilerSettings
     from laboneq.compiler.common.iface_compiler_output import RTCompilerOutputContainer
     from laboneq.compiler.workflow.rt_linker import CombinedRTCompilerOutputContainer
     from laboneq.core.types.numpy_support import NumPyArray
@@ -75,54 +72,29 @@ class IterationStack:
         return count
 
 
-class NtCompilerExecutorDelegate(abc.ABC):
-    @abc.abstractmethod
-    def __init__(self, settings: CompilerSettings):
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def after_compilation_run(self, new: RTCompilerOutputContainer, indices: list[int]):
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def after_final_run(self, combined: CombinedRTCompilerOutputContainer):
-        raise NotImplementedError
-
-
 class NtCompilerExecutor(ExecutorBase):
-    _delegates_types: list[type[NtCompilerExecutorDelegate]] = []
-
     def __init__(
         self,
         experiment: compiler_rs.ProcessedExperiment,
-        settings: CompilerSettings,
         chunk_count: int | None = None,
         backend: str = "qccs",
     ):
         super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY)
         self._experiment = experiment
-        self._settings = settings
         self._chunk_count = chunk_count
         self._backend = backend
         self._iteration_stack = IterationStack()
 
-        self._compiler_output_by_param_values: dict[
-            frozenset, RTCompilerOutputContainer
+        # Compiler outputs, grouped by the near-time parameters their compilation
+        # read, then keyed by the values of those parameters
+        self._compiler_outputs: dict[
+            frozenset[str],
+            dict[frozenset[tuple[str, Any]], RTCompilerOutputContainer],
         ] = {}
         self._last_compiler_output: RTCompilerOutputContainer | None = None
-        self._last_step_indices: list[int] | None = None
-        self._required_parameters: set[str] | None = None
         self._combined_compiler_output: CombinedRTCompilerOutputContainer | None = None
 
-        self._delegates = [
-            Delegate(self._settings) for Delegate in self._delegates_types
-        ]
-
         self._skipped_last_compilation = False
-
-    @classmethod
-    def register_hook(cls, delegate_class: type[NtCompilerExecutorDelegate]):
-        cls._delegates_types.append(delegate_class)
 
     def set_sw_param_handler(
         self,
@@ -164,33 +136,24 @@ class NtCompilerExecutor(ExecutorBase):
         self,
     ):
         time_start = time.perf_counter()
-        if self._required_parameters is not None:
-            # We already know what subset of the near-time parameters are required
-            # by the real-time sequence. If we already have a compiler output for
-            # that state, we can skip the compilation.
-            requested_values = self._frozen_required_parameters()
-            if requested_values in self._compiler_output_by_param_values:
-                new_compiler_output = self._compiler_output_by_param_values[
-                    requested_values
-                ]
+        nt_step_indices = list(self._iteration_stack.nt_loop_indices())
+        nt_parameter_values = self._iteration_stack.nt_parameter_values()
+        cached_compiler_output = self._cached_compiler_output(nt_parameter_values)
+        if cached_compiler_output is not None:
+            self._last_compiler_output = cached_compiler_output
+            rt_linker.repeat_run(
+                self._combined_compiler_output,
+                self._last_compiler_output,
+                nt_step_indices,
+            )
+            if not self._skipped_last_compilation:
+                _logger.info("Skipping compilation for next step(s)...")
+            self._skipped_last_compilation = True
 
-                self._last_compiler_output = new_compiler_output
-                rt_linker.repeat_previous(
-                    self._combined_compiler_output,
-                    self._last_compiler_output,
-                    self._last_step_indices,
-                )
-                self._last_step_indices = list(self._iteration_stack.nt_loop_indices())
-                if not self._skipped_last_compilation:
-                    _logger.info("Skipping compilation for next step(s)...")
-                self._skipped_last_compilation = True
-
-                return
+            return
 
         # We don't have a compiler output for this state yet, so we need to compile
-        parameter_store = ParameterStore[str, float](
-            self._iteration_stack.nt_parameter_values()
-        )
+        parameter_store = ParameterStore[str, float](nt_parameter_values)
         tracker = parameter_store.create_tracker()
         new_compiler_output = compile_realtime(
             experiment=self._experiment,
@@ -198,16 +161,10 @@ class NtCompilerExecutor(ExecutorBase):
             backend=self._backend,
         )
 
-        if self._required_parameters is None:
-            self._required_parameters = tracker.queries()
-        else:
-            assert self._required_parameters == tracker.queries()
-
-        requested_values = self._frozen_required_parameters()
-
-        self._compiler_output_by_param_values[requested_values] = new_compiler_output
-
-        nt_step_indices = list(self._iteration_stack.nt_loop_indices())
+        used_parameters = frozenset(tracker.queries())
+        self._compiler_outputs.setdefault(used_parameters, {})[
+            _cache_key(nt_parameter_values, used_parameters)
+        ] = new_compiler_output
 
         # Assemble the combined compiler output
         if self._combined_compiler_output is None:
@@ -223,11 +180,7 @@ class NtCompilerExecutor(ExecutorBase):
                 nt_step_indices,
             )
 
-        for delegate in self._delegates:
-            delegate.after_compilation_run(new_compiler_output, nt_step_indices)
-
         self._last_compiler_output = new_compiler_output
-        self._last_step_indices = nt_step_indices
 
         time_delta = time.perf_counter() - time_start
 
@@ -238,22 +191,22 @@ class NtCompilerExecutor(ExecutorBase):
             f"Completed compilation step {this_index + 1} of {total_count}. [{time_delta:.3f} s]"
         )
 
-    def _frozen_required_parameters(self):
-        assert self._required_parameters is not None
-        return frozenset(
-            (k, v)
-            for k, v in self._iteration_stack.nt_parameter_values().items()
-            if k in self._required_parameters
-        )
+    def _cached_compiler_output(
+        self, nt_parameter_values: dict[str, Any]
+    ) -> RTCompilerOutputContainer | None:
+        for used_parameters, compiler_outputs in self._compiler_outputs.items():
+            compiler_output = compiler_outputs.get(
+                _cache_key(nt_parameter_values, used_parameters)
+            )
+            if compiler_output is not None:
+                return compiler_output
+        return None
 
     def combined_compiler_output(self):
         return self._combined_compiler_output
 
-    def finalize(self):
-        if self._combined_compiler_output is not None:
-            for delegate in self._delegates:
-                delegate.after_final_run(self._combined_compiler_output)
-            uses_chunking = self._chunk_count is not None and self._chunk_count > 1
-            rt_linker.finalize(
-                self._combined_compiler_output, self._settings, uses_chunking
-            )
+
+def _cache_key(
+    values: dict[str, Any], names: frozenset[str]
+) -> frozenset[tuple[str, Any]]:
+    return frozenset((k, v) for k, v in values.items() if k in names)

@@ -21,11 +21,9 @@ pyo3 = { workspace = true, features = ["anyhow"] }
 num-complex = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
-smallvec = { workspace = true }
 serde_json = { workspace = true }
 num-integer = { workspace = true }
 capnp = { workspace = true }
-numpy = { workspace = true }
 indexmap = { workspace = true }
 tracing = { workspace = true }
 rustc-hash = { workspace = true }

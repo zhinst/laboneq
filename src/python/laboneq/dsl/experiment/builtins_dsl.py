@@ -19,6 +19,7 @@ __all__ = [  # noqa: RUF022
     "experiment",
     "experiment_calibration",
     "for_each",
+    "map_coprocessor",
     "map_signal",
     "match",
     "measure",
@@ -43,13 +44,14 @@ __all__ = [  # noqa: RUF022
     "create_pulse",
     "quantum_operation",
     # HQCS
-    "Coprocessor",
     "Variable",
     "Struct",
     "register_stream",
+    "set_coprocessor_payload",
     "send",
     "mark_stale",
     "is_live",
+    "ensure",
     "do_until",
     "render_layout",
     "Phase",
@@ -72,13 +74,14 @@ __all__ = [  # noqa: RUF022
 
 # HQCS coprocessor surface
 from laboneq.dsl.coprocessor.builtins import (
+    ensure,
     is_live,
     mark_stale,
     register_stream,
     render_layout,
     send,
+    set_coprocessor_payload,
 )
-from laboneq.dsl.coprocessor.coprocessor import Coprocessor
 from laboneq.dsl.coprocessor.struct import Struct
 from laboneq.dsl.experiment import pulse_library
 from laboneq.dsl.experiment.build_experiment import (
@@ -97,6 +100,7 @@ from laboneq.dsl.experiment.builtins import (
     experiment,
     experiment_calibration,
     for_each,
+    map_coprocessor,
     map_signal,
     match,
     measure,

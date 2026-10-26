@@ -172,8 +172,8 @@ class Workflow(Generic[Parameters]):
         Returns:
             Result of the workflow execution.
 
-            if `until` is used, returns the results up to the selected task or
-                sub-workflow.
+                if `until` is used, returns the results up to the selected task or
+                    sub-workflow.
 
         Raises:
             WorkflowError: An error occurred during workflow execution or
@@ -206,7 +206,7 @@ class Workflow(Generic[Parameters]):
         Returns:
             Result of the workflow execution.
 
-            if `until` is used, returns the results up to the selected task.
+                if `until` is used, returns the results up to the selected task.
 
         Raises:
             WorkflowError: An error occurred during workflow execution.
@@ -490,9 +490,9 @@ def workflow(
 
     Returns:
         A wrapper which returns a `Workflow` instance if called outside of
-            another workflow definition.
-        A wrapper which returns a `WorkflowResult` if called within
-            another workflow definition.
+                another workflow definition.
+            A wrapper which returns a `WorkflowResult` if called within
+                another workflow definition.
 
     Example:
         ```python

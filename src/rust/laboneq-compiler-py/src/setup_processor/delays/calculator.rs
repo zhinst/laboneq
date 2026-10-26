@@ -59,7 +59,7 @@ struct SignalDelayInfo {
     alignment_delay: Duration<Second>,
 }
 
-/// What lining one signal up against the others needs to know about it.
+/// What must be known about one signal to line it up against the others.
 pub(crate) struct SignalDelayProperties {
     pub(crate) uid: SignalUid,
     pub(crate) sampling_rate: f64,

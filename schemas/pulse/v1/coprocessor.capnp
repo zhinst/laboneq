@@ -37,7 +37,7 @@ struct Coprocessor {
   # Opaque kernel payload. Absent when unset.
 
   inventoryKey @2 :Text;
-  # Device-setup inventory key this handle is bound to. Absent when unmapped.
+  # Device-setup inventory key that this handle is bound to. Absent when unmapped.
 }
 
 struct VariableValue {
@@ -121,13 +121,14 @@ enum CmpOp {
 }
 
 struct Predicate {
-  # Exit condition of a do-until loop.
+  # Runtime condition: the exit condition of a do-until loop, or the assertion of an
+  # `ensure`.
 
   union {
     unspecified @0 :Void;
 
     comparison :group {
-      # Value-based exit: `do_until(condition=(var != 0), ...)`.
+      # Value-based: `do_until(condition=(var != 0), ...)`.
 
       variable @1 :Common.Id;
       # `Experiment.variables` index (left-hand side).
@@ -139,7 +140,7 @@ struct Predicate {
     }
 
     isLive :group {
-      # Arrival-based exit: `do_until(is_live(x), ...)`.
+      # Arrival-based: `do_until(is_live(x), ...)`, `ensure(is_live(x))`.
 
       union {
         variable @4 :Common.Id;

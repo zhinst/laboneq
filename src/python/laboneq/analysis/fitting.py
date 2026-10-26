@@ -109,7 +109,8 @@ def oscillatory(
     The form of the function is a cosine:
 
     $$
-        f(x) = amplitude \\times \\cos(frequency \\times x + phase) + offset
+        f(x) = \\mathrm{amplitude} \\times \\cos(\\mathrm{frequency} \\times x
+               + \\mathrm{phase}) + \\mathrm{offset}
     $$
 
     Calling this function evaluates it. One may also fit this function
@@ -163,8 +164,9 @@ def oscillatory_decay(
     The form of the function is a decaying cosine:
 
     $$
-        f(x) = amplitude \\times \\cos(frequency \\times x + phase)
-               \\exp(-decay \\text{\\textunderscore} rate \\times x) + offset
+        f(x) = \\mathrm{amplitude} \\times \\cos(\\mathrm{frequency} \\times x
+               + \\mathrm{phase}) \\exp(-\\mathrm{decay\\_rate} \\times x)
+               + \\mathrm{offset}
     $$
 
     Calling this function evaluates it. One may also fit this function
@@ -214,8 +216,8 @@ def exponential_decay(
     The form of the function is a decaying exponential:
 
     $$
-        f(x) = amplitude \\times \\exp(-decay \\text{\\textunderscore} rate \\times x)
-               + offset
+        f(x) = \\mathrm{amplitude} \\times \\exp(-\\mathrm{decay\\_rate} \\times x)
+               + \\mathrm{offset}
     $$
 
     Calling this function evaluates it. One may also fit this function
@@ -261,7 +263,8 @@ def lorentzian(
     The form of the spectrum function is:
 
     $$
-        f(x) = offset + amplitude \\times \\frac{width}{width^2 + (x - position)^2}
+        f(x) = \\mathrm{offset} + \\mathrm{amplitude} \\times
+               \\frac{\\mathrm{width}}{\\mathrm{width}^2 + (x - \\mathrm{position})^2}
     $$
 
     An inverted spectrum may be modelled by specifying a negative amplitude.
@@ -317,9 +320,9 @@ def fano_lineshape(
     The form of the Fano line-shape function is:
 
     $$
-        f(x) = offset + amplitude \\times
-               \\frac{fano \\times width + x - position) ** 2}{
-               width^2 + (x - position)^2}
+        f(x) = \\mathrm{offset} + \\mathrm{amplitude} \\times
+               \\frac{(\\mathrm{fano} \\times \\mathrm{width} + x - \\mathrm{position})^2}{
+               \\mathrm{width}^2 + (x - \\mathrm{position})^2}
     $$
 
     Calling this function evaluates it. One may also fit this function
@@ -348,13 +351,13 @@ def fano_lineshape(
         Evaluate the function:
         ``` py
         x = np.linspace(0, 10, 100)
-        values = fano_lineshape(x, 2.0, 0.5, 3.0, 1.0, 0.5, 0.1)
+        values = fano_lineshape(x, 0.5, 3.0, 1.0, 0.5, 0.1)
         ```
         Fit the function:
         ``` py
         x = np.linspace(0, 10, 100)
-        popt, pcov = fano_lineshape.fit(x, values, 1.0, 0.0, 1.0, 0.0, 0.0)
-        width, position, amplitude = popt
+        popt, pcov = fano_lineshape.fit(x, values, 1.0, 2.5, 1.0, 0.0, 0.0)
+        width, position, amplitude, fano, offset = popt
         ```
     """
     return offset + amplitude * (fano * width + x - position) ** 2 / (

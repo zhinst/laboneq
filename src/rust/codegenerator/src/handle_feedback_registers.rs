@@ -154,11 +154,6 @@ impl FeedbackConfig {
     pub(crate) fn feedback_source(&self, handle: &Handle) -> Option<&FeedbackSource> {
         self.feedback_sources.get(handle)
     }
-
-    /// Iterator over all handles that are configured for feedback.
-    pub(crate) fn handles(&self) -> impl Iterator<Item = &Handle> {
-        self.feedback_sources.keys()
-    }
 }
 
 /// Collect the feedback configuration from the given IR node for the given AWGs.

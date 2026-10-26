@@ -28,7 +28,6 @@ from laboneq.dsl.variable.types import (
 )
 
 if TYPE_CHECKING:
-    from laboneq.dsl.coprocessor.coprocessor import Coprocessor
     from laboneq.dsl.coprocessor.struct import Struct
 
 
@@ -169,8 +168,8 @@ class _Stream:
         *,
         uid: str | None = None,
         schema: Struct,
-        src: Coprocessor | None,
-        dst: Coprocessor | None,
+        src: str | None,
+        dst: str | None,
         link: str | None,
         direction: Direction,
     ) -> None:
@@ -207,7 +206,7 @@ class OutboundStream(_Stream):
         self,
         *,
         schema: Struct,
-        dst: Coprocessor,
+        dst: str,
         link: str | None,
         uid: str | None = None,
     ) -> None:
@@ -228,7 +227,7 @@ class InboundStream(_Stream):
         self,
         *,
         schema: Struct,
-        src: Coprocessor,
+        src: str,
         link: str | None,
         uid: str | None = None,
     ) -> None:

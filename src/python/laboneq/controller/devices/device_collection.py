@@ -9,7 +9,7 @@ import re
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Iterator, cast
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Iterator
 
 from laboneq._rust.utils import device_setup_fingerprint
 from laboneq.controller.constants import DEFAULT_TIMEOUT_S
@@ -18,10 +18,10 @@ from laboneq.controller.devices.async_support import (
     DataServerConnections,
     _gather,
 )
+from laboneq.controller.devices.device_base import DeviceBase
 from laboneq.controller.devices.device_factory import DeviceFactory
 from laboneq.controller.devices.device_setup_dao import DeviceSetupDAO, ServerQualifier
 from laboneq.controller.devices.device_utils import prepare_emulator_state
-from laboneq.controller.devices.device_zi import DeviceBase, DeviceZI
 from laboneq.controller.utilities.exception import LabOneQControllerException
 from laboneq.controller.utilities.for_each import for_each
 
@@ -31,8 +31,7 @@ if TYPE_CHECKING:
     )
     from laboneq.controller.devices.zi_emulator import EmulatorState
     from laboneq.controller.versioning import SetupCaps
-    from laboneq.data.execution_payload import TargetSetup
-    from laboneq.data.setup_descriptions import SetupDescription
+    from laboneq.dsl.device.device_setup import DeviceSetup
 
 
 SUPPRESSED_WARNINGS = frozenset(
@@ -48,24 +47,26 @@ _logger = logging.getLogger(__name__)
 class DeviceCollection:
     def __init__(
         self,
-        target_setup: TargetSetup,
+        device_setup: DeviceSetup,
         setup_caps: SetupCaps,
         ignore_version_mismatch: bool = False,
     ):
         self._ds = DeviceSetupDAO(
-            target_setup=target_setup,
+            device_setup=device_setup,
             ignore_version_mismatch=ignore_version_mismatch,
             setup_caps=setup_caps,
         )
 
-        self._device_setup_fingerprint = device_setup_fingerprint(target_setup)
+        self._device_setup_fingerprint = device_setup_fingerprint(
+            self._ds.fingerprint_setup
+        )
         if self._ds.has_uhf and self._ds.has_qhub:
             raise LabOneQControllerException("Gen1 setup with QHub is not supported.")
         self._emulator_state: EmulatorState | None = None
         self._ignore_version_mismatch = ignore_version_mismatch
         self._timeout_s: float = DEFAULT_TIMEOUT_S
         self._data_servers = DataServerConnections()
-        self._devices: dict[str, DeviceZI] = {}
+        self._devices: dict[str, DeviceBase] = {}
 
     @property
     def device_setup_fingerprint(self) -> str:
@@ -78,29 +79,17 @@ class DeviceCollection:
         return self._emulator_state
 
     @property
-    def devices(self) -> dict[str, DeviceZI]:
+    def devices(self) -> dict[str, DeviceBase]:
         return self._devices
 
     @property
-    def all(self) -> Iterator[tuple[str, DeviceZI]]:
+    def all(self) -> Iterator[tuple[str, DeviceBase]]:
         for uid, device in self._devices.items():
             yield uid, device
 
     @property
     def has_qhub(self) -> bool:
         return self._ds.has_qhub
-
-    @property
-    def setup_description(self) -> SetupDescription | None:
-        descriptions = [d.setup_description for _, d in self.all]
-        descriptions = [d for d in descriptions if d is not None]
-        if not descriptions:
-            return None
-        if len(descriptions) > 1:
-            raise LabOneQControllerException(
-                "More than one device published a setup description; only one device expected."
-            )
-        return descriptions[0]
 
     @asynccontextmanager
     async def capture_logs(self):
@@ -110,7 +99,7 @@ class DeviceCollection:
     def set_timeout(self, timeout_s: float | None):
         self._timeout_s = DEFAULT_TIMEOUT_S if timeout_s is None else timeout_s
 
-    def find_by_uid(self, device_uid) -> DeviceZI:
+    def find_by_uid(self, device_uid) -> DeviceBase:
         device = self._devices.get(device_uid)
         if device is None:
             raise LabOneQControllerException(
@@ -118,7 +107,7 @@ class DeviceCollection:
             )
         return device
 
-    def find_by_node_path(self, path: str) -> DeviceZI:
+    def find_by_node_path(self, path: str) -> DeviceBase:
         if m := re.match(r"^/?(dev[^/]+)/.+", path.lower()):
             serial = m.group(1)
             for _, dev in self.all:
@@ -135,7 +124,7 @@ class DeviceCollection:
         await self._prepare_data_servers(do_emulation=do_emulation)
         self._prepare_devices()
         await self.for_each(
-            DeviceZI.connect,
+            DeviceBase.connect,
             emulator_state=self.emulator_state if do_emulation else None,
             disable_runtime_checks=disable_runtime_checks,
             timeout_s=self._timeout_s,
@@ -145,7 +134,7 @@ class DeviceCollection:
 
     async def _configure_async(
         self,
-        devices: list[DeviceZI],
+        devices: list[DeviceBase],
         control_nodes_getter: Callable[[DeviceBase], list[NodeControlBase]],
         config_name: str,
     ):
@@ -157,14 +146,13 @@ class DeviceCollection:
                     timeout_s=self._timeout_s,
                 )
                 for device in devices
-                if isinstance(device, DeviceBase)
             )
         )
 
     async def configure_device_setup(self, reset_devices: bool):
         _logger.info("Configuring the device setup")
 
-        def _followers_of(parents: list[DeviceZI]) -> list[DeviceZI]:
+        def _followers_of(parents: list[DeviceBase]) -> list[DeviceBase]:
             children = []
             for parent_dev in parents:
                 for dev_ref in parent_dev._downlinks:
@@ -176,7 +164,7 @@ class DeviceCollection:
         if reset_devices:
             await self._configure_async(
                 [device for _, device in self.all if not device.is_secondary],
-                lambda d: cast("DeviceBase", d).load_factory_preset_control_nodes(),
+                lambda d: d.load_factory_preset_control_nodes(),
                 "Reset to factory defaults",
             )
             # TODO(2K): Error check
@@ -184,18 +172,10 @@ class DeviceCollection:
                 device.clear_cache()
 
         configs = {
-            "Configure runtime checks": lambda d: cast(
-                "DeviceBase", d
-            ).runtime_check_control_nodes(),
-            "Reference clock switching": lambda d: cast(
-                "DeviceBase", d
-            ).clock_source_control_nodes(),
-            "System frequency switching": lambda d: cast(
-                "DeviceBase", d
-            ).system_freq_control_nodes(),
-            "Setting RF channel offsets": lambda d: cast(
-                "DeviceBase", d
-            ).rf_offset_control_nodes(),
+            "Configure runtime checks": lambda d: d.runtime_check_control_nodes(),
+            "Reference clock switching": lambda d: d.clock_source_control_nodes(),
+            "System frequency switching": lambda d: d.system_freq_control_nodes(),
+            "Setting RF channel offsets": lambda d: d.rf_offset_control_nodes(),
         }
 
         leaders = [
@@ -221,7 +201,7 @@ class DeviceCollection:
         _logger.info("The device setup is configured")
 
     async def disconnect(self):
-        await self.for_each(DeviceZI.disconnect)
+        await self.for_each(DeviceBase.disconnect)
         self._devices = {}
         self._data_servers = DataServerConnections()
         self._emulator_state = None
@@ -304,7 +284,7 @@ class DeviceCollection:
         self._data_servers = updated_data_servers
 
     def _prepare_devices(self):
-        updated_devices: dict[str, DeviceZI] = {}
+        updated_devices: dict[str, DeviceBase] = {}
         for device_qualifier in self._ds.devices:
             device = self._devices.get(device_qualifier.uid)
             if device is None or device.device_qualifier != device_qualifier:
