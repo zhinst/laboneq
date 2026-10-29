@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import warnings
 from typing import TYPE_CHECKING
 
 from typing_extensions import deprecated
@@ -52,13 +51,6 @@ def laboneq_compile(
     !!! version-changed "Deprecated in version 26.4"
         Use `compile_experiment()` instead.
     """
-
-    warnings.warn(
-        "laboneq_compile() is deprecated, please use `compile_experiment()` instead.",
-        FutureWarning,
-        stacklevel=2,
-    )
-
     return compile_experiment(
         device_setup=device_setup,
         experiment=experiment,

@@ -120,6 +120,7 @@ pub fn decode_constant(
             Ok(Complex64::new(c.get_real(), c.get_imag()).into_py_any(py)?)
         }
         Which::StringValue(s) => Ok(text_to_string(s.map_err(capnp_err)?)?.into_py_any(py)?),
+        Which::Boolean(b) => Ok(b.into_py_any(py)?),
         Which::RawBytesValue(b) => {
             let b = b.map_err(capnp_err)?;
             Ok(PyBytes::new(py, b).into_py_any(py)?)

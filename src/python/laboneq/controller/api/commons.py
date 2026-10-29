@@ -3,28 +3,55 @@
 
 from __future__ import annotations
 
+import asyncio
+import json as json_module
+import logging
+import time
 import uuid
+from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 import httpx
 import pybase64
+from websockets.asyncio.client import connect as ws_connect
+from websockets.exceptions import (
+    ConnectionClosed,
+    ConnectionClosedError,
+    InvalidHandshake,
+)
 
-from laboneq.controller.api.lazy_results import AcquiredResultStructure
+from laboneq.controller.api.callback_client import (
+    ClientCallbackSession,
+    Done,
+    PendingCall,
+)
+from laboneq.controller.api.lazy_results import (
+    AcquiredResultStructure,
+    LazyAcquiredResults,
+    LazyNeartimeCallbackResults,
+)
+from laboneq.controller.callback_protocol import json_default
 from laboneq.controller.utilities.exception import (
     HardwareNotReadyError,
     LabOneQControllerException,
 )
-from laboneq.core.exceptions import LabOneQException
+from laboneq.dsl.result.results import Results
 from laboneq.serializers import from_dict, to_dict
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Awaitable, Callable, Mapping
 
-    from laboneq.controller.controller import ControllerSubmission
-    from laboneq.data.experiment_results import AcquiredResult
+    from laboneq.controller.controller_core import ControllerSubmission
+    from laboneq.data.experiment_results import AcquiredResult, ExperimentResults
     from laboneq.data.scheduled_experiment import ScheduledExperiment
-    from laboneq.dsl.result.results import Results
+    from laboneq.dsl.device.device_setup import DeviceSetup
 
+_logger = logging.getLogger(__name__)
+
+_RECONNECT_BACKOFF_INITIAL_S = 0.5
+_RECONNECT_BACKOFF_MAX_S = 5.0
+#: How long to keep retrying a callback channel the service reports as busy.
+_CHANNEL_BUSY_TIMEOUT_S = 30.0
 
 # Header and scheme carrying the service's authentication token.
 AUTH_HEADER = "Authorization"
@@ -75,16 +102,6 @@ def parse_major_minor(version: str) -> tuple[int, int]:
             f"Cannot parse version {version!r}: expected at least major.minor"
         )
     return int(parts[0]), int(parts[1])
-
-
-def raise_on_failed_run(status: str, error: Mapping[str, Any] | None = None) -> None:
-    """Raise if a run ended in a non-completed state (local-run parity)."""
-    if status == "completed":
-        return
-    detail = (error or {}).get("message")
-    raise LabOneQException(
-        f"Experiment run {status}" + (f": {detail}" if detail else "")
-    )
 
 
 def ws_url(remote_url: str, path: str) -> str:
@@ -287,3 +304,159 @@ class SubmissionRegistry:
 
     def __contains__(self, handle: SubmissionHandle) -> bool:
         return handle in self._submissions
+
+
+def to_results(
+    device_setup: DeviceSetup, experiment_results: ExperimentResults
+) -> Results:
+    """Returns the user-facing `Results` holding `experiment_results`."""
+    return Results(
+        device_setup=device_setup,
+        acquired_results=experiment_results.acquired_results,
+        variable_results=experiment_results.variable_results,
+        neartime_callback_results=experiment_results.neartime_callback_results,
+        execution_errors=experiment_results.execution_errors,
+        pipeline_jobs_timestamps=experiment_results.pipeline_jobs_timestamps,
+    )
+
+
+class ClientCallbackServer:
+    """Serves the client near-time callbacks of a remote controller's submissions.
+
+    The controller service opens a callback channel for each submission whose
+    experiment calls a near-time callback that the service does not provide, and
+    the run waits for a client to attach to it. The server attaches from `start`
+    until the run ends, or until `stop` or `stop_all`. It looks callbacks up in
+    `callbacks` when the service calls them, so that callbacks added to the
+    mapping later are served as well.
+
+    All methods run on the event loop that serves the channels.
+    """
+
+    def __init__(
+        self,
+        remote_url: str,
+        headers: dict[str, str],
+        callbacks: Mapping[str, Callable[..., Any]],
+        has_ended: Callable[[SubmissionHandle], Awaitable[bool]],
+    ):
+        self._remote_url = remote_url
+        self._headers = headers
+        self._callbacks = callbacks
+        self._has_ended = has_ended
+        self._tasks: dict[SubmissionHandle, asyncio.Task[None]] = {}
+
+    async def start(self, handle: SubmissionHandle) -> None:
+        """Starts serving the callback channel of the submission `handle`."""
+        session = ClientCallbackSession(
+            self._callbacks,
+            callback_results_factory(self._remote_url, self._headers, handle),
+        )
+        self._tasks[handle] = asyncio.create_task(self._serve(handle, session))
+
+    async def wait(self, handle: SubmissionHandle) -> None:
+        """Returns once the run of `handle` has ended, if its channel is served.
+
+        Raises:
+            APIError: The service refused the channel, or another client kept
+                it occupied.
+        """
+        task = self._tasks.get(handle)
+        if task is not None:
+            await asyncio.shield(task)
+
+    async def stop(self, handle: SubmissionHandle) -> None:
+        """Stops serving the callback channel of `handle`."""
+        task = self._tasks.pop(handle, None)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def stop_all(self) -> None:
+        """Stops serving every callback channel."""
+        for handle in list(self._tasks):
+            await self.stop(handle)
+
+    async def _serve(self, handle: SubmissionHandle, session: ClientCallbackSession):
+        """Serves callback messages over the WebSocket until the run ends.
+
+        Reconnects with backoff after a disconnect. Between attempts, the run
+        status is probed over REST, so that a run that ended while the socket
+        was down ends the loop. An unreachable service raises instead. A channel
+        that another client keeps occupied is given up on after
+        `_CHANNEL_BUSY_TIMEOUT_S`.
+        """
+        url = ws_url(self._remote_url, f"v1/experiments/{handle.hex}/callbacks")
+        backoff = _RECONNECT_BACKOFF_INITIAL_S
+        busy_deadline: float | None = None
+        while True:
+            try:
+                async with ws_connect(
+                    url, additional_headers=self._headers
+                ) as websocket:
+                    async for raw in websocket:
+                        # Messages are flowing, so a later disconnect is transient.
+                        backoff = _RECONNECT_BACKOFF_INITIAL_S
+                        busy_deadline = None
+                        outcome = session.handle_message(json_module.loads(raw))
+                        if isinstance(outcome, Done):
+                            return
+                        if isinstance(outcome, PendingCall):
+                            outcome = await session.execute_async(outcome)
+                        # stdlib json on purpose: the channel relies on its
+                        # tolerance for the non-standard NaN/Infinity literals
+                        # in both directions.
+                        await websocket.send(
+                            json_module.dumps(outcome, default=json_default)
+                        )
+            except ConnectionClosedError as exc:
+                close = exc.rcvd
+                if close is not None and close.code == 1008:
+                    raise APIError(
+                        f"Callback channel rejected: {close.reason}"
+                    ) from exc
+                if close is not None and close.code == 1013:
+                    if busy_deadline is None:
+                        busy_deadline = time.monotonic() + _CHANNEL_BUSY_TIMEOUT_S
+                    elif time.monotonic() > busy_deadline:
+                        raise APIError(
+                            "Another client is already serving the near-time callbacks"
+                            f" of experiment {handle.hex}: {close.reason}"
+                        ) from exc
+            except (OSError, InvalidHandshake, ConnectionClosed):
+                pass
+            if await self._has_ended(handle):
+                return
+            if backoff >= _RECONNECT_BACKOFF_MAX_S:
+                _logger.warning(
+                    "Cannot attach the callback channel of experiment %s; retrying"
+                    " every %.0f s. The run cannot progress until it attaches.",
+                    handle.hex,
+                    _RECONNECT_BACKOFF_MAX_S,
+                )
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, _RECONNECT_BACKOFF_MAX_S)
+
+
+def callback_results_factory(
+    remote_url: str, headers: dict[str, str], handle: SubmissionHandle
+) -> Callable[[], Results]:
+    """Returns a factory of the results that a client near-time callback reads.
+
+    The results fetch the data of `handle` from the service when accessed.
+    """
+    fetch = partial(fetch_acquired_results, remote_url, headers, handle.hex)
+    fetch_structure = partial(fetch_result_structure, remote_url, headers, handle.hex)
+    fetch_callbacks = partial(
+        fetch_neartime_callback_results, remote_url, headers, handle.hex
+    )
+
+    def factory() -> Results:
+        return Results(
+            acquired_results=LazyAcquiredResults(fetch, fetch_structure),
+            neartime_callback_results=cast(
+                "dict", LazyNeartimeCallbackResults(fetch_callbacks)
+            ),
+        )
+
+    return factory

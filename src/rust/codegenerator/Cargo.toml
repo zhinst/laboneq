@@ -16,9 +16,7 @@ workspace = true
 [dependencies]
 derive_more = { workspace = true, features = ["from"] }
 indexmap = { workspace = true }
-log = { workspace = true }
 num-complex = { workspace = true }
-thiserror = { workspace = true }
 sha1 = { workspace = true }
 md5 = { workspace = true }
 serde = { workspace = true, features = ["derive"] }

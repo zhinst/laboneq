@@ -124,16 +124,6 @@ class EventLoopHolder:
                 pass
 
 
-class EventLoopMixIn:
-    @property
-    def _event_loop(self) -> EventLoopHolder:
-        event_loop = getattr(self, "_laboneq_event_loop", None)
-        if event_loop is None:
-            event_loop = EventLoopHolder()
-            self._laboneq_event_loop = event_loop
-        return event_loop
-
-
 class AsyncWorker(Generic[T]):
     """Base class for async workers that process queued items sequentially.
 

@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::Operation;
 use laboneq_dsl::types::{ParameterUid, PulseDef, PulseUid, SectionUid, SignalUid, SweepParameter};
+use rustc_hash::FxHashMap;
 
 use crate::error::{Error, Result};
 use crate::signal_view::SignalView;
@@ -15,7 +16,7 @@ use crate::signal_view::SignalView;
 /// The experiment, and where in it a validator is looking.
 #[derive(Clone, Copy)]
 pub(super) struct VisitContext<'a> {
-    pub(super) pulses: &'a HashMap<PulseUid, PulseDef>,
+    pub(super) pulses: &'a FxHashMap<PulseUid, PulseDef>,
     pub(super) parameters: &'a HashMap<ParameterUid, &'a SweepParameter>,
     pub(super) signals: &'a HashMap<SignalUid, SignalView<'a>>,
     pub(super) nt_only_parameters: &'a HashSet<ParameterUid>,

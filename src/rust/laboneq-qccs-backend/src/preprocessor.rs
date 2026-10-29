@@ -1,7 +1,6 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::num::NonZeroU16;
@@ -25,6 +24,7 @@ use laboneq_dsl::types::{OscillatorKind, PhysicalChannelUid};
 use laboneq_units::duration::Duration;
 use laboneq_units::duration::Second;
 use laboneq_units::duration::seconds;
+use laboneq_units::duration::{Frequency, Hertz};
 use smallvec::SmallVec;
 
 use crate::device_kind::DeviceKind;
@@ -181,6 +181,7 @@ pub struct BackendSignal {
     pub device_kind: DeviceKind,
     pub kind: SignalKind,
     pub has_lrt: bool,
+    pub sampling_rate: Frequency<Hertz>,
     /// The calibration of the signal, as this backend handed it to the compiler.
     pub calibration: SignalCalibration,
     /// Device channels the signal occupies, sorted.
@@ -206,10 +207,6 @@ impl PreprocessedBackendData for QccsBackendPreprocessedData {
                     .unwrap_or_else(|| seconds(0.0))
             })
             .unwrap_or_else(|| seconds(0.0))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -316,6 +313,7 @@ pub(crate) fn preprocess_experiment(
             device_kind,
             kind: signal_kind.clone(),
             has_lrt: contains_option(&device_options, signal.device_uid, "LRT"),
+            sampling_rate,
             channels,
             awg_key,
             awg_index,

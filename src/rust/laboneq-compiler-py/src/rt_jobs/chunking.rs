@@ -1,15 +1,39 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+//! Finds the chunking mode of the chunked sweep, and retries compilation with more
+//! chunks under auto-chunking.
+
 use std::num::NonZeroU32;
 
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::{Operation, Sweep};
+use laboneq_error::{LabOneQError, WithContext};
 
-use crate::error::{Error, Result};
+use crate::error::Error;
 use crate::experiment::Experiment;
 
-pub(crate) fn collect_chunking_mode(experiment: &Experiment) -> Result<Option<ChunkingMode>> {
+const RESOURCE_LIMIT_MSG: &str = "\
+Compilation error: resource limitation exceeded.
+To circumvent this, try one or more of the following:
+- Double-check the integrity of your experiment (look for unexpectedly long pulses, large numbers of sweep steps, etc.)
+- Reduce the number of sweep steps
+- Reduce the number of variations in the pulses that are being played
+- Enable chunking for a sweep
+- If chunking is already enabled, increase the chunk count or switch to automatic chunking
+- For QCCS instruments, use pulse lengths that are multiples of 8 ns to improve memory efficiency";
+
+const AUTO_CHUNK_EXHAUSTED_MSG: &str = "\
+Automatic chunking could not find a chunk count that stays within the resource limits.
+One iteration of the chunked sweep is too large to execute.
+To circumvent this, try one or more of the following:
+- Chunk another sweep instead (e.g. for nested sweeps, enable chunking for the inner one)
+- Reduce the size of the program in a single sweep iteration
+- For QCCS instruments, use pulse lengths that are multiples of 8 ns to improve memory efficiency";
+
+pub(super) fn collect_chunking_mode(
+    experiment: &Experiment,
+) -> Result<Option<ChunkingMode>, Error> {
     let mut visitor = ExperimentVisitor::new();
     visitor.visit_node(&experiment.root)?;
     Ok(visitor.chunking)
@@ -23,21 +47,21 @@ impl ExperimentVisitor {
         Self { chunking: None }
     }
 
-    fn generic_visit(&mut self, node: &ExperimentNode) -> Result<()> {
+    fn generic_visit(&mut self, node: &ExperimentNode) -> Result<(), Error> {
         for child in &node.children {
             self.visit_node(child)?;
         }
         Ok(())
     }
 
-    fn visit_node(&mut self, node: &ExperimentNode) -> Result<()> {
+    fn visit_node(&mut self, node: &ExperimentNode) -> Result<(), Error> {
         match &node.kind {
             Operation::Sweep(op) => self.visit_sweep(node, op),
             _ => self.generic_visit(node),
         }
     }
 
-    fn visit_sweep(&mut self, node: &ExperimentNode, op: &Sweep) -> Result<()> {
+    fn visit_sweep(&mut self, node: &ExperimentNode, op: &Sweep) -> Result<(), Error> {
         if !op.is_chunked() {
             self.generic_visit(node)?;
             return Ok(());
@@ -75,20 +99,20 @@ impl ExperimentVisitor {
     }
 }
 
-pub(crate) enum ChunkingMode {
+pub(super) enum ChunkingMode {
     Auto(AutoChunking),
     Manual { chunk_count: NonZeroU32 },
 }
 
-pub(crate) struct AutoChunking {
-    pub iterations: NonZeroU32,
-    pub initial_chunk_count: NonZeroU32,
+pub(super) struct AutoChunking {
+    iterations: NonZeroU32,
+    initial_chunk_count: NonZeroU32,
 
     divisors: Vec<NonZeroU32>,
 }
 
 impl AutoChunking {
-    pub(crate) fn new(iterations: NonZeroU32, chunk_count: NonZeroU32) -> Self {
+    fn new(iterations: NonZeroU32, chunk_count: NonZeroU32) -> Self {
         let divisors = Self::divisors(iterations);
         let initial_chunk_count = Self::chunk_count_trial(chunk_count, &divisors);
 
@@ -99,7 +123,7 @@ impl AutoChunking {
         }
     }
 
-    pub(crate) fn resize(self, chunk_count: NonZeroU32) -> AutoChunking {
+    fn resize(self, chunk_count: NonZeroU32) -> AutoChunking {
         Self::new_with_divisors(self.iterations, chunk_count, self.divisors)
     }
 
@@ -130,8 +154,73 @@ impl AutoChunking {
     }
 }
 
+/// Runs `compile` for the chunk count of `chunking_mode`. With auto-chunking, retries
+/// with more chunks while the attempt exceeds a resource limit and the sweep allows
+/// more. Returns the output of the attempt that succeeded.
+pub(super) fn run_chunked<T>(
+    chunking_mode: Option<ChunkingMode>,
+    compile: impl Fn(Option<NonZeroU32>) -> Result<T, LabOneQError>,
+) -> Result<T, LabOneQError> {
+    let mut auto_chunking = match chunking_mode {
+        None => {
+            return compile(None).map_err(|e| with_hint(e, RESOURCE_LIMIT_MSG));
+        }
+        Some(ChunkingMode::Manual { chunk_count }) => {
+            return compile(sanitize_chunk_count(chunk_count))
+                .map_err(|e| with_hint(e, RESOURCE_LIMIT_MSG));
+        }
+        Some(ChunkingMode::Auto(auto_chunking)) => auto_chunking,
+    };
+
+    loop {
+        let requested = auto_chunking.initial_chunk_count;
+        laboneq_log::debug!("Attempting to compile with {} chunks", requested);
+        match compile(sanitize_chunk_count(requested)) {
+            Ok(output) => {
+                laboneq_log::info!("Auto-chunked sweep divided into {} chunks", requested);
+                return Ok(output);
+            }
+            Err(LabOneQError::ResourceExhaustion(e)) => {
+                laboneq_log::debug!(
+                    "The attempt with {} chunks failed with resource exhaustion: {}",
+                    requested,
+                    e
+                );
+                if requested == auto_chunking.iterations {
+                    return Err(with_hint(
+                        LabOneQError::ResourceExhaustion(e),
+                        AUTO_CHUNK_EXHAUSTED_MSG,
+                    ));
+                }
+                let multiplier = e.usage.unwrap_or(2.0).ceil().max(2.0) as u32;
+                auto_chunking = auto_chunking.resize(
+                    requested
+                        .get()
+                        .saturating_mul(multiplier)
+                        .try_into()
+                        .expect("Internal error: Expected chunk count to be non-zero"),
+                );
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Returns `None` for a chunk count of 1, which is equivalent to not chunking.
+fn sanitize_chunk_count(chunk_count: NonZeroU32) -> Option<NonZeroU32> {
+    Some(chunk_count).filter(|c| c.get() != 1)
+}
+
+fn with_hint(error: LabOneQError, hint: &'static str) -> LabOneQError {
+    if let LabOneQError::ResourceExhaustion(e) = error {
+        laboneq_error::laboneq_error!("{}", hint).with_context(|| e.to_string())
+    } else {
+        error
+    }
+}
+
 #[cfg(test)]
-mod test_chunking_mode {
+mod tests {
     use super::*;
 
     fn nz(n: u32) -> NonZeroU32 {

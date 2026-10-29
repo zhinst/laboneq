@@ -138,7 +138,7 @@ pub fn ir_to_codegen_ir(
 
     let pulse_defs = experiment
         .pulses
-        .iter()
+        .values()
         .map(|pulse| convert_pulse_def(pulse, id_store).into())
         .collect::<Vec<Arc<PulseDef>>>();
 

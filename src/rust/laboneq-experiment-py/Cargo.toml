@@ -20,6 +20,7 @@ crate-type = ["lib"]
 capnp = { workspace = true }
 num-complex = { workspace = true }
 pyo3 = { workspace = true }
+rustc-hash = { workspace = true }
 tracing = { workspace = true }
 
 laboneq-capnp = { workspace = true }

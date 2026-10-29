@@ -5,22 +5,21 @@ from __future__ import annotations
 
 import logging
 import sys
-from abc import ABC, abstractmethod
+from contextlib import suppress
 from copy import deepcopy
 from textwrap import indent
 from typing import TYPE_CHECKING, Any, Callable, Dict, Union
 
 from laboneq import laboneq_logging
-from laboneq.controller import Controller, LabOneQControllerException
+from laboneq.controller import LabOneQControllerException
 from laboneq.controller.constants import READY_TIMEOUT_S
-from laboneq.controller.runtime_context_impl import LegacySessionData
-from laboneq.controller.toolkit_adapter import ToolkitDevices
+from laboneq.controller.toolkit_adapter import ToolkitDevices, toolkit_instruments
 from laboneq.controller.utilities.exception import HardwareNotReadyError
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.types import CompiledExperiment
 from laboneq.core.utilities.compile_experiment import compile_experiment
 from laboneq.core.utilities.environment import is_testing
-from laboneq.data.experiment_results import ExperimentResults
+from laboneq.data.instrument_topology import InstrumentTopology
 from laboneq.dsl.device import DeviceSetup
 from laboneq.dsl.device.io_units.logical_signal import (
     resolve_logical_signal_ref,
@@ -28,13 +27,8 @@ from laboneq.dsl.device.io_units.logical_signal import (
 from laboneq.dsl.result import Results
 
 if TYPE_CHECKING:
-    # Imported lazily at runtime (see `_RemoteControllerBacking.connect`) to
-    # avoid a circular import: `laboneq.controller.api.remote_controller`
-    # pulls in `laboneq.serializers`, which eventually imports this module
-    # back.
-    from laboneq.controller.api.remote_controller import RemoteController
+    from laboneq.controller.api.controller_api import ControllerAPI
     from laboneq.controller.service.local_service import LocalControllerService
-    from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.data.setup_descriptions import SetupDescription
     from laboneq.dsl.device.io_units.logical_signal import (
         LogicalSignalRef,
@@ -58,313 +52,6 @@ class ConnectionState:
 
     connected: bool = False
     emulated: bool = False
-
-
-class _SessionBacking(ABC):
-    """What a connected `Session` is actually talking to.
-
-    A `Session` holds exactly one backing while connected: either
-    `_LocalControllerBacking`, which drives hardware directly through the
-    local `Controller`, or `_RemoteControllerBacking`, which submits
-    experiments to a running controller service over HTTP. `Session` itself
-    only decides which one to construct in `connect()`; every other method
-    delegates to the active backing instead of branching on which kind it is.
-    """
-
-    def fetch_setup_description(self) -> SetupDescription | None:
-        """Return the setup description of the instruments, if any.
-
-        Fetches it first if connecting could not. If the instruments cannot run
-        experiments, logs a warning and returns the last fetched one.
-        """
-        return None
-
-    @property
-    def raw_results(self) -> ExperimentResults | Results:
-        """Best-effort results of the most recently attempted `execute()` call.
-
-        Used to recover whatever results are available when `execute()` raises
-        instead of returning normally. No-op default for backings that cannot
-        recover anything in that case.
-        """
-        return ExperimentResults()
-
-    def assert_supports_registering_callbacks(self) -> None:
-        """Raise if this backing cannot accept near-time callback registrations.
-
-        No-op by default; overridden by backings that cannot support it.
-        """
-        return None
-
-    @abstractmethod
-    def get_toolkit_devices(self) -> ToolkitDevices:
-        """Return the connected devices, if this backing exposes any."""
-
-    @abstractmethod
-    def disconnect(self) -> None:
-        """Tear down the connection."""
-
-    @abstractmethod
-    def wait_until_ready(self, timeout_s: float) -> None:
-        """Return once the instruments can run experiments."""
-
-    @abstractmethod
-    def disable_outputs(
-        self,
-        devices: list[str] | None,
-        logical_signals: list[str] | None,
-        unused_only: bool,
-    ) -> None:
-        """Disable device outputs."""
-
-    @abstractmethod
-    def execute(
-        self,
-        scheduled_experiment: ScheduledExperiment,
-        legacy_session_data: LegacySessionData,
-        coprocessor_payload_overrides: dict[str, bytes] | None = None,
-    ):
-        """Submit *scheduled_experiment* and return once it has completed.
-
-        If this raises, `raw_results` exposes whatever results could still be
-        recovered, so callers can capture a best-effort result even in that
-        case.
-        """
-
-
-class _LocalControllerBacking(_SessionBacking):
-    """Drives hardware directly through the local `Controller`."""
-
-    def __init__(self, controller: Controller, toolkit_devices: ToolkitDevices):
-        self._controller = controller
-        self._toolkit_devices = toolkit_devices
-        self._raw_results = ExperimentResults()
-
-    @classmethod
-    def connect(
-        cls,
-        device_setup: DeviceSetup,
-        ignore_version_mismatch: bool,
-        neartime_callbacks: dict[str, Callable],
-        do_emulation: bool,
-        reset_devices: bool,
-        disable_runtime_checks: bool,
-        timeout: float | None,
-    ) -> _LocalControllerBacking:
-        controller = Controller(
-            device_setup=device_setup,
-            ignore_version_mismatch=ignore_version_mismatch,
-            neartime_callbacks=neartime_callbacks,
-        )
-        controller.start()
-        controller.connect(
-            do_emulation=do_emulation,
-            reset_devices=reset_devices,
-            disable_runtime_checks=disable_runtime_checks,
-            timeout_s=timeout,
-        )
-        toolkit_devices = (
-            ToolkitDevices() if do_emulation else ToolkitDevices(controller.devices)
-        )
-        return cls(controller=controller, toolkit_devices=toolkit_devices)
-
-    def fetch_setup_description(self) -> SetupDescription | None:
-        try:
-            self._controller.ensure_setup_description()
-        except HardwareNotReadyError as e:
-            setup_description = self._controller.setup_description
-            if setup_description is None:
-                _logger.warning("%s No setup description is available.", e)
-            else:
-                _logger.warning(
-                    "%s Using the last fetched setup description, which may be stale.",
-                    e,
-                )
-            return setup_description
-        return self._controller.setup_description
-
-    @property
-    def raw_results(self) -> ExperimentResults:
-        return self._raw_results
-
-    def get_toolkit_devices(self) -> ToolkitDevices:
-        return self._toolkit_devices
-
-    def disconnect(self) -> None:
-        self._controller.disconnect()
-
-    def wait_until_ready(self, timeout_s: float) -> None:
-        self._controller.wait_until_ready(timeout_s)
-
-    def disable_outputs(
-        self,
-        devices: list[str] | None,
-        logical_signals: list[str] | None,
-        unused_only: bool,
-    ) -> None:
-        self._controller.disable_outputs(devices, logical_signals, unused_only)
-
-    def execute(
-        self,
-        scheduled_experiment: ScheduledExperiment,
-        legacy_session_data: LegacySessionData,
-        coprocessor_payload_overrides: dict[str, bytes] | None = None,
-    ):
-        self._controller.set_legacy_session_data(legacy_session_data)
-        handle = None
-        try:
-            handle = self._controller.submit_compiled(
-                scheduled_experiment, coprocessor_payload_overrides
-            )
-            self._controller.wait_submission(handle)
-        finally:
-            self._controller.stop_workers()
-            self._raw_results = (
-                ExperimentResults()
-                if handle is None
-                else self._controller.submission_results(handle)
-            )
-
-
-class _RemoteControllerBacking(_SessionBacking):
-    """Submits experiments to a running controller service over HTTP,
-    instead of driving hardware directly.
-
-    Under `do_emulation`, this backing starts and owns a service on localhost
-    and submits to it, rather than to the service the setup points at.
-    """
-
-    def __init__(
-        self,
-        remote_controller: RemoteController,
-        neartime_callbacks: dict[str, Callable],
-        local_service: LocalControllerService | None = None,
-    ):
-        self._remote_controller = remote_controller
-        self._local_service = local_service
-        # Shared with the owning Session, so callbacks registered after
-        # connect() are picked up as well.
-        self._neartime_callbacks = neartime_callbacks
-        self._raw_results = Results()
-
-    @classmethod
-    def connect(
-        cls,
-        remote_url: str,
-        device_setup: DeviceSetup,
-        do_emulation: bool,
-        ignore_version_mismatch: bool,
-        reset_devices: bool,
-        disable_runtime_checks: bool,
-        timeout: float | None,
-        neartime_callbacks: dict[str, Callable],
-    ) -> _RemoteControllerBacking:
-        # Imported lazily to avoid a circular import at module load time, see
-        # the comment next to the `TYPE_CHECKING` import above.
-        from laboneq.controller.api.remote_controller import RemoteController
-
-        if reset_devices:
-            raise LabOneQException(
-                "reset_devices is not supported when connected via a remote "
-                "controller service."
-            )
-        if not disable_runtime_checks:
-            raise LabOneQException(
-                "disable_runtime_checks=False is not supported when "
-                "connected via a remote controller service."
-            )
-        if timeout is not None:
-            raise LabOneQException(
-                "timeout is not supported when connected via a remote "
-                "controller service."
-            )
-        local_service: LocalControllerService | None = None
-        auth_token: str | None = None
-        if do_emulation:
-            # Imported lazily so that a session which never emulates does not
-            # pull FastAPI and uvicorn in.
-            from laboneq.controller.service.local_service import (
-                LocalControllerService,
-            )
-
-            # The configured service drives real hardware, so emulation cannot
-            # go there. Host an emulated one instead and use it in its place.
-            local_service = LocalControllerService.start(device_setup)
-            remote_url = local_service.url
-            auth_token = local_service.auth_token
-        try:
-            remote_controller = RemoteController.create(
-                # Stripped because the client appends request paths to this address.
-                remote_url=remote_url.rstrip("/"),
-                ignore_version_mismatch=ignore_version_mismatch,
-                auth_token=auth_token,
-            )
-        except BaseException:
-            # There is no backing to disconnect() when connect() raises, so a
-            # service started above has to be released right here.
-            if local_service is not None:
-                local_service.stop()
-            raise
-        return cls(
-            remote_controller=remote_controller,
-            neartime_callbacks=neartime_callbacks,
-            local_service=local_service,
-        )
-
-    @property
-    def raw_results(self) -> Results:
-        return self._raw_results
-
-    def get_toolkit_devices(self) -> ToolkitDevices:
-        raise LabOneQException(
-            "The 'devices' toolkit is not available when connected via a "
-            "remote controller service."
-        )
-
-    def disconnect(self) -> None:
-        try:
-            self._remote_controller.close()
-        finally:
-            if self._local_service is not None:
-                self._local_service.stop()
-                self._local_service = None
-
-    def wait_until_ready(self, timeout_s: float) -> None:
-        self._remote_controller.wait_until_ready(timeout_s)
-
-    def disable_outputs(
-        self,
-        devices: list[str] | None,
-        logical_signals: list[str] | None,
-        unused_only: bool,
-    ) -> None:
-        raise LabOneQException(
-            "disable_outputs() is not supported when connected via a "
-            "remote controller service."
-        )
-
-    def execute(
-        self,
-        scheduled_experiment: ScheduledExperiment,
-        legacy_session_data: LegacySessionData,
-        coprocessor_payload_overrides: dict[str, bytes] | None = None,
-    ):
-        # Imported lazily for the same circular-import reason as
-        # RemoteController, see the comment next to TYPE_CHECKING above.
-        from laboneq.controller.api.commons import SubmissionHandle
-
-        # legacy_session_data has no remote equivalent: there is no HTTP
-        # endpoint to forward it to.
-        handle = SubmissionHandle()
-        # A failed run is released by run_experiment itself; only a completed
-        # one is still held on the service and has to be closed here.
-        self._raw_results = self._remote_controller.run_experiment(
-            scheduled_experiment,
-            callbacks=self._neartime_callbacks,
-            handle=handle,
-            coprocessor_payload_overrides=coprocessor_payload_overrides,
-        )
-        self._remote_controller.close_submission(handle)
 
 
 def _raise_execution_errors(execution_errors: list[tuple[list[int], str, str]]) -> None:
@@ -479,7 +166,15 @@ class Session:
             Added the `include_results_metadata` argument.
         """
         self._device_setup = device_setup if device_setup else DeviceSetup()
-        self._backing: _SessionBacking | None = None
+        self._controller: ControllerAPI | None = None
+        # Under remote emulation, the service that `_controller` submits to.
+        self._local_service: LocalControllerService | None = None
+        # None while connected to a controller service, which offers no toolkit
+        # connection to the instruments.
+        self._toolkit_devices: ToolkitDevices | None = None
+        # The last setup description fetched, for when the instruments cannot
+        # provide a current one.
+        self._setup_description: SetupDescription | None = None
         self._connection_state: ConnectionState = ConnectionState()
         self._experiment_definition = experiment
         self._compiled_experiment = compiled_experiment
@@ -503,37 +198,6 @@ class Session:
         self.disconnect()
 
     @property
-    def _controller(self) -> Controller | None:
-        """The underlying `Controller`, when this session is backed by one directly.
-
-        Kept for backward compatibility with test code and tooling that
-        pokes at the session's controller directly; new code should go
-        through `connect()`/`run()`/etc. instead.
-        """
-        if isinstance(self._backing, _LocalControllerBacking):
-            return self._backing._controller
-        return None
-
-    @_controller.setter
-    def _controller(self, controller: Controller | None) -> None:
-        self._backing = (
-            None
-            if controller is None
-            else _LocalControllerBacking(controller, ToolkitDevices())
-        )
-
-    @property
-    def _remote_controller(self) -> RemoteController | None:
-        """The underlying `RemoteController`, when this session is backed by one.
-
-        Kept for backward compatibility with test code; new code should go
-        through `connect()`/`run()`/etc. instead.
-        """
-        if isinstance(self._backing, _RemoteControllerBacking):
-            return self._backing._remote_controller
-        return None
-
-    @property
     def devices(self) -> ToolkitDevices:
         """Connected devices included in the system setup.
 
@@ -551,9 +215,14 @@ class Session:
         1
         ```
         """
-        if self._backing is None:
+        if self._controller is None:
             return ToolkitDevices()
-        return self._backing.get_toolkit_devices()
+        if self._toolkit_devices is None:
+            raise LabOneQException(
+                "The 'devices' toolkit is not available when connected via a "
+                "remote controller service."
+            )
+        return self._toolkit_devices
 
     def __eq__(self, other):
         if not isinstance(other, Session):
@@ -566,10 +235,10 @@ class Session:
             and self._neartime_callbacks == other._neartime_callbacks
         )
 
-    def _assert_connected(self) -> _SessionBacking:
+    def _assert_connected(self) -> ControllerAPI:
         """Verifies that the session is connected to the devices."""
-        if self._connection_state.connected and self._backing is not None:
-            return self._backing
+        if self._connection_state.connected and self._controller is not None:
+            return self._controller
         raise LabOneQException(
             "Session not connected.\n"
             "The call requires an established connection to devices in order to execute the experiment.\n"
@@ -585,8 +254,6 @@ class Session:
                             function. If not provided, function name will be used.
         """
 
-        if self._backing is not None:
-            self._backing.assert_supports_registering_callbacks()
         if name is None:
             name = func.__name__
         self._neartime_callbacks[name] = func
@@ -631,31 +298,27 @@ class Session:
                 The connection state of the session.
         """
         self._ignore_version_mismatch = ignore_version_mismatch
-        # Tear down any previous backing before building a new one: reassigning
-        # `self._backing` below would otherwise abandon it while it still holds
-        # a hardware connection (or, for a remote backing, a bound port).
-        if self._backing is not None:
+        # Reassigning `self._controller` below would otherwise abandon the
+        # previous controller while it still holds a hardware connection, or,
+        # under remote emulation, a running service.
+        if self._controller is not None:
             self.disconnect()
         self._connection_state.emulated = do_emulation
 
         remote_url = self._device_setup.controller_service_url
         if remote_url is not None:
-            self._backing = _RemoteControllerBacking.connect(
+            self._connect_remote(
                 remote_url=remote_url,
-                device_setup=self._device_setup,
                 do_emulation=do_emulation,
                 ignore_version_mismatch=ignore_version_mismatch,
                 reset_devices=reset_devices,
                 disable_runtime_checks=disable_runtime_checks,
                 timeout=timeout,
-                neartime_callbacks=self._neartime_callbacks,
             )
         else:
-            self._backing = _LocalControllerBacking.connect(
-                device_setup=self._device_setup,
-                ignore_version_mismatch=ignore_version_mismatch,
-                neartime_callbacks=self._neartime_callbacks,
+            self._connect_local(
                 do_emulation=do_emulation,
+                ignore_version_mismatch=ignore_version_mismatch,
                 reset_devices=reset_devices,
                 disable_runtime_checks=disable_runtime_checks,
                 timeout=timeout,
@@ -663,6 +326,104 @@ class Session:
 
         self._connection_state.connected = True
         return self._connection_state
+
+    def _connect_local(
+        self,
+        do_emulation: bool,
+        ignore_version_mismatch: bool,
+        reset_devices: bool,
+        disable_runtime_checks: bool,
+        timeout: float | None,
+    ):
+        # Imported here: `local_controller` pulls in `laboneq.serializers`, which
+        # imports this module back.
+        from laboneq.controller.api.local_controller import LocalController
+
+        controller = LocalController.create(
+            device_setup=self._device_setup,
+            ignore_version_mismatch=ignore_version_mismatch,
+            neartime_callbacks=self._neartime_callbacks,
+            do_emulation=do_emulation,
+            reset_devices=reset_devices,
+            disable_runtime_checks=disable_runtime_checks,
+            timeout_s=timeout,
+            # Only its setup description is used, to compile for the instruments.
+            instrument_topology=InstrumentTopology(),
+        )
+        # `create` only logs a failed connect. `Session.connect` raises it.
+        not_ready_reason = controller.get_not_ready_reason()
+        if not_ready_reason is not None:
+            controller.close()
+            raise HardwareNotReadyError(not_ready_reason)
+        self._controller = controller
+        self._toolkit_devices = (
+            ToolkitDevices()
+            if do_emulation
+            else ToolkitDevices(toolkit_instruments(self._device_setup))
+        )
+        # The instruments are ready now, so this fetch succeeds and gives a later
+        # fetch, made while they are not, a description to fall back on.
+        self._fetch_setup_description()
+
+    def _connect_remote(
+        self,
+        remote_url: str,
+        do_emulation: bool,
+        ignore_version_mismatch: bool,
+        reset_devices: bool,
+        disable_runtime_checks: bool,
+        timeout: float | None,
+    ):
+        # Imported here: `remote_controller` pulls in `laboneq.serializers`, which
+        # imports this module back.
+        from laboneq.controller.api.remote_controller import RemoteController
+
+        if reset_devices:
+            raise LabOneQException(
+                "reset_devices is not supported when connected via a remote "
+                "controller service."
+            )
+        if not disable_runtime_checks:
+            raise LabOneQException(
+                "disable_runtime_checks=False is not supported when "
+                "connected via a remote controller service."
+            )
+        if timeout is not None:
+            raise LabOneQException(
+                "timeout is not supported when connected via a remote "
+                "controller service."
+            )
+        local_service: LocalControllerService | None = None
+        auth_token: str | None = None
+        if do_emulation:
+            # Imported lazily so that a session which never emulates does not
+            # pull FastAPI and uvicorn in.
+            from laboneq.controller.service.local_service import (
+                LocalControllerService,
+            )
+
+            # The configured service drives real hardware, so emulation cannot
+            # go there. Host an emulated one instead and use it in its place.
+            local_service = LocalControllerService.start(self._device_setup)
+            remote_url = local_service.url
+            auth_token = local_service.auth_token
+        try:
+            controller = RemoteController.create(
+                # Stripped because the client appends request paths to this address.
+                remote_url=remote_url.rstrip("/"),
+                ignore_version_mismatch=ignore_version_mismatch,
+                auth_token=auth_token,
+                # Shared with the controller, so that callbacks registered after
+                # connect() are served as well.
+                neartime_callbacks=self._neartime_callbacks,
+            )
+        except BaseException:
+            # `disconnect` stops only the service that `_local_service` holds.
+            if local_service is not None:
+                local_service.stop()
+            raise
+        self._controller = controller
+        self._local_service = local_service
 
     def disconnect(self) -> ConnectionState:
         """Disconnects instruments from the data server and closes the connection for this session.
@@ -672,12 +433,19 @@ class Session:
                 The connection state of the session.
         """
         self._connection_state.connected = False
-        if self._backing is not None:
-            if not sys.is_finalizing():
-                self._backing.disconnect()
-            # Otherwise: not much we can do here. The OS is going to clean up
-            # after us.
-            self._backing = None
+        controller, local_service = self._controller, self._local_service
+        self._controller = None
+        self._local_service = None
+        self._toolkit_devices = None
+        self._setup_description = None
+        # While the interpreter shuts down, there is not much we can do. The OS
+        # is going to clean up after us.
+        if controller is not None and not sys.is_finalizing():
+            try:
+                controller.close()
+            finally:
+                if local_service is not None:
+                    local_service.stop()
         return self._connection_state
 
     def wait_until_ready(self, timeout: float = READY_TIMEOUT_S):
@@ -713,7 +481,7 @@ class Session:
                 Optional. If set to True, only outputs not mapped by any logical
                 signals will be disabled. Can't be used together with 'signals'.
         """
-        backing = self._assert_connected()
+        controller = self._assert_connected()
         if devices is not None and signals is not None:
             raise LabOneQException(
                 "Ambiguous outputs specification: disable_outputs() accepts either 'devices' or "
@@ -733,7 +501,7 @@ class Session:
             if signals is None
             else [resolve_logical_signal_ref(s) for s in signals]
         )
-        backing.disable_outputs(devices, logical_signals, unused_only)
+        controller.disable_outputs(devices, logical_signals, unused_only)
 
     @property
     def connection_state(self) -> ConnectionState:
@@ -754,8 +522,8 @@ class Session:
             compiler_settings: Extra options passed to the compiler.
         """
         self._experiment_definition = experiment
-        if self._backing is not None and not self._connection_state.emulated:
-            setup_description = self._backing.fetch_setup_description()
+        if self._controller is not None and not self._connection_state.emulated:
+            setup_description = self._fetch_setup_description()
             if setup_description is not None:
                 self._device_setup.setup_description = setup_description
         self._compiled_experiment = compile_experiment(
@@ -767,6 +535,28 @@ class Session:
         )
         self._last_results = None
         return self._compiled_experiment
+
+    def _fetch_setup_description(self) -> SetupDescription | None:
+        """Return the setup description of the instruments, if any.
+
+        If the instruments cannot run experiments, logs a warning and returns the
+        last fetched one.
+        """
+        assert self._controller is not None
+        try:
+            topology = self._controller.get_instrument_topology()
+        except HardwareNotReadyError as e:
+            if self._setup_description is None:
+                _logger.warning("%s No setup description is available.", e)
+            else:
+                _logger.warning(
+                    "%s Using the last fetched setup description, which may be stale.",
+                    e,
+                )
+            return self._setup_description
+        if topology is not None:
+            self._setup_description = topology.setup_description
+        return self._setup_description
 
     @property
     def compiled_experiment(self) -> CompiledExperiment | None:
@@ -826,7 +616,7 @@ class Session:
         if include_results_metadata is None:
             include_results_metadata = self._include_results_metadata
 
-        backing = self._assert_connected()
+        controller = self._assert_connected()
         if experiment:
             if isinstance(experiment, CompiledExperiment):
                 self._compiled_experiment = experiment
@@ -841,25 +631,24 @@ class Session:
             results_kwargs["experiment"] = self.compiled_experiment.experiment
             results_kwargs["device_setup"] = self.device_setup
 
-        # TODO: Remove _legacy_session_data tests once the RuntimeContext endpoints are removed
-        legacy_session_data = LegacySessionData(
-            experiment=self.experiment,
-            experiment_calibration=self.experiment_calibration,
-            signal_map=self.signal_map,
-            device_setup=self.device_setup,
-            device_calibration=self.device_calibration,
-        )
+        raw_results = Results()
         try:
-            backing.execute(
+            handle = controller.submit_experiment(
                 self.compiled_experiment.scheduled_experiment,
-                legacy_session_data,
-                self.compiled_experiment.coprocessor_payload_overrides,
+                coprocessor_payload_overrides=self.compiled_experiment.coprocessor_payload_overrides,
             )
+            try:
+                controller.wait_for_experiment(handle)
+            finally:
+                raw_results = controller.get_experiment_results(handle)
+                # An error from closing would replace the error of the run, or
+                # fail a run whose results are already read.
+                with suppress(Exception):
+                    controller.close_submission(handle)
         finally:
-            raw_results = backing.raw_results
             self._last_results = Results(
                 acquired_results=raw_results.acquired_results,
-                variable_results=getattr(raw_results, "variable_results", {}),
+                variable_results=raw_results.variable_results,
                 neartime_callback_results=raw_results.neartime_callback_results,
                 execution_errors=raw_results.execution_errors,
                 pipeline_jobs_timestamps=raw_results.pipeline_jobs_timestamps,

@@ -17,7 +17,7 @@ use laboneq_units::duration::{Duration, Frequency, Hertz, Second};
 ///
 /// Provides convenient access to signal and device properties.
 #[derive(Debug, Clone, PartialEq, Copy)]
-pub struct SignalView<'a> {
+pub(crate) struct SignalView<'a> {
     signal: &'a Signal,
 }
 
@@ -26,11 +26,11 @@ impl SignalView<'_> {
         SignalView { signal }
     }
 
-    pub fn uid(&self) -> SignalUid {
+    pub(crate) fn uid(&self) -> SignalUid {
         self.signal.uid
     }
 
-    pub fn awg_key(&self) -> &AwgKey {
+    pub(crate) fn awg_key(&self) -> &AwgKey {
         &self.signal.awg_key
     }
 
@@ -38,43 +38,27 @@ impl SignalView<'_> {
         self.signal.automute
     }
 
-    pub fn device_uid(&self) -> DeviceUid {
+    pub(crate) fn device_uid(&self) -> DeviceUid {
         self.signal.device_uid
     }
 
     /// Physical device this signal's device maps to.
     /// This UID is used to group virtual devices that share the same
     /// physical hardware, enabling proper device detection.
-    pub fn physical_device_uid(&self) -> PhysicalDeviceUid {
+    pub(crate) fn physical_device_uid(&self) -> PhysicalDeviceUid {
         self.signal.physical_device_uid
     }
 
-    pub fn device_traits(&self) -> &'static DeviceTraits {
+    pub(crate) fn device_traits(&self) -> &'static DeviceTraits {
         self.signal.traits
     }
 
-    pub fn sampling_rate(&self) -> f64 {
+    pub(crate) fn sampling_rate(&self) -> f64 {
         self.signal.sampling_rate
     }
 
-    pub(crate) fn oscillator(&self) -> Option<&Oscillator> {
-        self.signal.oscillator.as_ref()
-    }
-
-    pub(crate) fn lo_frequency(&self) -> Option<&ValueOrParameter<f64>> {
-        self.signal.lo_frequency.as_ref()
-    }
-
-    pub(crate) fn voltage_offset(&self) -> Option<&ValueOrParameter<f64>> {
-        self.signal.voltage_offset.as_ref()
-    }
-
-    pub fn signal_kind(&self) -> &SignalKind {
+    pub(crate) fn signal_kind(&self) -> &SignalKind {
         &self.signal.kind
-    }
-
-    pub(crate) fn amplifier_pump(&self) -> Option<&AmplifierPump> {
-        self.signal.amplifier_pump.as_ref()
     }
 
     pub(crate) fn is_hardware_modulated(&self) -> bool {
@@ -82,18 +66,6 @@ impl SignalView<'_> {
             .oscillator
             .as_ref()
             .is_some_and(|osc| matches!(osc.kind, OscillatorKind::Hardware))
-    }
-
-    pub fn signal_delay(&self) -> Duration<Second> {
-        self.signal.signal_delay
-    }
-
-    pub fn port_delay(&self) -> Option<&ValueOrParameter<Duration<Second>>> {
-        self.signal.port_delay.as_ref()
-    }
-
-    pub fn start_delay(&self) -> Duration<Second> {
-        self.signal.start_delay
     }
 }
 
@@ -127,11 +99,11 @@ impl SignalInfo for SignalView<'_> {
     }
 
     fn oscillator(&self) -> Option<&Oscillator> {
-        self.oscillator()
+        self.signal.oscillator.as_ref()
     }
 
     fn lo_frequency(&self) -> Option<&ValueOrParameter<f64>> {
-        self.lo_frequency()
+        self.signal.lo_frequency.as_ref()
     }
 
     fn supports_initial_oscillator_frequency(&self) -> bool {
@@ -139,7 +111,7 @@ impl SignalInfo for SignalView<'_> {
     }
 
     fn voltage_offset(&self) -> Option<&ValueOrParameter<f64>> {
-        self.voltage_offset()
+        self.signal.voltage_offset.as_ref()
     }
 
     fn supports_initial_voltage_offset(&self) -> bool {
@@ -147,7 +119,7 @@ impl SignalInfo for SignalView<'_> {
     }
 
     fn amplifier_pump(&self) -> Option<&AmplifierPump> {
-        self.amplifier_pump()
+        self.signal.amplifier_pump.as_ref()
     }
 
     fn supports_multiple_acquisition_lengths(&self) -> bool {

@@ -9,7 +9,7 @@ hardware. It starts one of these instead, on the loopback interface, and talks
 to it over HTTP like any other remote service.
 
 Going over the wire to reach a service in the same process may look like a
-detour, and emulating locally through `Controller` would be the shorter path.
+detour, and emulating locally through `LocalController` would be the shorter path.
 The detour is the point: emulation goes through the same remote code path, and
 withholds the same things a real service does.
 

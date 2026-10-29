@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import warnings
 from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
@@ -197,9 +196,6 @@ def gaussian(
         if order == 2:
             delta = np.exp(-(dt**2 / (2 * sigma**2)))
         else:
-            sigma_updated = (sigma ** (2 / order)) / (
-                2 ** ((order - 2) / (2 * order)) * dt ** ((2 - order) / order)
-            )
             delta = np.exp(-((dt**2 / (2 * sigma_updated**2)) ** (order / 2)))
         gauss -= delta
         gauss /= 1 - delta
@@ -369,61 +365,6 @@ def sampled_pulse(
         return PulseSampled(samples=samples, can_compress=can_compress)
     else:
         return PulseSampled(uid=uid, samples=samples, can_compress=can_compress)
-
-
-def sampled_pulse_real(
-    samples: ArrayLike, uid: str | None = None, can_compress: bool = False
-):
-    """Create a pulse based on a array of real values.
-
-    Arguments:
-        samples (numpy.ndarray): Real valued data.
-        uid (str): Unique identifier of the created pulse.
-        can_compress (bool): Whether the compiler should attempt to compress
-            the pulse.
-
-    Returns:
-        pulse (Pulse): Pulse based on the provided sample values.
-
-    !!! version-changed "Deprecated in version 2.51.0"
-        Use `sampled_pulse` instead.
-
-    """
-    warnings.warn(
-        "The `sampled_pulse_real` function, along with `PulseSampledReal`, is deprecated. "
-        "Please use `sampled_pulse` instead, as `sampled_pulse_real` now calls `sampled_pulse` internally.",
-        FutureWarning,
-        stacklevel=2,
-    )
-
-    return sampled_pulse(samples, uid=uid, can_compress=can_compress)
-
-
-def sampled_pulse_complex(
-    samples: ArrayLike, uid: str | None = None, can_compress: bool = False
-):
-    """Create a pulse based on a array of complex values.
-
-    Args:
-        samples (numpy.ndarray): Complex valued data.
-        uid (str): Unique identifier of the created pulse.
-        can_compress (bool): Whether the compiler should attempt to compress
-            the pulse.
-
-    Returns:
-        pulse (Pulse): Pulse based on the provided sample values.
-
-    !!! version-changed "Deprecated in version 2.51.0"
-        Use `sampled_pulse` instead.
-    """
-    warnings.warn(
-        "The `sampled_pulse_complex` function, along with `PulseSampledComplex`, is deprecated. "
-        "Please use `sampled_pulse` instead, as `sampled_pulse_complex` now calls `sampled_pulse` internally.",
-        FutureWarning,
-        stacklevel=2,
-    )
-
-    return sampled_pulse(samples, uid=uid, can_compress=can_compress)
 
 
 def pulse_sampler(name: str) -> Callable:

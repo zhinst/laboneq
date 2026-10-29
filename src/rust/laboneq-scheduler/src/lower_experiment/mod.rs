@@ -11,7 +11,7 @@ use crate::experiment_context::ExperimentContext;
 use crate::lower_experiment::local_context::LocalContext;
 use crate::schedule_info::{RepetitionMode, ScheduleInfoBuilder};
 use crate::utils::{checked_round_to_grid, compute_grid, lcm};
-use crate::{ParameterStore, ScheduledNode, SignalInfo};
+use crate::{ScheduledNode, SignalInfo};
 use laboneq_dsl::operation::{
     Acquire as AcquireDsl, Delay as DelayDsl, LoopInfo, Operation, PlayPulse as PlayPulseDsl,
     PrngSetup as PrngSetupDsl, Section as SectionDsl,
@@ -21,7 +21,9 @@ use laboneq_dsl::types::{
 };
 use laboneq_dsl::{ExperimentNode, NodeChild};
 use laboneq_ir::builders::SectionBuilder;
-use laboneq_ir::{Acquire, ChangeOscillatorPhase, IrKind, Loop, LoopKind, PlayPulse};
+use laboneq_ir::{
+    Acquire, ChangeOscillatorPhase, IrKind, Loop, LoopKind, ParameterLookup, PlayPulse,
+};
 use laboneq_units::tinysample::{TinySamples, seconds_to_tinysamples, tiny_samples};
 
 mod local_context;
@@ -45,7 +47,7 @@ use match_case::lower_match;
 pub(crate) fn lower_to_ir<T: SignalInfo + Sized>(
     node: &ExperimentNode,
     ctx: &ExperimentContext<T>,
-    nt_parameters: &ParameterStore,
+    nt_parameters: &dyn ParameterLookup,
 ) -> Result<ScheduledNode> {
     let system_grid = compute_grid(ctx.signals())?.1;
     let mut local_ctx =
@@ -63,12 +65,8 @@ pub(crate) fn lower_to_ir<T: SignalInfo + Sized>(
     });
     setup_initial_conditions(&mut root, &concrete_signals, nt_parameters, system_grid)?;
 
-    let (children, reserved_signals) = lower_children(&node.children, ctx, &mut local_ctx)?;
+    let reserved_signals = lower_children(&mut root, &node.children, ctx, &mut local_ctx)?;
     root.schedule.signals.extend(reserved_signals);
-
-    for child in children {
-        root.add_child(tiny_samples(0), child);
-    }
 
     adjust_node_grids(&mut root);
     Ok(root)
@@ -78,7 +76,7 @@ pub(crate) fn lower_to_ir<T: SignalInfo + Sized>(
 fn setup_initial_conditions<T: SignalInfo>(
     root: &mut ScheduledNode,
     signals: &[&T],
-    nt_parameters: &ParameterStore,
+    nt_parameters: &dyn ParameterLookup,
     system_grid: TinySamples,
 ) -> Result<()> {
     let initial_osc_freq =
@@ -98,43 +96,34 @@ fn setup_initial_conditions<T: SignalInfo>(
     Ok(())
 }
 
-/// Lower a single Experiment node into IR nodes.
-///
-/// Returns a vector of IR nodes and a set of reserved signals within those
-/// nodes.
-fn lower_to_ir_impl<T: SignalInfo + Sized>(
+/// Lower a single Experiment node, adding the resulting IR node(s) to `parent` as children,
+/// and inserting any reserved signals into `reserved`.
+fn lower_node<T: SignalInfo + Sized>(
+    parent: &mut ScheduledNode,
+    reserved: &mut HashSet<SignalUid>,
     node: &ExperimentNode,
     ctx: &ExperimentContext<T>,
     local_ctx: &mut LocalContext,
-) -> Result<(Vec<ScheduledNode>, HashSet<SignalUid>)> {
-    match &node.kind {
-        Operation::Section(section) => {
-            let section_node = lower_section(section, &node.children, ctx, local_ctx)?;
-            Ok((vec![section_node], HashSet::new()))
-        }
+) -> Result<()> {
+    let lowered = match &node.kind {
+        Operation::Section(section) => lower_section(section, &node.children, ctx, local_ctx)?,
         Operation::PrngLoop(_) | Operation::Sweep(_) | Operation::AveragingLoop(_) => {
-            Ok((lower_sweep(node, ctx, local_ctx)?, HashSet::new()))
+            lower_sweep(node, ctx, local_ctx)?
         }
         Operation::Reserve(reserve) => {
-            let mut reserved = HashSet::new();
             reserved.insert(reserve.signal);
-            Ok((vec![], reserved))
+            return Ok(());
         }
-        Operation::PlayPulse(play_pulse) => Ok((
-            vec![lower_play_pulse(play_pulse, local_ctx)?],
-            HashSet::new(),
-        )),
-        Operation::Acquire(acquire) => {
-            Ok((vec![lower_acquire(acquire, local_ctx)?], HashSet::new()))
-        }
+        Operation::PlayPulse(play_pulse) => lower_play_pulse(play_pulse, local_ctx)?,
+        Operation::Acquire(acquire) => lower_acquire(acquire, local_ctx)?,
         Operation::Delay(delay) => {
-            let delay_node = lower_delay(delay, local_ctx)?;
             if delay.precompensation_clear {
-                let precomp_node = create_precompensation_node(delay.signal, local_ctx);
-                Ok((vec![precomp_node, delay_node], HashSet::new()))
-            } else {
-                Ok((vec![delay_node], HashSet::new()))
+                parent.add_child(
+                    tiny_samples(0),
+                    create_precompensation_node(delay.signal, local_ctx),
+                );
             }
+            lower_delay(delay, local_ctx)?
         }
         Operation::ResetOscillatorPhase(reset) => {
             let signals = collect_signals_from_uids(&reset.signals, ctx)?;
@@ -153,17 +142,21 @@ fn lower_to_ir_impl<T: SignalInfo + Sized>(
                     "HW oscillator phase reset is not allowed in strict timing sections.",
                 ));
             }
-            Ok((vec![reset_node], HashSet::new()))
+            reset_node
         }
-        Operation::Case(_) => Err(Error::new(
-            "Internal error: Case must be used within a match block.",
-        )),
-        Operation::Match(_) => Ok((vec![lower_match(node, ctx, local_ctx)?], HashSet::new())),
-        Operation::PrngSetup(obj) => {
-            let setup_node = lower_prng_setup(obj, &node.children, ctx, local_ctx)?;
-            Ok((vec![setup_node], HashSet::new()))
+        Operation::Case(_) => {
+            return Err(Error::new(
+                "Internal error: Case must be used within a match block.",
+            ));
         }
-        Operation::RealTimeBoundary => lower_children(&node.children, ctx, local_ctx),
+        Operation::Match(_) => lower_match(node, ctx, local_ctx)?,
+        Operation::PrngSetup(obj) => lower_prng_setup(obj, &node.children, ctx, local_ctx)?,
+        Operation::RealTimeBoundary => {
+            for child in &node.children {
+                lower_node(parent, reserved, child, ctx, local_ctx)?;
+            }
+            return Ok(());
+        }
         Operation::Root => {
             panic!(
                 "Internal error: Scheduling is supported only for real-time part of an experiment."
@@ -176,10 +169,14 @@ fn lower_to_ir_impl<T: SignalInfo + Sized>(
         Operation::Send(_)
         | Operation::MarkStale(_)
         | Operation::Ensure(_)
-        | Operation::DoUntil(_) => Err(Error::new(
-            "Internal error: HQCS operations must be lowered or refused before scheduling.",
-        )),
-    }
+        | Operation::DoUntil(_) => {
+            return Err(Error::new(
+                "Internal error: HQCS operations must be lowered or refused before scheduling.",
+            ));
+        }
+    };
+    parent.add_child(tiny_samples(0), lowered);
+    Ok(())
 }
 
 /// Helper to collect signal references from UIDs
@@ -190,33 +187,29 @@ fn collect_signals_from_uids<'a, T: SignalInfo>(
     signal_uids.iter().map(|s| ctx.get_signal(s)).collect()
 }
 
-/// Lower a list of Experiment nodes into IR nodes.
+/// Lower a list of Experiment nodes, attaching each resulting IR node directly
+/// as a child of `parent`.
 ///
-/// Returns a vector of IR nodes and a set of reserved signals within those
-/// nodes.
+/// Returns the set of reserved signals within the lowered children.
 fn lower_children(
+    parent: &mut ScheduledNode,
     children: &[NodeChild],
     ctx: &ExperimentContext<impl SignalInfo + Sized>,
     local_ctx: &mut LocalContext,
-) -> Result<(Vec<ScheduledNode>, HashSet<SignalUid>)> {
-    let mut all_nodes = Vec::with_capacity(children.len() * 2);
-    let mut all_reserved = HashSet::new();
-
+) -> Result<HashSet<SignalUid>> {
+    let mut reserved = HashSet::new();
     for child in children {
-        let (nodes, reserved) = lower_to_ir_impl(child, ctx, local_ctx)?;
-        all_nodes.extend(nodes);
-        all_reserved.extend(reserved);
+        lower_node(parent, &mut reserved, child, ctx, local_ctx)?;
     }
-
-    Ok((all_nodes, all_reserved))
+    Ok(reserved)
 }
 
-/// Lower Experiment loop nodes into IR nodes.
+/// Lower an Experiment loop node into an IR node.
 fn lower_sweep<T: SignalInfo + Sized>(
     node: &ExperimentNode,
     ctx: &ExperimentContext<T>,
     local_ctx: &mut LocalContext,
-) -> Result<Vec<ScheduledNode>> {
+) -> Result<ScheduledNode> {
     let mut loop_info = node
         .kind
         .loop_info()
@@ -230,30 +223,54 @@ fn lower_sweep<T: SignalInfo + Sized>(
             .ok_or_else(|| Error::new("Swept parameter must have at least one value"))?;
     }
 
-    let (children, reserved_signals) = local_ctx
+    let mut iteration = ScheduledNode::new_with_capacity(
+        IrKind::LoopIteration,
+        ScheduleInfoBuilder::new()
+            // Escalate to the system grid.
+            // TODO: We might want to relax this in the future.
+            .grid(local_ctx.system_grid)
+            .alignment_mode(*loop_info.alignment)
+            .section_timing_mode(*loop_info.section_timing_mode)
+            .build(),
+        node.children.len() + 1, // +1 for preamble
+    );
+    // Dummy / placeholder preamble
+    // The preamble depends on the signals of the loop body,
+    // so it will be replaced once the body is lowered.
+    iteration.add_child(
+        tiny_samples(0),
+        ScheduledNode::new(
+            IrKind::LoopIterationPreamble,
+            ScheduleInfoBuilder::new().build(),
+        ),
+    );
+
+    let reserved_signals = local_ctx
         .with_loop(
             *loop_info.uid,
             loop_info.parameters,
             *loop_info.section_timing_mode,
-            |new_ctx| lower_children(&node.children, ctx, new_ctx),
+            |c| lower_children(&mut iteration, &node.children, ctx, c),
         )
         .flatten()?;
 
-    let mut loop_signals: HashSet<SignalUid> = children
-        .iter()
-        .flat_map(|child| &child.schedule.signals)
-        .cloned()
-        .collect();
+    let preamble = create_loop_preamble(
+        &iteration.schedule.signals,
+        &reserved_signals,
+        &loop_info,
+        ctx,
+        local_ctx,
+    )?;
+    iteration.insert_child(0, tiny_samples(0), preamble);
 
-    let preamble =
-        create_loop_preamble(&loop_signals, &reserved_signals, &loop_info, ctx, local_ctx)?;
-
-    loop_signals.extend(reserved_signals.iter().cloned());
-    let iteration =
-        create_loop_iteration(preamble, children, &loop_info, local_ctx, &loop_signals)?;
+    let (grid, sequencer_grid) =
+        local_ctx.calculate_grids(iteration.schedule.signals.iter().cloned(), false, true);
+    iteration.schedule.grid = grid;
+    iteration.schedule.sequencer_grid = sequencer_grid;
+    adjust_node_grids(&mut iteration);
 
     let root_loop = create_root_loop(node, iteration, &loop_info)?;
-    Ok(vec![root_loop])
+    Ok(root_loop)
 }
 
 /// Create the loop iteration preamble with oscillator and PPC setup
@@ -271,8 +288,10 @@ fn create_loop_preamble<T: SignalInfo>(
             .build(),
     );
 
-    let signal_refs =
-        collect_signals_from_uids(&loop_signals.iter().cloned().collect::<Vec<_>>(), ctx)?;
+    let signal_refs = loop_signals
+        .iter()
+        .map(|s| ctx.get_signal(s))
+        .collect::<Result<Vec<_>>>()?;
 
     let strict = *loop_info.section_timing_mode == SectionTimingMode::Strict;
 
@@ -335,42 +354,6 @@ fn create_loop_preamble<T: SignalInfo>(
         .signals
         .extend(reserved_signals.iter().cloned());
     Ok(preamble)
-}
-
-/// Create the loop iteration containing preamble and children
-fn create_loop_iteration(
-    preamble: ScheduledNode,
-    children: Vec<ScheduledNode>,
-    loop_info: &LoopInfo,
-    local_ctx: &mut LocalContext,
-    loop_signals: &HashSet<SignalUid>,
-) -> Result<ScheduledNode> {
-    let mut iteration = ScheduledNode::new_with_capacity(
-        IrKind::LoopIteration,
-        ScheduleInfoBuilder::new()
-            // Escalate to the system grid.
-            // TODO: We might want to relax this in the future.
-            .grid(local_ctx.system_grid)
-            .alignment_mode(*loop_info.alignment)
-            .signals(loop_signals.iter().cloned().collect())
-            .section_timing_mode(*loop_info.section_timing_mode)
-            .build(),
-        children.len() + 1, // +1 for preamble
-    );
-
-    iteration.add_child(tiny_samples(0), preamble);
-    for child in children {
-        iteration.add_child(tiny_samples(0), child);
-    }
-
-    let (grid, sequencer_grid) =
-        local_ctx.calculate_grids(iteration.schedule.signals.iter().cloned(), false, true);
-
-    iteration.schedule.grid = grid;
-    iteration.schedule.sequencer_grid = sequencer_grid;
-    adjust_node_grids(&mut iteration);
-
-    Ok(iteration)
 }
 
 /// Create the root loop node
@@ -454,15 +437,12 @@ fn lower_section(
         children.len(),
     );
 
-    let (children, reserved_signals) =
+    let reserved_signals =
         local_ctx.with_section(section.uid, section.section_timing_mode, |local_ctx| {
-            lower_children(children, ctx, local_ctx)
+            lower_children(&mut root, children, ctx, local_ctx)
         })?;
 
     root.schedule.signals.extend(reserved_signals);
-    for child in children {
-        root.add_child(tiny_samples(0), child);
-    }
 
     let (grid, sequencer_grid) = local_ctx.calculate_grids(
         root.schedule.signals.iter().cloned(),
@@ -612,22 +592,20 @@ fn lower_prng_setup(
         .prng_setup(section.range, section.seed)
         .build();
 
-    let mut root = ScheduledNode::new(
+    let mut root = ScheduledNode::new_with_capacity(
         IrKind::Section(ir_section),
         ScheduleInfoBuilder::new()
             .grid(local_ctx.system_grid)
             .build(),
+        children.len(),
     );
 
-    let (children, reserved_signals) =
+    let reserved_signals =
         local_ctx.with_section(section.uid, SectionTimingMode::default(), |local_ctx| {
-            lower_children(children, ctx, local_ctx)
+            lower_children(&mut root, children, ctx, local_ctx)
         })?;
 
     root.schedule.signals.extend(reserved_signals);
-    for child in children {
-        root.add_child(tiny_samples(0), child);
-    }
 
     let (grid, sequencer_grid) =
         local_ctx.calculate_grids(root.schedule.signals.iter().cloned(), false, false);

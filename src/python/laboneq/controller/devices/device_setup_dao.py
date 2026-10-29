@@ -258,8 +258,8 @@ def _effective_downlinks(entry: DeviceEntry, entries: list[DeviceEntry]) -> list
 
     A PPC connects to an SHFQA over a pump line and leads no follower, so it
     has no links. A leader that names no links drives every follower in the
-    setup, and a named link to an SHFQC reaches both of the devices it is
-    driven as.
+    setup that has signals, and a named link to an SHFQC reaches both of the
+    devices it is driven as.
     """
     if entry.device_type == "SHFPPC":
         return []
@@ -270,6 +270,7 @@ def _effective_downlinks(entry: DeviceEntry, entries: list[DeviceEntry]) -> list
             e.qualifier.uid
             for e in entries
             if e.device_type in ("HDAWG", "SHFQA", "SHFSG")
+            and e.qualifier.driver != "NONQC"
         ]
     split_qcs = {
         e.qualifier.uid.removesuffix(VIRTUAL_SHFSG_UID_SUFFIX)

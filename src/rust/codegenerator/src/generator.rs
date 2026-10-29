@@ -186,10 +186,12 @@ fn generate_code_for_awg<T: SampleWaveforms + SampleIntegrationKernels>(
         root,
         awg,
         &ctx.settings,
-        &measurement_info
-            .delays
+        &awg.signals
             .iter()
-            .map(|(signal, delay)| (*signal, delay.delay_sequencer()))
+            .filter_map(|signal| {
+                let delay = measurement_info.delays.get(signal)?;
+                Some((signal.uid, delay.delay_sequencer()))
+            })
             .collect(),
     )?;
     let waveforms = collect_and_finalize_waveforms(&mut awg_node, sampler, awg)?;
@@ -449,7 +451,7 @@ fn build_channel_properties(
         // The scheduler's delay alone. Output channels add the signal's alignment delay.
         let scheduler_delay = measurement_info
             .delays
-            .get(&signal.uid)
+            .get(signal)
             .map(|d| d.delay_port())
             .unwrap_or_default();
         let oscillator = channel_oscillator(awg, signal, properties);

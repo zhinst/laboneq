@@ -24,8 +24,6 @@ use crate::setup_processor::process_setup;
 
 pub(crate) struct PreprocessedExperiment<D, H> {
     pub(crate) inner: Experiment,
-    // NOTE: The usage of Arc here is to allow sharing the id_store across Python bindings
-    // Remove when Python bindings are no longer needed
     pub(crate) signals: Arc<[Signal]>,
     pub(crate) backend_data: D,
     pub(crate) result_shapes: ResultShapes,

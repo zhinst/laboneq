@@ -29,6 +29,7 @@ pub fn hash_pulse_parameter_value(value: &ExternalOrValue) -> u64 {
                 uid.hash(&mut hasher);
             }
         },
+        ExternalOrValue::Bool(value) => value.hash(&mut hasher),
         ExternalOrValue::None => {}
     }
     hasher.finish()

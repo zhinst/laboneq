@@ -74,6 +74,10 @@ class ResultsBuilder:
         self, nt_step: NtStepKey, chunk_index: int | None, handle: str
     ) -> tuple[slice | list[int], ...]:
         shape_info = self._shapes[handle]
+        assert chunk_index is None or shape_info.chunked_axis_index is not None, (
+            f"Cannot determine slices of chunk {chunk_index} for handle '{handle}': "
+            "its result shape has no chunked axis"
+        )
         slices: list[slice | list[int]] = []
         for i, (dim, nt_idx) in enumerate(
             zip_longest(shape_info.shape, nt_step.indices)
@@ -135,6 +139,7 @@ class ResultsBuilder:
             acquired_data: 1D array containing results acquired during the execution of a portion (NT step, chunk) of an experiment
             unaveraged: Whether the acquired data should be averaged over shots
         """
+        chunk_count = self._rt_loop_properties.chunk_count
         unique_handles = set(h for m in mapping for h in m)
         for handle in unique_handles:
             result_for_handle = self._results.acquired_results[handle]
@@ -151,7 +156,23 @@ class ResultsBuilder:
             )
             acquired_data_for_handle = acquired_data[handle_mask]
 
-            slices = self._determine_slices(nt_step, chunk_index, handle)
+            data_chunk_index = chunk_index
+            if chunk_count is not None and handle_shape_info.chunked_axis_index is None:
+                # Experiment is chunked and result has no chunked axis.
+                # Therefore, acquired outside chunked sweep, repeated in every chunk.
+                # We want to keep only the results of the last chunk.
+                if chunk_index is None:  # We receive data of all chunks at once
+                    acquired_data_for_handle = np.split(
+                        acquired_data_for_handle, chunk_count
+                    )[-1]  # Keep only the results of the last chunk
+                elif (
+                    chunk_index != chunk_count - 1
+                ):  # We receive data of each chunk one-by-one
+                    continue  # Skip unless we have results of the last chunk
+                # We now have results from one chunk, return full slice
+                data_chunk_index = None
+
+            slices = self._determine_slices(nt_step, data_chunk_index, handle)
             sliced_shape = result_for_handle.data[slices].shape
 
             if unaveraged:
@@ -200,7 +221,7 @@ class ResultsBuilder:
                     :, :truncation_index
                 ]
 
-            if self._rt_loop_properties.chunk_count is None or chunk_index is not None:
+            if handle_shape_info.chunked_axis_index is None or chunk_index is not None:
                 # if chunking is not used, or used and the incoming
                 # data is for a single chunk only
 
@@ -215,19 +236,17 @@ class ResultsBuilder:
                 chunked_axis_index = handle_shape_info.chunked_axis_index
                 assert chunked_axis_index is not None
                 assert chunk_index is None
-                assert self._rt_loop_properties.chunk_count is not None
+                assert chunk_count is not None
 
                 chunk_shape = tuple(
-                    dim
-                    if i != chunked_axis_index
-                    else dim // self._rt_loop_properties.chunk_count
+                    dim if i != chunked_axis_index else dim // chunk_count
                     for i, dim in enumerate(sliced_shape)
                 )
                 # rearrange the data as if it came from a non-chunked experiment
                 shaped_acquired_data_for_handle = np.concatenate(
                     np.reshape(
                         acquired_data_for_handle,
-                        (self._rt_loop_properties.chunk_count, *chunk_shape),
+                        (chunk_count, *chunk_shape),
                         copy=False,
                     ),
                     axis=chunked_axis_index,

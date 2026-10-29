@@ -5,7 +5,7 @@ use crate::Result;
 use crate::ir::compilation_job::{DeviceKind, Signal};
 use crate::ir::{IrNode, NodeKind, Samples, SectionId, SectionInfo, SignalUid};
 use crate::utils::{samples_to_grid, samples_to_length};
-use laboneq_error::{WithContext, bail};
+use laboneq_error::bail;
 use laboneq_units::duration;
 use laboneq_units::duration::{Duration, Second};
 use laboneq_units::tinysample::{tiny_samples, tinysamples_to_samples};
@@ -190,6 +190,28 @@ impl SignalDelay {
     }
 }
 
+/// Delays of an AWG's readout pulses and acquisitions.
+///
+/// The instrument applies one delay to all readout pulses of an AWG and one to
+/// all its acquisitions, so all output signals share the play delay and all
+/// integration signals share the acquire delay.
+#[derive(Debug, Default)]
+pub(crate) struct MeasurementDelays {
+    play: Option<SignalDelay>,
+    acquire: Option<SignalDelay>,
+}
+
+impl MeasurementDelays {
+    /// Returns the delay of the given signal, if a measurement on the AWG requires one.
+    pub(crate) fn get(&self, signal: &Signal) -> Option<&SignalDelay> {
+        if signal.is_output() {
+            self.play.as_ref()
+        } else {
+            self.acquire.as_ref()
+        }
+    }
+}
+
 fn validate_measurements(
     measurements: &Vec<MeasurementInfo>,
     sample_converter: &SampleToSecondsConverter,
@@ -245,127 +267,93 @@ fn validate_measurements(
     Ok(())
 }
 
-fn insert_ensure_unique_delays(
-    delays: &mut HashMap<SignalUid, SignalDelay>,
-    signal: SignalUid,
-    delay: SignalDelay,
-    sample_converter: &SampleToSecondsConverter,
-) -> Result<()> {
-    if let Some(existing) = delays.get(&signal) {
-        if existing.delay_sequencer != delay.delay_sequencer {
-            let mut delays = [existing.delay_sequencer, delay.delay_sequencer];
-            delays.sort();
-            bail!(
-                "Cannot resolve measure timing on a signal {} \
-                as it would result in two different delays: {} and {}",
-                signal.0,
-                sample_converter.to_seconds(delays[0]),
-                sample_converter.to_seconds(delays[1])
-            );
-        } else if existing.delay_port != delay.delay_port {
-            let mut delays = [existing.delay_port, delay.delay_port];
-            delays.sort();
-            bail!(
-                "Cannot resolve measure timing on a signal {} \
-                as it would result in two different delays: {} and {}",
-                signal.0,
-                delays[0],
-                delays[1]
-            );
-        }
-    } else {
-        delays.insert(signal, delay);
-    }
-    Ok(())
-}
-
 fn calculate_measurement_delays(
     measurements: Vec<SectionMeasurement<'_>>,
     device: &DeviceKind,
     sample_converter: &SampleToSecondsConverter,
-) -> Result<HashMap<SignalUid, SignalDelay>> {
-    if measurements.is_empty() {
-        return Ok(HashMap::new());
-    }
-    let measurement_infos = create_measurements(measurements, sample_converter)?;
-    let mut delays = HashMap::new();
-    for info in measurement_infos {
-        let play_info = &info.play;
-        let acquire_info = &info.acquire;
+) -> Result<MeasurementDelays> {
+    let sample_multiple: Samples = device.traits().sample_multiple.into();
+    let sampling_rate = sample_converter.sampling_rate();
+    let mut play = None;
+    let mut acquire = None;
+    for info in create_measurements(measurements, sample_converter)? {
         // NOTE: Play sample remainder is handled later by the waveform generator.
-        let (play_delay, _) =
-            samples_to_grid(play_info.start, device.traits().sample_multiple.into());
-        let (acquire_delay, remainder) =
-            samples_to_grid(acquire_info.start, device.traits().sample_multiple.into());
-        match device {
-            DeviceKind::UHFQA => {
-                for signal in &acquire_info.signals {
-                    let delay = SignalDelay::new(
-                        -acquire_delay,
-                        samples_to_length(
-                            acquire_delay + remainder,
-                            sample_converter.sampling_rate(),
-                        ),
-                    );
-                    insert_ensure_unique_delays(&mut delays, *signal, delay, sample_converter)
-                        .with_context(|| {
-                            format!(
-                                "Failed to adjust measurement timing in signal {}",
-                                info.section_info.name
-                            )
-                        })?;
-                }
-                for signal in &play_info.signals {
-                    let delay = SignalDelay::new(0, 0.0);
-                    insert_ensure_unique_delays(&mut delays, *signal, delay, sample_converter)
-                        .with_context(|| {
-                            format!(
-                                "Failed to adjust measurement timing in signal {}",
-                                info.section_info.name
-                            )
-                        })?;
-                }
-            }
+        let (play_delay, _) = samples_to_grid(info.play.start, sample_multiple);
+        let (acquire_delay, remainder) = samples_to_grid(info.acquire.start, sample_multiple);
+        let (play_signal_delay, acquire_signal_delay) = match device {
+            DeviceKind::UHFQA => (
+                SignalDelay::new(0, 0.0),
+                SignalDelay::new(
+                    -acquire_delay,
+                    samples_to_length(acquire_delay + remainder, sampling_rate),
+                ),
+            ),
             DeviceKind::SHFQA => {
                 let (delay_play, delay_acquire) = if play_delay > acquire_delay {
                     (acquire_delay - play_delay, 0)
                 } else {
                     (0, play_delay - acquire_delay)
                 };
-                for signal in &acquire_info.signals {
-                    let delay = SignalDelay::new(
+                (
+                    SignalDelay::new(delay_play, samples_to_length(-delay_play, sampling_rate)),
+                    SignalDelay::new(
                         delay_acquire,
-                        samples_to_length(
-                            -delay_acquire + remainder,
-                            sample_converter.sampling_rate(),
-                        ),
-                    );
-                    insert_ensure_unique_delays(&mut delays, *signal, delay, sample_converter)
-                        .with_context(|| {
-                            format!(
-                                "Failed to adjust measurement timing in signal {}",
-                                info.section_info.name
-                            )
-                        })?;
-                }
-                for signal in &play_info.signals {
-                    let delay = SignalDelay::new(
-                        delay_play,
-                        samples_to_length(-delay_play, sample_converter.sampling_rate()),
-                    );
-                    insert_ensure_unique_delays(&mut delays, *signal, delay, sample_converter)
-                        .with_context(|| {
-                            format!(
-                                "Failed to adjust measurement timing in signal {}",
-                                info.section_info.name
-                            )
-                        })?;
-                }
+                        samples_to_length(-delay_acquire + remainder, sampling_rate),
+                    ),
+                )
             }
-            _ => {}
-        }
+            _ => continue,
+        };
+        resolve_unique_delay(&mut play, play_signal_delay, &info.play.signals, "play")?;
+        resolve_unique_delay(
+            &mut acquire,
+            acquire_signal_delay,
+            &info.acquire.signals,
+            "acquire",
+        )?;
     }
-    Ok(delays)
+    Ok(MeasurementDelays {
+        play: play.map(|(delay, _)| delay),
+        acquire: acquire.map(|(delay, _)| delay),
+    })
+}
+
+/// Stores `delay` in `resolved`, or fails if `resolved` already holds a different
+/// delay from an earlier measurement.
+///
+/// `resolved` keeps one of the signals that first required the delay, to name it
+/// in the error.
+fn resolve_unique_delay(
+    resolved: &mut Option<(SignalDelay, SignalUid)>,
+    delay: SignalDelay,
+    signals: &HashSet<SignalUid>,
+    operation: &str,
+) -> Result<()> {
+    let signal = *signals.iter().min().expect("Internal error: No signals");
+    let Some((existing, existing_signal)) = resolved else {
+        *resolved = Some((delay, signal));
+        return Ok(());
+    };
+    if *existing == delay {
+        return Ok(());
+    }
+    if signals.contains(existing_signal) {
+        bail!(
+            "Cannot resolve measure timing on signal '{}' as it would result in \
+            two different {operation} delays: {} and {}.",
+            existing_signal.0,
+            existing.delay_port,
+            delay.delay_port
+        );
+    }
+    bail!(
+        "Cannot resolve measure timing: signals '{}' and '{}' share an AWG but \
+        would need different {operation} delays: {} and {}.",
+        existing_signal.0,
+        signal.0,
+        existing.delay_port,
+        delay.delay_port
+    );
 }
 
 fn build_play_operations<'a>(
@@ -585,9 +573,9 @@ fn calculate_integration_times(
 
 #[derive(Default)]
 pub(crate) struct MeasurementAnalysis {
-    /// A map of signal names to their respective delays, which include both the sequencer
-    /// delay and the port delay
-    pub delays: HashMap<SignalUid, SignalDelay>,
+    /// Delays of the readout pulses and acquisitions, each split into a sequencer delay
+    /// and a port delay.
+    pub delays: MeasurementDelays,
     /// A list of integration lengths for signals, which includes both play and acquire signals.
     pub integration_lengths: Vec<IntegrationLength>,
 }
@@ -765,8 +753,8 @@ mod tests {
             .delays;
 
         // Test that measure and acquire are adjusted to start at the same time for sequencer
-        let measure = result.get(&1.into()).unwrap();
-        let acquire = result.get(&0.into()).unwrap();
+        let measure = result.play.unwrap();
+        let acquire = result.acquire.unwrap();
         assert_eq!(measure.delay_sequencer(), 0);
         assert_eq!(acquire.delay_sequencer(), -16);
         assert_eq!(Into::<f64>::into(measure.delay_port()), 0.0);
@@ -809,8 +797,8 @@ mod tests {
         let result = analyze_measurements(&builder.build(), &DeviceKind::SHFQA, srate)
             .unwrap()
             .delays;
-        let measure = result.get(&1.into()).unwrap();
-        let acquire = result.get(&0.into()).unwrap();
+        let measure = result.play.unwrap();
+        let acquire = result.acquire.unwrap();
         assert_eq!(measure.delay_sequencer(), 0);
         assert_eq!(Into::<f64>::into(measure.delay_port()), 0.0);
 
@@ -875,8 +863,8 @@ mod tests {
             .unwrap()
             .delays;
 
-        let measure = result.get(&1.into()).unwrap();
-        let acquire = result.get(&0.into()).unwrap();
+        let measure = result.play.unwrap();
+        let acquire = result.acquire.unwrap();
 
         let expected_delay = 32;
         assert_eq!(measure.delay_sequencer(), 0);

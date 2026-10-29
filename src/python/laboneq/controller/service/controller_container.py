@@ -27,10 +27,10 @@ if TYPE_CHECKING:
     from types import ModuleType
 
     from laboneq.controller.api.controller_api import SubmissionStatus
-    from laboneq.data.experiment_results import ExperimentResults
     from laboneq.data.instrument_topology import InstrumentTopology
     from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.dsl.device import DeviceSetup
+    from laboneq.dsl.result.results import Results
 
 logger = logging.getLogger(__name__)
 
@@ -435,7 +435,7 @@ class ControllerContainer:
             SubmissionHandle(id=experiment_id)
         )
 
-    async def get_submission_results(self, experiment_id: int) -> ExperimentResults:
+    async def get_submission_results(self, experiment_id: int) -> Results:
         """Current (possibly partial) results for *experiment_id*."""
         return await self._controller.get_experiment_results(
             SubmissionHandle(id=experiment_id)

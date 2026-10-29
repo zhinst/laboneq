@@ -11,7 +11,8 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from laboneq._version import __version__, get_version  # noqa F401
+from laboneq._version import __version__ as __version__
+from laboneq._version import get_version  # noqa F401
 
 if TYPE_CHECKING:
     from collections.abc import Iterable

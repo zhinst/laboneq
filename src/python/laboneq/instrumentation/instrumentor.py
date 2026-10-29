@@ -10,7 +10,7 @@ from opentelemetry import trace
 from opentelemetry.instrumentation.instrumentor import BaseInstrumentor
 from opentelemetry.instrumentation.utils import unwrap
 
-import laboneq.controller.controller
+import laboneq.controller.controller_core
 import laboneq.core.utilities.seqc_compile
 import laboneq.dsl.session
 from laboneq import __version__
@@ -108,33 +108,33 @@ class ControllerInstrumentor(_BaseLabOneQInstrumentor):
         super().__init__()
         self._to_instrument = [
             (
-                laboneq.controller.controller.Controller,
-                laboneq.controller.controller.Controller._connect_async.__name__,
+                laboneq.controller.controller_core.ControllerCore,
+                laboneq.controller.controller_core.ControllerCore.connect.__name__,
                 self._wrap_controller_connect,
             ),
             (
-                laboneq.controller.controller.Controller,
-                laboneq.controller.controller.Controller._execute_compiled_async.__name__,
+                laboneq.controller.controller_core.ControllerCore,
+                laboneq.controller.controller_core.ControllerCore._execute_compiled_async.__name__,
                 self._wrap_controller_execute,
             ),
             (
-                laboneq.controller.controller.NearTimeRunner,
-                laboneq.controller.controller.NearTimeRunner.run.__name__,
+                laboneq.controller.controller_core.NearTimeRunner,
+                laboneq.controller.controller_core.NearTimeRunner.run.__name__,
                 self._wrap_near_time_execution,
             ),
             (
-                laboneq.controller.controller.Controller,
-                laboneq.controller.controller.Controller._execute_one_step.__name__,
+                laboneq.controller.controller_core.ControllerCore,
+                laboneq.controller.controller_core.ControllerCore._execute_one_step.__name__,
                 self._wrap_controller_step_execution,
             ),
             (
-                laboneq.controller.controller.Controller,
-                laboneq.controller.controller.Controller._read_one_step_results.__name__,
+                laboneq.controller.controller_core.ControllerCore,
+                laboneq.controller.controller_core.ControllerCore._read_one_step_results.__name__,
                 self._wrap_read_step_results,
             ),
             (
-                laboneq.controller.controller.Controller,
-                laboneq.controller.controller.Controller._prepare_nt_step.__name__,
+                laboneq.controller.controller_core.ControllerCore,
+                laboneq.controller.controller_core.ControllerCore._prepare_nt_step.__name__,
                 self._wrap_prepare_step,
             ),
         ]

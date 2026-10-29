@@ -11,7 +11,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from laboneq._rust import compiler as compiler_rs
-    from laboneq.compiler.common.iface_linker import ILinker
     from laboneq.dsl.device.device_setup import DeviceSetup
 
 
@@ -34,10 +33,6 @@ class CompilerHooks(ABC):
         which is also written to `DeviceSetup.backend` and
         `CompiledExperiment.metadata.createdBy`.
         """
-
-    @staticmethod
-    @abstractmethod
-    def linker() -> type[ILinker]: ...
 
     @staticmethod
     @abstractmethod

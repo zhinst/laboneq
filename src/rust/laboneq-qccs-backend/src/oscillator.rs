@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::types::SignalKind;
+use rustc_hash::FxHashMap;
 
 use crate::device_kind::DeviceKind;
 use laboneq_dsl::ExperimentNode;
@@ -58,7 +59,7 @@ pub(crate) struct Device {
 pub(crate) fn resolve_oscillator_modulation(
     signals: &mut [SignalOscillator],
     root: &ExperimentNode,
-    pulses: &HashMap<PulseUid, PulseDef>,
+    pulses: &FxHashMap<PulseUid, PulseDef>,
     id_store: &NamedIdStore,
 ) -> Result<()> {
     let acquisitions = Acquisitions::collect(root, pulses)?;
@@ -177,7 +178,7 @@ impl Acquisitions {
     ///
     /// # Errors
     /// Returns an error if an acquisition refers to an unknown kernel pulse.
-    fn collect(root: &ExperimentNode, pulses: &HashMap<PulseUid, PulseDef>) -> Result<Self> {
+    fn collect(root: &ExperimentNode, pulses: &FxHashMap<PulseUid, PulseDef>) -> Result<Self> {
         let mut acquisitions = Acquisitions {
             acquisition_type: None,
             max_lengths: HashMap::new(),
@@ -199,7 +200,11 @@ impl Acquisitions {
             .map(|length| length.max_seconds(sampling_rate))
     }
 
-    fn visit(&mut self, node: &ExperimentNode, pulses: &HashMap<PulseUid, PulseDef>) -> Result<()> {
+    fn visit(
+        &mut self,
+        node: &ExperimentNode,
+        pulses: &FxHashMap<PulseUid, PulseDef>,
+    ) -> Result<()> {
         match &node.kind {
             Operation::AveragingLoop(loop_) if self.acquisition_type.is_none() => {
                 self.acquisition_type = Some(loop_.acquisition_type);
@@ -357,7 +362,7 @@ mod tests {
                 oscillator: Some(&mut oscillator),
             },
         ];
-        resolve_oscillator_modulation(&mut signals, &root, &HashMap::new(), &store).unwrap();
+        resolve_oscillator_modulation(&mut signals, &root, &FxHashMap::default(), &store).unwrap();
 
         assert_eq!(oscillator.kind, OscillatorKind::Hardware);
     }
@@ -367,7 +372,7 @@ mod tests {
         let mut store = NamedIdStore::new();
         let signal: SignalUid = store.get_or_insert("q0/acquire").into();
         let kernel: PulseUid = store.get_or_insert("kernel").into();
-        let pulses = HashMap::from([(
+        let pulses = FxHashMap::from_iter([(
             kernel,
             pulse(
                 kernel,
@@ -407,7 +412,7 @@ mod tests {
         let mut store = NamedIdStore::new();
         let signal: SignalUid = store.get_or_insert("q0/acquire").into();
         let kernel: PulseUid = store.get_or_insert("kernel").into();
-        let pulses = HashMap::from([(
+        let pulses = FxHashMap::from_iter([(
             kernel,
             pulse(
                 kernel,

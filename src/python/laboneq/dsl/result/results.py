@@ -7,7 +7,7 @@ import copy
 from typing import TYPE_CHECKING, Any, Literal
 
 import attrs
-from typing_extensions import TypeAlias, deprecated
+from typing_extensions import TypeAlias
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.attribute_wrapper import AttributeWrapper
@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from laboneq.dsl.device.device_setup import DeviceSetup
     from laboneq.dsl.experiment import Experiment
 
-    from ..calibration import Calibration
     from .acquired_result import AcquiredResult
     from .logged_variable import LoggedVariable
 
@@ -98,6 +97,12 @@ class Results:
             * the error message
         pipeline_jobs_timestamps:
             The timestamps of all pipeline jobs, in seconds. Organized by signal, then pipeline job id.
+
+    !!! version-removed "Removed in version 26.10.0"
+        Removed the `.device_calibration`, `.experiment_calibration` and
+        `.signal_map` properties that were deprecated in version 2.52.0. Use
+        `.device_setup.get_calibration()`, `.experiment.get_calibration()` and
+        `.experiment.get_signal_map()` instead.
 
     !!! version-removed "Removed in version 2.57.0"
         Removed the `.user_func_results` attribute and argument that were deprecated
@@ -422,57 +427,6 @@ class Results:
 
         self._check_handle(handle)
         return self.acquired_results[handle].last_nt_step
-
-    @property
-    @deprecated(
-        "The `.device_calibration` property is deprecated. Use"
-        " `.device_setup.get_calibration()` instead.",
-        category=FutureWarning,
-    )
-    def device_calibration(self) -> Calibration | None:
-        """Get the device setup's calibration.
-
-        See also
-        [DeviceSetup.get_calibration][laboneq.dsl.device.device_setup.DeviceSetup.get_calibration].
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `.device_setup.get_calibration()` instead.
-        """
-        if self.device_setup is None:
-            return None
-        return self.device_setup.get_calibration()
-
-    @property
-    @deprecated(
-        "The `.experiment_calibration` property is deprecated. Use"
-        " `.experiment.get_calibration()` instead.",
-        category=FutureWarning,
-    )
-    def experiment_calibration(self):
-        """Return the experiment calibration.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `.experiment.get_calibration()` instead.
-        """
-        if self.experiment is None:
-            return None
-        return self.experiment.get_calibration()
-
-    @property
-    @deprecated(
-        "The `.signal_map` property is deprecated. Use"
-        " `.experiment.get_signal_map()` instead.",
-        category=FutureWarning,
-    )
-    def signal_map(self):
-        """Return the experiment signal map.
-
-        !!! version-changed "Deprecated in version 2.52.0"
-            Use `.experiment.get_signal_map()` instead.
-        """
-        if self.experiment is None:
-            return None
-        return self.experiment.get_signal_map()
 
 
 def combine_results(results: Sequence[Results]) -> Results:

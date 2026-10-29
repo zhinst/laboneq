@@ -206,7 +206,11 @@ impl LabOneQError {
         F: FnOnce(String) -> String,
     {
         pyo3::Python::attach(move |py| {
-            let msg = self.to_string();
+            // A Python `ResourceLimitationError` names itself, so its message goes unlabelled.
+            let msg = match &self {
+                LabOneQError::ResourceExhaustion(err) => err.message(),
+                _ => self.to_string(),
+            };
             let msg = msg_updater(msg);
             match self {
                 LabOneQError::Generic(_) => LabOneQException::new_err(msg),
@@ -232,12 +236,12 @@ impl LabOneQError {
         if !err.is_instance_of::<ResourceLimitationError>(py) {
             return err.into();
         }
-        let usage = err
-            .value(py)
+        let value = err.value(py);
+        let usage = value
             .getattr(pyo3::intern!(py, "usage"))
             .ok()
             .and_then(|v| v.extract().ok());
-        ResourceExhaustionError::new(err.to_string(), usage).into()
+        ResourceExhaustionError::new(value.to_string(), usage).into()
     }
 }
 
@@ -389,7 +393,10 @@ Context:
         for func in [bail_basic, bail_formatted_1, bail_formatted_2] {
             let res = func();
             assert!(res.is_err());
-            assert_eq!(res.unwrap_err().to_string(), "foo bar");
+            assert_eq!(
+                res.unwrap_err().to_string(),
+                "ResourceLimitationError: foo bar"
+            );
         }
     }
 }

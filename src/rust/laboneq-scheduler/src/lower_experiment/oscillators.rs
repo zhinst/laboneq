@@ -9,14 +9,15 @@ use std::collections::HashSet;
 use crate::error::{Error, Result};
 use crate::schedule_info::ScheduleInfoBuilder;
 use crate::utils::ceil_to_grid;
-use crate::{ParameterStore, ScheduledNode, SignalInfo};
+use crate::{ScheduledNode, SignalInfo};
 use laboneq_ir::{
-    InitialLocalOscillatorFrequency, InitialOscillatorFrequency, IrKind, SetOscillatorFrequency,
+    InitialLocalOscillatorFrequency, InitialOscillatorFrequency, IrKind, ParameterLookup,
+    SetOscillatorFrequency,
 };
 
 pub(super) fn handle_initial_oscillator_frequency<T: SignalInfo + Sized>(
     signals: &[&T],
-    parameters: &ParameterStore,
+    parameters: &dyn ParameterLookup,
     system_grid: TinySamples,
 ) -> Result<ScheduledNode> {
     let mut values = Vec::new();
@@ -33,8 +34,8 @@ pub(super) fn handle_initial_oscillator_frequency<T: SignalInfo + Sized>(
                         // the parameter, and force needless recompilation of each NT step.
                         continue;
                     }
-                    if let Some(freq) = parameters.get(obj) {
-                        TryInto::<ValueOrParameter<f64>>::try_into(*freq).unwrap()
+                    if let Some(freq) = parameters.value(*obj) {
+                        TryInto::<ValueOrParameter<f64>>::try_into(freq).unwrap()
                     } else {
                         continue;
                     }
@@ -56,7 +57,7 @@ pub(super) fn handle_initial_oscillator_frequency<T: SignalInfo + Sized>(
 
 pub(super) fn handle_initial_local_oscillator_frequency<T: SignalInfo + Sized>(
     signals: &[&T],
-    parameters: &ParameterStore,
+    parameters: &dyn ParameterLookup,
     system_grid: TinySamples,
 ) -> Result<Vec<ScheduledNode>> {
     signals
@@ -68,8 +69,8 @@ pub(super) fn handle_initial_local_oscillator_frequency<T: SignalInfo + Sized>(
             signal.lo_frequency().and_then(|&lo_freq| {
                 let value = match lo_freq {
                     ValueOrParameter::Parameter(obj) => {
-                        if let Some(freq) = parameters.get(&obj) {
-                            TryInto::<ValueOrParameter<f64>>::try_into(*freq).unwrap()
+                        if let Some(freq) = parameters.value(obj) {
+                            TryInto::<ValueOrParameter<f64>>::try_into(freq).unwrap()
                         } else {
                             return Some(Err(Error::new(
                                 "Local oscillator sweep must be in near-time.",

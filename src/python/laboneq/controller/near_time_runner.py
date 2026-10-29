@@ -21,8 +21,7 @@ if TYPE_CHECKING:
     import asyncio
 
     from laboneq.controller.callback_channel import CallbackChannel
-    from laboneq.controller.controller import Controller, ExecutionContext
-    from laboneq.controller.runtime_context_impl import LegacySessionData
+    from laboneq.controller.controller_core import ControllerCore, ExecutionContext
     from laboneq.core.types.enums.acquisition_type import AcquisitionType
     from laboneq.core.types.enums.averaging_mode import AveragingMode
     from laboneq.core.types.numpy_support import NumPyArray
@@ -52,10 +51,9 @@ def _deserialize_replacement(func_name: str, payload: Any) -> Any:
 class NearTimeRunner(AsyncExecutorBase):
     def __init__(
         self,
-        controller: Controller,
+        controller: ControllerCore,
         execution_context: ExecutionContext,
         do_emulation: bool,
-        legacy_session_data: LegacySessionData,
     ):
         super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY)
         self.controller = controller
@@ -65,7 +63,6 @@ class NearTimeRunner(AsyncExecutorBase):
         self.nt_loop_indices: list[int] = []
         self.sweep_params_tracker = SweepParamsTracker()
         self.last_nt_step_result_completed: asyncio.Future[None] | None = None
-        self._legacy_session_data = legacy_session_data
 
     def nt_step(self) -> NtStepKey:
         return NtStepKey(indices=tuple(self.nt_loop_indices))
@@ -108,10 +105,9 @@ class NearTimeRunner(AsyncExecutorBase):
             recipe_data=self.execution_context.recipe_data,
             experiment_results=self.execution_context.submission.results_builder.results,
             devices=ToolkitDevices(
-                None if self.do_emulation else self.controller.devices
+                None if self.do_emulation else self.controller.toolkit_instruments
             ),
             do_emulation=self.do_emulation,
-            legacy_session_data=self._legacy_session_data,
         )
         try:
             res_or_coro = func(runtime_context, **args)

@@ -65,10 +65,6 @@ class QCCSControllerBackend(ControllerBackend):
     def not_ready_reason(self) -> str | None:
         return None
 
-    @property
-    def devices(self) -> dict[str, DeviceBase]:
-        return self._devices.devices
-
     async def connect(
         self,
         do_emulation: bool,

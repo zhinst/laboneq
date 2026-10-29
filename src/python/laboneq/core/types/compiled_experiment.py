@@ -72,7 +72,7 @@ class CompiledExperiment:
         separately if they are needed.
 
         Note that the `.device_setup` and `.experiment` were no longer
-        deprecated in version 2.56.0.˝
+        deprecated in version 2.56.0.
 
     !!! version-changed "Changed in version 2.14.0"
         The `.scheduled_experiment` attribute was documented to

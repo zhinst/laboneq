@@ -5,7 +5,7 @@ use laboneq_common::types::SignalKind;
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::{Acquire, AveragingLoop, Operation, PlayPulse};
 use laboneq_dsl::types::{
-    AcquisitionType, AveragingMode, ComplexOrFloat, ParameterUid, PulseFunction, PulseKind,
+    AcquisitionType, AveragingMode, ComplexOrFloat, ParameterUid, PulseKind, SectionTimingMode,
     ValueOrParameter,
 };
 use numeric_array::NumericArray;
@@ -39,6 +39,7 @@ impl<'a> Validator<'a> for OperationValidator {
     }
 
     fn visit(&mut self, node: &ExperimentNode, ctx: &VisitContext<'a>) -> Result<()> {
+        validate_strict_timing_only_in_rt(node, ctx)?;
         match &node.kind {
             Operation::PlayPulse(op) => {
                 let signal = ctx
@@ -199,20 +200,17 @@ fn check_arbitrary_marker_is_valid(
                 );
                 return Err(Error::new(&err_msg));
             }
-            PulseKind::Functional(p) => match p.function {
-                PulseFunction::Constant => continue,
-                PulseFunction::Custom { ref function } => {
-                    if function != PulseFunction::CONSTANT_PULSE_NAME {
-                        let err_msg = format!(
-                            "A pulse '{}' in section '{}' attempts to play an arbitrary marker with a functional pulse \
-                            other than `const`. At this time, only constants pulses or sampled pulses are supported",
-                            signal.uid().0,
-                            section_uid.0,
-                        );
-                        return Err(Error::new(&err_msg));
-                    }
+            PulseKind::Functional(p) => {
+                if !p.function.is_constant() {
+                    let err_msg = format!(
+                        "A pulse '{}' in section '{}' attempts to play an arbitrary marker with a functional pulse \
+                        other than `const`. At this time, only constants pulses or sampled pulses are supported",
+                        signal.uid().0,
+                        section_uid.0,
+                    );
+                    return Err(Error::new(&err_msg));
                 }
-            },
+            }
             _ => continue,
         }
     }
@@ -247,6 +245,27 @@ fn validate_no_mixed_operations(node: &ExperimentNode, ctx: &VisitContext) -> Re
             ctx.section_uid.map(|s| s.0.to_string()).unwrap_or_default(),
         );
         return Err(Error::new(&msg));
+    }
+    Ok(())
+}
+
+/// Rejects strict timing outside the real-time boundary, as near-time sections
+/// cannot be strictly controlled.
+fn validate_strict_timing_only_in_rt(node: &ExperimentNode, ctx: &VisitContext) -> Result<()> {
+    if ctx.inside_rt_bound {
+        return Ok(());
+    }
+    let (uid, timing_mode) = match &node.kind {
+        Operation::Section(s) => (s.uid, s.section_timing_mode),
+        Operation::Sweep(s) => (s.uid, s.section_timing_mode),
+        Operation::Case(s) => (s.uid, s.section_timing_mode),
+        _ => return Ok(()),
+    };
+    if timing_mode == SectionTimingMode::Strict {
+        return Err(Error::new(format!(
+            "Section '{}': SectionTimingMode.STRICT is only allowed inside the real-time loop",
+            uid.0,
+        )));
     }
     Ok(())
 }

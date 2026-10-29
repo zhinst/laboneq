@@ -4,73 +4,50 @@
 from __future__ import annotations
 
 import asyncio
-import json as json_module
-import logging
 import time
-from functools import partial
 from typing import TYPE_CHECKING, Any, Callable, cast
 
 import httpx
-from websockets.asyncio.client import connect as ws_connect
-from websockets.exceptions import (
-    ConnectionClosed,
-    ConnectionClosedError,
-    InvalidHandshake,
-)
 
 from laboneq import __version__
 from laboneq.controller.api.async_controller_api import (
     AsyncControllerAPI,
 )
 from laboneq.controller.api.callback_client import (
-    ClientCallbackSession,
-    Done,
-    PendingCall,
     preflight_client_callbacks,
 )
 from laboneq.controller.api.commons import (
     APIError,
+    ClientCallbackServer,
     SubmissionHandle,
     encode_submission,
-    fetch_acquired_results,
-    fetch_neartime_callback_results,
-    fetch_result_structure,
-    raise_on_failed_run,
     readyz_not_ready_reason,
     reraise_controller_exception,
-    ws_url,
-)
-from laboneq.controller.api.lazy_results import (
-    LazyAcquiredResults,
-    LazyNeartimeCallbackResults,
 )
 from laboneq.controller.callback_protocol import (
     CALLBACK_PROTOCOL_HEADER,
     CALLBACK_PROTOCOL_VERSION,
-    json_default,
 )
 from laboneq.controller.constants import (
     PROTOCOL_VERSION,
     PROTOCOL_VERSION_HEADER,
     READY_TIMEOUT_S,
 )
-from laboneq.controller.controller import SubmissionStatus
+from laboneq.controller.controller_core import SubmissionStatus
 from laboneq.controller.utilities.exception import HardwareNotReadyError
-from laboneq.dsl.result.results import Results
+from laboneq.core.exceptions import LabOneQException
 from laboneq.serializers import from_dict
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from laboneq.data.instrument_topology import InstrumentTopology
     from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.dsl.device.device_setup import DeviceSetup
+    from laboneq.dsl.result.results import Results
 
-_logger = logging.getLogger(__name__)
 
 _TERMINAL_STATUSES = frozenset({SubmissionStatus.COMPLETED, SubmissionStatus.FAILED})
-_RECONNECT_BACKOFF_INITIAL_S = 0.5
-_RECONNECT_BACKOFF_MAX_S = 5.0
-#: How long to keep retrying a callback channel the service reports as busy.
-_CHANNEL_BUSY_TIMEOUT_S = 30.0
 
 
 class AsyncRemoteController(AsyncControllerAPI):
@@ -85,11 +62,21 @@ class AsyncRemoteController(AsyncControllerAPI):
     async def create(
         remote_url: str,
         ignore_version_mismatch: bool | None = None,
+        neartime_callbacks: Mapping[str, Callable[..., Any]] | None = None,
         _transport: httpx.AsyncBaseTransport | None = None,
     ) -> AsyncRemoteController:
+        """Create an instance of the AsyncRemoteController and connect it.
+
+        For every experiment it submits, the controller serves the near-time
+        callbacks in `neartime_callbacks` that the service does not provide,
+        until the submission or the controller is closed. It looks a callback up
+        when the service calls it, so that callbacks added to the mapping later
+        are served as well.
+        """
         remote_controller = AsyncRemoteController(
             remote_url=remote_url,
             ignore_version_mismatch=ignore_version_mismatch,
+            neartime_callbacks=neartime_callbacks,
             _transport=_transport,
         )
         await remote_controller._connect()
@@ -99,9 +86,13 @@ class AsyncRemoteController(AsyncControllerAPI):
         self,
         remote_url: str,
         ignore_version_mismatch: bool | None = None,
+        neartime_callbacks: Mapping[str, Callable[..., Any]] | None = None,
         _transport: httpx.AsyncBaseTransport | None = None,
     ):
         self._remote_url = remote_url
+        self._neartime_callbacks = (
+            {} if neartime_callbacks is None else neartime_callbacks
+        )
         self._ignore_version_mismatch = ignore_version_mismatch
         self._transport = _transport
         self._headers = {
@@ -113,6 +104,9 @@ class AsyncRemoteController(AsyncControllerAPI):
             self._headers["X-LabOneQ-Ignore-Version-Mismatch"] = str(
                 ignore_version_mismatch
             ).lower()
+        self._callback_server = ClientCallbackServer(
+            remote_url, self._headers, self._neartime_callbacks, self._has_ended
+        )
 
     async def _connect(self):
         await self._wait_until_live()
@@ -145,7 +139,7 @@ class AsyncRemoteController(AsyncControllerAPI):
             await asyncio.sleep(self._LIVEZ_POLL_INTERVAL_S)
 
     async def aclose(self):
-        pass
+        await self._callback_server.stop_all()
 
     async def get_default_devicesetup(self) -> DeviceSetup:
         data = await self._request_json("GET", "v1/devicesetup")
@@ -176,12 +170,26 @@ class AsyncRemoteController(AsyncControllerAPI):
                 )
             await asyncio.sleep(self._READYZ_POLL_INTERVAL_S)
 
+    async def disable_outputs(
+        self,
+        device_uids: list[str] | None = None,
+        logical_signals: list[str] | None = None,
+        unused_only: bool = False,
+    ):
+        raise LabOneQException(
+            "disable_outputs() is not supported when connected via a "
+            "remote controller service."
+        )
+
     async def submit_experiment(
         self,
         scheduled_experiment: ScheduledExperiment,
         handle: SubmissionHandle | None = None,
         coprocessor_payload_overrides: dict[str, bytes] | None = None,
     ) -> SubmissionHandle:
+        client_callbacks = preflight_client_callbacks(
+            scheduled_experiment, self._neartime_callbacks
+        )
         body = encode_submission(scheduled_experiment, coprocessor_payload_overrides)
         if handle is None:
             handle = SubmissionHandle()
@@ -190,9 +198,12 @@ class AsyncRemoteController(AsyncControllerAPI):
             f"v1/experiments/{handle.hex}",
             json=body,
         )
+        if client_callbacks:
+            await self._callback_server.start(handle)
         return handle
 
     async def wait_for_experiment(self, handle: SubmissionHandle) -> None:
+        await self._callback_server.wait(handle)
         poll_interval = 0.5
         while True:
             exp_status = await self.get_experiment_status(handle)
@@ -200,167 +211,17 @@ class AsyncRemoteController(AsyncControllerAPI):
                 return
             await asyncio.sleep(poll_interval)
 
-    async def run_experiment(
-        self,
-        scheduled_experiment: ScheduledExperiment,
-        callbacks: dict[str, Callable[..., Any]] | None = None,
-        handle: SubmissionHandle | None = None,
-        coprocessor_payload_overrides: dict[str, bytes] | None = None,
-    ) -> Results:
-        """Submit an experiment, serve its client near-time callbacks, and fetch results.
-
-        Callbacks not provided by the controller service itself are dispatched
-        to the matching entry in *callbacks*; their arguments are checked for
-        JSON-serializability before submission. Experiments with no client-served
-        callbacks fall back to plain submit-and-poll.
-
-        A completed run stays on the service until the caller closes the
-        submission. A run that fails after submission is released right away,
-        before its error propagates.
-        """
-        callbacks = dict(callbacks or {})
-        client_callbacks = preflight_client_callbacks(scheduled_experiment, callbacks)
-        handle = await self.submit_experiment(
-            scheduled_experiment, handle, coprocessor_payload_overrides
-        )
-        try:
-            if client_callbacks:
-                return await self._serve_run(handle, callbacks)
-            return await self._poll_run(handle)
-        except BaseException:
-            await self._release_failed_run(handle)
-            raise
-
-    async def _poll_run(self, handle: SubmissionHandle) -> Results:
-        """Wait for a run without client callbacks and fetch its results."""
-        await self.wait_for_experiment(handle)
-        status = await self.get_experiment_status(handle)
-        results = await self.get_experiment(handle)
-        if status is not SubmissionStatus.COMPLETED:
-            error = (
-                {"message": results.execution_errors[0][2]}
-                if results.execution_errors
-                else None
-            )
-            raise_on_failed_run(status.value, error)
-        return results
-
-    async def _serve_run(
-        self, handle: SubmissionHandle, callbacks: dict[str, Callable[..., Any]]
-    ) -> Results:
-        """Serve the client callbacks of a run until it ends and fetch its results."""
-        session = ClientCallbackSession(callbacks, self._results_factory(handle))
-        done = await self._serve_callbacks(handle, session)
-        if session.user_error is not None:
-            raise session.user_error
-        raise_on_failed_run(done.status, done.error)
-        return await self.get_experiment(handle)
-
-    async def _release_failed_run(self, handle: SubmissionHandle) -> None:
-        """Release a failed run; the run's own error is what the caller gets to see."""
-        try:
-            await self.close_submission(handle)
-        except Exception:
-            _logger.warning(
-                "Could not release experiment %s on the controller service after"
-                " its run failed",
-                handle.hex,
-                exc_info=True,
-            )
-
-    def _results_factory(self, handle: SubmissionHandle) -> Callable[[], Results]:
-        """Build the per-invocation results facade for callback messages."""
-        fetch = partial(
-            fetch_acquired_results, self._remote_url, self._headers, handle.hex
-        )
-        fetch_structure = partial(
-            fetch_result_structure, self._remote_url, self._headers, handle.hex
-        )
-        fetch_callbacks = partial(
-            fetch_neartime_callback_results,
-            self._remote_url,
-            self._headers,
-            handle.hex,
-        )
-
-        def factory() -> Results:
-            return Results(
-                acquired_results=LazyAcquiredResults(fetch, fetch_structure),
-                neartime_callback_results=cast(
-                    "dict", LazyNeartimeCallbackResults(fetch_callbacks)
-                ),
-            )
-
-        return factory
-
-    async def _serve_callbacks(
-        self, handle: SubmissionHandle, session: ClientCallbackSession
-    ) -> Done:
-        """Serve callback messages over the WebSocket until the run ends.
-
-        Reconnects with backoff after a disconnect. Between attempts, the run
-        status is probed over REST, so that a run that ended while the socket
-        was down terminates the loop. An unreachable service raises instead.
-        A channel that another client keeps occupied is given up on after
-        `_CHANNEL_BUSY_TIMEOUT_S`.
-        """
-        url = ws_url(self._remote_url, f"v1/experiments/{handle.hex}/callbacks")
-        backoff = _RECONNECT_BACKOFF_INITIAL_S
-        busy_deadline: float | None = None
-        while True:
-            try:
-                async with ws_connect(
-                    url, additional_headers=self._headers
-                ) as websocket:
-                    async for raw in websocket:
-                        # Messages are flowing, so a later disconnect is transient.
-                        backoff = _RECONNECT_BACKOFF_INITIAL_S
-                        busy_deadline = None
-                        outcome = session.handle_message(json_module.loads(raw))
-                        if isinstance(outcome, Done):
-                            return outcome
-                        if isinstance(outcome, PendingCall):
-                            outcome = await session.execute_async(outcome)
-                        # stdlib json on purpose: the channel relies on its
-                        # tolerance for the non-standard NaN/Infinity literals
-                        # in both directions.
-                        await websocket.send(
-                            json_module.dumps(outcome, default=json_default)
-                        )
-            except ConnectionClosedError as exc:
-                close = exc.rcvd
-                if close is not None and close.code == 1008:
-                    raise APIError(
-                        f"Callback channel rejected: {close.reason}"
-                    ) from exc
-                if close is not None and close.code == 1013:
-                    if busy_deadline is None:
-                        busy_deadline = time.monotonic() + _CHANNEL_BUSY_TIMEOUT_S
-                    elif time.monotonic() > busy_deadline:
-                        raise APIError(
-                            "Another client is already serving the near-time callbacks"
-                            f" of experiment {handle.hex}: {close.reason}"
-                        ) from exc
-            except (OSError, InvalidHandshake, ConnectionClosed):
-                pass
-            status = await self.get_experiment_status(handle)
-            if status in _TERMINAL_STATUSES:
-                return Done(status=status.value, error=None)
-            if backoff >= _RECONNECT_BACKOFF_MAX_S:
-                _logger.warning(
-                    "Cannot attach the callback channel of experiment %s; retrying"
-                    " every %.0f s. The run cannot progress until it attaches.",
-                    handle.hex,
-                    _RECONNECT_BACKOFF_MAX_S,
-                )
-            await asyncio.sleep(backoff)
-            backoff = min(backoff * 2, _RECONNECT_BACKOFF_MAX_S)
+    async def _has_ended(self, handle: SubmissionHandle) -> bool:
+        return await self.get_experiment_status(handle) in _TERMINAL_STATUSES
 
     async def get_experiment_status(self, handle: SubmissionHandle) -> SubmissionStatus:
         data = await self._request_json("GET", f"v1/experiments/{handle.hex}/status")
         return SubmissionStatus(data["status"])
 
     async def get_experiment(self, handle: SubmissionHandle) -> Results:
+        return await self.get_experiment_results(handle)
+
+    async def get_experiment_results(self, handle: SubmissionHandle) -> Results:
         data = await self._request_json("GET", f"v1/experiments/{handle.hex}/results")
         return cast("Results", from_dict(data["results"]))
 
@@ -368,6 +229,7 @@ class AsyncRemoteController(AsyncControllerAPI):
         await self._request("DELETE", f"v1/experiments/{handle.hex}")
 
     async def close_submission(self, handle: SubmissionHandle) -> None:
+        await self._callback_server.stop(handle)
         await self.cancel_experiment(handle)
 
     async def _request_json(

@@ -10,7 +10,7 @@ from laboneq.controller.constants import READY_TIMEOUT_S
 
 if TYPE_CHECKING:
     from laboneq.controller.api.commons import SubmissionHandle
-    from laboneq.controller.controller import SubmissionStatus
+    from laboneq.controller.controller_core import SubmissionStatus
     from laboneq.data.instrument_topology import InstrumentTopology
     from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.dsl.device.device_setup import DeviceSetup
@@ -52,6 +52,21 @@ class ControllerAPI(ABC):
         """
 
     @abstractmethod
+    def disable_outputs(
+        self,
+        device_uids: list[str] | None = None,
+        logical_signals: list[str] | None = None,
+        unused_only: bool = False,
+    ):
+        """Disable the outputs of the given logical signals or instruments.
+
+        Without logical signals, disables every output of the given instruments,
+        or of all instruments if none are given. With `unused_only`, keeps the
+        outputs that a logical signal uses. Logical signals exclude instruments
+        and `unused_only`.
+        """
+
+    @abstractmethod
     def submit_experiment(
         self,
         scheduled_experiment: ScheduledExperiment,
@@ -81,6 +96,13 @@ class ControllerAPI(ABC):
 
         Blocks until the experiment is complete. On already completed experiments,
         the results are returned immediately.
+        """
+
+    @abstractmethod
+    def get_experiment_results(self, handle: SubmissionHandle) -> Results:
+        """Retrieve the current results of an experiment.
+
+        Returns immediately. The results are partial while the experiment runs.
         """
 
     # TODO(2K): Streaming of the running experiment results

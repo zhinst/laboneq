@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import threading
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 
@@ -193,11 +192,8 @@ class ClientCallbackSession:
 
     `handle_message` decodes one server message into a `Done`, a ready-to-send
     reply (duplicate or unknown-callback), or a `PendingCall` that the transport
-    runs via `execute` / `execute_async`.
-
-    A failing user callback is reported to the service as an `error` reply and
-    also kept in `user_error`. Then, `run_experiment` raises the original exception,
-    with its traceback, once the run has ended.
+    runs via `execute_async`. A failing user callback is reported to the
+    service as an `error` reply.
     """
 
     def __init__(
@@ -209,41 +205,6 @@ class ClientCallbackSession:
         self._results_factory = results_factory
         self._last_call_id: str | None = None
         self._last_reply: dict[str, Any] | None = None
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._loop_thread: threading.Thread | None = None
-        self.user_error: BaseException | None = None
-
-    def close(self) -> None:
-        """Release the event loop used for coroutine callbacks, if any.
-
-        Called when the run ends; safe to call again.
-        """
-        if self._loop is None:
-            return
-        self._loop.call_soon_threadsafe(self._loop.stop)
-        assert self._loop_thread is not None
-        self._loop_thread.join()
-        self._loop.close()
-        self._loop = None
-        self._loop_thread = None
-
-    def _run_coroutine(self, coro: Any) -> Any:
-        """Run a coroutine callback on an event loop of our own, and wait.
-
-        `asyncio.run` cannot be used here. It refuses to start when the calling
-        thread already runs a loop, which is the normal state in a Jupyter
-        kernel. It would also hand each invocation a new loop, so a callback
-        could not keep a connection open from one near-time step to the next.
-        """
-        if self._loop is None:
-            self._loop = asyncio.new_event_loop()
-            self._loop_thread = threading.Thread(
-                target=self._loop.run_forever,
-                name="laboneq-neartime-callbacks",
-                daemon=True,
-            )
-            self._loop_thread.start()
-        return asyncio.run_coroutine_threadsafe(coro, self._loop).result()
 
     def handle_message(self, message: Any) -> Done | PendingCall | dict[str, Any]:
         if not isinstance(message, dict):
@@ -252,7 +213,6 @@ class ClientCallbackSession:
             )
         message_type = message.get("type")
         if message_type == MessageType.DONE:
-            self.close()
             return Done(status=message["status"], error=message.get("error"))
         if message_type != MessageType.CALLBACK:
             raise LabOneQException(
@@ -283,18 +243,6 @@ class ClientCallbackSession:
         return PendingCall(
             call_id=call_id, name=name, func=func, ctx=ctx, args=message["args"]
         )
-
-    def execute(self, call: PendingCall) -> dict[str, Any]:
-        """Run the callback synchronously; coroutine callbacks are run to completion."""
-        try:
-            value = call.func(call.ctx, **call.args)
-            if inspect.iscoroutine(value):
-                value = self._run_coroutine(value)
-        except AbortExecution:
-            return self._abort_reply(call)
-        except Exception as exc:  # noqa: BLE001 - reported as an error reply
-            return self._error_reply(call, exc)
-        return self._result_reply(call, value)
 
     async def execute_async(self, call: PendingCall) -> dict[str, Any]:
         """Run the callback, awaiting an awaitable result.
@@ -345,7 +293,6 @@ class ClientCallbackSession:
     def _error_reply(
         self, call: PendingCall, exc: BaseException, message: str | None = None
     ) -> dict[str, Any]:
-        self.user_error = exc
         if message is None:
             message = f"{type(exc).__name__}: {exc}"
         return self._store_reply(

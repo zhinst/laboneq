@@ -34,7 +34,8 @@ pub struct Delay {
     pub precompensation_clear: bool,
 }
 
-/// Either a constant/parametric value of type [`NumericLiteral`], or an external parameter.
+/// Either a constant/parametric value of type [`NumericLiteral`], a boolean, or an external
+/// parameter.
 ///
 /// The values can be parametrized, therefore the minimum requirement for the value type is [`NumericLiteral`], which represents
 /// all the possible parametrized types (those of sweep parameters).
@@ -42,6 +43,7 @@ pub struct Delay {
 pub enum ExternalOrValue {
     ExternalParameter(ExternalParameterUid),
     ValueOrParameter(ValueOrParameter<NumericLiteral>),
+    Bool(bool),
     None,
 }
 

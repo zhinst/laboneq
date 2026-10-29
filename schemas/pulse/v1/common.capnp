@@ -38,6 +38,7 @@ struct Constant {
     # cannot be JSON-serialized are rejected. Producers needing
     # an arbitrary opaque payload should use `rawBytesValue` with a producer/consumer-agreed
     # encoding instead.
+    boolean @6 :Bool;
   }
 }
 

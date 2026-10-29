@@ -34,15 +34,15 @@ pub use codegenerator::ir::compilation_job::DeviceKind;
 
 pub fn generate_code_py(
     py: Python<'_>,
-    experiment: ExperimentIr,
+    experiment: &ExperimentIr,
     setup_description: &HardwareSetup,
     compiler_settings: &CompilerSettings,
     external_parameters: &PyObjectStore<ExternalParameterUid>,
 ) -> Result<SeqCGenOutput, LabOneQError> {
-    let (codegen_ir, dedup) = ir_to_codegen_ir(&experiment, setup_description)?;
+    let (codegen_ir, dedup) = ir_to_codegen_ir(experiment, setup_description)?;
     let sampler = WaveformSamplerPy::new(
         py,
-        &experiment.pulses,
+        experiment.pulses,
         codegen_ir.acquisition_type.clone(),
         &dedup,
         external_parameters,

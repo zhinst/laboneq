@@ -77,10 +77,10 @@ class RuntimeContext(Protocol):
         Object holding the result of the last experiment execution.
 
         !!! Attention
-            This accessor is provided for better
-            performance. Unlike `get_result`, it doesn't make a copy, but instead returns the reference to the live
-            result object being updated during the session run. Care must be taken for not modifying this object from
-            the user code, otherwise behavior is undefined.
+            This accessor returns the reference to the live result object being updated during
+            the session run, not a copy. Care must be taken for not modifying this object from
+            the user code, otherwise behavior is undefined. Use `copy.deepcopy()` to obtain a
+            copy that is safe to modify.
         """
         ...
 

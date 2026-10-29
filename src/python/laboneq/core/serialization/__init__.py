@@ -4,6 +4,6 @@
 """The package `laboneq.core.serialization` is deprecated.
 
 !!! version-changed "Deprecated in version 26.4"
-    The package will be removed in LabOne Q 26.7.
+    The package will be removed in a future release.
     Use `laboneq.serializers` instead.
 """

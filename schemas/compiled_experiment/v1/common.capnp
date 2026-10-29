@@ -38,6 +38,8 @@ struct Constant {
     # function arguments whose type isn't one of the other `Constant` variants.
     # Values that cannot be JSON-serialized are rejected. Producers needing an arbitrary
     # opaque payload should use `rawBytesValue` with a producer/consumer-agreed encoding instead.
+
+    boolean @6 :Bool;
   }
 }
 

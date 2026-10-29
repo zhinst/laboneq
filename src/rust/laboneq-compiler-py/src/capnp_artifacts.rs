@@ -116,6 +116,9 @@ impl<'a> ArtifactSerializerContext<'a> {
                     OwnedPyObjectPayload::RawBytes(data) => constant.set_raw_bytes_value(data),
                 }
             }
+            ExternalOrValue::Bool(value) => {
+                builder.reborrow().init_constant().set_boolean(value);
+            }
             ExternalOrValue::None => {
                 builder.reborrow().set_none(());
             }

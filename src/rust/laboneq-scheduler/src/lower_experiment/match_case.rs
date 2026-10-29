@@ -90,18 +90,16 @@ pub(super) fn lower_match(
                 uid: case.uid,
                 state: case_iteration,
             });
-            let mut case_node = ScheduledNode::new(kind, ScheduleInfoBuilder::new().build());
-            let (children, reserved_signals) =
+            let mut case_node = ScheduledNode::new_with_capacity(
+                kind,
+                ScheduleInfoBuilder::new().build(),
+                child.children.len(),
+            );
+            let reserved_signals =
                 local_ctx.with_section(case.uid, case.section_timing_mode, |local| {
-                    lower_children(&child.children, ctx, local)
+                    lower_children(&mut case_node, &child.children, ctx, local)
                 })?;
-            case_node
-                .schedule
-                .signals
-                .extend(reserved_signals.iter().cloned());
-            for child in children {
-                case_node.add_child(tiny_samples(0), child);
-            }
+            case_node.schedule.signals.extend(reserved_signals);
             let (grid, sequencer_grid) =
                 local_ctx.calculate_grids(case_node.schedule.signals.iter().cloned(), false, false);
             case_node.schedule.grid = grid;
@@ -135,14 +133,11 @@ pub(super) fn lower_match(
                     .build(),
                 child.children.len(),
             );
-            let (children, reserved_signals) =
+            let reserved_signals =
                 local_ctx.with_section(case.uid, case.section_timing_mode, |local| {
-                    lower_children(&child.children, ctx, local)
+                    lower_children(&mut case_node, &child.children, ctx, local)
                 })?;
             case_node.schedule.signals.extend(reserved_signals);
-            for child in children {
-                case_node.add_child(tiny_samples(0), child);
-            }
             let (grid, sequencer_grid) =
                 local_ctx.calculate_grids(case_node.schedule.signals.iter().cloned(), false, false);
             case_node.schedule.grid = grid;

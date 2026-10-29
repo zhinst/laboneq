@@ -284,9 +284,10 @@ class ArtifactsCodegen(CompilerArtifact):
     # Data structure for referencing the waveforms used as integration kernels.
     integration_weights: dict[str, AwgWeights] = field(default_factory=dict)
 
-    # For each result source, contains a map representing the info about which index
-    # in the result corresponds to which handle(s). See `CombinedOutput` for a detailed
-    # description of the semantics.
+    # The handles of each result index, per result source. For a single-shot
+    # experiment, the indices cover one shot. A source has one entry per
+    # acquisition round of its AWG. An empty set marks a round in which the
+    # source's signal does not acquire.
     result_handle_maps: dict[ResultSource, list[set[str]]] = field(default_factory=dict)
 
     # QCCS device/AWG initialization records, per device.

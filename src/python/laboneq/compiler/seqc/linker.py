@@ -9,12 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from laboneq.compiler.common.iface_compiler_output import (
-    CombinedOutput,
-    NeartimeStepBase,
-    RTCompilerOutput,
-)
-from laboneq.compiler.common.iface_linker import ILinker
+from laboneq.compiler.common.iface_compiler_output import NeartimeStepBase
 from laboneq.core.exceptions import LabOneQException
 from laboneq.data.artifacts_qccs import (
     COMPLEX_USAGE,
@@ -44,7 +39,7 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class CombinedRTOutputSeqC(CombinedOutput):
+class CombinedRTOutputSeqC:
     integration_times: IntegrationTimes
     awg_properties: dict[AwgKey, codegen_rs.AwgProperties] = field(default_factory=dict)
     # key - SeqC name
@@ -144,7 +139,7 @@ class SeqCProgram:
 
 
 @dataclass
-class SeqCGenOutput(RTCompilerOutput):
+class SeqCGenOutput:
     integration_weights: dict[AwgKey, AwgWeights]
     integration_times: IntegrationTimes
     result_handle_maps: dict[ResultSource, list[set[str]]]
@@ -252,7 +247,7 @@ def _extend_parameter_phase_increment_map(
             this_param_targets.entries.append(entry)
 
 
-class SeqCLinker(ILinker):
+class SeqCLinker:
     @staticmethod
     def combined_from_single_run(output: SeqCGenOutput, step_indices: list[int]):
         src = {}

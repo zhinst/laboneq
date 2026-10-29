@@ -4,27 +4,28 @@
 use std::collections::{HashMap, HashSet};
 
 use laboneq_dsl::types::{NumericLiteral, ParameterUid, SweepParameter};
+use laboneq_ir::ParameterLookup;
 
-use crate::ParameterStore;
 use crate::error::{Error, Result};
 
 pub(crate) struct ParameterResolver<'a> {
     parameters: &'a HashMap<ParameterUid, SweepParameter>,
     iteration: HashMap<ParameterUid, usize>,
-    nt_parameters: &'a ParameterStore,
+    nt_parameters: &'a dyn ParameterLookup,
+    /// The real-time sweep parameters in scope.
     available_parameters: HashSet<ParameterUid>,
 }
 
 impl<'a> ParameterResolver<'a> {
     pub(crate) fn new(
         parameters: &'a HashMap<ParameterUid, SweepParameter>,
-        nt_parameters: &'a ParameterStore,
+        nt_parameters: &'a dyn ParameterLookup,
     ) -> Self {
         Self {
             parameters,
             iteration: HashMap::new(),
             nt_parameters,
-            available_parameters: nt_parameters.available_parameters(),
+            available_parameters: HashSet::new(),
         }
     }
 
@@ -44,7 +45,7 @@ impl<'a> ParameterResolver<'a> {
         // In principle, the full list of NT param values is available in self.parameters,
         // so the iteration index can be determined, but this should not be needed
         assert!(
-            self.nt_parameters.get(param).is_none(),
+            self.nt_parameters.value(*param).is_none(),
             "Cannot resolve NT iteration"
         );
 
@@ -65,7 +66,7 @@ impl<'a> ParameterResolver<'a> {
     ///
     /// If the requested parameter is not a near-time parameter, return `None`.
     pub(crate) fn near_time_value(&self, uid: &ParameterUid) -> Option<NumericLiteral> {
-        self.nt_parameters.get(uid).copied()
+        self.nt_parameters.value(*uid)
     }
 
     /// Returns the sweep parameter associated with the given UID.
@@ -85,7 +86,7 @@ impl<'a> ParameterResolver<'a> {
         {
             return Ok(parameter.value_numeric_at_index(*index).unwrap());
         }
-        if let Some(value) = self.nt_parameters.get(param).cloned() {
+        if let Some(value) = self.nt_parameters.value(*param) {
             return Ok(value);
         }
         unreachable!("Undefined parameter '{}'.", param.0)
@@ -98,9 +99,19 @@ impl<'a> ParameterResolver<'a> {
     }
 
     fn check_parameter_availability(&self, uid: &ParameterUid) -> Result<()> {
-        if !self.available_parameters.contains(uid) {
+        if !self.available_parameters.contains(uid) && self.nt_parameters.value(*uid).is_none() {
             return Err(Error::new(format!("Undefined parameter '{}'.", uid.0)));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(crate) struct NoNearTimeParameters;
+
+#[cfg(test)]
+impl ParameterLookup for NoNearTimeParameters {
+    fn value(&self, _uid: ParameterUid) -> Option<NumericLiteral> {
+        None
     }
 }

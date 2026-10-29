@@ -4,6 +4,7 @@
 use laboneq_dsl::types::{
     HandleUid, ParameterUid, SectionTimingMode, SectionUid, SignalUid, SweepParameter,
 };
+use laboneq_ir::ParameterLookup;
 use laboneq_units::tinysample::TinySamples;
 use num_integer::lcm;
 use std::collections::HashMap;
@@ -26,7 +27,7 @@ pub(super) struct LocalContext<'a> {
 impl<'a> LocalContext<'a> {
     pub(super) fn new<'b>(
         parameters: &'a HashMap<ParameterUid, SweepParameter>,
-        nt_parameters: &'a crate::ParameterStore,
+        nt_parameters: &'a dyn ParameterLookup,
         system_grid: TinySamples,
         signals: impl Iterator<Item = &'b (impl SignalGridInfo + 'b)>,
     ) -> Result<Self> {
@@ -154,7 +155,7 @@ impl<'a> LocalContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parameter_store::ParameterStoreBuilder;
+    use crate::parameter_resolver::NoNearTimeParameters;
     use laboneq_common::named_id::NamedId;
     use laboneq_units::tinysample::tiny_samples;
 
@@ -209,9 +210,13 @@ mod tests {
         f: impl FnOnce(&LocalContext) -> R,
     ) -> R {
         let parameters = HashMap::new();
-        let nt_parameters = ParameterStoreBuilder::new().build();
-        let ctx =
-            LocalContext::new(&parameters, &nt_parameters, system_grid, signals.iter()).unwrap();
+        let ctx = LocalContext::new(
+            &parameters,
+            &NoNearTimeParameters,
+            system_grid,
+            signals.iter(),
+        )
+        .unwrap();
         f(&ctx)
     }
 

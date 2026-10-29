@@ -1,3 +1,36 @@
+# LabOne Q 26.10.0 (2026-10-29)
+
+## Features
+
+- Added support for Python 3.15.
+
+## Bug Fixes
+
+- Fixed a bug where a delay between readout pulse and acquisition was silently dropped on SHFQA and SHFQC when several qubits share a readout channel but only some of them are measured.
+- Fixed a bug where acquiring outside a chunked sweep on QCCS raised an error; such results now come from the last chunk.
+- Fixed a bug where super-Gaussian pulses from `pulse_library.gaussian` (`order` greater than 2) with `zero_boundaries=True` did not taper to zero at the boundary. They now reach zero one sample before the pulse starts, as order-2 Gaussians do. As a result of this fix, samples change by a fraction of a percent of the amplitude, so amplitudes calibrated for such pulses may shift slightly.
+- Fixed a bug where the PQSC failed to connect to an instrument that has no signals defined. Such an instrument is now ignored, and no connection to it is attempted.
+
+## Deprecation Notices
+
+- `RuntimeContext.get_results()` is deprecated and will be removed in a future release. Use `copy.deepcopy(runtime_context.results)` in near-time callbacks instead.
+
+## Removals from the Codebase
+
+- Custom serializers that call `laboneq.serializers.core.import_cls()` must now pass both `base_cls` and `prefix_restrictions`. Omitting either was deprecated in version 26.4.0 and now raises a `TypeError`. The serialization tutorial shows how to pass them.
+- Near-time callbacks can no longer read `experiment`, `experiment_calibration`, `signal_map`, `device_setup`, `device_calibration` or `connection_state` from the `RuntimeContext` they receive as their first argument. These properties were deprecated in version 26.4.0. Pass the values a callback needs as arguments to `exp.call()`, or access the experiment and device setup directly where you define the callback. Use `RuntimeContext.emulated` in place of `connection_state.emulated`.
+- Removed `laboneq.analysis.calculate_integration_kernels`, which was deprecated in version 2.26.0. Use `calculate_integration_kernels_thresholds` instead. It returns the same kernels together with the state discrimination thresholds, as a tuple `(kernels, thresholds)`.
+- Removed the `Results.device_calibration`, `Results.experiment_calibration` and `Results.signal_map` properties, which were deprecated in version 2.52.0. Use `Results.device_setup.get_calibration()`, `Results.experiment.get_calibration()` and `Results.experiment.get_signal_map()` instead.
+- Removed the `laboneq.contrib.example_helpers.data_analysis` package, which was deprecated in version 2.15. Use `laboneq.analysis.fitting` instead.
+- Removed the `pulse_library.sampled_pulse_real` and `pulse_library.sampled_pulse_complex` functions, which were deprecated in version 2.51.0. Use `pulse_library.sampled_pulse` instead; it accepts both real and complex samples.
+- Removed the `run_experiment` method of `RemoteController` and `AsyncRemoteController`, which was added in version 26.10.0b3. It was blocking by design, which defeated the non-blocking `submit_experiment` and `wait_for_experiment` API. Like a local controller, a remote controller now runs the client near-time callbacks of every experiment it submits in the background. A client callback that raises still fails the run, but the client no longer re-raises the original exception. As with a local callback, `Session.run` raises a `LabOneQControllerException` that carries the error message.
+
+## Applications Library
+
+### Features
+
+- Added the ZQCS tunable transmon demo platform, available as `demo_platform(n_qubits, leader_instrument="ZQCS")` in `laboneq_applications.qpu_types.tunable_transmon`.
+
 # LabOne Q 26.10.0b4 (2026-10-16)
 
 ## Features

@@ -18,6 +18,7 @@ indexmap = { workspace = true }
 itertools = { workspace = true }
 pyo3 = { workspace = true }
 capnp = { workspace = true }
+rustc-hash = { workspace = true }
 
 laboneq-capnp = { workspace = true }
 laboneq-qccs-capnp = { workspace = true }

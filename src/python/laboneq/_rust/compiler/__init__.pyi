@@ -4,16 +4,12 @@
 from enum import Enum
 from typing import Literal, Protocol
 
-from laboneq.compiler.common.iface_compiler_output import RTCompilerOutput
 from laboneq.core.types.units import Quantity
 from laboneq.dsl.experiment import Section
 from laboneq.dsl.parameter import Parameter
 
 def init_logging(level: int) -> None:
     """Initialize logging with the given Python log level."""
-
-class ProcessedExperiment:
-    """Object containing the information about the experiment."""
 
 # ---------------------------------------------------------------------------
 # Input DTOs for serialize_experiment()
@@ -145,41 +141,6 @@ def compile_experiment(
     """Compile Cap'n Proto experiment bytes into `CompiledExperiment` Cap'n Proto bytes.
 
     `packed` describes `capnp_data` only; the returned bytes are always unpacked.
-    """
-
-class PulseSheetSchedule:
-    """Opaque handle to a pulse sheet schedule computed by the real-time compiler.
-
-    Carried opaquely through the near-time executor and only unpacked for the final compiler output.
-    """
-
-class RealTimeCompilerOutput:
-    """Result of a real-time compilation.
-
-    Attributes:
-        code_gen_output: Code generation output.
-        used_parameters: Used near-time parameters in the experiment.
-        pulse_sheet_schedule: Optional pulse sheet schedule (event list + metadata) for the Pulse Sheet Viewer.
-    """
-
-    code_gen_output: RTCompilerOutput
-    used_parameters: set[str]
-    pulse_sheet_schedule: PulseSheetSchedule | None
-
-def compile_realtime(
-    experiment: ProcessedExperiment,
-    parameters: dict[str, float],
-    chunking_info: tuple[int, int] | None,
-) -> RealTimeCompilerOutput:
-    """Compile real-time experiment.
-
-    Args:
-        experiment: Experiment information.
-        parameters: Dictionary of parameter values to be resolved.
-        chunking_info: Tuple of (current chunk index, total chunk count) or None.
-
-    Returns:
-        Compiled real-time experiment.
     """
 
 class SpanBuffer:

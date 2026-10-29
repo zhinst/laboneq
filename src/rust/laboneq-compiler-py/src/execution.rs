@@ -11,7 +11,6 @@ use laboneq_dsl::operation::{NearTimeCallback, Operation, SetNode, Sweep, ValueE
 use laboneq_dsl::types::{ParameterUid, ValueOrParameter};
 
 use crate::error::Result;
-use crate::experiment::Experiment;
 
 #[derive(Debug, Clone)]
 pub(crate) struct Execution {
@@ -43,17 +42,17 @@ pub(crate) enum Statement {
 }
 
 /// Creates a near-time execution for Controller.
-pub(crate) fn create_execution(experiment: &Experiment) -> Result<Execution> {
+pub(crate) fn create_execution(root: &ExperimentNode) -> Result<Execution> {
     Ok(Execution {
-        statements: NearTimeExecutionBuilder::build(experiment)?,
+        statements: NearTimeExecutionBuilder::build(root)?,
     })
 }
 
 struct NearTimeExecutionBuilder {}
 
 impl NearTimeExecutionBuilder {
-    fn build(experiment: &Experiment) -> Result<Vec<Statement>> {
-        NearTimeExecutionBuilder {}.visit_node(&experiment.root)
+    fn build(root: &ExperimentNode) -> Result<Vec<Statement>> {
+        NearTimeExecutionBuilder {}.visit_node(root)
     }
 
     fn visit_node(&mut self, node: &ExperimentNode) -> Result<Vec<Statement>> {

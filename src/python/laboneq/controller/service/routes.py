@@ -40,7 +40,7 @@ from laboneq.controller.callback_protocol import (
     json_default,
 )
 from laboneq.controller.constants import PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER
-from laboneq.controller.controller import SubmissionStatus
+from laboneq.controller.controller_core import SubmissionStatus
 from laboneq.controller.results import slice_results
 from laboneq.controller.service.advertised_url import advertised_base_url
 from laboneq.controller.service.models import (

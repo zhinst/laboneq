@@ -1,11 +1,11 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::any::Any;
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 
 use laboneq_dsl::experiment_signal::ExperimentSignal;
-use pyo3::prelude::*;
+use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use laboneq_common::compiler_settings::CompilerSettings;
@@ -15,6 +15,7 @@ use laboneq_py_utils::py_object_store::PyObjectStore;
 use numeric_array::NumericArray;
 
 use laboneq_common::named_id::NamedIdStore;
+use laboneq_common::near_time::NtStepKey;
 use laboneq_common::types::AwgKey;
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::hqcs::{self, HqcsDeclarations};
@@ -28,7 +29,6 @@ pub use crate::capnp_deserializer::DeserializedExperiment;
 pub use crate::capnp_setup_description::SetupDescriptionPayload;
 pub use crate::error::Error;
 pub use crate::experiment::DeviceSignal;
-pub use crate::signal_view::SignalView;
 pub use laboneq_scheduler::FeedbackCalculator;
 
 pub type CompilerBackendResult<T, E = laboneq_error::LabOneQError> = Result<T, E>;
@@ -48,20 +48,28 @@ pub struct ProcessedExperiment<'a> {
     pub acquisition_type: AcquisitionType,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SignalDelays {
+    pub uid: SignalUid,
+    /// The part of the wait before the signal starts that fits the sequencer
+    /// grid, plus the head start the signal's instrument needs.
+    pub start_delay: Duration<Second>,
+    /// The calibrated signal delay, rounded onto the signal's sequencer grid.
+    pub signal_delay: Duration<Second>,
+}
+
 /// A backend that performs hardware-specific preprocessing of an experiment
 /// before it enters the generic compilation pipeline.
 ///
 /// Each hardware family (QCCS, ZQCS, etc.) implements this trait to translate
 /// the hardware-agnostic experiment representation into [`PreprocessedBackendData`]
 /// that the rest of the compiler can query.
-///
-/// `Send + Sync + 'static`: the backend ends up stored in `Arc<dyn DynCompilerBackend>` on
-/// a Python object shared across Python-bound calls.
-pub trait CompilerBackend: Clone + Send + Sync + 'static {
-    type Output: PreprocessedBackendData + Send + Sync;
-    type CodeGenArtifact: CodeGenArtifact + Send + Sync + 'static;
+pub trait CompilerBackend {
+    type Output: PreprocessedBackendData;
+    type CodeGenArtifact;
     type CompilerArtifact: CompilerArtifact;
     type CombinedOutput: CombinedOutput;
+    type Linker: Linker<Artifact = Self::CodeGenArtifact, Output = Self::CombinedOutput>;
 
     /// The compiler settings this backend accepts, each declared with its
     /// type, default and documentation. The frontend validates the caller's
@@ -74,7 +82,7 @@ pub trait CompilerBackend: Clone + Send + Sync + 'static {
     /// Backend-specific program collected from HQCS content. `()` for backends
     /// that only refuse it; a real (non-emulated) coprocessor needs no compiler
     /// artifact — its program is the payload.
-    type EmulatedHqcsProgram: Default + Send + Sync + 'static;
+    type EmulatedHqcsProgram: Default;
 
     /// Name of the backend.
     ///
@@ -140,7 +148,7 @@ pub trait CompilerBackend: Clone + Send + Sync + 'static {
 
     fn generate_code(
         &self,
-        experiment: ExperimentIr,
+        experiment: &ExperimentIr,
         compiler_settings: &CompilerSettings,
         external_parameters: &PyObjectStore<ExternalParameterUid>,
         backend_data: &Self::Output,
@@ -149,7 +157,7 @@ pub trait CompilerBackend: Clone + Send + Sync + 'static {
     #[instrument(level = "debug", name = "laboneq.compiler.generate-code", skip_all)]
     fn generate_code_traced(
         &self,
-        experiment: ExperimentIr,
+        experiment: &ExperimentIr,
         compiler_settings: &CompilerSettings,
         external_parameters: &PyObjectStore<ExternalParameterUid>,
         backend_data: &Self::Output,
@@ -165,24 +173,16 @@ pub trait CompilerBackend: Clone + Send + Sync + 'static {
     /// Get a feedback calculator for the given backend. The default implementation returns `Ok(None)`, indicating that no feedback calculator is available for this backend.
     fn feedback_calculator(
         &self,
-        _signals: &[SignalView],
+        _signal_delays: &[SignalDelays],
         _compiler_settings: &CompilerSettings,
         _backend_data: &Self::Output,
-    ) -> Result<Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>>, Error>
-    {
+    ) -> Result<Option<Box<dyn FeedbackCalculator<Error = Error>>>, Error> {
         Ok(None)
     }
 
-    /// Extract this backend's [`CombinedOutput`] from the Python object (`CombinedOutput`)
-    /// produced by the linking stage.
-    ///
-    /// NOTE: This is a temporary workaround as long as the compiler calls Python code that requires this information.
-    /// Once the compiler is refactored to be fully Rust-based, this method can be removed
-    /// and replaced with a more direct approach.
-    fn combined_output_from_py(
-        &self,
-        obj: &Bound<'_, PyAny>,
-    ) -> CompilerBackendResult<Self::CombinedOutput>;
+    /// Creates an empty [`Linker`]. Every compilation attempt links with a linker of
+    /// its own.
+    fn linker(&self) -> Self::Linker;
 
     /// Finishes one compilation attempt on the linked [`CombinedOutput`].
     ///
@@ -198,7 +198,7 @@ pub trait CompilerBackend: Clone + Send + Sync + 'static {
         &self,
         _combined: &mut Self::CombinedOutput,
         _compiler_settings: &CompilerSettings,
-        _chunk_count: Option<u32>,
+        _chunk_count: Option<NonZeroU32>,
     ) -> CompilerBackendResult<()> {
         Ok(())
     }
@@ -229,6 +229,33 @@ pub fn refuse_hqcs(
     }
 }
 
+/// A linker for the compiled variants of the real-time program and the real-time jobs
+/// that run them, producing a [`CombinedOutput`].
+///
+/// Jobs are added in the order they run. Several jobs may run the same variant.
+pub trait Linker {
+    type Artifact;
+    /// A variant added to this linker.
+    type Variant;
+    type Output: CombinedOutput;
+
+    /// Adds `artifact`, the code generation output of one variant, and returns the
+    /// variant that jobs run.
+    fn add_artifact(&mut self, artifact: Self::Artifact) -> CompilerBackendResult<Self::Variant>;
+
+    /// Records that the real-time job `key` runs `variant`, which this linker returned.
+    /// `first_run` is true for the first job that runs `variant`.
+    fn add_job(
+        &mut self,
+        key: &NtStepKey,
+        variant: &Self::Variant,
+        first_run: bool,
+    ) -> CompilerBackendResult<()>;
+
+    /// Returns the output linked from all jobs.
+    fn finish(self) -> CompilerBackendResult<Self::Output>;
+}
+
 /// A combined (linked) real-time compilation output.
 pub trait CombinedOutput {
     /// Resolve the raw acquisition length (in samples) for each requested signal/handle pair.
@@ -250,7 +277,7 @@ pub struct ExperimentView<'a> {
     pub root: &'a ExperimentNode,
     pub id_store: &'a mut NamedIdStore,
     pub parameters: ParameterMap<'a>,
-    pub pulses: &'a HashMap<PulseUid, PulseDef>,
+    pub pulses: &'a FxHashMap<PulseUid, PulseDef>,
 
     pub experiment_signals: Vec<ExperimentSignal>,
 
@@ -263,7 +290,7 @@ impl<'a> ExperimentView<'a> {
         root: &'a ExperimentNode,
         id_store: &'a mut NamedIdStore,
         parameters: ParameterMap<'a>,
-        pulses: &'a HashMap<PulseUid, PulseDef>,
+        pulses: &'a FxHashMap<PulseUid, PulseDef>,
         experiment_signals: Vec<ExperimentSignal>,
         setup_description: SetupDescriptionPayload,
     ) -> Self {
@@ -303,12 +330,6 @@ impl<T: PreprocessedBackendData> PreprocessOutput<T> {
     }
 }
 
-/// A code generation artifact produced by a [`CompilerBackend`].
-pub trait CodeGenArtifact {
-    /// Convert the artifact to a Python object for returning to the user.
-    fn to_python<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>>;
-}
-
 /// A compiler artifact produced by a [`CompilerBackend`].
 pub trait CompilerArtifact {
     /// Produce an [`ArtifactsWriter`] that fills `CompiledExperiment.artifacts` (an opaque
@@ -329,69 +350,6 @@ pub struct CompilationOutput<T: CompilerArtifact> {
     pub artifacts: T,
 }
 
-/// Object-safe version of [`CompilerBackend`] for storage in `ExperimentPy`.
-///
-/// `CompilerBackend` cannot be used as a trait object directly because its associated types
-/// prevent object safety. This trait erases them so the backend can be stored as
-/// `Arc<dyn DynCompilerBackend>`.
-///
-/// All concrete [`CompilerBackend`] implementors automatically implement this trait
-/// via the blanket impl below.
-pub(crate) trait DynCompilerBackend: Send + Sync {
-    /// Equivalent to [`CompilerBackend::generate_code`] with type-erased `backend_data`.
-    ///
-    /// `backend_data` is a reference to the erased `B::Output` stored in `ExperimentPy`.
-    /// The caller passes `&*experiment.backend_data` (deref of the stored `Arc<dyn Any>`).
-    fn generate_code_dyn(
-        &self,
-        experiment: ExperimentIr,
-        compiler_settings: &CompilerSettings,
-        external_parameters: &PyObjectStore<ExternalParameterUid>,
-        backend_data: &(dyn PreprocessedBackendData + Send + Sync),
-    ) -> CompilerBackendResult<Box<dyn CodeGenArtifact + Send + Sync>>;
-
-    fn feedback_calculator(
-        &self,
-        signals: &[SignalView],
-        compiler_settings: &CompilerSettings,
-        backend_data: &(dyn PreprocessedBackendData + Send + Sync),
-    ) -> Result<Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>>, Error>;
-}
-
-impl<B> DynCompilerBackend for B
-where
-    B: CompilerBackend,
-{
-    fn generate_code_dyn(
-        &self,
-        experiment: ExperimentIr,
-        compiler_settings: &CompilerSettings,
-        external_parameters: &PyObjectStore<ExternalParameterUid>,
-        backend_data: &(dyn PreprocessedBackendData + Send + Sync),
-    ) -> CompilerBackendResult<Box<dyn CodeGenArtifact + Send + Sync>> {
-        let data = backend_data
-            .as_any()
-            .downcast_ref::<B::Output>()
-            .expect("DynCompilerBackend: backend_data type does not match backend Output type");
-        self.generate_code_traced(experiment, compiler_settings, external_parameters, data)
-            .map(|a| Box::new(a) as Box<dyn CodeGenArtifact + Send + Sync>)
-    }
-
-    fn feedback_calculator(
-        &self,
-        signals: &[SignalView],
-        compiler_settings: &CompilerSettings,
-        backend_data: &(dyn PreprocessedBackendData + Send + Sync),
-    ) -> Result<Option<Box<dyn FeedbackCalculator<Error = Error> + Send + Sync + 'static>>, Error>
-    {
-        let data = backend_data
-            .as_any()
-            .downcast_ref::<B::Output>()
-            .expect("DynCompilerBackend: backend_data type does not match backend Output type");
-        <Self as CompilerBackend>::feedback_calculator(self, signals, compiler_settings, data)
-    }
-}
-
 /// The pseudo-random sequence a device's PRNG produces.
 ///
 /// The compiler replays it to label the result axis of a PRNG loop with the
@@ -402,16 +360,10 @@ pub trait PrngSequence {
 
 /// Hardware-specific data produced by a [`CompilerBackend`], queried
 /// by later compilation stages
-pub trait PreprocessedBackendData: Any {
+pub trait PreprocessedBackendData {
     /// Get AWG key for signal. Required for all valid signals.
     fn awg_key(&self, signal_uid: SignalUid) -> CompilerBackendResult<AwgKey>;
 
     /// Get lead delay for signal.
     fn lead_delay(&self, signal_uid: SignalUid) -> Duration<Second>;
-
-    /// Returns `&dyn Any` to allow downcasting to the concrete type.
-    ///
-    /// NOTE: This is a temporary workaround for codegenerators that need to access backend-specific data.
-    /// Once codegenerator is refactored to be part of the compiler backend, this can be removed and replaced with direct access to backend-specific data.
-    fn as_any(&self) -> &dyn Any;
 }

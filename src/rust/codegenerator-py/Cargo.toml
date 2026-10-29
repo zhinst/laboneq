@@ -16,11 +16,9 @@ workspace = true
 pyo3 = { workspace = true }
 numpy = { workspace = true }
 num-complex = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
+rustc-hash = { workspace = true }
 
 codegenerator = { workspace = true }
-numeric-array = { workspace = true, features = ["pyo3"] }
 laboneq-dsl = { workspace = true }
 laboneq-ir = { workspace = true }
 codegenerator-utils = { workspace = true }
@@ -28,4 +26,3 @@ laboneq-py-utils = { workspace = true }
 laboneq-common = { workspace = true }
 laboneq-error = { workspace = true, features = ["pyo3"] }
 laboneq-units = { workspace = true }
-laboneq-compiler-py = { workspace = true }

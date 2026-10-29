@@ -29,9 +29,9 @@ dependencies = [
 
 [[package]]
 name = "arc-swap"
-version = "1.9.2"
+version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c049c0be4daef0b145cb3555416b3b8ef5b7888a38aea1a3a155801fe7b0810b"
+checksum = "380962b3d93b99642e50b9febf72c071e97e8b32d86eae9cf4ef582bb960ae6e"
 dependencies = [
  "rustversion",
 ]
@@ -44,7 +44,7 @@ checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.8",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -100,7 +100,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "codegenerator"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "codegenerator-utils",
  "crossbeam-epoch",
@@ -113,7 +113,6 @@ dependencies = [
  "laboneq-ir",
  "laboneq-log",
  "laboneq-units",
- "log",
  "md5",
  "num-complex",
  "numeric-array",
@@ -121,38 +120,32 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
- "thiserror",
  "tracing",
 ]
 
 [[package]]
 name = "codegenerator-py"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "codegenerator",
  "codegenerator-utils",
  "laboneq-common",
- "laboneq-compiler-py",
  "laboneq-dsl",
  "laboneq-error",
  "laboneq-ir",
  "laboneq-py-utils",
  "laboneq-units",
  "num-complex",
- "numeric-array",
  "numpy",
  "pyo3",
- "thiserror",
- "tracing",
+ "rustc-hash",
 ]
 
 [[package]]
 name = "codegenerator-utils"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
- "laboneq-common",
  "laboneq-dsl",
- "laboneq-ir",
  "tracing",
 ]
 
@@ -251,9 +244,9 @@ checksum = "9eb1aa714776b75c7e67e1da744b81a129b3ff919c8712b5e1b32252c1f07cc7"
 
 [[package]]
 name = "equivalent"
-version = "1.0.2"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
 name = "foldhash"
@@ -295,7 +288,7 @@ checksum = "9fb9654ba8355388abeb8dcb4fc62f511300867002afc858860463bdd9fe0c44"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.8",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -394,7 +387,7 @@ dependencies = [
 
 [[package]]
 name = "interval-calculator"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "anyhow",
  "thiserror",
@@ -428,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-capnp"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "capnp",
  "laboneq-capnp-build",
@@ -436,14 +429,14 @@ dependencies = [
 
 [[package]]
 name = "laboneq-capnp-build"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "capnpc",
 ]
 
 [[package]]
 name = "laboneq-common"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "laboneq-error",
  "laboneq-units",
@@ -456,7 +449,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-compiled-experiment-py"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "capnp",
  "laboneq-capnp",
@@ -470,7 +463,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-compiler-py"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "anyhow",
  "approx",
@@ -499,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-dsl"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "laboneq-common",
  "laboneq-error",
@@ -511,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-error"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "laboneq-log",
  "pyo3",
@@ -520,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-experiment-py"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "capnp",
  "laboneq-capnp",
@@ -532,34 +525,32 @@ dependencies = [
  "num-complex",
  "numeric-array",
  "pyo3",
+ "rustc-hash",
  "tracing",
 ]
 
 [[package]]
 name = "laboneq-ir"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "laboneq-common",
  "laboneq-dsl",
  "laboneq-units",
- "num-complex",
- "num-traits",
- "numeric-array",
+ "rustc-hash",
  "serde",
  "serde_json",
- "smallvec",
 ]
 
 [[package]]
 name = "laboneq-log"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "laboneq-opentelemetry-python"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "laboneq-tracing",
  "opentelemetry",
@@ -570,14 +561,13 @@ dependencies = [
 
 [[package]]
 name = "laboneq-py-utils"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "laboneq-common",
  "laboneq-dsl",
- "laboneq-ir",
  "laboneq-log",
- "laboneq-units",
  "log",
+ "num-complex",
  "numeric-array",
  "pyo3",
  "pyo3-log",
@@ -586,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-qccs-backend"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "approx",
  "capnp",
@@ -604,12 +594,13 @@ dependencies = [
  "laboneq-qccs-capnp",
  "laboneq-units",
  "pyo3",
+ "rustc-hash",
  "smallvec",
 ]
 
 [[package]]
 name = "laboneq-qccs-capnp"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "capnp",
  "laboneq-capnp-build",
@@ -617,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-qccs-codegen-artifacts-py"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "capnp",
  "laboneq-compiled-experiment-py",
@@ -628,7 +619,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-rust"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "codegenerator-py",
  "laboneq-compiled-experiment-py",
@@ -637,13 +628,12 @@ dependencies = [
  "laboneq-py-utils",
  "laboneq-qccs-backend",
  "laboneq-qccs-codegen-artifacts-py",
- "laboneq-scheduler",
  "pyo3",
 ]
 
 [[package]]
 name = "laboneq-scheduler"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "anyhow",
  "itertools",
@@ -652,18 +642,16 @@ dependencies = [
  "laboneq-ir",
  "laboneq-log",
  "laboneq-units",
- "num-complex",
  "num-integer",
  "num-traits",
  "numeric-array",
- "smallvec",
  "thiserror",
  "tracing",
 ]
 
 [[package]]
 name = "laboneq-tracing"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -676,10 +664,9 @@ dependencies = [
 
 [[package]]
 name = "laboneq-units"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "derive_more",
- "num-integer",
  "num-traits",
 ]
 
@@ -691,9 +678,9 @@ checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "libc"
-version = "0.2.190"
+version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 
 [[package]]
 name = "log"
@@ -767,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "numeric-array"
-version = "26.10.0-b4"
+version = "26.10.0"
 dependencies = [
  "approx",
  "num-complex",
@@ -1157,7 +1144,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.8",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -1230,9 +1217,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.8"
+version = "3.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01016da373cd8f7ef12624f796309f5c31ba8d646dd08856c02cd741d823c622"
+checksum = "d78c8dee4c7bf0e14673097256fed6142ce9d3b85a408189d07482442145823b"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1262,7 +1249,7 @@ checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.8",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -1345,9 +1332,9 @@ checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
 
 [[package]]
 name = "unicode-ident"
-version = "1.0.26"
+version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d245f478577f809a851594d02313b640fb437e0bb33866753cff937863096954"
+checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
 
 [[package]]
 name = "valuable"
@@ -1396,7 +1383,7 @@ dependencies = [
  "bumpalo",
  "proc-macro2",
  "quote",
- "syn 3.0.8",
+ "syn 3.0.9",
  "wasm-bindgen-shared",
 ]
 
@@ -1427,18 +1414,18 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "zerocopy"
-version = "0.8.62"
+version = "0.8.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86502bf56ac7c77571a32e2647bb2a15894565e981fb2a48d7bde2d91c965a9d"
+checksum = "e5fe1f8f1b06191a00962174c61aa5005e0bb391a6d80d07e24d115c01a92ed8"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.62"
+version = "0.8.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5457206954b06561e2608c7e19cf58b1926586d999c246eebe4502f7e2039d1a"
+checksum = "863ad3ac83293fb4d740aedbfdc9240dd8d1a50c1099acd76ce80ce7c7230c7f"
 dependencies = [
  "proc-macro2",
  "quote",

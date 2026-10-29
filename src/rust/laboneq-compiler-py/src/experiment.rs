@@ -1,7 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::HashMap, num::NonZeroU16, sync::Arc};
+use std::{num::NonZeroU16, sync::Arc};
 
 use laboneq_common::device_traits::DeviceTraits;
 use laboneq_common::types::{PhysicalDeviceUid, SignalKind};
@@ -12,6 +12,7 @@ use laboneq_dsl::types::{
 };
 use laboneq_py_utils::py_object_store::PyObjectStore;
 use laboneq_units::duration::{Frequency, Hertz};
+use rustc_hash::FxHashMap;
 
 use laboneq_common::named_id::NamedIdStore;
 
@@ -22,7 +23,7 @@ pub(crate) struct Experiment {
     // Remove when Python bindings are no longer needed
     pub id_store: Arc<NamedIdStore>,
     pub parameters: Vec<SweepParameter>,
-    pub pulses: HashMap<PulseUid, PulseDef>,
+    pub pulses: FxHashMap<PulseUid, PulseDef>,
     pub external_parameters: Arc<PyObjectStore<ExternalParameterUid>>,
 }
 

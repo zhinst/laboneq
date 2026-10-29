@@ -39,14 +39,49 @@ pub enum PulseKind {
     MarkerPulse { length: Duration<Second> },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PulseFunction {
-    Constant,
+    /// LabOne Q's standard pulses.
+    Builtin(BuiltinPulse),
+    /// A custom-defined functional pulse.
     Custom { function: String },
 }
 
 impl PulseFunction {
     pub const CONSTANT_PULSE_NAME: &str = "const";
+
+    pub fn name(&self) -> &str {
+        match self {
+            PulseFunction::Builtin(pulse) => pulse.name(),
+            PulseFunction::Custom { function } => function,
+        }
+    }
+
+    pub fn is_constant(&self) -> bool {
+        self.name() == Self::CONSTANT_PULSE_NAME
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BuiltinPulse {
+    Const,
+}
+
+impl BuiltinPulse {
+    /// Returns the registered name under LabOne Q's pulse library.
+    pub fn name(self) -> &'static str {
+        match self {
+            BuiltinPulse::Const => PulseFunction::CONSTANT_PULSE_NAME,
+        }
+    }
+
+    /// Returns the standard pulse registered under `name`, if any.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            PulseFunction::CONSTANT_PULSE_NAME => Some(BuiltinPulse::Const),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

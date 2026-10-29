@@ -16,8 +16,8 @@ pub(crate) struct DelayRegistry {
 }
 
 impl DelayRegistry {
-    /// How long the signal waits before it starts, including the head start its
-    /// instrument needs.
+    /// The part of the wait before the signal starts that fits the sequencer
+    /// grid, plus the head start the signal's instrument needs.
     pub(crate) fn signal_start_delay(&self, signal: SignalUid) -> Duration<Second> {
         self.signal_delays
             .get(&signal)

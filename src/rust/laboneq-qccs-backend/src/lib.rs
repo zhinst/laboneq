@@ -7,6 +7,7 @@ mod device_kind;
 mod device_setup_fingerprint;
 mod device_traits;
 mod experiment_view;
+mod linker;
 mod oscillator;
 mod output_routing;
 mod ppc_connections;

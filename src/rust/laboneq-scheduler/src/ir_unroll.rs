@@ -5,12 +5,12 @@ use std::collections::HashMap;
 
 use laboneq_dsl::types::{ParameterUid, SweepParameter};
 use laboneq_ir::builders::SectionBuilder;
-use laboneq_ir::{IrKind, MatchTarget};
+use laboneq_ir::{IrKind, MatchTarget, ParameterLookup};
 
+use crate::ScheduledNode;
 use crate::error::Result;
 use crate::parameter_resolver::ParameterResolver;
 use crate::scheduled_node::NodeRef;
-use crate::{ParameterStore, ScheduledNode};
 
 /// This function modifies the IR to unroll all sweep unconditionally.
 ///
@@ -21,7 +21,7 @@ use crate::{ParameterStore, ScheduledNode};
 pub(crate) fn unroll_loops(
     node: ScheduledNode,
     parameters: &HashMap<ParameterUid, SweepParameter>,
-    nt_parameters: &ParameterStore,
+    nt_parameters: &dyn ParameterLookup,
 ) -> Result<ScheduledNode> {
     let resolver = ParameterResolver::new(parameters, nt_parameters);
     let node = unroll_loops_impl(node.into(), &resolver)?;
@@ -111,7 +111,7 @@ mod tests {
     use laboneq_dsl::types::SectionUid;
     use laboneq_ir::{Case, IrKind, Loop, LoopKind, Match};
 
-    use crate::ParameterStoreBuilder;
+    use crate::parameter_resolver::NoNearTimeParameters;
     use crate::scheduled_node::ir_node_structure;
 
     fn create_section_kind(uid: SectionUid) -> IrKind {
@@ -145,8 +145,7 @@ mod tests {
                 ),]
             )]
         );
-        let root =
-            unroll_loops(root, &HashMap::new(), &ParameterStoreBuilder::new().build()).unwrap();
+        let root = unroll_loops(root, &HashMap::new(), &NoNearTimeParameters).unwrap();
         let root_expected = ir_node_structure!(
             IrKind::Root,
             [(
@@ -166,8 +165,7 @@ mod tests {
         );
         assert_eq!(root, root_expected);
         // Unroll again, should have no effect
-        let root =
-            unroll_loops(root, &HashMap::new(), &ParameterStoreBuilder::new().build()).unwrap();
+        let root = unroll_loops(root, &HashMap::new(), &NoNearTimeParameters).unwrap();
         assert_eq!(root, root_expected);
     }
 
@@ -217,8 +215,7 @@ mod tests {
             )]
         );
 
-        let root =
-            unroll_loops(root, &HashMap::new(), &ParameterStoreBuilder::new().build()).unwrap();
+        let root = unroll_loops(root, &HashMap::new(), &NoNearTimeParameters).unwrap();
 
         // Expected structure after unrolling:
         // The match should be replaced by sections corresponding to the selected case

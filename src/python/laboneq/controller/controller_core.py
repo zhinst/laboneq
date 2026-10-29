@@ -20,7 +20,7 @@ from laboneq.controller.near_time_replacement import NearTimeReplacements
 from laboneq.controller.near_time_runner import NearTimeRunner
 from laboneq.controller.recipe_processor import validate_scheduled_experiment
 from laboneq.controller.results import ResultsBuilder
-from laboneq.controller.runtime_context_impl import LegacySessionData
+from laboneq.controller.toolkit_adapter import toolkit_instruments
 from laboneq.controller.utilities.exception import (
     HardwareNotReadyError,
     LabOneQControllerException,
@@ -30,18 +30,18 @@ from laboneq.controller.versioning import (
     SetupCaps,
 )
 from laboneq.core.exceptions import AbortExecution
-from laboneq.core.utilities.async_helpers import AsyncWorker, EventLoopMixIn
+from laboneq.core.utilities.async_helpers import AsyncWorker
 
 if TYPE_CHECKING:
     from numpy import typing as npt
 
     from laboneq.controller.backend_runtime_state import BackendRuntimeState
     from laboneq.controller.callback_channel import CallbackChannel, DoneStatus
-    from laboneq.controller.devices.device_base import DeviceBase
     from laboneq.controller.devices.device_utils import NodeCollector
     from laboneq.controller.recipe_processor import (
         RecipeData,
     )
+    from laboneq.controller.toolkit_adapter import ToolkitInstrument
     from laboneq.controller.utilities.sweep_params_tracker import SweepParamsTracker
     from laboneq.controller.versioning import LabOneVersion
     from laboneq.data.experiment_results import ExperimentResults
@@ -127,6 +127,10 @@ class ExecutionContext:
     submission: ControllerSubmission
     recipe_data: RecipeData
     backend_runtime_state: BackendRuntimeState | None = None
+    #: Resolves once the result collector has finished the most recent step
+    #: queued on it. The collector takes steps in order, so the earlier ones
+    #: are finished too.
+    last_nt_step_result_completed: asyncio.Future[None] | None = None
 
 
 @dataclass
@@ -136,7 +140,13 @@ class NtStepResultContext:
     execution_context: ExecutionContext
 
 
-class Controller(EventLoopMixIn):
+class ControllerCore:
+    """Runs experiments on the instruments of one device setup.
+
+    All its coroutines must run on one event loop, because its futures, tasks
+    and queues are bound to the loop they were created on.
+    """
+
     #: Minimum time between connect attempts while the instruments are not connected.
     _RECONNECT_HOLDOFF_S: float = CONNECT_CHECK_HOLDOFF
     #: Delay between successive readiness checks in `wait_until_ready`.
@@ -167,13 +177,12 @@ class Controller(EventLoopMixIn):
             setup_caps=self._setup_caps,
             ignore_version_mismatch=ignore_version_mismatch,
         )
+        self._toolkit_instruments = toolkit_instruments(device_setup)
 
         self._neartime_replacements: NearTimeReplacements = NearTimeReplacements()
         self._neartime_callbacks: dict[str, Callable[..., Any]] = (
             {} if neartime_callbacks is None else neartime_callbacks
         )
-        # TODO: Remove _legacy_session_data tests once the RuntimeContext endpoints are removed
-        self._legacy_session_data = LegacySessionData(None, None, None, None, None)
 
         self._experiment_runner = AsyncWorker(run_one=self._run_one_experiment)
         self._result_collector = AsyncWorker(run_one=self._collect_nt_step_results)
@@ -198,18 +207,15 @@ class Controller(EventLoopMixIn):
         return self._setup_caps
 
     @property
-    def devices(self) -> dict[str, DeviceBase]:
-        return self._backend.devices
+    def toolkit_instruments(self) -> dict[str, ToolkitInstrument]:
+        return self._toolkit_instruments
 
     @property
     def setup_description(self) -> SetupDescription | None:
         """Setup description from connected device, if any."""
         return self._backend.setup_description
 
-    def get_not_ready_reason(self) -> str | None:
-        return self._event_loop.run(self._get_not_ready_reason_async)
-
-    async def _get_not_ready_reason_async(self) -> str | None:
+    async def get_not_ready_reason(self) -> str | None:
         """Return why the instruments cannot run experiments now, or None if they can.
 
         If the last connect failed, starts another attempt in the background and
@@ -220,12 +226,9 @@ class Controller(EventLoopMixIn):
             return f"Not connected to the instruments: {self._connect_error}"
         return self._backend.not_ready_reason
 
-    def wait_until_ready(self, timeout_s: float):
-        self._event_loop.run(self._wait_until_ready_async, timeout_s)
-
-    async def _wait_until_ready_async(self, timeout_s: float):
+    async def wait_until_ready(self, timeout_s: float):
         deadline = time.monotonic() + timeout_s
-        while (reason := await self._get_not_ready_reason_async()) is not None:
+        while (reason := await self.get_not_ready_reason()) is not None:
             if time.monotonic() >= deadline:
                 raise HardwareNotReadyError(
                     f"Not ready after {timeout_s:g} s. {reason}"
@@ -233,7 +236,7 @@ class Controller(EventLoopMixIn):
             await asyncio.sleep(self._READY_POLL_INTERVAL_S)
 
     async def _raise_if_not_ready_async(self):
-        not_ready_reason = await self._get_not_ready_reason_async()
+        not_ready_reason = await self.get_not_ready_reason()
         if not_ready_reason is not None:
             raise HardwareNotReadyError(not_ready_reason)
 
@@ -282,14 +285,16 @@ class Controller(EventLoopMixIn):
             execution_context=execution_context,
         )
 
+        async def results_pending():
+            execution_context.last_nt_step_result_completed = nt_step_result_completed
+            await self._result_collector.submit(nt_step_result_context)
+
         try:
             await self._backend.execute_nt_step(
                 recipe_data=recipe_data,
                 nt_step=nt_step,
                 timeout_s=timeout_s,
-                results_pending=lambda: self._result_collector.submit(
-                    nt_step_result_context
-                ),
+                results_pending=results_pending,
             )
         except (asyncio.TimeoutError, TimeoutError, LabOneQControllerException) as e:
             if not isinstance(e, LabOneQControllerException):
@@ -308,22 +313,7 @@ class Controller(EventLoopMixIn):
         await self._backend.after_nt_step()
         return nt_step_result_completed
 
-    def connect(
-        self,
-        do_emulation: bool = True,
-        reset_devices: bool = False,
-        disable_runtime_checks: bool = True,
-        timeout_s: float | None = None,
-    ):
-        self._event_loop.run(
-            self._connect_async,
-            do_emulation=do_emulation,
-            reset_devices=reset_devices,
-            disable_runtime_checks=disable_runtime_checks,
-            timeout_s=timeout_s,
-        )
-
-    async def _connect_async(
+    async def connect(
         self,
         do_emulation: bool = True,
         reset_devices: bool = False,
@@ -379,24 +369,11 @@ class Controller(EventLoopMixIn):
         # A requested reset is a one-time action.
         self._reset_pending = False
 
-    def ensure_setup_description(self):
-        self._event_loop.run(self._ensure_setup_description_async)
-
-    async def _ensure_setup_description_async(self):
+    async def ensure_setup_description(self):
         await self._raise_if_not_ready_async()
         await self._backend.ensure_setup_description()
 
-    def disable_outputs(
-        self,
-        device_uids: list[str] | None = None,
-        logical_signals: list[str] | None = None,
-        unused_only: bool = False,
-    ):
-        self._event_loop.run(
-            self._disable_outputs_async, device_uids, logical_signals, unused_only
-        )
-
-    async def _disable_outputs_async(
+    async def disable_outputs(
         self,
         device_uids: list[str] | None = None,
         logical_signals: list[str] | None = None,
@@ -404,12 +381,8 @@ class Controller(EventLoopMixIn):
     ):
         await self._backend.disable_outputs(device_uids, logical_signals, unused_only)
 
-    def disconnect(self):
-        self.stop_workers()
-        self._event_loop.run(self._disconnect_async)
-        self.stop()
-
-    async def _disconnect_async(self):
+    async def disconnect(self):
+        await self.stop_workers()
         _logger.info("Disconnecting from all devices and servers...")
         if self._reconnect_task is not None:
             self._reconnect_task.cancel()
@@ -418,29 +391,6 @@ class Controller(EventLoopMixIn):
             self._reconnect_task = None
         await self._backend.disconnect()
         _logger.info("Successfully disconnected from all devices and servers.")
-
-    def submit_compiled(
-        self,
-        scheduled_experiment: ScheduledExperiment,
-        coprocessor_payload_overrides: dict[str, bytes] | None = None,
-    ) -> ControllerSubmission:
-        return self._event_loop.run(
-            self._submit_compiled_async,
-            scheduled_experiment=scheduled_experiment,
-            coprocessor_payload_overrides=coprocessor_payload_overrides,
-        )
-
-    def wait_submission(self, submission: ControllerSubmission):
-        self._event_loop.run(self._wait_submission_async, submission=submission)
-
-    def stop_workers(self):
-        self._event_loop.run(self.stop_workers_async)
-
-    def start(self):
-        self._event_loop.start()
-
-    def stop(self):
-        self._event_loop.stop()
 
     def submission_results(self, submission: ControllerSubmission) -> ExperimentResults:
         return submission.results_builder.results
@@ -453,7 +403,7 @@ class Controller(EventLoopMixIn):
             return SubmissionStatus.FAILED
         return SubmissionStatus.COMPLETED
 
-    async def _submit_compiled_async(
+    async def submit_compiled(
         self,
         scheduled_experiment: ScheduledExperiment,
         callback_channel: CallbackChannel | None = None,
@@ -479,11 +429,11 @@ class Controller(EventLoopMixIn):
         await self._experiment_runner.submit(submission)
         return submission
 
-    async def _wait_submission_async(self, submission: ControllerSubmission):
+    async def wait_submission(self, submission: ControllerSubmission):
         await submission.completion_future
         await submission.temp_run_future  # TODO(2K): Temporary
 
-    async def stop_workers_async(self):
+    async def stop_workers(self):
         await self._experiment_runner.stop()
         await self._result_collector.stop()
 
@@ -492,6 +442,11 @@ class Controller(EventLoopMixIn):
             if await _wait_callback_channel(submission):
                 await self._execute_compiled_async(submission=submission)
         except Exception as e:
+            # A remote client sees the failure only through the status and
+            # results of the submission.
+            submission.results_builder.add_execution_error(
+                ([], "", "".join(traceback.format_exception(e)))
+            )
             # completion_future maybe cancelled by SIGINT handler, avoid InvalidStateError in that case
             if not submission.completion_future.done():
                 submission.completion_future.set_exception(e)
@@ -523,11 +478,16 @@ class Controller(EventLoopMixIn):
                         controller=self,
                         execution_context=execution_context,
                         do_emulation=self._do_emulation,
-                        legacy_session_data=self._legacy_session_data,
                     ).run(recipe_data.execution)
                 except AbortExecution:
                     # eat the exception
                     pass
+                except Exception:
+                    # The run must not complete while the collector still reads
+                    # its results, and the reading has to end inside the experiment.
+                    if execution_context.last_nt_step_result_completed is not None:
+                        await execution_context.last_nt_step_result_completed
+                    raise
 
                 # In case of an exception in the preceding flow, we skip this finalization step,
                 # as the `completion_future` will be set with the exception, that should take precedence.
@@ -613,7 +573,3 @@ class Controller(EventLoopMixIn):
             nt_step=nt_step,
             results_builder=results_builder,
         )
-
-    # TODO: Remove _legacy_session_data tests once the RuntimeContext endpoints are removed
-    def set_legacy_session_data(self, legacy_session_data: LegacySessionData):
-        self._legacy_session_data = legacy_session_data

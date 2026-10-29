@@ -13,6 +13,7 @@ use laboneq_py_utils::py_object_store::PyObjectStore;
 use num_complex::Complex64;
 use numpy::{PyArray1, PyArrayMethods, PyReadonlyArray1};
 use pyo3::exceptions::{PyTypeError, PyValueError};
+use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -101,14 +102,14 @@ struct SamplingInfo {
 impl WaveformSamplerPy<'_> {
     pub(crate) fn new<'a>(
         py: Python,
-        pulse_defs: &[PulseDef],
+        pulse_defs: &FxHashMap<PulseUid, PulseDef>,
         acquisition_type: AcquisitionType,
         dedup: &'a PulseParameterDeduplicator,
         external_parameters: &'a PyObjectStore<ExternalParameterUid>,
         id_store: &'a NamedIdStore,
     ) -> WaveformSamplerPy<'a> {
         let pulse_defs = pulse_defs
-            .iter()
+            .values()
             .map(|pd| {
                 let pd_py = pulse_def_to_py(py, id_store, pd).unwrap();
                 (

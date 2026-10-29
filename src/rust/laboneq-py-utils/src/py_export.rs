@@ -12,7 +12,7 @@ use laboneq_common::types::Literal;
 use laboneq_dsl::operation::ExternalOrValue;
 use laboneq_dsl::types::{
     AcquisitionType, AveragingMode, ComplexOrFloat, ExternalParameterUid, NumericLiteral, PulseDef,
-    PulseFunction, PulseKind, PulseParameterUid, ValueOrParameter,
+    PulseKind, PulseParameterUid, ValueOrParameter,
 };
 
 use crate::py_object_store::PyObjectStore;
@@ -60,11 +60,7 @@ pub fn pulse_def_to_py<'py>(
 
     match &pulse_def.kind {
         PulseKind::Functional(func) => {
-            let function_name = match func.function {
-                PulseFunction::Constant => "const",
-                PulseFunction::Custom { ref function } => function.as_str(),
-            };
-            kwargs.set_item("function", function_name)?;
+            kwargs.set_item("function", func.function.name())?;
             kwargs.set_item("length", func.length.value())?;
             kwargs.set_item("samples", py.None())?;
         }
@@ -117,6 +113,7 @@ fn external_or_value_to_py<'py>(
         ExternalOrValue::ValueOrParameter(value_or_param) => {
             value_or_parameter_to_py(py, value_or_param, id_store)
         }
+        ExternalOrValue::Bool(value) => value.into_bound_py_any(py),
         ExternalOrValue::None => Ok(py.None().into_bound(py)),
     }
 }

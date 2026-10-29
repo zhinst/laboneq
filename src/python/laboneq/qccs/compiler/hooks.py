@@ -15,7 +15,6 @@ from laboneq.compiler.workflow.compiler_hooks import (
 
 if TYPE_CHECKING:
     from laboneq._rust import compiler as compiler_rs
-    from laboneq.compiler.common.iface_linker import ILinker
     from laboneq.dsl.device.device_setup import DeviceSetup
 
 
@@ -29,12 +28,6 @@ class CompilerHooksSeqC(CompilerHooks):
         from laboneq._rust import compiler
 
         return compiler
-
-    @staticmethod
-    def linker() -> type[ILinker]:
-        from laboneq.compiler.seqc.linker import SeqCLinker
-
-        return SeqCLinker
 
     @staticmethod
     def build_setup_description(

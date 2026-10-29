@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from contextlib import AbstractAsyncContextManager
 
     from laboneq.controller.backend_runtime_state import BackendRuntimeState
-    from laboneq.controller.devices.device_base import DeviceBase
     from laboneq.controller.devices.device_utils import NodeCollector
     from laboneq.controller.near_time_replacement import NearTimeReplacements
     from laboneq.controller.recipe_processor import RecipeData
@@ -63,14 +62,6 @@ class ControllerBackend(ABC):
         """Why the instruments cannot run experiments now, or None if they can.
 
         Valid once `connect` returns.
-        """
-
-    @property
-    @abstractmethod
-    def devices(self) -> dict[str, DeviceBase]:
-        """Devices open to direct node access, by uid.
-
-        Empty if the backend exposes none.
         """
 
     @abstractmethod

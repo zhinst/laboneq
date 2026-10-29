@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 pub mod error;
-pub mod parameter_store;
 
 mod adjust_acquire_lengths;
 mod analysis;
@@ -23,7 +22,6 @@ mod utils;
 
 pub use crate::chunk_experiment::ChunkingInfo;
 pub use crate::experiment_context::ExperimentContext;
-pub use crate::parameter_store::{ParameterStore, ParameterStoreBuilder};
 pub use crate::scheduler::{ScheduledExperiment, schedule_experiment};
 pub use crate::signal_info::SignalInfo;
 pub use timing_resolver::FeedbackCalculator;

@@ -47,6 +47,17 @@ impl Node {
         });
     }
 
+    pub(crate) fn insert_child(&mut self, index: usize, offset: TinySamples, child: Node) {
+        self.schedule.signals.extend(&child.schedule.signals);
+        self.children.insert(
+            index,
+            NodeChild {
+                offset,
+                node: Rc::new(child),
+            },
+        );
+    }
+
     pub(crate) fn make_mut(self: &mut Rc<Node>) -> &mut Self {
         Rc::make_mut(self)
     }

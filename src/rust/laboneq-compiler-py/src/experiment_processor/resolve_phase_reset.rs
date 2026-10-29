@@ -18,23 +18,11 @@ pub(super) fn resolve_phase_reset(
     node: &mut ExperimentNode,
     signals: &HashMap<SignalUid, &Signal>,
 ) -> Result<()> {
-    let mut seen_signals = HashSet::new();
-    resolve_phase_reset_impl(node, &mut seen_signals, signals)
-}
-
-fn resolve_phase_reset_impl(
-    node: &mut ExperimentNode,
-    seen_signals: &mut HashSet<SignalUid>,
-    signals: &HashMap<SignalUid, &Signal>,
-) -> Result<()> {
-    let mut to_fill = vec![];
-    let mut this_signals = HashSet::new();
-    for (idx, child) in node.children.iter_mut().enumerate() {
+    let mut has_unassigned_reset = false;
+    for child in &mut node.children {
         match &child.kind {
             Operation::ResetOscillatorPhase(obj) => {
-                if obj.signals.is_empty() {
-                    to_fill.push(idx);
-                }
+                has_unassigned_reset |= obj.signals.is_empty();
                 for signal in &obj.signals {
                     let signal = signals
                         .get(signal)
@@ -50,31 +38,47 @@ fn resolve_phase_reset_impl(
                     }
                 }
             }
-            _ => {
-                this_signals.extend(child.kind.signals());
-                resolve_phase_reset_impl(child, &mut this_signals, signals)?;
-            }
+            _ => resolve_phase_reset(child, signals)?,
         }
     }
-    if !to_fill.is_empty() {
-        if this_signals.is_empty() {
-            return Err(Error::new(
-                "No signals available to assign for oscillator phase reset.",
-            ));
-        }
-        for obj in to_fill {
-            let node = node
-                .children
-                .get_mut(obj)
-                .expect("Internal Error: Expected child node to be present");
-            if let Operation::ResetOscillatorPhase(obj) = &mut node.kind {
-                obj.signals = this_signals.iter().cloned().collect();
-                obj.signals.sort();
-            }
-        }
+    if has_unassigned_reset {
+        assign_scope_signals(node)?;
     }
-    seen_signals.extend(this_signals);
     Ok(())
+}
+
+/// Assigns the signals in scope of `node`'s children to its phase resets that have none.
+fn assign_scope_signals(node: &mut ExperimentNode) -> Result<()> {
+    let mut scope_signals = HashSet::new();
+    for child in &node.children {
+        collect_signals(child, &mut scope_signals);
+    }
+    if scope_signals.is_empty() {
+        return Err(Error::new(
+            "No signals available to assign for oscillator phase reset.",
+        ));
+    }
+    let mut scope_signals: Vec<_> = scope_signals.into_iter().collect();
+    scope_signals.sort();
+    for child in &mut node.children {
+        if let Operation::ResetOscillatorPhase(obj) = &mut child.kind
+            && obj.signals.is_empty()
+        {
+            obj.signals = scope_signals.clone();
+        }
+    }
+    Ok(())
+}
+
+/// Collects the signals of `node` and its descendants, excluding phase resets.
+fn collect_signals(node: &ExperimentNode, signals: &mut HashSet<SignalUid>) {
+    if matches!(node.kind, Operation::ResetOscillatorPhase(_)) {
+        return;
+    }
+    signals.extend(node.kind.signals());
+    for child in &node.children {
+        collect_signals(child, signals);
+    }
 }
 
 #[cfg(test)]
@@ -135,6 +139,125 @@ mod tests {
             ]
         );
         assert_eq!(experiment, experiment_expected);
+    }
+
+    #[test]
+    fn test_resolve_phase_reset_fill_nested_scopes() {
+        let signals = [make_iq_signal(0), make_iq_signal(1)];
+        let mut experiment = node_structure!(
+            Operation::Root,
+            [
+                (
+                    Operation::RealTimeBoundary,
+                    [
+                        (Operation::Reserve(Reserve::new(signals[1].uid)), []),
+                        (
+                            Operation::ResetOscillatorPhase(ResetOscillatorPhase::default()),
+                            []
+                        ),
+                    ]
+                ),
+                (
+                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::default()),
+                    []
+                ),
+                (Operation::Reserve(Reserve::new(signals[0].uid)), []),
+            ]
+        );
+        resolve_phase_reset(
+            &mut experiment,
+            &signals.iter().map(|s| (s.uid, s)).collect(),
+        )
+        .unwrap();
+        let experiment_expected = node_structure!(
+            Operation::Root,
+            [
+                (
+                    Operation::RealTimeBoundary,
+                    [
+                        (Operation::Reserve(Reserve::new(signals[1].uid)), []),
+                        (
+                            Operation::ResetOscillatorPhase(ResetOscillatorPhase::new(vec![
+                                signals[1].uid
+                            ])),
+                            []
+                        ),
+                    ]
+                ),
+                (
+                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::new(vec![
+                        signals[0].uid,
+                        signals[1].uid
+                    ])),
+                    []
+                ),
+                (Operation::Reserve(Reserve::new(signals[0].uid)), []),
+            ]
+        );
+        assert_eq!(experiment, experiment_expected);
+    }
+
+    #[test]
+    fn test_resolve_phase_reset_fill_ignores_signals_of_other_resets() {
+        let signals = [make_iq_signal(0), make_iq_signal(1)];
+        let mut experiment = node_structure!(
+            Operation::RealTimeBoundary,
+            [
+                (
+                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::new(vec![
+                        signals[0].uid
+                    ])),
+                    []
+                ),
+                (Operation::Reserve(Reserve::new(signals[1].uid)), []),
+                (
+                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::default()),
+                    []
+                ),
+            ]
+        );
+        resolve_phase_reset(
+            &mut experiment,
+            &signals.iter().map(|s| (s.uid, s)).collect(),
+        )
+        .unwrap();
+        let experiment_expected = node_structure!(
+            Operation::RealTimeBoundary,
+            [
+                (
+                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::new(vec![
+                        signals[0].uid
+                    ])),
+                    []
+                ),
+                (Operation::Reserve(Reserve::new(signals[1].uid)), []),
+                (
+                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::new(vec![
+                        signals[1].uid
+                    ])),
+                    []
+                ),
+            ]
+        );
+        assert_eq!(experiment, experiment_expected);
+    }
+
+    #[test]
+    fn test_resolve_phase_reset_no_signals_in_scope() {
+        let mut experiment = node_structure!(
+            Operation::RealTimeBoundary,
+            [(
+                Operation::ResetOscillatorPhase(ResetOscillatorPhase::default()),
+                []
+            ),]
+        );
+        let result = resolve_phase_reset(&mut experiment, &HashMap::new());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No signals available to assign for oscillator phase reset.")
+        );
     }
 
     #[test]

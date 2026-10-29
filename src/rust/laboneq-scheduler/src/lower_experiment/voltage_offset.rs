@@ -4,14 +4,14 @@
 use crate::error::{Error, Result};
 
 use crate::schedule_info::ScheduleInfoBuilder;
-use crate::{ParameterStore, ScheduledNode, SignalInfo};
+use crate::{ScheduledNode, SignalInfo};
 use laboneq_dsl::types::ValueOrParameter;
-use laboneq_ir::{InitialVoltageOffset, IrKind};
+use laboneq_ir::{InitialVoltageOffset, IrKind, ParameterLookup};
 use laboneq_units::tinysample::TinySamples;
 
 pub(super) fn handle_initial_voltage_offset<T: SignalInfo + Sized>(
     signals: &[&T],
-    parameters: &ParameterStore,
+    parameters: &dyn ParameterLookup,
     system_grid: TinySamples,
 ) -> Result<Vec<ScheduledNode>> {
     signals
@@ -23,8 +23,8 @@ pub(super) fn handle_initial_voltage_offset<T: SignalInfo + Sized>(
             signal.voltage_offset().and_then(|voltage_offset| {
                 let value = match voltage_offset {
                     ValueOrParameter::Parameter(obj) => {
-                        if let Some(freq) = parameters.get(obj) {
-                            TryInto::<ValueOrParameter<f64>>::try_into(*freq).unwrap()
+                        if let Some(freq) = parameters.value(*obj) {
+                            TryInto::<ValueOrParameter<f64>>::try_into(freq).unwrap()
                         } else {
                             return Some(Err(Error::new(
                                 "Voltage offset sweep must be in near-time.",

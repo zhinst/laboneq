@@ -8,11 +8,11 @@ use laboneq_dsl::operation::ExternalOrValue;
 use laboneq_dsl::types::{ParameterUid, SweepParameter, ValueOrParameter};
 use laboneq_units::tinysample::seconds_to_tinysamples;
 
+use crate::ScheduledNode;
 use crate::error::{Error, Result};
 use crate::parameter_resolver::ParameterResolver;
 use crate::utils::round_to_grid;
-use crate::{ParameterStore, ScheduledNode};
-use laboneq_ir::IrKind;
+use laboneq_ir::{IrKind, ParameterLookup};
 
 /// This function modifies the IR in place to resolve all real-time parameter references to their concrete values.
 ///
@@ -20,7 +20,7 @@ use laboneq_ir::IrKind;
 pub(crate) fn resolve_parameters(
     ir: &mut ScheduledNode,
     parameters: &HashMap<ParameterUid, SweepParameter>,
-    nt_parameters: &ParameterStore,
+    nt_parameters: &dyn ParameterLookup,
 ) -> Result<()> {
     let resolver = ParameterResolver::new(parameters, nt_parameters);
     resolve_parameters_impl(ir, &resolver)

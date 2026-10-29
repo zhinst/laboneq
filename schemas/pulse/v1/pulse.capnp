@@ -133,6 +133,7 @@ struct FunctionalPulse {
   samplerUri @0 :Text;
   # Sampler URI. Supported schemes:
   #   "py://function_name" for in-process Python samplers (PyO3)
+  #   "builtin://function_name" for compiler-native sampling
   #   "http://" or "https://" for REST API samplers (future)
 
   parameters @1 :List(Common.ValueEntry);

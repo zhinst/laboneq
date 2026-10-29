@@ -12,6 +12,7 @@ use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::{Acquire, Operation, PlayPulse};
 use laboneq_dsl::types::{Marker, PulseDef, PulseKind, PulseUid, SignalUid, ValueOrParameter};
 use laboneq_units::duration::{Duration, Second, seconds};
+use rustc_hash::FxHashMap;
 
 /// Resolve missing pulses.
 ///
@@ -38,7 +39,7 @@ pub(super) fn resolve_pulses(
 
 struct Context<'a> {
     id_store: &'a mut NamedIdStore,
-    pulses: &'a mut HashMap<PulseUid, PulseDef>,
+    pulses: &'a mut FxHashMap<PulseUid, PulseDef>,
     signals: &'a HashMap<SignalUid, SignalView<'a>>,
 }
 
@@ -60,7 +61,7 @@ fn resolve_pulses_impl(node: &mut ExperimentNode, ctx: &mut Context) -> Result<(
 fn resolve_acquire_pulses_and_length(
     obj: &mut Acquire,
     id_store: &mut NamedIdStore,
-    pulses: &mut HashMap<PulseUid, PulseDef>,
+    pulses: &mut FxHashMap<PulseUid, PulseDef>,
     signals: &HashMap<SignalUid, SignalView<'_>>,
 ) -> Result<()> {
     if obj.kernel.is_empty() && obj.length.is_none() {
@@ -92,7 +93,7 @@ fn resolve_acquire_pulses_and_length(
 
 fn find_maximum_pulse_length(
     pulse_uids: &[PulseUid],
-    pulses: &HashMap<PulseUid, PulseDef>,
+    pulses: &FxHashMap<PulseUid, PulseDef>,
     sampling_rate: f64,
 ) -> Duration<Second> {
     pulse_uids
@@ -120,7 +121,7 @@ fn determine_pulse_length(pulse_def: &PulseDef, sampling_rate: f64) -> Duration<
 fn create_length_only_acquisition_pulse(
     length: Duration<Second>,
     id_store: &mut NamedIdStore,
-    pulses: &mut HashMap<PulseUid, PulseDef>,
+    pulses: &mut FxHashMap<PulseUid, PulseDef>,
 ) -> PulseUid {
     // TODO: Cache these pulses to avoid duplicates? Implement hash for Duration?
     // TODO: Use a better naming scheme
@@ -169,7 +170,7 @@ fn process_play_pulses(obj: &mut PlayPulse, ctx: &mut Context<'_>) -> Result<()>
 /// Determine the maximum length of all markers.
 fn determine_marker_pulse_length(
     markers: &[Marker],
-    pulses: &HashMap<PulseUid, PulseDef>,
+    pulses: &FxHashMap<PulseUid, PulseDef>,
     sampling_rate: f64,
 ) -> Result<Duration<Second>> {
     assert!(!markers.is_empty(), "Expected at least one marker");
@@ -201,7 +202,7 @@ fn determine_marker_pulse_length(
 fn create_zero_amplitude_marker_pulse(
     length: Duration<Second>,
     id_store: &mut NamedIdStore,
-    pulses: &mut HashMap<PulseUid, PulseDef>,
+    pulses: &mut FxHashMap<PulseUid, PulseDef>,
 ) -> PulseUid {
     let suffix = pulses.len();
     // Prefix the uid with `__marker__` to indicate it's a marker pulse for compatibility with Python side.

@@ -19,7 +19,9 @@ use std::collections::{HashMap, HashSet};
 use capnp::any_pointer;
 use pyo3::intern;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyBytes, PyComplex, PyDict, PyFloat, PyList, PyString};
+use pyo3::pybacked::PyBackedStr;
+use pyo3::types::{PyBytes, PyComplex, PyDict, PyFloat, PyList, PyString};
+use rustc_hash::FxHashMap;
 use tracing::instrument;
 
 use laboneq_capnp::pulse::v1::{
@@ -28,6 +30,7 @@ use laboneq_capnp::pulse::v1::{
 };
 use laboneq_error::{LabOneQError, WithContext, bail, laboneq_error};
 use laboneq_py_utils::constant_serializer;
+use laboneq_py_utils::py_constant::{PyConstant, classify_constant, classify_value};
 use numeric_array::NumericArray;
 
 use crate::Result;
@@ -85,6 +88,7 @@ enum PulseParamValue {
     Real(f64),
     Complex(f64, f64),
     Int(i64),
+    Bool(bool),
     Json(Vec<u8>),
     RawBytes(Vec<u8>),
     ParameterRef(u32),
@@ -132,7 +136,7 @@ struct EntityIndex {
     // --- pulses ---
     pulses: Vec<CollectedPulse>,
     /// uid string → final index
-    pulse_indices: HashMap<String, u32>,
+    pulse_indices: FxHashMap<String, u32>,
 
     // --- handles ---
     handles: Vec<CollectedHandle>,
@@ -147,7 +151,7 @@ impl EntityIndex {
             parameter_indices: HashMap::new(),
             derived_parameters: HashMap::new(),
             pulses: Vec::new(),
-            pulse_indices: HashMap::new(),
+            pulse_indices: FxHashMap::default(),
             handles: Vec::new(),
             handle_indices: HashMap::new(),
         }
@@ -219,11 +223,13 @@ struct Serializer<'py> {
     /// Signals in alphabetically-sorted definition order.
     signal_order: Vec<String>,
     /// uid string → final signal index.
-    signal_indices: HashMap<String, u32>,
+    signal_indices: FxHashMap<String, u32>,
     /// Collected sweep parameters by UID for consistency checking across multiple references.
     collected_sweep_parameters: HashMap<String, Bound<'py, PyAny>>,
     /// HQCS interning state (coprocessors, streams, variables).
     hqcs: HqcsIndex<'py>,
+    /// Whether the traversal is inside the real-time acquire loop.
+    in_real_time: bool,
 }
 
 impl<'py> Serializer<'py> {
@@ -233,9 +239,10 @@ impl<'py> Serializer<'py> {
             np: py.import(intern!(py, "numpy"))?,
             entities: EntityIndex::new(),
             signal_order: Vec::new(),
-            signal_indices: HashMap::new(),
+            signal_indices: FxHashMap::default(),
             collected_sweep_parameters: HashMap::new(),
             hqcs: HqcsIndex::new(),
+            in_real_time: false,
         })
     }
 
@@ -260,7 +267,7 @@ impl<'py> Serializer<'py> {
     fn collect_signals(
         &mut self,
         experiment: &ExperimentCapnpPy,
-    ) -> Result<(HashMap<String, u32>, Vec<String>)> {
+    ) -> Result<(FxHashMap<String, u32>, Vec<String>)> {
         // Collect UIDs.
         let mut uid_strings: Vec<String> = Vec::with_capacity(experiment.experiment_signals.len());
         for signal in experiment.experiment_signals.iter() {
@@ -275,7 +282,8 @@ impl<'py> Serializer<'py> {
         }
 
         // Assign indices in sorted order.
-        let mut signal_indices = HashMap::with_capacity(uid_strings.len());
+        let mut signal_indices =
+            FxHashMap::with_capacity_and_hasher(uid_strings.len(), Default::default());
         let mut signal_order = Vec::with_capacity(uid_strings.len());
 
         for uid_str in uid_strings {
@@ -458,6 +466,9 @@ impl<'py> Serializer<'py> {
                                 }
                                 PulseParamValue::Int(v) => {
                                     val.reborrow().init_constant().set_integer(*v);
+                                }
+                                PulseParamValue::Bool(v) => {
+                                    val.reborrow().init_constant().set_boolean(*v);
                                 }
                                 PulseParamValue::Json(bytes) => {
                                     val.reborrow().init_constant().set_python_value(bytes);
@@ -872,6 +883,11 @@ impl<'py> Serializer<'py> {
 
         let kind = obj.get_type();
         let is_sweep = kind.is(self.dsl_types.laboneq_type(DslType::Sweep));
+        let is_acquire_loop = kind.is(self.dsl_types.laboneq_type(DslType::AcquireLoopRt));
+
+        let enclosing_in_real_time = self.in_real_time;
+        self.in_real_time |= is_acquire_loop;
+        self.validate_execution_type(obj, uid_str)?;
 
         // For Sweep sections, we intentionally process children first so that any
         // derived sweep parameters referenced in child operations are collected
@@ -881,58 +897,53 @@ impl<'py> Serializer<'py> {
         }
 
         // Determine section kind and serialize appropriately.
-        if is_sweep {
+        if kind.is(self.dsl_types.laboneq_type(DslType::Section)) {
+            self.serialize_regular_section(obj, &mut builder)?;
+        } else if is_sweep {
             warn_unsupported_section_fields(obj, false)?;
             self.serialize_sweep_section(obj, &mut builder)?;
-        } else if obj
-            .get_type()
-            .is(self.dsl_types.laboneq_type(DslType::AcquireLoopRt))
-        {
+        } else if is_acquire_loop {
             warn_unsupported_section_fields(obj, false)?;
             self.serialize_acquire_loop_section(obj, &mut builder)?;
-        } else if obj
-            .get_type()
-            .is(self.dsl_types.laboneq_type(DslType::Match))
-        {
+        } else if kind.is(self.dsl_types.laboneq_type(DslType::Match)) {
             warn_unsupported_section_fields(obj, true)?;
             self.serialize_match_section(obj, &mut builder)?;
-        } else if obj
-            .get_type()
-            .is(self.dsl_types.laboneq_type(DslType::Case))
-        {
+        } else if kind.is(self.dsl_types.laboneq_type(DslType::Case)) {
             warn_unsupported_section_fields(obj, false)?;
             self.serialize_case_section(obj, &mut builder)?;
-        } else if obj
-            .get_type()
-            .is(self.dsl_types.laboneq_type(DslType::PrngSetup))
-        {
+        } else if kind.is(self.dsl_types.laboneq_type(DslType::PrngSetup)) {
             warn_unsupported_section_fields(obj, false)?;
             self.serialize_prng_setup_section(obj, &mut builder)?;
-        } else if obj
-            .get_type()
-            .is(self.dsl_types.laboneq_type(DslType::PrngLoop))
-        {
+        } else if kind.is(self.dsl_types.laboneq_type(DslType::PrngLoop)) {
             warn_unsupported_section_fields(obj, false)?;
             self.serialize_prng_loop_section(obj, &mut builder)?;
-        } else if obj
-            .get_type()
-            .is(self.dsl_types.laboneq_type(DslType::HqcsDoUntilSection))
-        {
+        } else if kind.is(self.dsl_types.laboneq_type(DslType::HqcsDoUntilSection)) {
             warn_unsupported_section_fields(obj, false)?;
             self.serialize_do_until_section(obj, &mut builder)?;
-        } else if obj
-            .get_type()
-            .is(self.dsl_types.laboneq_type(DslType::Section))
-        {
-            self.serialize_regular_section(obj, &mut builder)?;
         } else {
-            bail!("Unknown section type: {}", obj.get_type());
+            bail!("Unknown section type: {kind}");
         }
 
         if !is_sweep {
             self.serialize_section_children(obj, &mut builder)?;
         }
 
+        self.in_real_time = enclosing_in_real_time;
+        Ok(())
+    }
+
+    /// Rejects an `execution_type` that contradicts where the section sits: near-time
+    /// inside the real-time acquire loop, or real-time outside of it.
+    fn validate_execution_type(&self, obj: &Bound<'_, PyAny>, uid: &str) -> Result<()> {
+        let execution_type = obj.getattr(intern!(obj.py(), "execution_type"))?;
+        if self.in_real_time && execution_type.is(self.dsl_types.near_time()) {
+            bail!("Near-time section '{uid}' is nested inside a RT section");
+        }
+        if !self.in_real_time && execution_type.is(self.dsl_types.real_time()) {
+            bail!(
+                "Section '{uid}' is marked as real-time, but it is located outside the RT averaging loop"
+            );
+        }
         Ok(())
     }
 
@@ -1902,29 +1913,23 @@ impl<'py> Serializer<'py> {
                     let key_str: String = key.extract()?;
                     let pv =
                         if value.is_instance(self.dsl_types.laboneq_type(DslType::Parameter))? {
-                            let param_idx = self.collect_parameter(&value)?;
-                            PulseParamValue::ParameterRef(param_idx)
-                        } else if value.is_instance_of::<PyBool>() {
-                            // `bool` subclasses `int`; keep it out of the `Int` branch below so
-                            // it round-trips as a bool rather than as `0`/`1`.
-                            let bytes = constant_serializer::serialize_json(&value)
-                                .map_err(LabOneQError::from)
-                                .with_context(|| format!("pulse parameter '{key_str}'"))?;
-                            PulseParamValue::Json(bytes)
-                        } else if let Ok(v) = value.extract::<i64>() {
-                            PulseParamValue::Int(v)
-                        } else if value.is_instance_of::<PyComplex>() {
-                            let c: num_complex::Complex64 = value.extract()?;
-                            PulseParamValue::Complex(c.re, c.im)
-                        } else if let Ok(v) = value.extract::<f64>() {
-                            PulseParamValue::Real(v)
-                        } else if let Ok(raw) = value.cast::<PyBytes>() {
-                            PulseParamValue::RawBytes(raw.as_bytes().to_vec())
+                            PulseParamValue::ParameterRef(self.collect_parameter(&value)?)
                         } else {
-                            let bytes = constant_serializer::serialize_json(&value)
-                                .map_err(LabOneQError::from)
-                                .with_context(|| format!("pulse parameter '{key_str}'"))?;
-                            PulseParamValue::Json(bytes)
+                            match classify_value(&value)? {
+                                PyConstant::Float(v) => PulseParamValue::Real(v),
+                                PyConstant::Int(v) => PulseParamValue::Int(v),
+                                PyConstant::Bool(v) => PulseParamValue::Bool(v),
+                                PyConstant::Complex(v) => PulseParamValue::Complex(v.re, v.im),
+                                PyConstant::RawBytes(bytes) => {
+                                    PulseParamValue::RawBytes(bytes.to_vec())
+                                }
+                                PyConstant::None | PyConstant::Str(_) | PyConstant::Opaque => {
+                                    let bytes = constant_serializer::serialize_json(&value)
+                                        .map_err(LabOneQError::from)
+                                        .with_context(|| format!("pulse parameter '{key_str}'"))?;
+                                    PulseParamValue::Json(bytes)
+                                }
+                            }
                         };
                     entries.push(PulseParamEntry {
                         key: key_str,
@@ -1991,34 +1996,12 @@ impl<'py> Serializer<'py> {
         obj: &Bound<'py, PyAny>,
         builder: &mut common_capnp::value::Builder<'_>,
     ) -> Result<()> {
-        // `bool` is a subclass of `int` in Python, so it would otherwise be serialized as an
-        // integer constant and reach the user as `0`/`1`. Route it to the opaque path instead,
-        // which round-trips it losslessly as JSON.
-        if obj.is_instance_of::<PyBool>() {
-            return self.set_external_opaque_constant(obj, builder);
-        }
-        match self.set_value_from_py(obj, builder) {
-            Ok(()) => Ok(()),
-            Err(_) => self.set_external_opaque_constant(obj, builder),
-        }
-    }
-
-    fn set_external_opaque_constant(
-        &self,
-        obj: &Bound<'py, PyAny>,
-        builder: &mut common_capnp::value::Builder<'_>,
-    ) -> Result<()> {
-        if let Ok(raw) = obj.cast::<PyBytes>() {
-            // Plain bytes — pass through without serialization.
-            builder
-                .reborrow()
-                .init_constant()
-                .set_raw_bytes_value(raw.as_bytes());
+        if obj.is_instance(self.dsl_types.laboneq_type(DslType::Parameter))? {
+            let index = self.collect_parameter(obj)?;
+            builder.set_parameter_ref(index);
             return Ok(());
         }
-        let bytes = constant_serializer::serialize_json(obj)?;
-        builder.reborrow().init_constant().set_python_value(&bytes);
-        Ok(())
+        set_constant(classify_value(obj)?, obj, builder)
     }
 
     fn set_value_from_py(
@@ -2029,8 +2012,11 @@ impl<'py> Serializer<'py> {
         if obj.is_none() {
             return Ok(());
         }
-        // Check if it's a Parameter reference.
-        if obj.is_instance(self.dsl_types.laboneq_type(DslType::Parameter))? {
+        // Check if it's a Parameter reference. Floats, the most common values, are ruled out
+        // first: a failing `isinstance` falls back to a slow `__class__` lookup.
+        if !obj.is_instance_of::<PyFloat>()
+            && obj.is_instance(self.dsl_types.laboneq_type(DslType::Parameter))?
+        {
             let param_idx = self.collect_parameter(obj)?;
             builder.set_parameter_ref(param_idx);
             return Ok(());
@@ -2371,20 +2357,18 @@ impl<'py> Serializer<'py> {
 ///
 /// `setup_description` is the root of the target backend's own setup-description message,
 /// stored as-is in the opaque `DeviceSetup.setupDescription`; `backend` names its schema.
-///
-/// Returns the serialized bytes as a `Vec<u8>`.
 #[instrument(
     level = "debug",
     name = "laboneq.compiler.serialize_experiment",
     skip_all
 )]
-pub(crate) fn serialize_experiment(
-    py: Python,
+pub(crate) fn serialize_experiment<'py>(
+    py: Python<'py>,
     experiment: ExperimentCapnpPy,
     backend: &str,
     setup_description: any_pointer::Reader<'_>,
     packed: bool,
-) -> Result<Vec<u8>> {
+) -> Result<Bound<'py, PyBytes>> {
     let mut ser = Serializer::new(py)?;
 
     let mut message = capnp::message::Builder::new_default();
@@ -2421,14 +2405,18 @@ pub(crate) fn serialize_experiment(
     metadata.set_schema_version(experiment_capnp::SCHEMA_VERSION);
     metadata.set_created_by(format!("laboneq/{}", env!("CARGO_PKG_VERSION")));
 
-    let bytes = if packed {
+    if packed {
         let mut buf = Vec::new();
         capnp::serialize_packed::write_message(&mut buf, &message)
             .map_err(|e| laboneq_error!("Failed to write packed Cap'n Proto message: {e}"))?;
-        buf
-    } else {
-        capnp::serialize::write_message_to_words(&message)
-    };
+        return Ok(PyBytes::new(py, &buf));
+    }
+    let size =
+        capnp::serialize::compute_serialized_size_in_words(&message) * size_of::<capnp::Word>();
+    let bytes = PyBytes::new_with(py, size, |buf| {
+        capnp::serialize::write_message(buf, &message)
+            .map_err(|e| laboneq_error!("Failed to write Cap'n Proto message: {e}").into())
+    })?;
     Ok(bytes)
 }
 
@@ -2514,6 +2502,10 @@ fn set_variable_value(
     Ok(())
 }
 
+fn enum_member_name(member: &Bound<'_, PyAny>) -> Result<PyBackedStr> {
+    Ok(member.getattr(intern!(member.py(), "_name_"))?.extract()?)
+}
+
 /// Extract alignment from a Python section object and convert to capnp enum.
 fn extract_alignment_capnp(obj: &Bound<'_, PyAny>) -> Result<Option<section_capnp::Alignment>> {
     let py = obj.py();
@@ -2521,9 +2513,8 @@ fn extract_alignment_capnp(obj: &Bound<'_, PyAny>) -> Result<Option<section_capn
     if alignment_py.is_none() {
         return Ok(None);
     }
-    let alignment_obj = alignment_py.getattr(intern!(py, "name"))?;
-    let name: &str = alignment_obj.extract()?;
-    match name {
+    let name = enum_member_name(&alignment_py)?;
+    match &*name {
         "LEFT" => Ok(Some(section_capnp::Alignment::Left)),
         "RIGHT" => Ok(Some(section_capnp::Alignment::Right)),
         _ => Err(laboneq_error!("Unknown section alignment: {name}")),
@@ -2539,9 +2530,8 @@ fn extract_section_timing_mode_capnp(
     if section_timing_mode_py.is_none() {
         return Ok(None);
     }
-    let section_timing_mode_obj = section_timing_mode_py.getattr(intern!(py, "name"))?;
-    let name: &str = section_timing_mode_obj.extract()?;
-    match name {
+    let name = enum_member_name(&section_timing_mode_py)?;
+    match &*name {
         "RELAXED" => Ok(Some(section_capnp::SectionTimingMode::Relaxed)),
         "STRICT" => Ok(Some(section_capnp::SectionTimingMode::Strict)),
         _ => Err(laboneq_error!(
@@ -2731,30 +2721,39 @@ fn set_sweep_value_from_py(
     obj: &Bound<'_, PyAny>,
     builder: &mut common_capnp::value::Builder<'_>,
 ) -> Result<()> {
-    if obj.is_none() {
-        return Ok(());
+    match classify_constant(obj)? {
+        PyConstant::RawBytes(_) | PyConstant::Opaque => {
+            Err(laboneq_error!("Cannot convert value to sweep value: {obj}"))
+        }
+        constant => set_constant(constant, obj, builder),
     }
-    // Floats are the most common values, so check them first.
-    // This does not cast ints to float so this can stay before
-    // the int extraction.
-    if let Ok(f) = obj.cast::<PyFloat>() {
-        builder.reborrow().init_constant().set_real(f.value());
-        return Ok(());
+}
+
+/// Writes `constant`, the classification of `obj`, into `builder`.
+fn set_constant(
+    constant: PyConstant<'_>,
+    obj: &Bound<'_, PyAny>,
+    builder: &mut common_capnp::value::Builder<'_>,
+) -> Result<()> {
+    match constant {
+        PyConstant::None => {}
+        PyConstant::Float(value) => builder.reborrow().init_constant().set_real(value),
+        PyConstant::Int(value) => builder.reborrow().init_constant().set_integer(value),
+        PyConstant::Complex(value) => {
+            let mut complex = builder.reborrow().init_constant().init_complex();
+            complex.set_real(value.re);
+            complex.set_imag(value.im);
+        }
+        PyConstant::Str(value) => builder.reborrow().init_constant().set_string_value(value),
+        PyConstant::Bool(value) => builder.reborrow().init_constant().set_boolean(value),
+        PyConstant::RawBytes(value) => builder
+            .reborrow()
+            .init_constant()
+            .set_raw_bytes_value(value),
+        PyConstant::Opaque => {
+            let bytes = constant_serializer::serialize_json(obj)?;
+            builder.reborrow().init_constant().set_python_value(&bytes);
+        }
     }
-    if let Ok(v) = obj.extract::<i64>() {
-        builder.reborrow().init_constant().set_integer(v);
-        return Ok(());
-    }
-    if obj.is_instance_of::<PyComplex>() {
-        let c: num_complex::Complex64 = obj.extract()?;
-        let mut cv = builder.reborrow().init_constant().init_complex();
-        cv.set_real(c.re);
-        cv.set_imag(c.im);
-        return Ok(());
-    }
-    if let Ok(v) = obj.extract::<&str>() {
-        builder.reborrow().init_constant().set_string_value(v);
-        return Ok(());
-    }
-    Err(laboneq_error!("Cannot convert value to sweep value: {obj}"))
+    Ok(())
 }

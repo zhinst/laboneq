@@ -13,9 +13,7 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import flask.cli
 import numpy as np
-from flask import Flask, request
 
 from laboneq.core.utilities.compile_experiment import compile_experiment
 from laboneq.simulator.signal_plots import backends
@@ -99,6 +97,8 @@ def _interactive_psv_app(
     max_simulation_length: float | None,
     max_events_to_publish: int,
 ):
+    from flask import Flask, request
+
     name = compiled_experiment.experiment.name
     compiled_experiment = _fill_maybe_missing_information(
         compiled_experiment, max_events_to_publish
@@ -168,6 +168,8 @@ def interactive_psv(
             Signals that extend beyond this time are not shown. Default: 10ms.
         max_events_to_publish: Number of events to show
     """
+    import flask.cli
+
     app = _interactive_psv_app(
         compiled_experiment, max_simulation_length, max_events_to_publish
     )

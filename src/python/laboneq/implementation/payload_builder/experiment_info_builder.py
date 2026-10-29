@@ -9,11 +9,6 @@ from typing import TYPE_CHECKING
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.data.calibration import SignalCalibration
-from laboneq.dsl.enums import ExecutionType
-from laboneq.dsl.experiment.section import (
-    AcquireLoopRt,
-    Section,
-)
 from laboneq.implementation.legacy_adapters.calibration_converter import (
     convert_signal_calibration,
 )
@@ -54,9 +49,8 @@ def build_experiment_info(
     """The experiment content to compile, with its signal calibration resolved.
 
     Raises:
-        LabOneQException: An experiment signal has no logical signal mapping, signals
-            sharing a physical channel disagree on its calibration, or a section's
-            execution type conflicts with where it sits in the tree.
+        LabOneQException: An experiment signal has no logical signal mapping, or signals
+            sharing a physical channel disagree on its calibration.
     """
     signal_mappings = _signal_mappings(experiment)
     experiment_calibration = {
@@ -82,8 +76,6 @@ def build_experiment_info(
         )
         for uid, logical_signal in signal_mappings.items()
     ]
-    _validate_realtime(experiment.sections)
-
     return ExperimentInfo(
         src=experiment,
         device_setup=device_setup,
@@ -211,36 +203,6 @@ def _resolve_calibration(
         )
         calibration = AttributeOverrider(baseline_calib, exp_calib)
     return calibration or SignalCalibration()
-
-
-def _validate_realtime(root_sections: list[Section]) -> None:
-    """Verify that:
-    - no near-time section is located inside a real-time section
-    - if there is one, it must be the real-time boundary.
-    """
-
-    def traverse_set_execution_type_and_check_rt_loop(
-        section: Section, in_realtime: bool
-    ):
-        if not isinstance(section, Section):
-            return
-        if isinstance(section, AcquireLoopRt):
-            in_realtime = True
-        execution_type = getattr(section, "execution_type", None)
-        if execution_type == ExecutionType.NEAR_TIME and in_realtime:
-            raise LabOneQException(
-                f"Near-time section '{section.uid}' is nested inside a RT section"
-            )
-        if execution_type == ExecutionType.REAL_TIME and not in_realtime:
-            raise LabOneQException(
-                f"Section '{section.uid}' is marked as real-time, but it is"
-                f" located outside the RT averaging loop"
-            )
-        for child in section.children:
-            traverse_set_execution_type_and_check_rt_loop(child, in_realtime)
-
-    for root_section in root_sections:
-        traverse_set_execution_type_and_check_rt_loop(root_section, in_realtime=False)
 
 
 class AttributeOverrider(object):

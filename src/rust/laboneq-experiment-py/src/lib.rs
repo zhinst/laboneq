@@ -10,6 +10,7 @@ mod serializer;
 
 use capnp::any_pointer;
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 
 use laboneq_error::LabOneQError;
 use laboneq_opentelemetry_python::attach_otel_context;
@@ -23,13 +24,13 @@ type Result<T, E = LabOneQError> = std::result::Result<T, E>;
 ///
 /// `setup_description` is the root of the target backend's own encoding of the device setup,
 /// which the serializer forwards into an opaque pointer tagged with `backend`.
-pub fn serialize_experiment(
-    py: Python,
+pub fn serialize_experiment<'py>(
+    py: Python<'py>,
     experiment: &Bound<'_, PyAny>,
     backend: &str,
     setup_description: any_pointer::Reader<'_>,
     packed: bool,
-) -> PyResult<Vec<u8>> {
+) -> PyResult<Bound<'py, PyBytes>> {
     let _context_guard = tracing_is_enabled()
         .then(|| attach_otel_context(py))
         .transpose()?;

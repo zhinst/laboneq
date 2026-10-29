@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import importlib
-import warnings
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -73,24 +72,17 @@ def _serialize_object(
     return serializer.to_dict(obj, options)
 
 
-# Sentinel used to detect callers that omit the new keyword arguments.
-# We cannot use None as the default for prefix_restrictions because None is a
-# meaningful value (meaning "allow any module"), so we need a distinct object
-# to distinguish "caller passed None explicitly" from "caller passed nothing".
-_UNSET = object()
-
-
 def import_cls(
     dotted_name: str,
     *,
-    base_cls: type | None = None,
-    prefix_restrictions: tuple[str, ...] | None = _UNSET,  # type: ignore[assignment]
+    base_cls: type,
+    prefix_restrictions: tuple[str, ...] | None,
 ) -> type:
     """Import a class by its dotted name and verify it is a subclass of the expected type.
 
-    !!! version-changed "Changed in version 26.4.0"
-        Both ``base_cls`` and ``prefix_restrictions`` are required. Omitting either
-        is deprecated and will raise an error in version 26.10.0.
+    !!! version-changed "Changed in version 26.10.0"
+        ``base_cls`` and ``prefix_restrictions`` are required. Omitting either
+        was deprecated in version 26.4.0.
 
     Args:
         dotted_name: Dotted name of the form ``"<module>.<ClassName>"``, e.g.
@@ -99,34 +91,12 @@ def import_cls(
             nested classes (whose ``__qualname__`` contains a dot) are not
             supported.
         base_cls: The class that the imported class must be a subclass of.
-            Required; omitting it is deprecated.
         prefix_restrictions: Use this when ``dotted_name`` comes from an
             untrusted source (e.g. a serialized file) to restrict which modules
             may be imported — ``dotted_name`` must start with one of the listed
             prefixes or a ``ValueError`` is raised. Pass ``None`` to allow any
-            module when the caller already controls the name. Required;
-            omitting it is deprecated.
+            module when the caller already controls the name.
     """
-    if base_cls is None or prefix_restrictions is _UNSET:
-        missing = []
-        if base_cls is None:
-            missing.append("base_cls")
-        if prefix_restrictions is _UNSET:
-            missing.append("prefix_restrictions")
-        missing_str = " and ".join(missing)
-        warnings.warn(
-            f"Calling import_cls() without explicit {missing_str} "
-            "is deprecated and will be removed in version 26.10.0. "
-            "Pass base_cls=<expected base class> to verify the imported class, and "
-            "prefix_restrictions=('<your.package.',) to restrict which modules may "
-            "be imported (or prefix_restrictions=None to allow any module).",
-            FutureWarning,
-            stacklevel=2,
-        )
-        if base_cls is None:
-            base_cls = object
-        if prefix_restrictions is _UNSET:
-            prefix_restrictions = None
     if prefix_restrictions is not None and not any(
         dotted_name.startswith(p) for p in prefix_restrictions
     ):

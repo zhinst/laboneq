@@ -65,6 +65,72 @@ fn test_play_keeps_pulse_parameter_references_and_values() {
     );
 }
 
+#[test]
+fn test_sampler_uri_names_the_pulse_function() {
+    let custom = deserialize_functional_pulse("py://gaussian").unwrap();
+    assert_eq!(
+        custom,
+        PulseFunction::Custom {
+            function: "gaussian".to_owned()
+        }
+    );
+
+    // A Python functional named `const` may be a user's override, so it stays custom.
+    let custom_const = deserialize_functional_pulse("py://const").unwrap();
+    assert!(matches!(custom_const, PulseFunction::Custom { .. }));
+    assert!(custom_const.is_constant());
+
+    let builtin = deserialize_functional_pulse("builtin://const").unwrap();
+    assert_eq!(builtin, PulseFunction::Builtin(BuiltinPulse::Const));
+}
+
+#[test]
+fn test_unsupported_sampler_uri_is_rejected() {
+    for uri in [
+        "gaussian",
+        "file://gaussian",
+        "builtin://not_a_standard_pulse",
+    ] {
+        let Err(error) = deserialize_functional_pulse(uri) else {
+            panic!("'{uri}' was accepted");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("Unsupported sampler URI: {uri}")),
+            "{error}"
+        );
+    }
+}
+
+/// Deserializes an experiment whose only pulse is a functional pulse sampled
+/// by `sampler_uri`, and returns its corresponding [`PulseFunction`].
+fn deserialize_functional_pulse(sampler_uri: &str) -> Result<PulseFunction> {
+    let mut message = capnp::message::Builder::new_default();
+    let mut experiment = message.init_root::<experiment_capnp::experiment::Builder<'_>>();
+    experiment
+        .reborrow()
+        .init_metadata()
+        .set_schema_version(experiment_capnp::SCHEMA_VERSION);
+    let mut pulse = experiment.init_pulses(1).get(0);
+    pulse.set_uid("pulse");
+    pulse.reborrow().init_length().set_value(100e-9);
+    pulse.init_functional().set_sampler_uri(sampler_uri);
+
+    let bytes = capnp::serialize::write_message_to_words(&message);
+    let experiment = deserialize_experiment(&bytes, false)?;
+    let [pulse] = experiment
+        .pulses
+        .into_values()
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
+    let PulseKind::Functional(pulse) = pulse.kind else {
+        panic!("expected a functional pulse, got {:?}", pulse.kind);
+    };
+    Ok(pulse.function)
+}
+
 /// Deserializes an experiment laid out as:
 ///
 /// ```text

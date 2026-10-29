@@ -63,6 +63,8 @@ pub(crate) struct DslTypes<'a> {
     hqcs_variable: Bound<'a, PyAny>,
     hqcs_predicate: Bound<'a, PyAny>,
     hqcs_is_live: Bound<'a, PyAny>,
+    near_time: Bound<'a, PyAny>,
+    real_time: Bound<'a, PyAny>,
 }
 
 impl<'a> DslTypes<'a> {
@@ -142,6 +144,11 @@ impl<'a> DslTypes<'a> {
         let hqcs_is_live = py
             .import(intern!(py, "laboneq.dsl.coprocessor.predicate"))?
             .getattr(intern!(py, "_IsLive"))?;
+        let execution_type = py
+            .import(intern!(py, "laboneq.core.types.enums.execution_type"))?
+            .getattr(intern!(py, "ExecutionType"))?;
+        let near_time = execution_type.getattr(intern!(py, "NEAR_TIME"))?;
+        let real_time = execution_type.getattr(intern!(py, "REAL_TIME"))?;
 
         Ok(Self {
             linear_sweep_parameter,
@@ -169,6 +176,8 @@ impl<'a> DslTypes<'a> {
             hqcs_variable,
             hqcs_predicate,
             hqcs_is_live,
+            near_time,
+            real_time,
         })
     }
 
@@ -200,5 +209,15 @@ impl<'a> DslTypes<'a> {
             DslType::HqcsPredicate => &self.hqcs_predicate,
             DslType::HqcsIsLive => &self.hqcs_is_live,
         }
+    }
+
+    /// `ExecutionType.NEAR_TIME`.
+    pub(crate) fn near_time(&self) -> &Bound<'a, PyAny> {
+        &self.near_time
+    }
+
+    /// `ExecutionType.REAL_TIME`.
+    pub(crate) fn real_time(&self) -> &Bound<'a, PyAny> {
+        &self.real_time
     }
 }

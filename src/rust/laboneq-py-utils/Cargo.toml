@@ -10,6 +10,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+num-complex = { workspace = true }
 pyo3 = { workspace = true }
 pyo3-log = { workspace = true }
 log = { workspace = true }
@@ -17,9 +18,7 @@ twox-hash = { workspace = true, features = ["xxhash3_64"] }
 
 laboneq-dsl = { workspace = true }
 laboneq-log = { workspace = true }
-laboneq-units = { workspace = true }
 laboneq-common = { workspace = true }
-laboneq-ir = { workspace = true }
 numeric-array = { workspace = true, features = ["pyo3"] }
 
 [lints]

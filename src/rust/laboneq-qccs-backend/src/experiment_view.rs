@@ -9,6 +9,7 @@ use laboneq_common::types::AuxiliaryDevice;
 use laboneq_compiler_py::compiler_backend::ExperimentView;
 use laboneq_compiler_py::compiler_backend::ParameterValues;
 use laboneq_dsl::ExperimentNode;
+use rustc_hash::FxHashMap;
 
 use crate::setup_description::{InternalConnection, PhysicalChannel};
 use laboneq_dsl::signal_calibration::SignalCalibration;
@@ -46,7 +47,7 @@ pub(crate) struct ExperimentViewWrapper<'a> {
     pub id_store: &'a mut NamedIdStore,
 
     pub root: &'a ExperimentNode,
-    pub pulses: &'a HashMap<PulseUid, PulseDef>,
+    pub pulses: &'a FxHashMap<PulseUid, PulseDef>,
 
     // Device setup properties
     pub instruments: IndexMap<DeviceUid, Instrument>,

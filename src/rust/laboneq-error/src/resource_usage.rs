@@ -8,7 +8,7 @@ use crate::{ContextualError, LabOneQError, WithContext};
 use laboneq_log::warn;
 
 #[derive(thiserror::Error, Debug)]
-#[error("{source}")]
+#[error("ResourceLimitationError: {source}")]
 pub struct ResourceExhaustionError {
     source: ContextualError,
 
@@ -25,6 +25,11 @@ impl ResourceExhaustionError {
             source: ContextualError::from_str(msg),
             usage,
         }
+    }
+
+    /// Returns the message without the `ResourceLimitationError` label.
+    pub(crate) fn message(&self) -> String {
+        self.source.to_string()
     }
 }
 
@@ -136,11 +141,11 @@ mod test {
 
         let res = intercept_and_collect(items);
         assert!(res.is_err());
-        assert_eq!(res.unwrap_err().to_string(), "abc");
+        assert_eq!(res.unwrap_err().to_string(), "ResourceLimitationError: abc");
 
         let res = intercept_and_collect(items_rev);
         assert!(res.is_err());
-        assert_eq!(res.unwrap_err().to_string(), "abc");
+        assert_eq!(res.unwrap_err().to_string(), "ResourceLimitationError: abc");
     }
 
     #[test]
@@ -152,7 +157,7 @@ mod test {
 
         let res = intercept_and_collect(items);
         assert!(res.is_err());
-        assert_eq!(res.unwrap_err().to_string(), "abc");
+        assert_eq!(res.unwrap_err().to_string(), "ResourceLimitationError: abc");
     }
 
     #[test]

@@ -4,12 +4,8 @@
 
 """Utilities mainly useful for analysing results and experiments."""
 
-from ._kernelutils import (
-    calculate_integration_kernels,
-    calculate_integration_kernels_thresholds,
-)
+from ._kernelutils import calculate_integration_kernels_thresholds
 
 __all__ = [
-    "calculate_integration_kernels",
     "calculate_integration_kernels_thresholds",
 ]

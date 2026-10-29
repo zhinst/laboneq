@@ -44,12 +44,12 @@ use laboneq_dsl::signal_calibration::{
     SignalCalibration,
 };
 use laboneq_dsl::types::{
-    AcquisitionType, AmplifierPump, AveragingMode, ComplexOrFloat, ExternalParameterUid,
-    FunctionalPulse, HandleUid, Marker, MarkerSelector, MatchTarget, NumericLiteral, Oscillator,
-    OscillatorKind, ParameterUid, PrngSampleUid, PulseDef, PulseFunction, PulseKind,
-    PulseParameterUid, PulseUid, PumpCancellationSource, Quantity, RepetitionMode, SampledPulse,
-    SectionAlignment, SectionTimingMode, SectionUid, SignalUid, StreamUid, SweepParameter, Trigger,
-    Unit, ValueOrParameter, VariableUid,
+    AcquisitionType, AmplifierPump, AveragingMode, BuiltinPulse, ComplexOrFloat,
+    ExternalParameterUid, FunctionalPulse, HandleUid, Marker, MarkerSelector, MatchTarget,
+    NumericLiteral, Oscillator, OscillatorKind, ParameterUid, PrngSampleUid, PulseDef,
+    PulseFunction, PulseKind, PulseParameterUid, PulseUid, PumpCancellationSource, Quantity,
+    RepetitionMode, SampledPulse, SectionAlignment, SectionTimingMode, SectionUid, SignalUid,
+    StreamUid, SweepParameter, Trigger, Unit, ValueOrParameter, VariableUid,
 };
 use laboneq_py_utils::py_object_store::{PyObjectPayload, PyObjectStore};
 use laboneq_units::angle::Angle64;
@@ -57,6 +57,7 @@ use laboneq_units::duration::{hertz, seconds};
 use num_complex::Complex64;
 use numeric_array::NumericArray;
 use pyo3::prelude::*;
+use rustc_hash::FxHashMap;
 
 use tracing::instrument;
 
@@ -67,7 +68,7 @@ pub struct DeserializedExperiment {
     pub root: ExperimentNode,
     pub id_store: NamedIdStore,
     pub parameters: Vec<SweepParameter>,
-    pub pulses: HashMap<PulseUid, PulseDef>,
+    pub pulses: FxHashMap<PulseUid, PulseDef>,
     pub external_parameters: ExternalParameterStore,
 
     pub experiment_signals: Vec<ExperimentSignal>,
@@ -296,6 +297,7 @@ fn deserialize_constant_numeric(
             )))
         }
         Which::StringValue(_) => Err(Error::new("String values not supported as numeric")),
+        Which::Boolean(_) => Err(Error::new("Boolean values not supported as numeric")),
         Which::PythonValue(_) | Which::RawBytesValue(_) => {
             Err(Error::new("Bytes values not supported as numeric"))
         }
@@ -312,6 +314,7 @@ fn deserialize_constant(reader: &common_capnp::constant::Reader<'_>) -> Result<L
             Ok(Complex64::new(cv.get_real(), cv.get_imag()).into())
         }
         Which::StringValue(v) => Ok(text_to_str(v.map_err(Error::new)?)?.into()),
+        Which::Boolean(_) => Err(Error::new("Boolean values not supported")),
         Which::PythonValue(_) | Which::RawBytesValue(_) => {
             Err(Error::new("Bytes values not supported"))
         }
@@ -343,6 +346,19 @@ fn deserialize_acquisition_type(acq_type: operation_capnp::AcquisitionType) -> A
         operation_capnp::AcquisitionType::SpectroscopyPsd => AcquisitionType::SpectroscopyPsd,
         operation_capnp::AcquisitionType::Unspecified => AcquisitionType::default(),
     }
+}
+
+/// Returns the [`PulseFunction`] associated to a pulse's sampler URI.
+/// `py://name` names a Python functional, `builtin://name` a standard pulse.
+fn pulse_function(sampler_uri: &str) -> Result<PulseFunction> {
+    let function = match sampler_uri.split_once("://") {
+        Some(("py", name)) => Some(PulseFunction::Custom {
+            function: name.to_owned(),
+        }),
+        Some(("builtin", name)) => BuiltinPulse::from_name(name).map(PulseFunction::Builtin),
+        _ => None,
+    };
+    function.ok_or_else(|| Error::new(format!("Unsupported sampler URI: {sampler_uri}")))
 }
 
 fn coproc_type_from_capnp(t: coprocessor_capnp::VarType) -> Result<VarType> {
@@ -532,7 +548,7 @@ struct Deserializer {
     section_uid_gen: SectionUidGenerator,
     external_parameters: ExternalParameterStore,
     parameters: Vec<SweepParameter>,
-    pulses: HashMap<PulseUid, PulseDef>,
+    pulses: FxHashMap<PulseUid, PulseDef>,
     pulse_definition_params: HashMap<PulseUid, HashMap<PulseParameterUid, ExternalOrValue>>,
     // A map of driver -> derived parameters.
     driving_parameters: HashMap<ParameterUid, Vec<ParameterUid>>,
@@ -551,7 +567,7 @@ impl Deserializer {
             section_uid_gen: SectionUidGenerator::new(),
             external_parameters: ExternalParameterStore::new(),
             parameters: Vec::new(),
-            pulses: HashMap::new(),
+            pulses: FxHashMap::default(),
             pulse_definition_params: HashMap::new(),
             driving_parameters: HashMap::new(),
             hqcs: HqcsDeclarations::default(),
@@ -801,15 +817,7 @@ impl Deserializer {
             Which::Functional(functional) => {
                 let functional = functional.map_err(Error::new)?;
                 let uri = text_to_str(functional.get_sampler_uri().map_err(Error::new)?)?;
-                let function_name = uri
-                    .strip_prefix("py://")
-                    .ok_or_else(|| Error::new(format!("Unsupported sampler URI: {uri}")))?;
-                let function = match function_name {
-                    "const" => PulseFunction::Constant,
-                    other => PulseFunction::Custom {
-                        function: other.to_owned(),
-                    },
-                };
+                let function = pulse_function(uri)?;
                 let pulse_length =
                     length.ok_or_else(|| Error::new("Functional pulse must have a length"))?;
                 // Read definition-level pulse parameters (FunctionalPulse.parameters).
@@ -1903,6 +1911,7 @@ impl Deserializer {
                         let data = data.map_err(Error::new)?;
                         self.store_external(PyObjectPayload::RawBytes(data))
                     }
+                    ConstantWhich::Boolean(value) => Ok(ExternalOrValue::Bool(value)),
                     _ => Ok(ExternalOrValue::ValueOrParameter(ValueOrParameter::Value(
                         deserialize_constant_numeric(&constant)?,
                     ))),

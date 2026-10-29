@@ -1,6 +1,8 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::num::NonZeroU32;
+
 use pyo3::types::PyDict;
 use pyo3::{intern, prelude::*};
 
@@ -12,8 +14,8 @@ use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::settings::SettingSpec;
 use laboneq_compiler_py::capnp_artifacts::ArtifactSerializerContext;
 use laboneq_compiler_py::compiler_backend::{
-    CodeGenArtifact, CombinedOutput, CompilerArtifact, CompilerBackend, Error as CompilerError,
-    ExperimentView, FeedbackCalculator, PrngSequence, ProcessedExperiment, SignalView,
+    CombinedOutput, CompilerArtifact, CompilerBackend, Error as CompilerError, ExperimentView,
+    FeedbackCalculator, PrngSequence, ProcessedExperiment, SignalDelays,
 };
 use laboneq_compiler_py::compiler_backend::{CompilerBackendResult, PreprocessOutput};
 use laboneq_dsl::types::{ExternalParameterUid, HandleUid, SignalUid};
@@ -22,11 +24,12 @@ use laboneq_ir::ExperimentIr;
 use laboneq_py_utils::py_object_store::PyObjectStore;
 
 use crate::BACKEND_NAME;
+use crate::linker::QccsLinker;
 use crate::preprocessor::QccsBackendPreprocessedData;
 use crate::preprocessor::preprocess_experiment;
 use crate::qccs_feedback_calculator::{FeedbackSignal, QccsFeedbackCalculator};
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct QccsBackend {}
 
 impl CompilerBackend for QccsBackend {
@@ -34,6 +37,7 @@ impl CompilerBackend for QccsBackend {
     type CodeGenArtifact = CodeGenArtifactQccs;
     type CompilerArtifact = CompilationArtifactsQccs;
     type CombinedOutput = QccsCombinedOutput;
+    type Linker = QccsLinker;
     type EmulatedHqcsProgram = ();
     fn settings(&self) -> &'static [SettingSpec] {
         codegenerator_py::CODE_GENERATOR_SETTINGS
@@ -66,7 +70,7 @@ impl CompilerBackend for QccsBackend {
 
     fn generate_code(
         &self,
-        experiment: ExperimentIr,
+        experiment: &ExperimentIr,
         compiler_settings: &CompilerSettings,
         external_parameters: &PyObjectStore<ExternalParameterUid>,
         backend_data: &Self::Output,
@@ -103,7 +107,7 @@ impl CompilerBackend for QccsBackend {
             auxiliary_devices: backend_data.auxiliary_devices().to_vec(),
         };
 
-        let id_store = &experiment.id_store;
+        let id_store = experiment.id_store;
 
         let out = Python::attach(|py| -> Result<Py<PyAny>, LabOneQError> {
             let artifacts = generate_code_py(
@@ -121,47 +125,40 @@ impl CompilerBackend for QccsBackend {
 
     fn feedback_calculator(
         &self,
-        signals: &[SignalView],
+        signal_delays: &[SignalDelays],
         _compiler_settings: &CompilerSettings,
         backend_data: &Self::Output,
-    ) -> Result<
-        Option<Box<dyn FeedbackCalculator<Error = CompilerError> + Send + Sync + 'static>>,
-        CompilerError,
-    > {
-        let feedback_signals = signals.iter().map(|s| {
-            let device = s.device_uid();
+    ) -> Result<Option<Box<dyn FeedbackCalculator<Error = CompilerError>>>, CompilerError> {
+        let feedback_signals = signal_delays.iter().map(|delays| {
+            let s = backend_data
+                .get_signal(delays.uid)
+                .expect("Internal error: Signal unknown to the backend");
             FeedbackSignal {
-                uid: s.uid(),
-                awg_key: *s.awg_key(),
-                signal_kind: s.signal_kind().clone(),
-                device_kind: *backend_data
-                    .device_kinds()
-                    .get(&device)
-                    .expect("Internal Error: Unknown device kind for device with UID"),
-                device_traits: s.device_traits(),
-                is_shfqc: backend_data.is_shfqc(device),
-                sampling_rate: s.sampling_rate(),
-                signal_delay: s.signal_delay(),
-                port_delay: s.port_delay().copied(),
-                start_delay: s.start_delay(),
+                uid: s.uid,
+                awg_key: s.awg_key,
+                signal_kind: s.kind.clone(),
+                device_kind: s.device_kind,
+                device_traits: s.device_kind.traits(),
+                is_shfqc: backend_data.is_shfqc(s.device_uid),
+                sampling_rate: s.sampling_rate.value(),
+                signal_delay: delays.signal_delay,
+                port_delay: s.calibration.port_delay,
+                start_delay: delays.start_delay,
             }
         });
         let model = QccsFeedbackCalculator::new(feedback_signals)?;
         Ok(Some(Box::new(model)))
     }
 
-    fn combined_output_from_py(
-        &self,
-        obj: &Bound<'_, PyAny>,
-    ) -> CompilerBackendResult<Self::CombinedOutput> {
-        Ok(QccsCombinedOutput(obj.clone().unbind()))
+    fn linker(&self) -> QccsLinker {
+        QccsLinker::default()
     }
 
     fn finish_attempt(
         &self,
         combined: &mut Self::CombinedOutput,
         compiler_settings: &CompilerSettings,
-        chunk_count: Option<u32>,
+        chunk_count: Option<NonZeroU32>,
     ) -> CompilerBackendResult<()> {
         Python::attach(|py| {
             let kwargs = PyDict::new(py);
@@ -205,9 +202,8 @@ fn output_module(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
     py.import(intern!(py, "laboneq.qccs.compiler.output"))
 }
 
-/// QCCS's linked real-time compilation output. Still fully backed by the Python
-/// `CombinedOutput` object, since QCCS's linker has not been ported to Rust.
-pub struct QccsCombinedOutput(Py<PyAny>);
+/// QCCS's linked real-time compilation output, the Python `CombinedRTOutputSeqC`.
+pub struct QccsCombinedOutput(pub(crate) Py<PyAny>);
 
 impl CombinedOutput for QccsCombinedOutput {
     fn raw_acquisition_lengths(
@@ -253,14 +249,9 @@ impl CombinedOutput for QccsCombinedOutput {
     }
 }
 
+/// QCCS's code generation output, the Python `SeqCGenOutput`.
 pub struct CodeGenArtifactQccs {
-    inner: Py<PyAny>,
-}
-
-impl CodeGenArtifact for CodeGenArtifactQccs {
-    fn to_python<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        Ok(self.inner.bind(py).into())
-    }
+    pub(crate) inner: Py<PyAny>,
 }
 
 pub struct CompilationArtifactsQccs {

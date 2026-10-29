@@ -9,20 +9,21 @@ from typing import TYPE_CHECKING, Any
 
 import attrs
 
-from laboneq.controller.api.commons import SubmissionRegistry
+from laboneq.controller.api.commons import SubmissionRegistry, to_results
 from laboneq.controller.api.controller_api import ControllerAPI
 from laboneq.controller.constants import DEFAULT_TIMEOUT_S, READY_TIMEOUT_S
-from laboneq.controller.controller import Controller
-from laboneq.dsl.result.results import Results
+from laboneq.controller.controller_core import ControllerCore
+from laboneq.core.utilities.async_helpers import EventLoopHolder
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from laboneq.controller.api.commons import SubmissionHandle
-    from laboneq.controller.controller import SubmissionStatus
+    from laboneq.controller.controller_core import SubmissionStatus
     from laboneq.data.instrument_topology import InstrumentTopology
     from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.dsl.device.device_setup import DeviceSetup
+    from laboneq.dsl.result.results import Results
 
 
 _logger = logging.getLogger(__name__)
@@ -47,17 +48,16 @@ class LocalController(ControllerAPI):
         Returns the instance even if connecting fails. `get_not_ready_reason`
         then reports the failure, and the controller tries again in the
         background when it needs the instruments, at most every
-        `Controller._RECONNECT_HOLDOFF_S` seconds. With `reset_devices`, the
+        `ControllerCore._RECONNECT_HOLDOFF_S` seconds. With `reset_devices`, the
         first successful connect resets the instruments, and no later one does.
         """
         if neartime_callbacks is None:
             neartime_callbacks = {}
-        controller = Controller(
+        controller = ControllerCore(
             device_setup=device_setup,
             ignore_version_mismatch=ignore_version_mismatch,
             neartime_callbacks=neartime_callbacks,
         )
-        controller.start()
         local_controller = LocalController(
             device_setup=device_setup,
             controller=controller,
@@ -65,8 +65,7 @@ class LocalController(ControllerAPI):
             do_emulation=do_emulation,
         )
         try:
-            controller.connect(
-                do_emulation=do_emulation,
+            local_controller.connect(
                 reset_devices=reset_devices,
                 disable_runtime_checks=disable_runtime_checks,
                 timeout_s=DEFAULT_TIMEOUT_S if timeout_s is None else timeout_s,
@@ -78,16 +77,39 @@ class LocalController(ControllerAPI):
     def __init__(
         self,
         device_setup: DeviceSetup,
-        controller: Controller,
+        controller: ControllerCore,
         instrument_topology: InstrumentTopology | None = None,
         do_emulation: bool = True,
     ):
         self._device_setup = device_setup
         # Keep reference to avoid garbage collection
         self._controller = controller
+        # Runs every coroutine of `controller`, which must all run on one loop.
+        self._event_loop = EventLoopHolder()
+        self._event_loop.start()
         self._instrument_topology = instrument_topology
         self._do_emulation = do_emulation
         self._submissions = SubmissionRegistry()
+
+    def connect(
+        self,
+        reset_devices: bool = False,
+        disable_runtime_checks: bool = True,
+        timeout_s: float | None = None,
+    ):
+        """Connect to the instruments, or to the emulator under `do_emulation`.
+
+        Raises if connecting fails. The interfaces do not declare this method:
+        a remote implementation connects to the service in `create`, and the
+        service connects to the instruments.
+        """
+        self._event_loop.run(
+            self._controller.connect,
+            do_emulation=self._do_emulation,
+            reset_devices=reset_devices,
+            disable_runtime_checks=disable_runtime_checks,
+            timeout_s=timeout_s,
+        )
 
     def close(self):
         for handle in self._submissions:
@@ -95,7 +117,10 @@ class LocalController(ControllerAPI):
             # `get_experiment`; teardown has to reach the disconnect regardless.
             with suppress(Exception):
                 self.cancel_experiment(handle)
-        self._controller.disconnect()
+        try:
+            self._event_loop.run(self._controller.disconnect)
+        finally:
+            self._event_loop.stop()
 
     def get_default_devicesetup(self) -> DeviceSetup:
         return self._device_setup
@@ -103,7 +128,7 @@ class LocalController(ControllerAPI):
     def get_instrument_topology(self) -> InstrumentTopology | None:
         if self._instrument_topology is None:
             return None
-        self._controller.ensure_setup_description()
+        self._event_loop.run(self._controller.ensure_setup_description)
         # A client rebuilds a `DeviceSetup` from the topology, and compiles for it
         # with the setup description. Emulation has no instruments to fetch one from.
         setup_description = self._controller.setup_description
@@ -114,10 +139,10 @@ class LocalController(ControllerAPI):
         )
 
     def get_not_ready_reason(self) -> str | None:
-        return self._controller.get_not_ready_reason()
+        return self._event_loop.run(self._controller.get_not_ready_reason)
 
     def wait_until_ready(self, timeout_s: float = READY_TIMEOUT_S):
-        self._controller.wait_until_ready(timeout_s)
+        self._event_loop.run(self._controller.wait_until_ready, timeout_s)
 
     @property
     def neartime_callbacks(self) -> dict[str, Callable]:
@@ -130,6 +155,16 @@ class LocalController(ControllerAPI):
         """
         self._controller.neartime_callbacks.update(neartime_callbacks)
 
+    def disable_outputs(
+        self,
+        device_uids: list[str] | None = None,
+        logical_signals: list[str] | None = None,
+        unused_only: bool = False,
+    ):
+        self._event_loop.run(
+            self._controller.disable_outputs, device_uids, logical_signals, unused_only
+        )
+
     def submit_experiment(
         self,
         scheduled_experiment: ScheduledExperiment,
@@ -139,7 +174,8 @@ class LocalController(ControllerAPI):
         handle = self._submissions.ensure_unique_handle(handle)
         self._submissions.add(
             handle,
-            self._controller.submit_compiled(
+            self._event_loop.run(
+                self._controller.submit_compiled,
                 scheduled_experiment=scheduled_experiment,
                 coprocessor_payload_overrides=coprocessor_payload_overrides,
             ),
@@ -147,22 +183,21 @@ class LocalController(ControllerAPI):
         return handle
 
     def wait_for_experiment(self, handle: SubmissionHandle):
-        self._controller.wait_submission(self._submissions.get(handle))
+        self._event_loop.run(
+            self._controller.wait_submission, self._submissions.get(handle)
+        )
 
     def get_experiment_status(self, handle: SubmissionHandle) -> SubmissionStatus:
         return self._controller.submission_status(self._submissions.get(handle))
 
     def get_experiment(self, handle: SubmissionHandle) -> Results:
         self.wait_for_experiment(handle)
-        experiment_results = self._controller.submission_results(
-            self._submissions.get(handle)
-        )
-        return Results(
-            device_setup=self._device_setup,
-            acquired_results=experiment_results.acquired_results,
-            neartime_callback_results=experiment_results.neartime_callback_results,
-            execution_errors=experiment_results.execution_errors,
-            pipeline_jobs_timestamps=experiment_results.pipeline_jobs_timestamps,
+        return self.get_experiment_results(handle)
+
+    def get_experiment_results(self, handle: SubmissionHandle) -> Results:
+        return to_results(
+            self._device_setup,
+            self._controller.submission_results(self._submissions.get(handle)),
         )
 
     def cancel_experiment(self, handle: SubmissionHandle):

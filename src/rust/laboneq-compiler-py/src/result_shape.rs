@@ -135,6 +135,10 @@ fn merge_shapes(shapes: Vec<HandleResultShape>) -> Result<HandleResultShape> {
 
     let handle = first_shape.handle;
     let combined_match_case_mask = &mut first_shape.match_case_mask;
+    let mut claimed_case_indices: HashMap<usize, HashSet<usize>> = combined_match_case_mask
+        .iter()
+        .map(|(loop_depth, case_indices)| (*loop_depth, case_indices.iter().copied().collect()))
+        .collect();
 
     for shape in shapes {
         if shape.shape != first_shape.shape {
@@ -165,18 +169,22 @@ fn merge_shapes(shapes: Vec<HandleResultShape>) -> Result<HandleResultShape> {
         let mut match_case_mask = shape.match_case_mask.into_iter().collect::<Vec<_>>();
         match_case_mask.sort_by_key(|(loop_depth, _)| *loop_depth);
         for (loop_depth, case_indices) in match_case_mask {
-            let existing_case_indices: HashSet<_> =
-                combined_match_case_mask[&loop_depth].iter().collect();
-            let new_case_indices: HashSet<_> = case_indices.iter().collect();
-            if !existing_case_indices.is_disjoint(&new_case_indices) {
+            let combined_case_indices = &mut combined_match_case_mask[&loop_depth];
+            let claimed = claimed_case_indices.entry(loop_depth).or_default();
+            if case_indices
+                .iter()
+                .any(|case_index| claimed.contains(case_index))
+            {
                 let msg = format!(
                     "Cannot use the same handle ('{}') multiple times in a single case context of a match section",
                     handle.0
                 );
                 return Err(Error::new(msg));
             }
-            if let Some(combined_case_indices) = combined_match_case_mask.get_mut(&loop_depth) {
-                combined_case_indices.extend(new_case_indices);
+            for case_index in case_indices {
+                if claimed.insert(case_index) {
+                    combined_case_indices.push(case_index);
+                }
             }
         }
     }
