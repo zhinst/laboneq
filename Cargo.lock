@@ -100,7 +100,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
 name = "codegenerator"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "codegenerator-utils",
  "crossbeam-epoch",
@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-py"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "codegenerator",
  "codegenerator-utils",
@@ -143,7 +143,7 @@ dependencies = [
 
 [[package]]
 name = "codegenerator-utils"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "laboneq-dsl",
  "tracing",
@@ -387,7 +387,7 @@ dependencies = [
 
 [[package]]
 name = "interval-calculator"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "anyhow",
  "thiserror",
@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-capnp"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "capnp",
  "laboneq-capnp-build",
@@ -429,14 +429,14 @@ dependencies = [
 
 [[package]]
 name = "laboneq-capnp-build"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "capnpc",
 ]
 
 [[package]]
 name = "laboneq-common"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "laboneq-error",
  "laboneq-units",
@@ -449,7 +449,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-compiled-experiment-py"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "capnp",
  "laboneq-capnp",
@@ -463,7 +463,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-compiler-py"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "anyhow",
  "approx",
@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-dsl"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "laboneq-common",
  "laboneq-error",
@@ -504,7 +504,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-error"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "laboneq-log",
  "pyo3",
@@ -513,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-experiment-py"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "capnp",
  "laboneq-capnp",
@@ -531,7 +531,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-ir"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "laboneq-common",
  "laboneq-dsl",
@@ -543,14 +543,14 @@ dependencies = [
 
 [[package]]
 name = "laboneq-log"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "laboneq-opentelemetry-python"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "laboneq-tracing",
  "opentelemetry",
@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-py-utils"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "laboneq-common",
  "laboneq-dsl",
@@ -576,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-qccs-backend"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "approx",
  "capnp",
@@ -600,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-qccs-capnp"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "capnp",
  "laboneq-capnp-build",
@@ -608,7 +608,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-qccs-codegen-artifacts-py"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "capnp",
  "laboneq-compiled-experiment-py",
@@ -619,7 +619,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-rust"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "codegenerator-py",
  "laboneq-compiled-experiment-py",
@@ -633,7 +633,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-scheduler"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "anyhow",
  "itertools",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-tracing"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "laboneq-units"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "derive_more",
  "num-traits",
@@ -754,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "numeric-array"
-version = "26.10.0"
+version = "26.10.1"
 dependencies = [
  "approx",
  "num-complex",

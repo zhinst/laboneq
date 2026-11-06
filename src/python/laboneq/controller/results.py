@@ -221,9 +221,15 @@ class ResultsBuilder:
                     :, :truncation_index
                 ]
 
-            if handle_shape_info.chunked_axis_index is None or chunk_index is not None:
-                # if chunking is not used, or used and the incoming
-                # data is for a single chunk only
+            if (
+                chunk_count is None
+                or chunk_index is not None
+                or handle_shape_info.chunked_axis_index is None
+            ):
+                # This branch triggers in the following scenarios:
+                # - when chunking is not used
+                # - when chunking is used and the incoming data is for a single chunk only
+                # - when chunking is used and the incoming data is for a handle outside the chunked sweep
 
                 shaped_acquired_data_for_handle = np.reshape(
                     acquired_data_for_handle,

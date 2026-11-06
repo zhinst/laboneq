@@ -1,3 +1,15 @@
+# LabOne Q 26.10.1 (2026-11-06)
+
+## Bug Fixes
+
+- Fixed a bug in `ResultsBuilder.add_acquired_data`, where automatically or manually chunked sweeps that needed to be rounded down to a single chunk resulted in a runtime error.
+
+
+## Applications Library
+
+No significant changes.
+
+
 # LabOne Q 26.10.0 (2026-10-29)
 
 ## Features
