@@ -648,10 +648,14 @@ fn fill_missing_device_options(experiment_view: &mut ExperimentViewWrapper) {
 }
 
 fn check_local_oscillator(signal: &ExperimentSignal, instrument: DeviceKind) -> Result<()> {
-    if signal.calibration.lo_frequency.is_some() && !instrument.is_shf() {
+    if let Some(lo_freq) = signal.calibration.lo_frequency
+        && !instrument.is_shf()
+        // Exact 0.0 comparison is OK since we expect a 0 literal from pythonland.
+        && lo_freq.fixed_value() != Some(0.0)
+    {
         bail!(
             "Signal '{}' sets a local oscillator, which is unsupported on this channel \
-            type. Remove the 'local_oscillator' calibration from this signal.",
+            type. Remove the 'local_oscillator' calibration from this signal or set it to 0.",
             signal.uid.0,
         );
     }

@@ -7,8 +7,9 @@ import logging
 from inspect import isawaitable
 from typing import TYPE_CHECKING, Any
 
-from laboneq.controller.callback_protocol import json_failure
+from laboneq.controller.callback_channel import ClientCallbackChannelLost
 from laboneq.controller.devices.device_utils import NodeCollector
+from laboneq.controller.results import error_message
 from laboneq.controller.runtime_context_impl import RuntimeContextImpl
 from laboneq.controller.toolkit_adapter import ToolkitDevices
 from laboneq.controller.utilities.exception import LabOneQControllerException
@@ -83,16 +84,32 @@ class NearTimeRunner(AsyncExecutorBase):
             # is not broken by the new asynchronous execution model.
             await self.last_nt_step_result_completed
         channel = self.execution_context.submission.callback_channel
-        # Callbacks registered on the controller run here; anything else is
-        # dispatched to the client over the callback channel when one exists.
-        if channel is not None and func_name not in self.controller.neartime_callbacks:
-            res = await self._run_client_callback(channel, func_name, args)
-        else:
-            res = await self._run_local_callback(func_name, args)
-        experiment_results = self.execution_context.submission.results_builder.results
-        experiment_results.neartime_callback_results.setdefault(func_name, []).append(
-            res
-        )
+        results_builder = self.execution_context.submission.results_builder
+        try:
+            # Callbacks registered on the controller run here; anything else is
+            # dispatched to the client over the callback channel when one exists.
+            if (
+                channel is not None
+                and func_name not in self.controller.neartime_callbacks
+            ):
+                res = await self._run_client_callback(channel, func_name, args)
+            else:
+                res = await self._run_local_callback(func_name, args)
+        except ClientCallbackChannelLost:
+            # The run cannot continue without its client.
+            raise
+        except LabOneQControllerException as e:
+            if not self.execution_context.anything_submitted:
+                # Nothing has been measured, so the run stops.
+                raise
+            # A failed callback stores no return value; `None` keeps one entry per call.
+            results_builder.add_execution_error(
+                (list(self.nt_loop_indices), func_name, error_message(e))
+            )
+            res = None
+        results_builder.results.neartime_callback_results.setdefault(
+            func_name, []
+        ).append(res)
 
     async def _run_local_callback(self, func_name: str, args: dict[str, Any]) -> Any:
         func = self.controller.neartime_callbacks.get(func_name)
@@ -117,7 +134,7 @@ class NearTimeRunner(AsyncExecutorBase):
         except AbortExecution:
             _logger.warning(f"Execution aborted by near-time callback '{func_name}'")
             raise
-        except BaseException as e:
+        except Exception as e:
             raise LabOneQControllerException(
                 f"Near-time callback '{func_name}' failed with: {e}"
             ) from e
@@ -128,13 +145,6 @@ class NearTimeRunner(AsyncExecutorBase):
         func_name: str,
         args: dict[str, Any],
     ) -> Any:
-        failure = json_failure(args)
-        if failure is not None:
-            raise LabOneQControllerException(
-                f"Near-time callback {func_name!r} cannot be called with {failure}: "
-                f"its arguments travel as JSON. Pass a complex number as its real "
-                f"and imaginary parts, and an array as a list."
-            )
         reply = await channel.invoke(func_name, args, self.nt_loop_indices, None)
         self._apply_callback_actions(func_name, reply.actions)
         return reply.return_value

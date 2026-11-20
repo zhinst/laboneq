@@ -55,7 +55,7 @@ class TaskBlock(Block):
         return self.task.name
 
     @staticmethod
-    def _validate_options(task_name: str, options: Any) -> None:  # noqa: ANN401
+    def _validate_options(task_name: str, options: Any) -> None:
         """Validate options passed to a task.
 
         Raises:

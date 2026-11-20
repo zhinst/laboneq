@@ -1,3 +1,93 @@
+# LabOne Q 27.1.0b1 (2026-11-19)
+
+## Features
+
+- The controller service now gives each client an experiment queue of its own. It still runs one experiment at a time, taking the next one from each client in turn, so a long queue of one client no longer delays the others. Each client's experiments run in the order the client submitted them. Remote clients identify themselves with the `X-LabOneQ-Client-Id` request header. An experiment whose client never connects for its near-time callbacks now delays only that client's experiments.
+- Experiments that reserve many signals, such as those built from quantum operations, now compile faster and use less memory.
+- In chunking error messages, we now refer to the "sweep length" as the "number of sweep iterations". This is to clarify that chunking rules refer to the "length" of sweeps with respect to the number of sweep iterations, rather than the length in time.
+- Added support for chunking multiple sibling sweeps (sweeps in the same parent section) in a real-time experiment, if they have the same number of iterations and the same `auto_chunking` and `chunk_count` settings.
+- Raw-acquisition results now report the sampling rate of their `"samples"` axis in the new `sampling_rate` attribute of `AcquiredResult`. The value is `None` for other acquisition types and for results loaded from serialized files saved by LabOne Q 26.10.x or earlier.
+- Added `acquisition_type` to `acquire()`. It overrides the acquisition type of
+  the real-time loop for that acquisition. On ZQCS, this allows experiments to mix
+  acquisition types, for example, starting with active reset
+  (`AcquisitionType.DISCRIMINATION`) followed by integration acquisitions and
+  ending with a `RAW` acquisition of calibration traces.
+
+  This feature is not supported on SHFQA, SHFSG, HDAWG or UHFQA devices.
+- An error confined to one near-time step no longer stops the experiment. If a near-time callback raises, if the results of a step cannot be read or processed, or if the instruments report errors after a step, LabOne Q records the error on its step, runs the remaining steps and keeps their results. Previously each of these errors stopped the run. An error before anything has been submitted to the instruments, from a near-time callback or otherwise, still stops the run immediately. If the first step reached no instrument, the error that stopped the run ends with "Execution stopped." and the errors of the step's chunks follow it. `Session.run` still raises a `LabOneQControllerException` once the run has ended, listing every error under "Error(s) occurred during experiment execution:", and `session.results` holds the data of the other steps. Each entry of `Results.execution_errors` gives the near-time loop indices of its step, followed by the chunk index if the error concerns a single chunk. An error that stopped the run comes first. To stop a sweep from a near-time callback, call `context.abort_execution()`.
+- Improved the OpenQASM importer's error messages for unsupported statements and expressions.
+- The built-in OpenQASM 3 parser no longer crashes the Python process on very deeply nested programs, and rejects a statement that nests deeper than 256 levels with an error. It also parses short programs faster and reports the errors of large malformed programs much faster.
+- The built-in OpenQASM 3 parser now releases the Python GIL while it parses a program, so other Python threads keep running in the meantime.
+- `save`, `to_json` and `to_dict` now accept a `SweepParameter` or `LinearSweepParameter` on its own. Before, they raised "No serializer available for object of type laboneq.dsl.parameter.SweepParameter." unless the parameter was part of an `Experiment` or `Calibration`.
+
+## Bug Fixes
+
+- Fixed a bug where strict timing mode was being ignored inside `case` sections.
+- Fixed a bug where a near-time sweep of an oscillator frequency with complex values raised a `PanicException`. It now raises "Oscillator frequency must be a real number (integer or float)."
+- Fixed a bug where `Session.run()` rejected valid arguments of a near-time callback that is registered both on the LabOne Q controller service and in the session.
+- Fixed a bug where saving an experiment failed with `AttributeError: 'str' object has no attribute 'uid'` when the `play_after` of a section listed sections by UID.
+- Fixed a bug where the controller service refused experiments from a client of another LabOne Q version with "LabOne Q version mismatch". It now accepts any client at or above its minimum client version.
+- Fixed a bug where, if a QCCS readout instrument returned fewer results than the experiment acquires, LabOne Q only logged "Results for job id(s) ... are missing." and returned the results with the missing values set to NaN. LabOne Q now records the missing results as errors in `Results.execution_errors`, and `Session.run` raises.
+- Fixed a bug where setting the frequency of local oscillators belonging to signals mapped to HDAWG and
+  UHFQA instruments to 0 resulted in a compilation error. Setting any other value
+  continues to give an error, as these instruments do not contain upconverters.
+- Fixed a bug where, if a `Session` was connected to a LabOne Q controller service and the experiment called a near-time callback that is registered neither in the session nor on the service, the run could wait 60 seconds and then fail. The call now fails immediately.
+
+## Documentation
+
+- Added an overview page of the OpenQASM support with a short example of running a Qiskit circuit, and a tutorial, [Running Qiskit Circuits with LabOne Q](https://docs.zhinst.com/labone_q_user_manual/core/functionality_and_concepts/08_openqasm/tutorials/01_qiskit_to_experiment.html), which takes a Qiskit circuit to measurement results and shows parameterized circuits and physical qubits.
+
+## Removals from the Codebase
+
+- Support for Python 3.10 has been dropped. LabOne Q now requires Python 3.11 or newer.
+
+## Applications Library
+
+### Features
+
+- **Breaking change:** The single-qubit randomized benchmarking experiment and its analysis moved out of `contrib` into the core of the Applications Library, and no longer need Qiskit. Import them from `laboneq_applications.experiments.single_qubit_rb` and `laboneq_applications.analysis.single_qubit_rb` instead of `laboneq_applications.contrib.experiments.single_qubit_randomized_benchmarking` and `laboneq_applications.contrib.analysis.single_qubit_randomized_benchmarking`. The experiment workflow is named `single_qubit_rb` instead of `single_qubit_randomized_benchmarking`. The experiment also changed in the following ways:
+
+  - It draws its Clifford sequences itself and implements each Clifford with the fewest pulses, so the same `seed` gives different sequences than before. Each qubit plays its own random sequences instead of the same ones, and every sequence ends right before the measurement.
+  - Its `gate_map` accepts only the gates `sx`, `x` and `rz`, of which it needs `sx` and `rz`. Remove other gates, such as `"id"`, from your `gate_map`.
+  - It plays its Clifford gates on the transition that the `transition` option sets. With `transition="ef"`, it used to prepare the e state and then play the gates on the ge transition. The quantum operations of `gate_map` now take the transition as the keyword argument `transition`; add it to custom operations.
+  - It resets the qubits actively before every Clifford sequence and calibration trace when the `active_reset` option is set, like the other tune-up experiments. It used to ignore the option.
+  - `generate_clifford_sequences` takes the qubits as its first argument, returns the sequences per qubit UID, the form that `create_experiment` takes, and no longer takes `options`.
+  - The plot of the analysis shows the average fidelity of the Clifford gates, `(1 + p) / 2`, as "Clifford fidelity". It used to show the depolarizing parameter `p` of the fitted decay as "gate fidelity", which understated the fidelity.
+- Added the `chunk_count` and `auto_chunking` experiment options, with the same defaults and behavior as in `dsl.sweep`. `chunk_count` splits the real-time sweep into that number of chunks. `auto_chunking` lets the compiler split the sweep into as many chunks as needed to stay within the instruments' resource limits, using `chunk_count` as the initial guess.
+- The `extract_sampling_rate` task of the time-traces analysis workflow now reads the sampling rate from the `sampling_rate` attribute of the acquired raw traces, instead of deriving it from their length and `readout_integration_length`. **Breaking change:** It raises an error if the results do not provide a sampling rate, unless the `sampling_rate` option is set.
+- **Breaking change:** The `rx` and `ry` operations of `TunableTransmonOperations` now wrap the angle to [-π, π] on the "ge" transition and to [-2π, 2π] on any other. `rx(q, 3 * np.pi / 2)` plays the pulse of `rx(q, -np.pi / 2)` instead of 1.5 times the π pulse amplitude, and a swept angle that passes π changes the sign of the amplitude there. Pass `amplitude` to choose the amplitude yourself.
+- **Breaking change:** The coupled-transmon demo platform moved out of `contrib` to the tunable-coupler QPU type. Import it from `laboneq_applications.qpu_types.tunable_coupler.demo_platform_coupled_transmons` instead of `laboneq_applications.contrib.qpu_types.demo_platform_coupled_transmons`.
+- **Breaking change:** The two-qubit randomized benchmarking experiments `two_qubit_rb` and `two_qubit_irb` moved out of `contrib` and no longer need Qiskit. Import them from `laboneq_applications.experiments` instead of `laboneq_applications.contrib.experiments.two_qubit`, and their analyses from `laboneq_applications.analysis` instead of `laboneq_applications.contrib.analysis.two_qubit`. Their tasks, `gate_map` and the results of the interleaved analysis changed; see their API reference. They also changed in the following ways:
+
+  - Each qubit pair plays its own random Clifford sequences, so the pairs must not share qubits. `two_qubit_rb` used to play the same sequences on every pair, and `two_qubit_irb` played only the first pair.
+  - Both analyses take the qubit pairs as UIDs only.
+  - The workflow of `two_qubit_irb` is named `two_qubit_irb` instead of `two_qubit_coupler_irb` and takes `TuneUpWorkflowOptions` instead of `TwoQubitCouplerIRBWorkflowOptions`. Its analysis workflow is named `analysis_workflow`, as in the other experiments, so look up its results as `result.tasks["analysis_workflow"]` instead of `result.tasks["two qubit IRB analysis workflow"]`.
+  - A folder store saves the qubit pairs of their tasks. For `two_qubit_rb`, it used to log a warning instead, since it cannot save nested lists of quantum elements.
+  - They raise an error for the `ef` transition. `two_qubit_rb` used to prepare the e state and then play its gates on the ge transition.
+  - They raise an error unless the `averaging_mode` and `acquisition_type` options are `SINGLE_SHOT` and `DISCRIMINATION`. With other values, the `two_qubit_rb` analysis used to return wrong populations without an error.
+  - They reset the qubits actively before every sequence when the `active_reset` option is set. `two_qubit_rb` used to ignore the option, and `two_qubit_irb` took the `add_reset` option instead.
+  - The `two_qubit_rb` analysis averages single-shot data over the shots of each sequence. It used to average over the sequences when there were as many shots as sequences.
+  - The plot of the `two_qubit_rb` analysis shows the average fidelity of the two-qubit Clifford gates, `1 - 3/4 (1 - α)`, as "Clifford fidelity". It used to show the depolarizing parameter `α` of the fitted decay as "fidelity", which understated the fidelity.
+- Added a `transition` option to the qubit spectroscopy experiment and analysis to support e-f transition measurements. Added a `transition` argument to the `qubit_spectroscopy_drive` quantum operation.
+
+### Bug Fixes
+
+- Fixed a bug where, in `evaluate_experiment` tasks, the amplitude Rabi, lifetime measurement, Hahn echo, Ramsey, and time Rabi experiment workflows did not automatically evaluate the parameter of the transition selected with the `transition` option. In addition, amplitude fine experiment workflows now automatically evaluate the parameter that they update.
+
+### Documentation
+
+- Added the how-to guide [Single-Qubit Randomized Benchmarking](https://docs.zhinst.com/labone_q_user_manual/applications_library/how-to-guides/sources/01_superconducting_qubits/01_workflows/18_single_qubit_randomized_benchmarking.html), which runs the single-qubit randomized benchmarking experiment of the Applications Library.
+- Added the how-to guides [Two-Qubit Randomized Benchmarking](https://docs.zhinst.com/labone_q_user_manual/applications_library/how-to-guides/sources/01_superconducting_qubits/01_workflows/19_two_qubit_randomized_benchmarking.html) and [Two-Qubit Interleaved Randomized Benchmarking](https://docs.zhinst.com/labone_q_user_manual/applications_library/how-to-guides/sources/01_superconducting_qubits/01_workflows/20_two_qubit_interleaved_randomized_benchmarking.html), which run the two-qubit randomized benchmarking experiments of the Applications Library.
+- The how-to guide [One- and Two-Qubit Randomized Benchmarking in LabOne Q with Qiskit](https://docs.zhinst.com/labone_q_user_manual/applications_library/how-to-guides/sources/04_qasm/02_RandomizedBenchmarking_from_Qiskit.html) now generates its sequences with Qiskit alone instead of Qiskit Experiments, runs the two-qubit sequences with the CZ gate of tunable couplers, and also runs the randomized benchmarking experiment of the Applications Library.
+
+### Removals from the Codebase
+
+- **Breaking change:** In the bosonic `swap_calibration`, `snap_calibration` and `wigner_tomography_demonstrator` experiments, `chunk_count=0` no longer enables auto-chunking; instead set `auto_chunking=True`. The `TuneupExperiment2QOptions` class of the two-qubit `contrib` experiments has been removed; instead use `TuneupExperimentOptions`, which now provides `auto_chunking`.
+- **Breaking change:** Renamed the `resonator_spectroscopy_amplitude_qflux` experiment workflow to `resonator_spectroscopy_qflux`, consistent with `qubit_spectroscopy_qflux`.
+- **Breaking change:** The Applications Library no longer depends on Qiskit or Qiskit Experiments, which brought IBM's cloud SDKs into every installation. Its randomized benchmarking experiments generate their Clifford sequences themselves. To keep using Qiskit with LabOne Q, for example to export OpenQASM programs, install it yourself with `pip install qiskit`.
+- Support for Python 3.10 has been dropped. The Applications Library now requires Python 3.11 or newer.
+
+
 # LabOne Q 26.10.1 (2026-11-06)
 
 ## Bug Fixes
@@ -236,10 +326,14 @@ No significant changes.
   import numpy as np
   from laboneq.simple import pulse_library
 
+
   @pulse_library.register_pulse_functional
   def my_pulse(x, **kwargs):
-      coefficients = np.frombuffer(kwargs["coefficients"], dtype=np.float64)  # bytes -> ndarray
+      coefficients = np.frombuffer(
+          kwargs["coefficients"], dtype=np.float64
+      )  # bytes -> ndarray
       return np.polyval(coefficients, x)
+
 
   coefficients = np.array([0.1, -0.5, 1.0])
   exp.play(signal="drive", pulse=my_pulse("p", coefficients=coefficients.tobytes()))
@@ -472,7 +566,7 @@ No significant changes.
 ## Deprecation Notices
 
 - Deprecated the legacy serializer provided by `laboneq.dsl.serialization` and
-  `laboneq.core.serialization`. These will be removed in LabOneQ 26.7.
+  `laboneq.core.serialization`. These will be removed in LabOne Q 26.7.
   Use `laboneq.serializers` instead.
 
 # LabOne Q 26.4.0b1 (2026-02-12)

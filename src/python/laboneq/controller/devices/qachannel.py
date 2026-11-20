@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
@@ -1068,7 +1067,7 @@ class QAChannel(SHFChannelBase):
                 rt_result.metadata.setdefault(job_id, {})["timestamp"] = (
                     timestamp_clock_cycles * TIME_STAMP_TIMEBASE
                 )
-        except (TimeoutError, asyncio.TimeoutError):
+        except TimeoutError:
             _logger.error(
                 f"{ch_repr}: Failed to receive all results within {timeout_s} s, timing out."
             )
@@ -1078,7 +1077,12 @@ class QAChannel(SHFChannelBase):
             _logger.error(
                 f"{ch_repr}: Results for job id(s) {missing_jobs} are missing."
             )
-
+        for job_id in sorted(missing_jobs):
+            rt_result.errors.append((job_id, f"{ch_repr}: No result received."))
+        rt_result.errors.extend(
+            (None, f"{ch_repr}: {message}")
+            for message in self._subscriber.take_stream_errors(result_path)
+        )
         return rt_result
 
     @staticmethod
@@ -1110,17 +1114,22 @@ class QAChannel(SHFChannelBase):
         segment_length = (acquire_length + 0xF) & (~0xF)
         if acquires is None:
             acquires = 1
+        errors: list[tuple[int | None, str]] = []
         try:
             raw_result = await self._subscriber.get_result(
                 result_path, timeout_s=timeout_s
             )
             raw_data = np.reshape(raw_result.vector, (acquires, segment_length))
-        except (TimeoutError, asyncio.TimeoutError):
-            _logger.error(
-                f"{self._unit_repr}:scope: Failed to receive a result from {result_path} within {timeout_s} seconds."
-            )
+        except TimeoutError:
+            message = f"{self._unit_repr}:scope: Failed to receive a result from {result_path} within {timeout_s} seconds."
+            _logger.error(message)
+            errors.append((None, message))
             raw_data = np.full((acquires, segment_length), np.nan, dtype=np.complex128)
-        return RawReadoutData(raw_data)
+        errors.extend(
+            (None, f"{self._unit_repr}:scope: {message}")
+            for message in self._subscriber.take_stream_errors(result_path)
+        )
+        return RawReadoutData(raw_data, errors=errors)
 
     async def teardown_one_step_execution(self, with_pipeliner: bool):
         nc = NodeCollector(base=f"{self._node_base}/")
@@ -1205,7 +1214,7 @@ class SHFQAMixIn:
             and scheduled_experiment.rt_loop_properties.chunk_count is not None
         ):
             raise LabOneQControllerException(
-                f"{self.dev_repr}: Experiment chunking in RAW acquisition mode is not supported by the device"
+                f"{self.dev_repr}: Experiment chunking with 'RAW' acquisition type is not supported by the device"
             )
 
         initialization = get_initialization_by_device_uid(artifacts, self.uid)

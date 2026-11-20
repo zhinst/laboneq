@@ -10,9 +10,12 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+num-complex = { workspace = true }
 tracing = { workspace = true }
 
+laboneq-common = { workspace = true }
 laboneq-dsl = { workspace = true }
+laboneq-pulse-sampling = { workspace = true }
 
 [lints]
 workspace = true

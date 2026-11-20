@@ -1,7 +1,7 @@
 // Copyright 2026 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-//! Finds the chunking mode of the chunked sweep, and retries compilation with more
+//! Finds the chunking mode of the chunked sweeps, and retries compilation with more
 //! chunks under auto-chunking.
 
 use std::num::NonZeroU32;
@@ -11,7 +11,6 @@ use laboneq_dsl::operation::{Operation, Sweep};
 use laboneq_error::{LabOneQError, WithContext};
 
 use crate::error::Error;
-use crate::experiment::Experiment;
 
 const RESOURCE_LIMIT_MSG: &str = "\
 Compilation error: resource limitation exceeded.
@@ -31,71 +30,69 @@ To circumvent this, try one or more of the following:
 - Reduce the size of the program in a single sweep iteration
 - For QCCS instruments, use pulse lengths that are multiples of 8 ns to improve memory efficiency";
 
-pub(super) fn collect_chunking_mode(
-    experiment: &Experiment,
-) -> Result<Option<ChunkingMode>, Error> {
-    let mut visitor = ExperimentVisitor::new();
-    visitor.visit_node(&experiment.root)?;
-    Ok(visitor.chunking)
+pub(super) fn collect_chunking_mode(root: &ExperimentNode) -> Result<Option<ChunkingMode>, Error> {
+    let mut sweeps = Vec::new();
+    collect_chunked_sweeps(root, &mut sweeps);
+    let Some(&(first_parent, first)) = sweeps.first() else {
+        return Ok(None);
+    };
+    if sweeps
+        .iter()
+        .any(|(parent, _)| !std::ptr::eq(*parent, first_parent))
+    {
+        return Err(Error::new(
+            "All chunked sweeps must be siblings, in the same parent section",
+        ));
+    }
+    if sweeps.iter().any(|(_, op)| op.count != first.count) {
+        return Err(Error::new(
+            "All chunked sweeps must have the same number of iterations",
+        ));
+    }
+    if sweeps.iter().any(|(_, op)| {
+        op.auto_chunking != first.auto_chunking || op.chunk_count != first.chunk_count
+    }) {
+        return Err(Error::new(
+            "All chunked sweeps must have the same chunk count and auto-chunking setting",
+        ));
+    }
+    let sweep_iterations = first.count;
+    let mut chunk_count = first.chunk_count;
+
+    let chunking_mode = if first.auto_chunking {
+        ChunkingMode::Auto(AutoChunking::new(sweep_iterations, chunk_count))
+    } else {
+        if chunk_count > sweep_iterations {
+            laboneq_log::warn!(
+                "Provided chunk count ({}) is larger than the number of sweep iterations ({}). Using {} instead.",
+                chunk_count,
+                sweep_iterations,
+                sweep_iterations
+            );
+            chunk_count = sweep_iterations;
+        }
+        if !sweep_iterations.get().is_multiple_of(chunk_count.get()) {
+            return Err(Error::new(format!(
+                "Chunk count ({chunk_count}) does not evenly divide the number of sweep iterations ({sweep_iterations})"
+            )));
+        }
+        ChunkingMode::Manual { chunk_count }
+    };
+    Ok(Some(chunking_mode))
 }
 
-struct ExperimentVisitor {
-    chunking: Option<ChunkingMode>,
-}
-impl ExperimentVisitor {
-    fn new() -> Self {
-        Self { chunking: None }
-    }
-
-    fn generic_visit(&mut self, node: &ExperimentNode) -> Result<(), Error> {
-        for child in &node.children {
-            self.visit_node(child)?;
+/// Collects every chunked sweep below `node`, paired with its parent.
+fn collect_chunked_sweeps<'a>(
+    node: &'a ExperimentNode,
+    sweeps: &mut Vec<(&'a ExperimentNode, &'a Sweep)>,
+) {
+    for child in &node.children {
+        if let Operation::Sweep(op) = &child.kind
+            && op.is_chunked()
+        {
+            sweeps.push((node, op));
         }
-        Ok(())
-    }
-
-    fn visit_node(&mut self, node: &ExperimentNode) -> Result<(), Error> {
-        match &node.kind {
-            Operation::Sweep(op) => self.visit_sweep(node, op),
-            _ => self.generic_visit(node),
-        }
-    }
-
-    fn visit_sweep(&mut self, node: &ExperimentNode, op: &Sweep) -> Result<(), Error> {
-        if !op.is_chunked() {
-            self.generic_visit(node)?;
-            return Ok(());
-        }
-        if op.is_chunked() && self.chunking.is_some() {
-            // Should be validated earlier, but check just in case
-            return Err(Error::new(
-                "Multiple chunked sweeps found in experiment, which is not supported",
-            ));
-        }
-        let sweep_iterations = op.count;
-        let mut chunk_count = op.chunk_count;
-
-        let chunking_mode = if op.auto_chunking {
-            ChunkingMode::Auto(AutoChunking::new(sweep_iterations, chunk_count))
-        } else {
-            if chunk_count > sweep_iterations {
-                laboneq_log::warn!(
-                    "Provided chunk count ({}) is larger than the sweep length ({}). Using {} instead.",
-                    chunk_count,
-                    sweep_iterations,
-                    sweep_iterations
-                );
-                chunk_count = sweep_iterations;
-            }
-            if !sweep_iterations.get().is_multiple_of(chunk_count.get()) {
-                return Err(Error::new(format!(
-                    "Chunk count ({chunk_count}) does not evenly divide sweep length ({sweep_iterations})"
-                )));
-            }
-            ChunkingMode::Manual { chunk_count }
-        };
-        self.chunking = Some(chunking_mode);
-        Ok(())
+        collect_chunked_sweeps(child, sweeps);
     }
 }
 

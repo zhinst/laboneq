@@ -36,22 +36,6 @@ impl<'a> ParameterResolver<'a> {
         Ok(())
     }
 
-    /// Returns the current iteration index for a sweep parameter.
-    pub(crate) fn current_iteration(&self, param: &ParameterUid) -> Result<usize> {
-        self.check_parameter_availability(param)?;
-        if let Some(sweep_param) = self.iteration.get(param) {
-            return Ok(*sweep_param);
-        }
-        // In principle, the full list of NT param values is available in self.parameters,
-        // so the iteration index can be determined, but this should not be needed
-        assert!(
-            self.nt_parameters.value(*param).is_none(),
-            "Cannot resolve NT iteration"
-        );
-
-        unreachable!("Undefined parameter '{}'.", param.0)
-    }
-
     /// Creates a child scope of the parameter resolver with additional available parameters.
     pub(crate) fn child_scope(&self, available_parameters: &[ParameterUid]) -> Result<Self> {
         Ok(Self {
@@ -103,15 +87,5 @@ impl<'a> ParameterResolver<'a> {
             return Err(Error::new(format!("Undefined parameter '{}'.", uid.0)));
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-pub(crate) struct NoNearTimeParameters;
-
-#[cfg(test)]
-impl ParameterLookup for NoNearTimeParameters {
-    fn value(&self, _uid: ParameterUid) -> Option<NumericLiteral> {
-        None
     }
 }

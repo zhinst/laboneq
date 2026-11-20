@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import inspect
 from collections import defaultdict
+from collections.abc import Callable
 from functools import wraps
-from typing import Callable, TypeVar
+from typing import TypeVar
 
 from laboneq.workflow import reference
 from laboneq.workflow._context import LocalContext
@@ -67,7 +68,7 @@ def track(func: T) -> T:
     """
 
     @wraps(func)
-    def inner(*args, **kwargs):  # noqa: ANN202
+    def inner(*args, **kwargs):
         ctx = WorkflowFunctionVariableTrackerContext.get_active()
         if ctx:
             frame = inspect.currentframe()
@@ -76,4 +77,4 @@ def track(func: T) -> T:
                     ctx.add_variable(k, v)
         return func(*args, **kwargs)
 
-    return inner  # type: ignore  # noqa: PGH003
+    return inner  # type: ignore

@@ -45,6 +45,10 @@ fn init(m: &Bound<'_, PyModule>) -> PyResult<()> {
     modules.set_item("laboneq._rust.compiler", &compiler)?;
     m.add_submodule(&compiler)?;
 
+    let pulse_sampling = laboneq_pulse_sampling_py::create_py_module(py, "pulse_sampling")?;
+    modules.set_item("laboneq._rust.pulse_sampling", &pulse_sampling)?;
+    m.add_submodule(&pulse_sampling)?;
+
     let compiled_experiment = compiled_experiment::create_py_module(py, "compiled_experiment")?;
     modules.set_item("laboneq._rust.compiled_experiment", &compiled_experiment)?;
     m.add_submodule(&compiled_experiment)?;

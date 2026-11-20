@@ -20,7 +20,8 @@ compile and run experiments on real devices.
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Any, Sequence
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Any
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.quantum.qpu_topology import QPUTopology
@@ -94,7 +95,7 @@ class QuantumPlatform:
         yield "setup", self.setup.uid
         yield "qpu", self.qpu
 
-    def session(self, do_emulation: bool = False) -> Session:  # noqa: FBT001 FBT002
+    def session(self, do_emulation: bool = False) -> Session:
         """Return a new LabOne Q session.
 
         Arguments:

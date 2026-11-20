@@ -1,7 +1,7 @@
 # Copyright 2024 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""Module that defines acquisition handle formatters for LabOneQ experiments."""
+"""Module that defines acquisition handle formatters for LabOne Q experiments."""
 
 from __future__ import annotations
 

@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Callable, Union
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from yaml import safe_load
 
@@ -74,7 +75,7 @@ InstrumentsType = dict[str, list[dict[str, str]]]
 #         - iq_signal: q0/measure_line
 #           ports: [SIGOUTS/0, SIGOUTS/1]
 #         - acquire_signal: q0/acquire_line
-ConnectionsType = dict[str, list[dict[str, Union[str, list[str]]]]]
+ConnectionsType = dict[str, list[dict[str, str | list[str]]]]
 
 # Models 'dataservers' part of the descriptor:
 #     dataservers:
@@ -82,7 +83,7 @@ ConnectionsType = dict[str, list[dict[str, Union[str, list[str]]]]]
 #         host: 127.0.0.1
 #         port: 8004
 #         instruments: [device_hdawg, device_uhfqa, device_pqsc]
-DataServersType = dict[str, dict[str, Union[str, list[str]]]]
+DataServersType = dict[str, dict[str, str | list[str]]]
 
 
 def _iterate_over_descriptors_of_type(instruments: InstrumentsType, device_type: str):

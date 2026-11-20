@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Callable, cast
+import uuid
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
@@ -13,14 +15,12 @@ from laboneq import __version__
 from laboneq.controller.api.async_controller_api import (
     AsyncControllerAPI,
 )
-from laboneq.controller.api.callback_client import (
-    preflight_client_callbacks,
-)
 from laboneq.controller.api.commons import (
     APIError,
     ClientCallbackServer,
     SubmissionHandle,
     encode_submission,
+    needs_callback_channel,
     readyz_not_ready_reason,
     reraise_controller_exception,
 )
@@ -29,6 +29,7 @@ from laboneq.controller.callback_protocol import (
     CALLBACK_PROTOCOL_VERSION,
 )
 from laboneq.controller.constants import (
+    CLIENT_ID_HEADER,
     PROTOCOL_VERSION,
     PROTOCOL_VERSION_HEADER,
     READY_TIMEOUT_S,
@@ -67,6 +68,10 @@ class AsyncRemoteController(AsyncControllerAPI):
     ) -> AsyncRemoteController:
         """Create an instance of the AsyncRemoteController and connect it.
 
+        An AsyncRemoteController identifies itself to the service with an id of
+        its own. The service runs the experiments of one client in submission
+        order, taking turns with other clients.
+
         For every experiment it submits, the controller serves the near-time
         callbacks in `neartime_callbacks` that the service does not provide,
         until the submission or the controller is closed. It looks a callback up
@@ -99,6 +104,7 @@ class AsyncRemoteController(AsyncControllerAPI):
             "X-LabOneQ-Client-Version": __version__,
             PROTOCOL_VERSION_HEADER: PROTOCOL_VERSION,
             CALLBACK_PROTOCOL_HEADER: CALLBACK_PROTOCOL_VERSION,
+            CLIENT_ID_HEADER: uuid.uuid4().hex,
         }
         if ignore_version_mismatch is not None:
             self._headers["X-LabOneQ-Ignore-Version-Mismatch"] = str(
@@ -187,18 +193,11 @@ class AsyncRemoteController(AsyncControllerAPI):
         handle: SubmissionHandle | None = None,
         coprocessor_payload_overrides: dict[str, bytes] | None = None,
     ) -> SubmissionHandle:
-        client_callbacks = preflight_client_callbacks(
-            scheduled_experiment, self._neartime_callbacks
-        )
         body = encode_submission(scheduled_experiment, coprocessor_payload_overrides)
         if handle is None:
             handle = SubmissionHandle()
-        await self._request(
-            "PUT",
-            f"v1/experiments/{handle.hex}",
-            json=body,
-        )
-        if client_callbacks:
+        reply = await self._request("PUT", f"v1/experiments/{handle.hex}", json=body)
+        if needs_callback_channel(reply, self._neartime_callbacks):
             await self._callback_server.start(handle)
         return handle
 
@@ -250,9 +249,7 @@ class AsyncRemoteController(AsyncControllerAPI):
         async with httpx.AsyncClient(transport=self._transport) as client:
             resp = await client.request(method, url, json=json, headers=self._headers)
 
-            if 400 <= resp.status_code < 500:
-                raise APIError(f"{resp.status_code}: {resp.text}")
-            elif 500 <= resp.status_code < 600:
+            if 400 <= resp.status_code < 600:
                 reraise_controller_exception(resp)
                 raise APIError(f"{resp.status_code}: {resp.text}")
 

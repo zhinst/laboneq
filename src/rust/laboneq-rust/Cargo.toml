@@ -23,6 +23,7 @@ codegenerator-py = { workspace = true }
 laboneq-compiler-py = { workspace = true }
 laboneq-qccs-backend = { workspace = true }
 laboneq-py-utils = { workspace = true }
+laboneq-pulse-sampling-py = { workspace = true }
 laboneq-compiled-experiment-py = { workspace = true }
 laboneq-experiment-py = { workspace = true }
 laboneq-qccs-codegen-artifacts-py = { workspace = true }

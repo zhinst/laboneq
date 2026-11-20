@@ -62,7 +62,7 @@ def _get_argument_types(
 def _get_default_argument(
     fn: typing.Callable,
     arg_name: str,
-) -> typing.Any:  # noqa: ANN401
+) -> typing.Any:
     """Get the default value of the parameter for a function-like object."""
     param = inspect.signature(fn).parameters.get(arg_name, None)
     if param is None:
@@ -73,8 +73,8 @@ def _get_default_argument(
 
 def _convert_str_type(
     t: str,
-    globals_,  # noqa: ANN001
-    locals_,  # noqa: ANN001
+    globals_,
+    locals_,
 ) -> type:
     """Convert a type in a string form to a type object, handling Union types.
 
@@ -95,7 +95,7 @@ def _convert_str_type(
         ]
     except (TypeError, SyntaxError, NameError) as e:
         raise TypeConvertError(f"Could not resolve type {t}.") from e
-    return typing.Union[tuple(type_args)]
+    return typing.Union[tuple(type_args)]  # noqa: UP007
 
 
 def _unwrap_wrapped_func(func: typing.Callable) -> typing.Callable:
@@ -156,7 +156,7 @@ def get_and_validate_param_type(
 
 
 def check_type(
-    value,  # noqa: ANN001
+    value,
     t: type | str,
     globals_: dict,
     locals_: dict,

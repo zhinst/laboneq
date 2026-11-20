@@ -47,9 +47,10 @@ pub(super) fn resolve_phase_reset(
     Ok(())
 }
 
-/// Assigns the signals in scope of `node`'s children to its phase resets that have none.
+/// Assigns the signals that `node` reserves or its children use to the phase resets among its
+/// children that have none.
 fn assign_scope_signals(node: &mut ExperimentNode) -> Result<()> {
-    let mut scope_signals = HashSet::new();
+    let mut scope_signals: HashSet<_> = node.kind.reserved_signals().iter().copied().collect();
     for child in &node.children {
         collect_signals(child, &mut scope_signals);
     }
@@ -88,8 +89,8 @@ mod tests {
     use laboneq_common::named_id::NamedId;
     use laboneq_common::types::{AwgKey, PhysicalDeviceUid};
     use laboneq_dsl::node_structure;
-    use laboneq_dsl::operation::{Reserve, ResetOscillatorPhase};
-    use laboneq_dsl::types::Oscillator;
+    use laboneq_dsl::operation::{ResetOscillatorPhase, Section};
+    use laboneq_dsl::types::{Oscillator, SectionAlignment, SectionTimingMode};
     use laboneq_ir::signal::builder::SignalBuilder;
 
     fn make_iq_signal(uid: u32) -> Signal {
@@ -105,39 +106,35 @@ mod tests {
         .build()
     }
 
+    fn section(reserved_signals: Vec<SignalUid>) -> Operation {
+        Operation::Section(Section {
+            uid: NamedId::debug_id(0).into(),
+            alignment: SectionAlignment::Left,
+            length: None,
+            play_after: vec![],
+            triggers: vec![],
+            on_system_grid: false,
+            section_timing_mode: SectionTimingMode::Relaxed,
+            reserved_signals,
+        })
+    }
+
+    fn reset(signals: Vec<SignalUid>) -> Operation {
+        Operation::ResetOscillatorPhase(ResetOscillatorPhase::new(signals))
+    }
+
     #[test]
     fn test_resolve_phase_reset_fill_scoped_signals() {
         let signals = [make_iq_signal(0), make_iq_signal(1)];
-        let mut experiment = node_structure!(
-            Operation::RealTimeBoundary,
-            [
-                (Operation::Reserve(Reserve::new(signals[0].uid)), []),
-                (
-                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::default()),
-                    []
-                ),
-                (Operation::Reserve(Reserve::new(signals[1].uid)), []),
-            ]
-        );
+        let reserved = vec![signals[0].uid, signals[1].uid];
+        let mut experiment = node_structure!(section(reserved.clone()), [(reset(vec![]), [])]);
         resolve_phase_reset(
             &mut experiment,
             &signals.iter().map(|s| (s.uid, s)).collect(),
         )
         .unwrap();
-        let experiment_expected = node_structure!(
-            Operation::RealTimeBoundary,
-            [
-                (Operation::Reserve(Reserve::new(signals[0].uid)), []),
-                (
-                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::new(vec![
-                        signals[0].uid,
-                        signals[1].uid
-                    ])),
-                    []
-                ),
-                (Operation::Reserve(Reserve::new(signals[1].uid)), []),
-            ]
-        );
+        let experiment_expected =
+            node_structure!(section(reserved.clone()), [(reset(reserved), [])]);
         assert_eq!(experiment, experiment_expected);
     }
 
@@ -145,23 +142,10 @@ mod tests {
     fn test_resolve_phase_reset_fill_nested_scopes() {
         let signals = [make_iq_signal(0), make_iq_signal(1)];
         let mut experiment = node_structure!(
-            Operation::Root,
+            section(vec![signals[0].uid]),
             [
-                (
-                    Operation::RealTimeBoundary,
-                    [
-                        (Operation::Reserve(Reserve::new(signals[1].uid)), []),
-                        (
-                            Operation::ResetOscillatorPhase(ResetOscillatorPhase::default()),
-                            []
-                        ),
-                    ]
-                ),
-                (
-                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::default()),
-                    []
-                ),
-                (Operation::Reserve(Reserve::new(signals[0].uid)), []),
+                (section(vec![signals[1].uid]), [(reset(vec![]), [])]),
+                (reset(vec![]), []),
             ]
         );
         resolve_phase_reset(
@@ -170,28 +154,13 @@ mod tests {
         )
         .unwrap();
         let experiment_expected = node_structure!(
-            Operation::Root,
+            section(vec![signals[0].uid]),
             [
                 (
-                    Operation::RealTimeBoundary,
-                    [
-                        (Operation::Reserve(Reserve::new(signals[1].uid)), []),
-                        (
-                            Operation::ResetOscillatorPhase(ResetOscillatorPhase::new(vec![
-                                signals[1].uid
-                            ])),
-                            []
-                        ),
-                    ]
+                    section(vec![signals[1].uid]),
+                    [(reset(vec![signals[1].uid]), [])]
                 ),
-                (
-                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::new(vec![
-                        signals[0].uid,
-                        signals[1].uid
-                    ])),
-                    []
-                ),
-                (Operation::Reserve(Reserve::new(signals[0].uid)), []),
+                (reset(vec![signals[0].uid, signals[1].uid]), []),
             ]
         );
         assert_eq!(experiment, experiment_expected);
@@ -201,20 +170,8 @@ mod tests {
     fn test_resolve_phase_reset_fill_ignores_signals_of_other_resets() {
         let signals = [make_iq_signal(0), make_iq_signal(1)];
         let mut experiment = node_structure!(
-            Operation::RealTimeBoundary,
-            [
-                (
-                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::new(vec![
-                        signals[0].uid
-                    ])),
-                    []
-                ),
-                (Operation::Reserve(Reserve::new(signals[1].uid)), []),
-                (
-                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::default()),
-                    []
-                ),
-            ]
+            section(vec![signals[1].uid]),
+            [(reset(vec![signals[0].uid]), []), (reset(vec![]), [])]
         );
         resolve_phase_reset(
             &mut experiment,
@@ -222,21 +179,10 @@ mod tests {
         )
         .unwrap();
         let experiment_expected = node_structure!(
-            Operation::RealTimeBoundary,
+            section(vec![signals[1].uid]),
             [
-                (
-                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::new(vec![
-                        signals[0].uid
-                    ])),
-                    []
-                ),
-                (Operation::Reserve(Reserve::new(signals[1].uid)), []),
-                (
-                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::new(vec![
-                        signals[1].uid
-                    ])),
-                    []
-                ),
+                (reset(vec![signals[0].uid]), []),
+                (reset(vec![signals[1].uid]), [])
             ]
         );
         assert_eq!(experiment, experiment_expected);
@@ -264,17 +210,8 @@ mod tests {
     fn test_resolve_phase_reset_signals_defined() {
         let signals = [make_iq_signal(0), make_iq_signal(1)];
         let mut experiment = node_structure!(
-            Operation::RealTimeBoundary,
-            [
-                (Operation::Reserve(Reserve::new(signals[0].uid)), []),
-                (
-                    Operation::ResetOscillatorPhase(ResetOscillatorPhase::new(vec![
-                        signals[1].uid
-                    ])),
-                    []
-                ),
-                (Operation::Reserve(Reserve::new(signals[1].uid)), []),
-            ]
+            section(vec![signals[0].uid, signals[1].uid]),
+            [(reset(vec![signals[1].uid]), [])]
         );
         let experiment_expected = experiment.clone();
         resolve_phase_reset(

@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 from collections import deque
-from typing import TYPE_CHECKING, Any, Callable, Iterator, NoReturn, final
+from collections.abc import Callable, Iterator
+from typing import TYPE_CHECKING, Any, NoReturn, final
 
 import attrs
 
@@ -587,6 +588,7 @@ class Experiment:
         kernel: Pulse | list[Pulse] | None = None,
         length: float | None = None,
         pulse_parameters: dict[str, Any] | list[dict[str, Any] | None] | None = None,
+        acquisition_type: AcquisitionType | None = None,
     ):
         """Acquire a signal and make it available in [Result][laboneq.dsl.result.results.Results].
 
@@ -599,6 +601,14 @@ class Experiment:
             kernel: Pulse(s) for filtering the acquired signal.
             length: Integration length for spectroscopy mode.
             pulse_parameters: Dictionary with user pulse function parameters (re)binding.
+            acquisition_type:
+                Acquisition type for this acquire operation.
+                Defaults to the type set in the enclosing real-time loop.
+                Supported only on ZQCS.
+
+        !!! version-changed "Changed in version 27.1.0"
+            Added `acquisition_type` parameter that overrides the acquisition type
+            set in the real-time loop.
         """
         current_section = self._peek_rt_section()
         current_section.acquire(
@@ -607,6 +617,7 @@ class Experiment:
             kernel=kernel,
             length=length,
             pulse_parameters=pulse_parameters,
+            acquisition_type=acquisition_type,
         )
 
     def measure(

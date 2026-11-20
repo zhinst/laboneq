@@ -20,6 +20,7 @@ from websockets.exceptions import (
     InvalidHandshake,
 )
 
+from laboneq import __version__
 from laboneq.controller.api.callback_client import (
     ClientCallbackSession,
     Done,
@@ -33,10 +34,12 @@ from laboneq.controller.api.lazy_results import (
 from laboneq.controller.callback_protocol import json_default
 from laboneq.controller.utilities.exception import (
     HardwareNotReadyError,
+    InvalidCallbackArgumentsError,
     LabOneQControllerException,
 )
 from laboneq.dsl.result.results import Results
 from laboneq.serializers import from_dict, to_dict
+from laboneq.serializers.implementations import ScheduledExperimentSerializer
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -76,9 +79,13 @@ def encode_submission(
 def decode_submission(
     body: dict[str, Any],
 ) -> tuple[ScheduledExperiment, dict[str, bytes]]:
-    """Read a `PUT v1/experiments/{uuid}` body written by `encode_submission`."""
+    """Read a `PUT v1/experiments/{uuid}` body written by `encode_submission`.
+
+    Does not check which LabOne Q version wrote the body.
+    """
+    serialized = {**body["scheduled_experiment"], "__laboneq_version__": __version__}
     return (
-        cast("ScheduledExperiment", from_dict(body["scheduled_experiment"])),
+        ScheduledExperimentSerializer.from_dict(serialized),
         {
             label: pybase64.b64decode(value.encode("ascii"))
             for label, value in body.get("coprocessor_payload_overrides", {}).items()
@@ -204,12 +211,14 @@ def readyz_not_ready_reason(resp: httpx.Response) -> str | None:
 
 
 def reraise_controller_exception(resp: httpx.Response) -> None:
-    """Raise the exception that a structured 5xx error body reports, if any.
+    """Raise the exception that a structured error body reports, if any.
 
     Raises:
         LabOneQControllerException: The body reports a controller error.
         HardwareNotReadyError: The body reports hardware that cannot run
             experiments now.
+        InvalidCallbackArgumentsError: The body reports a client near-time
+            callback called with arguments that are not JSON-serializable.
     """
     try:
         error = resp.json().get("error", {})
@@ -221,6 +230,23 @@ def reraise_controller_exception(resp: httpx.Response) -> None:
         raise LabOneQControllerException(message)
     if code == "NOT_READY":
         raise HardwareNotReadyError(message)
+    if code == "INVALID_CALLBACK_ARGUMENTS":
+        raise InvalidCallbackArgumentsError(message)
+
+
+def needs_callback_channel(
+    submit_reply: dict[str, Any] | None,
+    neartime_callbacks: Mapping[str, Callable[..., Any]],
+) -> bool:
+    """Whether the client must open the callback channel after a submission.
+
+    Without `client_callbacks` in *submit_reply*, the service may call any of
+    *neartime_callbacks*.
+    """
+    client_callbacks = (submit_reply or {}).get("client_callbacks")
+    if client_callbacks is None:
+        return bool(neartime_callbacks)
+    return bool(client_callbacks)
 
 
 class SubmissionHandle:
@@ -269,7 +295,7 @@ class SubmissionHandle:
     @property
     def hex(self) -> str:
         """Hexadecimal string representation of the handle ID."""
-        return "%032x" % self.id
+        return f"{self.id:032x}"
 
 
 class SubmissionRegistry:

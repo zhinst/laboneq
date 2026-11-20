@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 from enum import Enum
 from functools import partial
 from types import NoneType
-from typing import Callable, ClassVar, NewType, Optional, Type, Union
+from typing import ClassVar, NewType, Union
 
 import attrs
 import numpy
@@ -20,7 +21,7 @@ from laboneq.core.types.enums.execution_type import ExecutionType
 from laboneq.core.types.enums.repetition_mode import RepetitionMode
 from laboneq.core.types.enums.section_alignment import SectionAlignment
 from laboneq.core.types.enums.section_timing_mode import SectionTimingMode
-from laboneq.dsl.coprocessor.operations import _Ensure, _MarkStale, _Send
+from laboneq.dsl.coprocessor.operations import _Expect, _MarkStale, _Send
 from laboneq.dsl.coprocessor.predicate import _IsLive
 from laboneq.dsl.experiment.acquire import Acquire
 from laboneq.dsl.experiment.call import Call
@@ -131,7 +132,7 @@ class PulseSampledModel:
     samples: ArrayLike_Model
     uid: str
     can_compress: bool
-    _target_class: ClassVar[Type] = PulseSampled
+    _target_class: ClassVar[type] = PulseSampled
 
     @classmethod
     def _unstructure(cls, obj):
@@ -160,7 +161,7 @@ class PulseFunctionalModel:
     length: ParameterModel | float | None
     can_compress: bool
     pulse_parameters: PulseParameterModel | None
-    _target_class: ClassVar[Type] = PulseFunctional
+    _target_class: ClassVar[type] = PulseFunctional
 
     @classmethod
     def _unstructure(cls, obj):
@@ -233,8 +234,8 @@ PulseParameterValueModelTypes = tuple(
 )
 
 PulseParameterValueModel = (
-    Union[PulseParameterValueBasicTypes]
-    | Union[PulseParameterValueModelTypes]
+    Union[PulseParameterValueBasicTypes]  # noqa: UP007
+    | Union[PulseParameterValueModelTypes]  # noqa: UP007
     | list["PulseParameterValueModel"]
     | dict[str, "PulseParameterValueModel"]
 )
@@ -413,7 +414,7 @@ class PlayPulseModel:
     pulse_parameters: PulseParameterModel | None
     precompensation_clear: bool | None
     marker: dict | None
-    _target_class: ClassVar[Type] = PlayPulse
+    _target_class: ClassVar[type] = PlayPulse
 
     @classmethod
     def _unstructure(cls, obj):
@@ -469,21 +470,21 @@ class PlayPulseModel:
 @attrs.define
 class ReserveModel:
     signal: str
-    _target_class: ClassVar[Type] = Reserve
+    _target_class: ClassVar[type] = Reserve
 
 
 @attrs.define
 class ResetOscillatorPhaseModel:
     signal: str | None
-    _target_class: ClassVar[Type] = ResetOscillatorPhase
+    _target_class: ClassVar[type] = ResetOscillatorPhase
 
 
 @attrs.define
 class SetNodeModel:
     path: str
     # Assume that the value is a simple type
-    value: Optional[Union[str, int, float, complex, bool]]
-    _target_class: ClassVar[Type] = SetNode
+    value: str | int | float | complex | bool | None
+    _target_class: ClassVar[type] = SetNode
 
 
 @attrs.define
@@ -491,7 +492,7 @@ class DelayModel:
     signal: str | None
     time: float | ParameterModel | None
     precompensation_clear: bool | None
-    _target_class: ClassVar[Type] = Delay
+    _target_class: ClassVar[type] = Delay
 
 
 @attrs.define
@@ -501,7 +502,8 @@ class AcquireModel:
     kernel: PulseModel | list[PulseModel] | None
     length: float | None
     pulse_parameters: PulseParameterModel | list[PulseParameterModel] | None
-    _target_class: ClassVar[Type] = Acquire
+    acquisition_type: AcquisitionTypeModel | None = None
+    _target_class: ClassVar[type] = Acquire
 
     @classmethod
     def _unstructure(cls, obj):
@@ -527,6 +529,9 @@ class AcquireModel:
             "kernel": kernel,
             "length": obj.length,
             "pulse_parameters": pulse_parameters,
+            "acquisition_type": _converter.unstructure(
+                obj.acquisition_type, AcquisitionTypeModel | None
+            ),
         }
 
     @classmethod
@@ -557,6 +562,9 @@ class AcquireModel:
             kernel=kernel,
             length=obj["length"],
             pulse_parameters=pulse_parameters,
+            acquisition_type=_converter.structure(
+                obj.get("acquisition_type"), AcquisitionTypeModel | None
+            ),
         )
 
 
@@ -566,9 +574,9 @@ class CallModel:
     # args could be anything, here we limit it to simple types.
     args: dict[
         str,
-        Union[ParameterModel | str | int | float | bool | complex | None],
+        ParameterModel | str | int | float | bool | complex | None,
     ]
-    _target_class: ClassVar[Type] = Call
+    _target_class: ClassVar[type] = Call
 
     @classmethod
     def _unstructure(cls, obj):
@@ -637,7 +645,7 @@ class _SendModel:
 
     stream: StreamModel
     literal_kwargs: dict
-    _target_class: ClassVar[Type] = _Send
+    _target_class: ClassVar[type] = _Send
 
     @classmethod
     def _unstructure(cls, obj):
@@ -661,7 +669,7 @@ class _MarkStaleModel:
     """
 
     target: dict | None
-    _target_class: ClassVar[Type] = _MarkStale
+    _target_class: ClassVar[type] = _MarkStale
 
     @classmethod
     def _unstructure(cls, obj):
@@ -673,15 +681,15 @@ class _MarkStaleModel:
 
 
 @attrs.define
-class _EnsureModel:
-    """Model for `_Ensure` operations (`ensure(condition)` in a section).
+class _ExpectModel:
+    """Model for `_Expect` operations (`expect(condition)` in a section).
 
     The condition is an `is_live(...)` predicate whose target is
     cross-referenced by `$ref` via its identity cache.
     """
 
     condition: dict | None
-    _target_class: ClassVar[Type] = _Ensure
+    _target_class: ClassVar[type] = _Expect
 
     @classmethod
     def _unstructure(cls, obj):
@@ -691,14 +699,14 @@ class _EnsureModel:
     def _structure(cls, obj, _):
         condition = _structure_hqcs_condition(obj.get("condition"))
         assert condition is not None
-        return _Ensure(condition=condition)
+        return _Expect(condition=condition)
 
 
 _operation_types = [
     AcquireModel,
     CallModel,
     DelayModel,
-    _EnsureModel,
+    _ExpectModel,
     _MarkStaleModel,
     PlayPulseModel,
     ReserveModel,
@@ -707,18 +715,18 @@ _operation_types = [
     ResetOscillatorPhaseModel,
 ]
 _operation_types_target_class = {cl._target_class.__name__ for cl in _operation_types}
-OperationModel = Union[
-    AcquireModel,
-    CallModel,
-    DelayModel,
-    _EnsureModel,
-    _MarkStaleModel,
-    PlayPulseModel,
-    ReserveModel,
-    SetNodeModel,
-    _SendModel,
-    ResetOscillatorPhaseModel,
-]
+OperationModel = (
+    AcquireModel
+    | CallModel
+    | DelayModel
+    | _ExpectModel
+    | _MarkStaleModel
+    | PlayPulseModel
+    | ReserveModel
+    | SetNodeModel
+    | _SendModel
+    | ResetOscillatorPhaseModel
+)
 
 
 def _unstructure_operation_model(obj, _converter: Converter):
@@ -737,7 +745,7 @@ MatchVariableModel = NewType("MatchVariableModel", object)
 
 def _unstructure_play_after_model(obj):
     if isinstance(obj, list):
-        play_after = [p.uid for p in obj]
+        play_after = [p if isinstance(p, str) else p.uid for p in obj]
     elif obj is None or isinstance(obj, str):
         play_after = obj
     else:
@@ -772,7 +780,7 @@ class SectionModel:
     section_timing_mode: SectionTimingModeModel | None
 
     on_system_grid: bool | None
-    _target_class: ClassVar[Type] = Section
+    _target_class: ClassVar[type] = Section
 
 
 @attrs.define
@@ -783,7 +791,7 @@ class MatchModel(SectionModel):
     sweep_parameter: ParameterModel | None
     local: bool | None
     variable: MatchVariableModel = None
-    _target_class: ClassVar[Type] = Match
+    _target_class: ClassVar[type] = Match
 
 
 @attrs.define
@@ -795,7 +803,7 @@ class AcquireLoopRtModel(SectionModel):
     repetition_mode: RepetitionModeModel
     repetition_time: float | None
     reset_oscillator_phase: bool
-    _target_class: ClassVar[Type] = AcquireLoopRt
+    _target_class: ClassVar[type] = AcquireLoopRt
 
 
 @attrs.define
@@ -804,25 +812,25 @@ class SweepModel(SectionModel):
     reset_oscillator_phase: bool
     chunk_count: int
     auto_chunking: bool
-    _target_class: ClassVar[Type] = Sweep
+    _target_class: ClassVar[type] = Sweep
 
 
 @attrs.define
 class CaseModel(SectionModel):
     state: int
-    _target_class: ClassVar[Type] = Case
+    _target_class: ClassVar[type] = Case
 
 
 @attrs.define
 class PRNGSetupModel(SectionModel):
     prng: PRNGModel | None
-    _target_class: ClassVar[Type] = PRNGSetup
+    _target_class: ClassVar[type] = PRNGSetup
 
 
 @attrs.define
 class PRNGLoopModel(SectionModel):
     prng_sample: PRNGSample | None
-    _target_class: ClassVar[Type] = PRNGLoop
+    _target_class: ClassVar[type] = PRNGLoop
 
 
 _section_types = [
@@ -835,15 +843,15 @@ _section_types = [
     PRNGLoopModel,
 ]
 _section_types_target_class = {cl._target_class.__name__ for cl in _section_types}
-AllSectionModel = Union[
-    SectionModel,
-    MatchModel,
-    AcquireLoopRtModel,
-    SweepModel,
-    CaseModel,
-    PRNGSetupModel,
-    PRNGLoopModel,
-]
+AllSectionModel = (
+    SectionModel
+    | MatchModel
+    | AcquireLoopRtModel
+    | SweepModel
+    | CaseModel
+    | PRNGSetupModel
+    | PRNGLoopModel
+)
 
 
 def _unstructure_section_model(obj, _converter: Converter):
@@ -860,7 +868,7 @@ def _structure_section_model(d, _, _converter: Converter):
 
 
 def _unstructure_hqcs_condition(condition) -> dict | None:
-    """Serialize the condition of a DoUntilSection or an `_Ensure`.
+    """Serialize the condition of a DoUntilSection or an `_Expect`.
 
     - `_IsLive`: target (`Variable` or `Pulse`) cross-referenced by `$ref`.
     - Comparison predicates: not yet serializable; stored as `None`.
@@ -879,7 +887,7 @@ def _structure_hqcs_condition(d: dict | None):
     return _IsLive(target=_structure_hqcs_target(d.get("target")))
 
 
-def _unstructure_do_until_section(obj: "DoUntilSection", _converter: Converter) -> dict:
+def _unstructure_do_until_section(obj: DoUntilSection, _converter: Converter) -> dict:
     """Serialize a DoUntilSection.
 
     Notes:
@@ -907,7 +915,7 @@ def _unstructure_do_until_section(obj: "DoUntilSection", _converter: Converter) 
     }
 
 
-def _structure_do_until_section(d: dict, _converter: Converter) -> "DoUntilSection":
+def _structure_do_until_section(d: dict, _converter: Converter) -> DoUntilSection:
     """Deserialize a DoUntilSection from a dict."""
     children = [
         _structure_allsection_model_operation_model(c, None)
@@ -940,7 +948,7 @@ def _structure_do_until_section(d: dict, _converter: Converter) -> "DoUntilSecti
 class PRNGModel:
     range: int
     seed: int
-    _target_class: ClassVar[Type] = PRNG
+    _target_class: ClassVar[type] = PRNG
 
 
 @attrs.define
@@ -948,7 +956,7 @@ class PRNGSampleModel:
     uid: str
     prng: PRNGModel
     count: int
-    _target_class: ClassVar[Type] = PRNGSample
+    _target_class: ClassVar[type] = PRNGSample
 
 
 @attrs.define
@@ -956,7 +964,7 @@ class ExperimentSignalModel:
     uid: str
     calibration: SignalCalibrationModel | None
     mapped_logical_signal_path: str | None
-    _target_class: ClassVar[Type] = ExperimentSignal
+    _target_class: ClassVar[type] = ExperimentSignal
 
 
 def _unstructure_allsection_model_operation_model(obj):

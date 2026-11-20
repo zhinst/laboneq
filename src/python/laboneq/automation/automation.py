@@ -6,8 +6,9 @@ from __future__ import annotations
 import copy
 import threading
 import warnings
+from collections.abc import Iterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Iterator, Literal, final
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, final
 
 import attrs
 import matplotlib.pyplot as plt
@@ -23,7 +24,6 @@ from laboneq.automation.serialization import (
 from laboneq.automation.status import AutomationStatus as Status
 from laboneq.automation.utils.dict_parser import nested_update
 from laboneq.automation.utils.plot_utils import hierarchical_layout
-from laboneq.core.utilities.add_exception_note import add_note
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.workflow.timestamps import local_timestamp
 
@@ -107,7 +107,7 @@ class Automation:
             return self._node_lookup[elem_id]
         else:
             err = KeyError(elem_id)
-            add_note(err, f"Element {elem_id!r} is not in the automation framework.")
+            err.add_note(f"Element {elem_id!r} is not in the automation framework.")
             raise err
 
     def __repr__(self) -> str:
@@ -280,7 +280,7 @@ class Automation:
                 return None
         else:
             err = KeyError(layer_key)
-            add_note(err, f"Layer {layer_key!r} is not in the automation framework.")
+            err.add_note(f"Layer {layer_key!r} is not in the automation framework.")
             raise err
 
     def construct_layer_params_using_auto_params(self, layer_key: str):
@@ -443,7 +443,7 @@ class Automation:
         try:
             return self._layer_lookup[layer_key]
         except KeyError as err:
-            add_note(err, f"Layer {layer_key!r} is not in the automation framework.")
+            err.add_note(f"Layer {layer_key!r} is not in the automation framework.")
             raise err
 
     def get_node(self, node_id: str) -> AutomationNode:
@@ -461,7 +461,7 @@ class Automation:
         try:
             return self._node_lookup[node_id]
         except KeyError as err:
-            add_note(err, f"Node {node_id!r} is not in the automation framework.")
+            err.add_note(f"Node {node_id!r} is not in the automation framework.")
             raise err
 
     def update_timestamp(self) -> None:
@@ -611,7 +611,7 @@ class Automation:
 
             try:
                 new_layer_key, _ = self.run_layer(new_layer_key)
-            except ValueError as err:  # noqa: PERF203
+            except ValueError as err:
                 # Must catch per-iteration: stop execution immediately on error
                 warnings.warn(f"{err}", stacklevel=2)
                 break

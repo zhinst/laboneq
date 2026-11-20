@@ -5,7 +5,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from laboneq.workflow import variable_tracker
 from laboneq.workflow.blocks.block import Block, BlockBuilderContext
@@ -22,7 +23,7 @@ class Namespace:
     def __init__(self, **kwargs: object) -> None:
         self.__dict__.update(kwargs)
 
-    def __setattr__(self, name, value):  # noqa: ANN001
+    def __setattr__(self, name, value):
         raise AttributeError("can't set attribute")
 
     def __delattr__(self, name: str) -> None:
@@ -82,7 +83,7 @@ class ReturnStatement(Block):
 
 
 @variable_tracker.track
-def return_(output: Any | None = None, /, **kwargs: object) -> None:  # noqa: ANN401
+def return_(output: Any | None = None, /, **kwargs: object) -> None:
     """Return statement of an workflow.
 
     Interrupts the current workflow execution and sets the active workflow output

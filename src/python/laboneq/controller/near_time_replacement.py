@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 class NearTimeReplacements:
     def __init__(self):
         # pulse_uid: replacement
-        self._pulses: dict[str, npt.ArrayLike | "Pulse"] = {}
+        self._pulses: dict[str, npt.ArrayLike | Pulse] = {}
         self._pulses_updated_after_last_read: bool = False
 
         # param_uid: replacement
@@ -47,9 +47,7 @@ class NearTimeReplacements:
         yield self._phase_increments
         self._phase_increments_updated_after_last_read = False
 
-    def add_pulse_replacement(
-        self, pulse_uid: str, replacement: npt.ArrayLike | "Pulse"
-    ):
+    def add_pulse_replacement(self, pulse_uid: str, replacement: npt.ArrayLike | Pulse):
         self._pulses[pulse_uid] = replacement
         self._pulses_updated_after_last_read = True
 

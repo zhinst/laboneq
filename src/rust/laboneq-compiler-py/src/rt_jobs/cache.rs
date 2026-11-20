@@ -2,63 +2,83 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::hash::Hash;
 
 use laboneq_dsl::types::{NumericLiteral, ParameterUid};
 
 use super::environment::Environment;
 
-/// The indices of the compiled variants of the real-time program. A job runs a
-/// variant when it is in the variant's chunk and holds the same values for the
-/// parameters the variant read.
-#[derive(Default)]
-pub(crate) struct VariantCache {
-    /// The variants grouped by the parameters they read.
-    groups: Vec<(Vec<ParameterUid>, HashMap<Key, usize>)>,
+/// The indices of the compiled variants of the real-time program, by what each depends on.
+///
+/// A variant depends on its program key, its chunk, and the values of the parameters that
+/// compiling it read. A job runs a variant when it agrees with it on all three.
+pub(crate) struct VariantCache<ProgramKey> {
+    /// The index of each variant, by what it depends on.
+    variants: HashMap<VariantKey<ProgramKey>, usize>,
+    /// The sets of parameters that compiling the variants of each program read. A job
+    /// looks up its variant once per set.
+    reads: HashMap<ProgramKey, Vec<Vec<ParameterUid>>>,
 }
 
-impl VariantCache {
-    /// Returns the index of the variant that matches `env` in `chunk`, if one is recorded.
-    pub(crate) fn get(&self, env: &Environment, chunk: Option<usize>) -> Option<usize> {
-        self.groups.iter().find_map(|(reads, variants)| {
-            let key = Key::new(env, reads, chunk)?;
-            variants.get(&key).copied()
-        })
-    }
+#[derive(PartialEq, Eq, Hash)]
+struct VariantKey<ProgramKey> {
+    program: ProgramKey,
+    chunk: Option<usize>,
+    values: Vec<(ParameterUid, NumericLiteral)>,
+}
 
-    /// Records variant `index`, compiled for `env` and `chunk`, as reading the parameters
-    /// `reads`. Panics when `env` lacks one of `reads`.
-    pub(crate) fn insert(
-        &mut self,
-        reads: Vec<ParameterUid>,
-        env: &Environment,
-        chunk: Option<usize>,
-        index: usize,
-    ) {
-        let key = Key::new(env, &reads, chunk)
-            .expect("Internal error: A variant read a parameter out of scope");
-        match self.groups.iter_mut().find(|(group, _)| *group == reads) {
-            Some((_, variants)) => {
-                variants.insert(key, index);
-            }
-            None => self.groups.push((reads, HashMap::from([(key, index)]))),
+impl<ProgramKey> Default for VariantCache<ProgramKey> {
+    fn default() -> Self {
+        Self {
+            variants: HashMap::new(),
+            reads: HashMap::new(),
         }
     }
 }
 
-/// The values of a group's parameters in one job, and the job's chunk.
-#[derive(PartialEq, Eq, Hash)]
-struct Key {
-    values: Vec<NumericLiteral>,
-    chunk: Option<usize>,
-}
+impl<ProgramKey: Clone + Eq + Hash> VariantCache<ProgramKey> {
+    /// Returns the index of the variant that a job with `program`, `chunk` and `env` runs, if
+    /// one is recorded.
+    pub(crate) fn get(
+        &self,
+        program: &ProgramKey,
+        chunk: Option<usize>,
+        env: &Environment,
+    ) -> Option<usize> {
+        self.reads.get(program)?.iter().find_map(|reads| {
+            let values = reads
+                .iter()
+                .map(|&uid| Some((uid, env.get(uid)?)))
+                .collect::<Option<_>>()?;
+            let key = VariantKey {
+                program: program.clone(),
+                chunk,
+                values,
+            };
+            self.variants.get(&key).copied()
+        })
+    }
 
-impl Key {
-    fn new(env: &Environment, reads: &[ParameterUid], chunk: Option<usize>) -> Option<Self> {
-        let values = reads
-            .iter()
-            .map(|uid| env.get(*uid))
-            .collect::<Option<_>>()?;
-        Some(Self { values, chunk })
+    /// Records variant `index`, compiled for `program` and `chunk`, as depending on the
+    /// parameter values in `values`.
+    pub(crate) fn insert(
+        &mut self,
+        program: ProgramKey,
+        chunk: Option<usize>,
+        values: Vec<(ParameterUid, NumericLiteral)>,
+        index: usize,
+    ) {
+        let reads: Vec<_> = values.iter().map(|&(uid, _)| uid).collect();
+        let known = self.reads.entry(program.clone()).or_default();
+        if !known.contains(&reads) {
+            known.push(reads);
+        }
+        let key = VariantKey {
+            program,
+            chunk,
+            values,
+        };
+        self.variants.insert(key, index);
     }
 }
 
@@ -73,20 +93,11 @@ mod tests {
     #[test]
     fn variants_that_read_different_parameters_run_by_their_own_reads() {
         let mut cache = VariantCache::default();
-        cache.insert(
-            uids(&[SELECTOR, A]),
-            &env(&[(SELECTOR, 0.0), (A, 0.1), (B, 0.3)]),
-            None,
-            0,
-        );
-        cache.insert(
-            uids(&[SELECTOR, B]),
-            &env(&[(SELECTOR, 1.0), (A, 0.2), (B, 0.4)]),
-            None,
-            1,
-        );
+        cache.insert((), None, values(&[(SELECTOR, 0.0), (A, 0.1)]), 0);
+        cache.insert((), None, values(&[(SELECTOR, 1.0), (B, 0.4)]), 1);
 
-        let get = |selector, a, b| cache.get(&env(&[(SELECTOR, selector), (A, a), (B, b)]), None);
+        let get =
+            |selector, a, b| cache.get(&(), None, &env(&[(SELECTOR, selector), (A, a), (B, b)]));
         assert_eq!(get(0.0, 0.1, 0.9), Some(0));
         assert_eq!(get(1.0, 0.9, 0.4), Some(1));
         assert_eq!(get(1.0, 0.1, 0.3), None);
@@ -94,22 +105,44 @@ mod tests {
     }
 
     #[test]
+    fn variants_that_read_equal_values_of_different_parameters_stay_apart() {
+        let mut cache = VariantCache::default();
+        cache.insert((), None, values(&[(A, 0.1)]), 0);
+        cache.insert((), None, values(&[(B, 0.1)]), 1);
+
+        assert_eq!(cache.get(&(), None, &env(&[(A, 0.1), (B, 0.2)])), Some(0));
+        assert_eq!(cache.get(&(), None, &env(&[(A, 0.2), (B, 0.1)])), Some(1));
+    }
+
+    #[test]
     fn a_variant_runs_in_its_own_chunk_only() {
         let mut cache = VariantCache::default();
-        cache.insert(vec![], &env(&[]), Some(0), 0);
+        cache.insert((), Some(0), vec![], 0);
 
-        assert_eq!(cache.get(&env(&[]), Some(0)), Some(0));
-        assert_eq!(cache.get(&env(&[]), Some(1)), None);
+        assert_eq!(cache.get(&(), Some(0), &env(&[])), Some(0));
+        assert_eq!(cache.get(&(), Some(1), &env(&[])), None);
+    }
+
+    #[test]
+    fn a_variant_runs_for_its_own_program_key_only() {
+        let mut cache = VariantCache::default();
+        cache.insert("a", None, values(&[(A, 0.1)]), 0);
+        cache.insert("b", None, vec![], 1);
+
+        assert_eq!(cache.get(&"a", None, &env(&[(A, 0.1)])), Some(0));
+        assert_eq!(cache.get(&"a", None, &env(&[(A, 0.2)])), None);
+        assert_eq!(cache.get(&"b", None, &env(&[(A, 0.2)])), Some(1));
+        assert_eq!(cache.get(&"c", None, &env(&[(A, 0.1)])), None);
     }
 
     fn env(values: &[(u32, f64)]) -> Environment {
+        self::values(values).into_iter().collect()
+    }
+
+    fn values(values: &[(u32, f64)]) -> Vec<(ParameterUid, NumericLiteral)> {
         values
             .iter()
             .map(|&(id, value)| (id.into(), NumericLiteral::Float(value)))
             .collect()
-    }
-
-    fn uids(ids: &[u32]) -> Vec<ParameterUid> {
-        ids.iter().copied().map(ParameterUid::from).collect()
     }
 }

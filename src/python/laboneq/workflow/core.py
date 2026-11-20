@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import inspect
 import textwrap
+from collections.abc import Callable
 from functools import partial, update_wrapper
-from typing import TYPE_CHECKING, Callable, Generic, cast, overload
+from typing import TYPE_CHECKING, Generic, cast, overload
 
 from typing_extensions import ParamSpec
 
@@ -55,7 +56,7 @@ class Workflow(Generic[Parameters]):
     def __init__(
         self,
         root: WorkflowBlock,
-        input: dict | None = None,  # noqa: A002
+        input: dict | None = None,
         *,
         storage_key: tuple[str, ...] | None = None,
     ) -> None:
@@ -74,7 +75,7 @@ class Workflow(Generic[Parameters]):
         cls,
         func: Callable,
         name: str | None = None,
-        input: dict | None = None,  # noqa: A002
+        input: dict | None = None,
     ) -> Workflow:
         """Create a workflow from a callable.
 
@@ -414,7 +415,7 @@ class WorkflowBuilder(Generic[Parameters]):
         return result
 
     @variable_tracker.track
-    def __call__(  #  noqa: D102
+    def __call__(
         self,
         *args: Parameters.args,
         **kwargs: Parameters.kwargs,

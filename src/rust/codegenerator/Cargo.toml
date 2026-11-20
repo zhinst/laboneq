@@ -22,7 +22,7 @@ md5 = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 rayon = { workspace = true }
-# Not used directly; pins the version pulled in by rayon (see workspace manifest).
+# Not used directly; sets a lower bound on the version pulled in by rayon (see workspace manifest).
 crossbeam-epoch = { workspace = true }
 tracing = { workspace = true }
 

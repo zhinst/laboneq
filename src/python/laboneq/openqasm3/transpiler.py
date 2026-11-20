@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from contextlib import nullcontext
 from itertools import chain
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from laboneq.core.exceptions.laboneq_exception import LabOneQException
 from laboneq.dsl import enums, parameter, quantum

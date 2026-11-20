@@ -25,7 +25,8 @@ from .serializer import (
 from .simple_serializer import NOT_SIMPLE, SimpleType, simple_serialize
 
 if TYPE_CHECKING:
-    from typing import IO, Callable
+    from collections.abc import Callable
+    from typing import IO
 
     from laboneq.workflow import Workflow, WorkflowResult
     from laboneq.workflow.result import TaskResult
@@ -116,7 +117,7 @@ class FolderStore(LogbookStore):
             log_path_stem = Path(self._folder, day)
             log_path_stem.mkdir(parents=False, exist_ok=True)
 
-        assert workflow.name is not None  # noqa: S101
+        assert workflow.name is not None
         folder_name = self._unique_workflow_folder_name(
             workflow.name, start_time, log_path_stem
         )

@@ -4,10 +4,9 @@
 from __future__ import annotations
 
 import copy
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 import attrs
-from typing_extensions import TypeAlias
 
 from laboneq.core.exceptions import LabOneQException
 from laboneq.core.utilities.attribute_wrapper import AttributeWrapper
@@ -92,9 +91,15 @@ class Results:
             A list of errors that occurred during the execution of the experiment.
             Entries are tuples of:
 
-            * the indices of the loops where the error occurred
+            * the indices of the loops where the error occurred, followed by the
+              chunk index for an error of a single chunk
             * the experiment section uid
             * the error message
+
+            A fatal error that stopped the run comes first; the others follow in
+            the order they were recorded. If the first near-time step reached no
+            instrument, the error that stopped the run ends with "Execution
+            stopped." and the errors of the step's chunks follow it.
         pipeline_jobs_timestamps:
             The timestamps of all pipeline jobs, in seconds. Organized by signal, then pipeline job id.
 

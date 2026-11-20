@@ -12,6 +12,7 @@ use num_complex::Complex;
 use codegenerator_utils::pulse_parameters::PulseParameterDeduplicator;
 use laboneq_common::named_id::NamedIdStore;
 use laboneq_common::types::SignalKind as SignalKindCommon;
+use laboneq_dsl::types::FixedValueOrParameter;
 use laboneq_dsl::types::{
     AcquisitionType as AcquisitionTypeCommon, AveragingMode, ComplexOrFloat, MarkerSelector,
     Oscillator as OscillatorCommon, OscillatorKind as OscillatorKindCommon, OscillatorUid,
@@ -38,7 +39,7 @@ use crate::ir::{
     PhaseReset, PlayPulse, PpcSweepStep, PrngSetup, Section, SectionId, SectionInfo,
     SetOscillatorFrequency, SignalFrequency,
 };
-use crate::result::{DeviceProperties, FixedValueOrParameter, PpcSettings, RoutedOutput};
+use crate::result::{DeviceProperties, PpcSettings, RoutedOutput};
 use crate::utils::length_to_samples;
 
 pub struct CodegenIr {
@@ -208,6 +209,7 @@ fn create_device_properties(
                 kind: device.kind,
                 sampling_rate: device_sampling_rates.remove(&device.uid),
                 lead_delay: device.lead_delay,
+                is_shfqc: hardware_setup.device(device.uid)?.is_shfqc,
             })
         })
         .collect::<Result<Vec<_>>>()
@@ -238,11 +240,11 @@ fn create_initial_signal_properties(
 ) -> Result<InitialSignalProperties> {
     Ok(InitialSignalProperties {
         uid: signal.uid,
-        amplitude: signal.amplitude.map(value_or_parameter_to_fixed),
+        amplitude: signal.amplitude.map(FixedValueOrParameter::from),
         thresholds: signal.thresholds.clone(),
         mixer_calibration: signal.mixer_calibration.clone(),
         port_mode: signal.port_mode.clone(),
-        port_delay: signal.port_delay.map(value_or_parameter_to_fixed),
+        port_delay: signal.port_delay.map(FixedValueOrParameter::from),
         signal_alignment_delay: signal.signal_alignment_delay,
         precompensation: signal.precompensation.clone(),
         ppc_settings: signal
@@ -260,25 +262,25 @@ fn create_initial_signal_properties(
                     alc_on: pump.alc_on,
                     pump_on: pump.pump_on,
                     pump_filter_on: pump.pump_filter_on,
-                    pump_power: pump.pump_power.map(value_or_parameter_to_fixed),
-                    pump_frequency: pump.pump_frequency.map(value_or_parameter_to_fixed),
+                    pump_power: pump.pump_power.map(FixedValueOrParameter::from),
+                    pump_frequency: pump.pump_frequency.map(FixedValueOrParameter::from),
                     probe_on: pump.probe_on,
-                    probe_power: pump.probe_power.map(value_or_parameter_to_fixed),
-                    probe_frequency: pump.probe_frequency.map(value_or_parameter_to_fixed),
+                    probe_power: pump.probe_power.map(FixedValueOrParameter::from),
+                    probe_frequency: pump.probe_frequency.map(FixedValueOrParameter::from),
                     cancellation_on: pump.cancellation_on,
-                    cancellation_phase: pump.cancellation_phase.map(value_or_parameter_to_fixed),
+                    cancellation_phase: pump.cancellation_phase.map(FixedValueOrParameter::from),
                     cancellation_attenuation: pump
                         .cancellation_attenuation
-                        .map(value_or_parameter_to_fixed),
+                        .map(FixedValueOrParameter::from),
                     cancellation_source: pump.cancellation_source,
                     cancellation_source_frequency: pump.cancellation_source_frequency,
                     sweep_config: None,
                 })
             })
             .transpose()?,
-        voltage_offset: signal.voltage_offset.map(value_or_parameter_to_fixed),
+        voltage_offset: signal.voltage_offset.map(FixedValueOrParameter::from),
         range: signal.range.clone(),
-        lo_frequency: signal.lo_frequency.map(value_or_parameter_to_fixed),
+        lo_frequency: signal.lo_frequency.map(FixedValueOrParameter::from),
         routed_outputs: signal
             .added_outputs
             .iter()
@@ -294,8 +296,8 @@ fn create_initial_signal_properties(
                                 output.source_channel.0
                             )
                         })?,
-                    amplitude_scaling: output.amplitude_scaling.map(value_or_parameter_to_fixed),
-                    phase_shift: output.phase_shift.map(value_or_parameter_to_fixed),
+                    amplitude_scaling: output.amplitude_scaling.map(FixedValueOrParameter::from),
+                    phase_shift: output.phase_shift.map(FixedValueOrParameter::from),
                 })
             })
             .collect::<Result<Vec<_>>>()?,
@@ -303,18 +305,8 @@ fn create_initial_signal_properties(
             .oscillator
             .as_ref()
             .map(|osc| osc.frequency)
-            .map(value_or_parameter_to_fixed),
+            .map(FixedValueOrParameter::from),
     })
-}
-
-pub(crate) fn value_or_parameter_to_fixed<T>(
-    value: ValueOrParameter<T>,
-) -> FixedValueOrParameter<T> {
-    match value {
-        ValueOrParameter::Value(v) => FixedValueOrParameter::Value(v),
-        ValueOrParameter::Parameter(p) => FixedValueOrParameter::Parameter(p),
-        ValueOrParameter::ResolvedParameter { value, .. } => FixedValueOrParameter::Value(value),
-    }
 }
 
 fn eval_trigger_modes(
@@ -489,7 +481,10 @@ fn transform_ir(
         hir::IrKind::Root => NodeKind::Nop {
             length: node.length.value(),
         },
-        _ => panic!("Codegenerator encountered unexpected node: {:?}", node.kind),
+        hir::IrKind::MarkStale(_) | hir::IrKind::Expect(_) => {
+            // QCCS does not support coprocessors. This should have been refused earlier.
+            bail!("Internal error: HQCS operation reached the code generator")
+        }
     };
 
     // Construct the code IR node and recursively process children

@@ -53,7 +53,7 @@ def _simplify_type_signature(types: tuple) -> tuple:
                 else:
                     simplified_members.append(object)
 
-            simplified_types.append(Union[tuple(simplified_members)])
+            simplified_types.append(Union[tuple(simplified_members)])  # noqa: UP007
         else:
             simplified_types.append(object)
 

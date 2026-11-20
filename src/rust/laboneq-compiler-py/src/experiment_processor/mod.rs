@@ -5,6 +5,7 @@ use crate::error::Result;
 use crate::experiment::Experiment;
 use crate::signal_view::signal_views;
 
+mod resolve_acquisition_types;
 mod resolve_averaging;
 mod resolve_match;
 mod resolve_phase_reset;
@@ -13,6 +14,7 @@ mod resolve_section_triggers;
 mod resolve_timing_boundary;
 
 use laboneq_ir::signal::Signal;
+use resolve_acquisition_types::resolve_acquisition_types;
 use resolve_averaging::resolve_averaging;
 use resolve_match::resolve_match;
 use resolve_phase_reset::resolve_phase_reset;
@@ -26,6 +28,7 @@ pub(super) fn process_experiment(experiment: &mut Experiment, signals: &[Signal]
 
     resolve_timing_boundary(&mut experiment.root)?;
     resolve_averaging(&mut experiment.root)?;
+    resolve_acquisition_types(&mut experiment.root)?;
     resolve_phase_reset(
         &mut experiment.root,
         &signals.iter().map(|s| (s.uid, s)).collect(),

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from enum import Enum
-from typing import Optional
 
 
 @dataclass(eq=True, frozen=True)
@@ -20,9 +19,9 @@ class DeviceTraits:
     sampling_rate_2GHz: float | None = None
     oscillator_set_latency: float = 0.0
     reset_osc_duration: float = 0.0
-    lo_frequency_granularity: Optional[float] = None
-    min_lo_frequency: Optional[float] = None
-    max_lo_frequency: Optional[float] = None
+    lo_frequency_granularity: float | None = None
+    min_lo_frequency: float | None = None
+    max_lo_frequency: float | None = None
 
 
 class DeviceType(DeviceTraits, Enum):

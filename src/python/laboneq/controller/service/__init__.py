@@ -30,12 +30,12 @@ __all__ = [
 def __getattr__(name: str) -> Any:
     """Lazy imports to avoid importing fastapi at module load time."""
     if name in ("create_app"):
-        from laboneq.controller.service import app as _app  # noqa: PLC0415
+        from laboneq.controller.service import app as _app
 
         return getattr(_app, name)
     if name == "DeviceSetupLoader":
         from laboneq.controller.service import (
-            controller_container as _cc,  # noqa: PLC0415
+            controller_container as _cc,
         )
 
         return _cc.DeviceSetupLoader

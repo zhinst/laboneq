@@ -20,28 +20,6 @@ struct ComplexValue {
   imag @1 :Float64;
 }
 
-struct Constant {
-  # A constant value (one of several scalar types).
-  #
-  # Used inside `Value` to represent a fixed (non-swept) quantity.
-
-  union {
-    real @0 :Float64;
-    complex @1 :ComplexValue;
-    integer @2 :Int64;
-    stringValue @3 :Text;
-    rawBytesValue @4 :Data;
-    # Arbitrary binary data.
-    pythonValue @5 :Data;
-    # Serialized Python object, for custom functional pulse parameters or user callback
-    # function arguments whose type isn't one of the other `Constant` variants. Values that
-    # cannot be JSON-serialized are rejected. Producers needing
-    # an arbitrary opaque payload should use `rawBytesValue` with a producer/consumer-agreed
-    # encoding instead.
-    boolean @6 :Bool;
-  }
-}
-
 # ========================================================================================
 # Sweepable Values
 
@@ -52,17 +30,29 @@ struct Value {
   # `parameterRef`, the actual value is determined at each sweep step from the
   # referenced `SweepParameter`.
   #
-  # Example: an amplitude field might be a fixed `constant` of 0.5, or a `parameterRef`
+  # Example: an amplitude field might be a fixed `real` of 0.5, or a `parameterRef`
   # pointing to a sweep parameter that varies from 0.0 to 1.0.
 
   union {
     none @0 :Void;
     # No value specified. The consumer should use its default.
 
-    constant @1 :Constant;
-    # A fixed value.
+    real @1 :Float64;
+    complex @2 :ComplexValue;
+    integer @3 :Int64;
+    boolean @4 :Bool;
+    stringValue @5 :Text;
 
-    parameterRef @2 :Id;
+    rawBytesValue @6 :Data;
+    # Arbitrary binary data.
+
+    pythonValue @7 :Data;
+    # Serialized Python object, for custom functional pulse parameters or user callback
+    # function arguments whose type isn't one of the other variants. Values that cannot be
+    # JSON-serialized are rejected. Producers needing an arbitrary opaque payload should use
+    # `rawBytesValue` with a producer/consumer-agreed encoding instead.
+
+    parameterRef @8 :Id;
     # `Experiment.sweepParameters` index. The value is resolved at each sweep step.
   }
 }

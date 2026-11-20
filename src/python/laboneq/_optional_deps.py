@@ -11,9 +11,7 @@ provides missing module error handling.
 from __future__ import annotations
 
 import importlib
-from typing import TYPE_CHECKING
-
-from typing_extensions import TypeAlias
+from typing import TYPE_CHECKING, TypeAlias
 
 if TYPE_CHECKING:
     from types import ModuleType

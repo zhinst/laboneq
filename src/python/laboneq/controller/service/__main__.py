@@ -26,8 +26,9 @@ For more options:
 
 Note:
     This service runs a single uvicorn worker. Multiple workers are
-    intentionally unsupported because the controller manages a single
-    hardware session in-process and concurrent connections would conflict.
+    intentionally unsupported because the controller drives the hardware
+    in-process. Concurrent clients share that process, and each client has an
+    experiment queue of its own.
 """
 
 from __future__ import annotations
@@ -355,7 +356,7 @@ Examples:
 
     # Check for uvicorn
     try:
-        import uvicorn  # noqa: PLC0415
+        import uvicorn
     except ImportError:
         print(
             "Error: uvicorn is required to run the service. "

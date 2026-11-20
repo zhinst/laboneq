@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
-from typing import Dict, TypeVar
+from typing import TypeVar
 
 import orjson
 from typing_extensions import deprecated
@@ -33,7 +33,7 @@ def _uses_new_serializer(obj_or_type) -> bool:
     return isinstance(obj_or_type, CompiledExperiment)
 
 
-def _new_to_dict(obj, omit_none_fields: bool) -> Dict:
+def _new_to_dict(obj, omit_none_fields: bool) -> dict:
     from laboneq.serializers import to_dict
     from laboneq.serializers.types import SerializationOptions
 
@@ -113,7 +113,7 @@ class Serializer:
         "The laboneq.dsl.serialization.Serializer class is deprecated. Use `laboneq.serializers.to_dict` instead.",
         category=FutureWarning,
     )
-    def to_dict(serializable_object, omit_none_fields=False) -> Dict:
+    def to_dict(serializable_object, omit_none_fields=False) -> dict:
         if _uses_new_serializer(serializable_object):
             return _new_to_dict(serializable_object, omit_none_fields)
 

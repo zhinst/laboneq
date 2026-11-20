@@ -49,7 +49,7 @@ def _check_laboneq_version(
             warnings.warn(NOT_FOUND_MSG, UserWarning, stacklevel=2)
     elif serialized_laboneq_version != __version__:
         MISMATCH_MSG = (
-            f"LabOne Q version mismatch. Check out the Labone Q with correct version "
+            f"LabOne Q version mismatch. Check out the LabOne Q with correct version "
             f"{serialized_laboneq_version} to load the serialized data. Otherwise, set "
             f"the `force` option to True to skip the version check."
         )

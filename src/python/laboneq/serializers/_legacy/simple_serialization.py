@@ -11,7 +11,6 @@ import warnings
 from collections.abc import Mapping
 from enum import Enum
 from io import BytesIO
-from typing import Dict
 
 import numpy as np
 import pybase64 as base64
@@ -116,7 +115,7 @@ def module_classes(modules_list, class_names=None):
     return classes_by_fullname, classes_by_short_name
 
 
-@functools.lru_cache()
+@functools.lru_cache
 def all_slots(cls):
     # store slots in a dictionary rather than a set to
     # preserve ordering
@@ -255,7 +254,7 @@ def serialize_to_dict(
     return sub_dict
 
 
-@functools.lru_cache()
+@functools.lru_cache
 def class_argnames(cls):
     return inspect.signature(cls.__init__).parameters.keys()
 
@@ -580,7 +579,7 @@ def serialize_to_dict_with_ref(
     return retval
 
 
-@functools.lru_cache()
+@functools.lru_cache
 def is_entity_class(candidate_class, entity_class_list):
     for entity_class in entity_class_list:
         if issubclass(candidate_class, entity_class):
@@ -588,18 +587,18 @@ def is_entity_class(candidate_class, entity_class_list):
     return False, None
 
 
-@functools.lru_cache()
+@functools.lru_cache
 def _issubclass(cls, base):
     return issubclass(cls, base)
 
 
-@functools.lru_cache()
+@functools.lru_cache
 def _dir(cls):
     return dir(cls)
 
 
 def deserialize_from_dict_with_ref_recursor(
-    data, class_mapping, entity_pool_raw: Dict, entity_pool_deserialized: Dict
+    data, class_mapping, entity_pool_raw: dict, entity_pool_deserialized: dict
 ):
     cls = data.__class__
     if cls is dict:

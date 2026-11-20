@@ -4,21 +4,20 @@
 use anyhow::Context;
 use itertools::Itertools;
 use laboneq_dsl::types::{HandleUid, SectionAlignment, SectionTimingMode, SectionUid, SignalUid};
-use std::collections::HashMap;
-
 use laboneq_units::tinysample::{
     TinySamples, seconds_to_tinysamples, tiny_samples, tinysamples_to_seconds,
 };
 use num_integer::lcm;
+use std::collections::HashMap;
 
+use super::{FeedbackCalculator, TimingResult};
 use crate::error::{Error, Result};
+use crate::schedule_info::{Access, CoprocessorValue};
 use crate::scheduled_node::NodeChild;
 use crate::timing_resolver::timing_result::TimingWarning;
 use crate::utils::{ceil_to_grid, checked_ceil_to_grid, checked_floor_to_grid};
 use crate::{RepetitionMode, ScheduledNode};
 use laboneq_ir::{IrKind, MatchTarget};
-
-use super::{FeedbackCalculator, TimingResult};
 
 fn section_name(kind: &IrKind) -> String {
     kind.section_info()
@@ -104,6 +103,15 @@ impl<T: FeedbackCalculator> CalculatorContext<'_, T> {
     }
 }
 
+/// Timing constraints from siblings that access the same coprocessor values.
+#[derive(Default)]
+struct AccessConstraints {
+    /// Bounds from the most recently arranged writer of each value.
+    written: HashMap<CoprocessorValue, TinySamples>,
+    /// Tightest bounds from all arranged readers and writers of each value.
+    accessed: HashMap<CoprocessorValue, TinySamples>,
+}
+
 /// Calculate timing for a single node.
 fn calculate_node_timing(
     node: &mut ScheduledNode,
@@ -148,10 +156,10 @@ fn calculate_node_timing(
         IrKind::PpcStep(_) => Ok(absolute_start),
         IrKind::SetOscillatorFrequency(_) => Ok(absolute_start),
         IrKind::ResetOscillatorPhase { .. } => Ok(absolute_start),
-        IrKind::InitialLocalOscillatorFrequency(_) => Ok(absolute_start),
         IrKind::InitialOscillatorFrequency(_) => Ok(absolute_start),
-        IrKind::InitialVoltageOffset(_) => Ok(absolute_start),
         IrKind::ClearPrecompensation { .. } => Ok(absolute_start),
+        IrKind::MarkStale(_) => Ok(absolute_start),
+        IrKind::Expect(_) => Ok(absolute_start),
     }?;
     node.schedule.absolute_start = absolute_start;
     if node.kind.section_info().is_some() {
@@ -178,7 +186,7 @@ fn update_absolute_start(
             absolute_start,
         );
     }
-    let child = child.node.make_mut();
+    let child = &mut child.node;
     child.schedule.absolute_start = absolute_start;
     for child in child.children.iter_mut() {
         update_absolute_start(child, absolute_start, ctx);
@@ -192,7 +200,7 @@ fn schedule_root(
 ) -> Result<TinySamples> {
     let mut length = tiny_samples(0);
     for child in node.children.iter_mut() {
-        calculate_node_timing(child.node.make_mut(), absolute_start, ctx)?;
+        calculate_node_timing(&mut child.node, absolute_start, ctx)?;
         length = length.max(child.node.schedule.length());
     }
     length = checked_ceil_to_grid(
@@ -281,6 +289,7 @@ fn arrange_left_aligned(
 ) -> Result<()> {
     let mut signal_start_constraints = HashMap::new();
     let mut play_after_constraints = HashMap::new();
+    let mut access_constraints = AccessConstraints::default();
 
     for child in node.children.iter_mut() {
         // Determine earliest possible start based on signals
@@ -290,6 +299,16 @@ fn arrange_left_aligned(
                 .entry(*signal)
                 .or_insert(tiny_samples(0));
             start = start.max(*signal_start);
+        }
+        // Determine earliest possible start time based on variable access
+        let child_accesses = &child.node.schedule.accesses;
+        for (value, child_access) in child_accesses.iter() {
+            if let Some(access_start) = match child_access {
+                Access::Read => access_constraints.written.get(value).copied(),
+                Access::Write => access_constraints.accessed.get(value).copied(),
+            } {
+                start = start.max(access_start);
+            }
         }
 
         // Handle play after constraints
@@ -316,7 +335,7 @@ fn arrange_left_aligned(
         .into();
 
         // Calculate child timing
-        let start = calculate_node_timing(child.node.make_mut(), absolute_start + start, ctx)?;
+        let start = calculate_node_timing(&mut child.node, absolute_start + start, ctx)?;
 
         // Assign calculated start offset relative to parent
         child.offset = start - absolute_start;
@@ -329,10 +348,21 @@ fn arrange_left_aligned(
             );
         }
 
-        // Update signal constraints
+        // Update signal constraints and variable access constraints
+        let child_end = child.offset + child.node.schedule.length();
         for signal in child.node.schedule.signals.iter() {
             if let Some(signal_offset) = signal_start_constraints.get_mut(signal) {
-                *signal_offset = child.offset + child.node.schedule.length();
+                *signal_offset = child_end;
+            }
+        }
+        for (value, &access) in &child.node.schedule.accesses {
+            let latest_end = access_constraints
+                .accessed
+                .entry(*value)
+                .or_insert(child_end);
+            *latest_end = (*latest_end).max(child_end);
+            if access == Access::Write {
+                access_constraints.written.insert(*value, child_end);
             }
         }
     }
@@ -347,10 +377,11 @@ fn arrange_right_aligned(
 ) -> Result<()> {
     let mut signal_end_constraints = HashMap::new();
     let mut play_after_constraints: HashMap<&SectionUid, TinySamples> = HashMap::new();
+    let mut access_constraints = AccessConstraints::default();
     let mut relative_offset = tiny_samples(0);
 
     for child in node.children.iter_mut().rev() {
-        let c_offset = calculate_node_timing(child.node.make_mut(), absolute_start, ctx)?;
+        let c_offset = calculate_node_timing(&mut child.node, absolute_start, ctx)?;
         assert_eq!(
             (c_offset - absolute_start).value(),
             0,
@@ -365,6 +396,19 @@ fn arrange_right_aligned(
                 .or_insert(tiny_samples(0));
             child_offset = child_offset.min(*signal_start);
         }
+
+        // Determine latest possible end time based on variable access
+        let child_accesses = &child.node.schedule.accesses;
+        for (value, child_access) in child_accesses.iter() {
+            let Some(access_start) = (match child_access {
+                Access::Read => access_constraints.written.get(value).copied(),
+                Access::Write => access_constraints.accessed.get(value).copied(),
+            }) else {
+                continue;
+            };
+            child_offset = child_offset.min(access_start);
+        }
+
         child_offset = child_offset - child.node.schedule.length();
 
         // Handle play after constraints
@@ -406,10 +450,20 @@ fn arrange_right_aligned(
                 .or_insert(child_offset);
         });
 
-        // Update signal constraints
+        // Update signal constraints and variable access constraints
         for signal in child.node.schedule.signals.iter() {
             if let Some(end) = signal_end_constraints.get_mut(signal) {
                 *end = child_offset;
+            }
+        }
+        for (value, &access) in &child.node.schedule.accesses {
+            let earliest_start = access_constraints
+                .accessed
+                .entry(*value)
+                .or_insert(child_offset);
+            *earliest_start = (*earliest_start).min(child_offset);
+            if access == Access::Write {
+                access_constraints.written.insert(*value, child_offset);
             }
         }
     }
@@ -582,7 +636,7 @@ fn schedule_compressed_loop(
         .iter_mut()
         .exactly_one()
         .expect("Expected exactly one iteration in compressed loop.");
-    calculate_node_timing(iteration.node.make_mut(), absolute_start, ctx)?;
+    calculate_node_timing(&mut iteration.node, absolute_start, ctx)?;
     let mut length = iteration.node.length();
     if let Some(RepetitionMode::Constant { time }) = &node.schedule.repetition_mode {
         let adjusted_time = checked_ceil_to_grid(
@@ -617,7 +671,7 @@ fn schedule_compressed_loop(
             )
         })?
         .into();
-    adjust_section_length(iteration.node.make_mut(), length, absolute_start, ctx)?;
+    adjust_section_length(&mut iteration.node, length, absolute_start, ctx)?;
     iteration.offset = tiny_samples(0);
     node.schedule
         .resolve_length(length * loop_obj.iterations.get().into());
@@ -636,11 +690,7 @@ fn schedule_generic_loop(
     let mut child_offset = 0;
     for child in node.children.iter_mut() {
         child.offset = child_offset.into();
-        calculate_node_timing(
-            child.node.make_mut(),
-            absolute_start + child_offset.into(),
-            ctx,
-        )?;
+        calculate_node_timing(&mut child.node, absolute_start + child_offset.into(), ctx)?;
         let child_length = checked_ceil_to_grid(
             child.node.schedule.length().value(),
             node.schedule.grid.value(),
@@ -653,12 +703,7 @@ fn schedule_generic_loop(
                 loop_uid.0
             )
         })?;
-        adjust_section_length(
-            child.node.make_mut(),
-            child_length.into(),
-            absolute_start,
-            ctx,
-        )?;
+        adjust_section_length(&mut child.node, child_length.into(), absolute_start, ctx)?;
         child_offset += child_length;
     }
     Ok(absolute_start)
@@ -679,11 +724,7 @@ fn schedule_auto_repetition_mode_loop(
     let mut child_offset = 0;
     for child in node.children.iter_mut() {
         child.offset = child_offset.into();
-        calculate_node_timing(
-            child.node.make_mut(),
-            absolute_start + child_offset.into(),
-            ctx,
-        )?;
+        calculate_node_timing(&mut child.node, absolute_start + child_offset.into(), ctx)?;
         let length = ceil_to_grid(
             child.node.schedule.length().value(),
             node.schedule.grid.value(),
@@ -695,7 +736,7 @@ fn schedule_auto_repetition_mode_loop(
     // Adjust all iterations to the longest length
     for (iteration, child) in node.children.iter_mut().enumerate() {
         adjust_section_length(
-            child.node.make_mut(),
+            &mut child.node,
             longest_iteration.into(),
             absolute_start,
             ctx,
@@ -738,11 +779,7 @@ fn schedule_constant_repetition_mode_loop(
     let mut child_offset = 0;
     for (iteration, child) in node.children.iter_mut().enumerate() {
         child.offset = child_offset.into();
-        calculate_node_timing(
-            child.node.make_mut(),
-            absolute_start + child_offset.into(),
-            ctx,
-        )?;
+        calculate_node_timing(&mut child.node, absolute_start + child_offset.into(), ctx)?;
         if adjusted_time < child.node.length().value() {
             return Err(Error::new(
                 create_insufficient_repetition_time_error_message(
@@ -753,12 +790,7 @@ fn schedule_constant_repetition_mode_loop(
                 ),
             ));
         }
-        adjust_section_length(
-            child.node.make_mut(),
-            adjusted_time.into(),
-            absolute_start,
-            ctx,
-        )?;
+        adjust_section_length(&mut child.node, adjusted_time.into(), absolute_start, ctx)?;
         child_offset += adjusted_time;
     }
     Ok(absolute_start)
@@ -810,7 +842,7 @@ fn schedule_match(
         absolute_start
     };
     for child in node.children.iter_mut() {
-        calculate_node_timing(child.node.make_mut(), absolute_start, ctx)?;
+        calculate_node_timing(&mut child.node, absolute_start, ctx)?;
     }
     calculate_section_length(node, absolute_start, ctx)?;
     Ok(absolute_start)
@@ -874,3 +906,6 @@ fn schedule_feedback_match(
     let start = start.max(earliest_execute_table_entry_ts.into());
     Ok(start)
 }
+
+#[cfg(test)]
+mod tests;

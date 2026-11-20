@@ -64,6 +64,6 @@ class SHFQC(ZIStandardInstrument):
                 physical_port_ids=[f"{ch}"],
                 connector_labels=[f"Signal Output {ch + 1}"],
             )
-            for ch in range(8)
+            for ch in range(6)
         )
         return inputs + outputs

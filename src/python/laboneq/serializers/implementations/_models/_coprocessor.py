@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import sys
 from functools import partial
-from typing import ClassVar, Type, Union
+from typing import ClassVar
 
 import attrs
 import pybase64
@@ -165,7 +165,7 @@ def structure_payloads(payloads: dict[str, str]) -> dict[str, bytes]:
 
 @attrs.define
 class StructModel:
-    _target_class: ClassVar[Type] = Struct
+    _target_class: ClassVar[type] = Struct
 
     @classmethod
     def _unstructure(cls, obj):
@@ -188,7 +188,7 @@ class StructModel:
 @VariableCache.cache
 @attrs.define
 class VariableModel:
-    _target_class: ClassVar[Type] = Variable
+    _target_class: ClassVar[type] = Variable
 
     @classmethod
     def _unstructure(cls, obj):
@@ -217,7 +217,7 @@ class VariableModel:
 
 @attrs.define
 class FieldAccessorModel:
-    _target_class: ClassVar[Type] = _FieldAccessor
+    _target_class: ClassVar[type] = _FieldAccessor
 
     @classmethod
     def _unstructure(cls, obj):
@@ -230,7 +230,7 @@ class FieldAccessorModel:
 
 @attrs.define
 class OutboundHandlesFieldModel:
-    _target_class: ClassVar[Type] = _OutboundHandlesField
+    _target_class: ClassVar[type] = _OutboundHandlesField
 
     @classmethod
     def _unstructure(cls, obj):
@@ -251,7 +251,7 @@ class OutboundHandlesFieldModel:
 
 @attrs.define
 class OutboundLiteralFieldModel:
-    _target_class: ClassVar[Type] = _OutboundLiteralField
+    _target_class: ClassVar[type] = _OutboundLiteralField
 
     @classmethod
     def _unstructure(cls, obj):
@@ -266,7 +266,7 @@ class OutboundLiteralFieldModel:
 
 @attrs.define
 class InboundScalarFieldModel:
-    _target_class: ClassVar[Type] = _InboundScalarField
+    _target_class: ClassVar[type] = _InboundScalarField
 
     @classmethod
     def _unstructure(cls, obj):
@@ -293,7 +293,7 @@ class InboundScalarFieldModel:
 
 @attrs.define
 class InboundPulseFieldModel:
-    _target_class: ClassVar[Type] = _InboundPulseField
+    _target_class: ClassVar[type] = _InboundPulseField
 
     @classmethod
     def _unstructure(cls, obj):
@@ -330,13 +330,13 @@ _accessor_models = [
     InboundPulseFieldModel,
     FieldAccessorModel,
 ]
-FieldAccessorModelUnion = Union[
-    OutboundHandlesFieldModel,
-    OutboundLiteralFieldModel,
-    InboundScalarFieldModel,
-    InboundPulseFieldModel,
-    FieldAccessorModel,
-]
+FieldAccessorModelUnion = (
+    OutboundHandlesFieldModel
+    | OutboundLiteralFieldModel
+    | InboundScalarFieldModel
+    | InboundPulseFieldModel
+    | FieldAccessorModel
+)
 
 
 def _unstructure_accessor(obj, converter):
@@ -388,7 +388,7 @@ def _structure_stream(obj, target_class):
 @StreamCache.cache
 @attrs.define
 class OutboundStreamModel:
-    _target_class: ClassVar[Type] = OutboundStream
+    _target_class: ClassVar[type] = OutboundStream
 
     @classmethod
     def _unstructure(cls, obj):
@@ -402,7 +402,7 @@ class OutboundStreamModel:
 @StreamCache.cache
 @attrs.define
 class InboundStreamModel:
-    _target_class: ClassVar[Type] = InboundStream
+    _target_class: ClassVar[type] = InboundStream
 
     @classmethod
     def _unstructure(cls, obj):
@@ -417,10 +417,7 @@ _stream_models = [
     OutboundStreamModel,
     InboundStreamModel,
 ]
-StreamModel = Union[
-    OutboundStreamModel,
-    InboundStreamModel,
-]
+StreamModel = OutboundStreamModel | InboundStreamModel
 
 
 def _unstructure_stream_model(obj, converter):

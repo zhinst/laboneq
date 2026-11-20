@@ -17,7 +17,7 @@ pub(crate) fn resolve_repetition_mode(node: &mut ScheduledNode) -> Result<()> {
         if repetition_mode != RepetitionMode::Fastest {
             let mut innermost_loop = None;
             for child in node.children.iter_mut() {
-                innermost_loop = find_innermost_sweep(child.node.make_mut())?;
+                innermost_loop = find_innermost_sweep(&mut child.node)?;
             }
             if let Some(innermost) = innermost_loop {
                 // Move repetition mode to innermost sweep loop
@@ -30,7 +30,7 @@ pub(crate) fn resolve_repetition_mode(node: &mut ScheduledNode) -> Result<()> {
         return Ok(());
     }
     for child in node.children.iter_mut() {
-        resolve_repetition_mode(child.node.make_mut())?;
+        resolve_repetition_mode(&mut child.node)?;
     }
     Ok(())
 }
@@ -42,7 +42,7 @@ fn find_innermost_sweep(node: &mut ScheduledNode) -> Result<Option<&mut Schedule
         innermost_sweep = Some(&mut node.schedule);
     }
     for child in node.children.iter_mut() {
-        if let Some(innermost) = find_innermost_sweep(child.node.make_mut())? {
+        if let Some(innermost) = find_innermost_sweep(&mut child.node)? {
             innermost_sweep = Some(innermost);
         }
     }

@@ -83,6 +83,7 @@ mod tests {
             reset_oscillator_phase: false,
             alignment: SectionAlignment::Left,
             section_timing_mode: SectionTimingMode::Relaxed,
+            reserved_signals: Vec::new(),
         }
     }
 

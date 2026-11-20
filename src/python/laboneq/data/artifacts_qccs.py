@@ -4,10 +4,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 import numpy as np
-from typing_extensions import TypeAlias
 
 from laboneq.data.scheduled_experiment import CompilerArtifact
 
@@ -42,6 +41,7 @@ class RoutedOutput:
 @dataclass
 class IO:
     channel: int
+    awg_id: int
     enable: bool | None = None
     modulation: bool | None = None
     offset: float | None | ParameterUID = None
@@ -57,13 +57,13 @@ class IO:
     amplitude: float | str | None = None
     routed_outputs: list[RoutedOutput] = field(default_factory=list)
     enable_output_mute: bool = False
+    signals: set[str] = field(default_factory=set)
 
 
 @dataclass
 class AWG:
     awg: int
     signal_type: AWGSignalType
-    signals: set[str] = field(default_factory=set)
 
     # receiver (SG instruments)
     source_feedback_register: int | Literal["local"] | None = None
@@ -124,6 +124,7 @@ class Initialization:
     inputs: list[IO] = field(default_factory=list)
     measurements: list[Measurement] = field(default_factory=list)
     ppchannels: list[PPChannel] = field(default_factory=list)
+    is_shfqc: bool = False
 
 
 @dataclass

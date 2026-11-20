@@ -5,12 +5,14 @@ from .runtime_context import RuntimeContext
 from .toolkit_adapter import ToolkitDevices
 from .utilities.exception import (
     HardwareNotReadyError,
+    InvalidCallbackArgumentsError,
     LabOneQControllerException,
     UnknownCallbackError,
 )
 
 __all__ = [
     "HardwareNotReadyError",
+    "InvalidCallbackArgumentsError",
     "LabOneQControllerException",
     "RuntimeContext",
     "ToolkitDevices",

@@ -9,8 +9,9 @@ import concurrent.futures
 import signal
 import threading
 import time
+from collections.abc import Awaitable, Callable, Coroutine
 from contextlib import contextmanager, suppress
-from typing import Awaitable, Callable, Coroutine, Generic, TypeVar
+from typing import Generic, TypeVar
 
 T = TypeVar("T")
 
@@ -18,7 +19,7 @@ T = TypeVar("T")
 async def wait_for(awaitable: Awaitable[T], timeout_s: float | None) -> T:
     """Await *awaitable* for at most *timeout_s* seconds (None: no limit).
 
-    Raises `asyncio.TimeoutError` on expiry, like `asyncio.wait_for`, but
+    Raises `TimeoutError` on expiry, like `asyncio.wait_for`, but
     never drops a cancellation of the caller: before Python 3.12,
     `asyncio.wait_for` returns the inner result when it completes in the same
     loop iteration as the cancellation arrives, and the caller carries on as if
@@ -36,7 +37,7 @@ async def wait_for(awaitable: Awaitable[T], timeout_s: float | None) -> T:
         inner.cancel()
         with suppress(asyncio.CancelledError):
             await inner
-        raise asyncio.TimeoutError
+        raise TimeoutError
     return inner.result()
 
 
@@ -120,7 +121,7 @@ class EventLoopHolder:
                 # Exit future wait every 0.1s to handle SIGINT, balancing
                 # responsiveness and CPU load.
                 return future.result(timeout=0.1)  # @IgnoreException
-            except concurrent.futures.TimeoutError:  # noqa: PERF203
+            except concurrent.futures.TimeoutError:
                 pass
 
 
@@ -152,16 +153,23 @@ class AsyncWorker(Generic[T]):
         self._idle_cycles = 0
         self._task: asyncio.Task | None = None
         self._queue = asyncio.Queue[T]()
+        self._cancelling = False
+        # Whether `run_one` has an item in progress.
+        self._processing = False
 
     async def _worker(self):
         try:
-            while True:
+            # `run_one` may swallow the cancellation of its item, so `cancel` also
+            # stops the loop between items.
+            while not self._cancelling:
                 try:
                     item = await wait_for(self._queue.get(), self._cycle_timeout)
                     self._idle_cycles = 0
+                    self._processing = True
                     await self._run_one(item)
+                    self._processing = False
                     self._queue.task_done()
-                except asyncio.TimeoutError:  # noqa: PERF203
+                except TimeoutError:
                     self._idle_cycles += 1
                     if self._idle_cycles >= self._max_idle_cycles:
                         # Idle timeout reached. Stopping background task.
@@ -198,6 +206,28 @@ class AsyncWorker(Generic[T]):
                 await asyncio.wait([join])
             self._task.cancel()
             await self._finalize_task()
+
+    async def cancel(self):
+        """Stops the worker at once, and drops the queued items.
+
+        The item in progress stays unfinished.
+        """
+        while not self._queue.empty():
+            self._queue.get_nowait()
+            self._queue.task_done()
+        if self._task is None:
+            return
+        self._cancelling = True
+        try:
+            self._task.cancel()
+            await self._finalize_task()
+        finally:
+            self._cancelling = False
+        if self._processing:
+            # Otherwise the queue counts the interrupted item as unfinished, and a
+            # later `stop` waits for it.
+            self._processing = False
+            self._queue.task_done()
 
     async def _finalize_task(self):
         assert self._task is not None

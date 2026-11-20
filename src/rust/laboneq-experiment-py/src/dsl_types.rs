@@ -31,7 +31,7 @@ pub(crate) enum DslType {
     HqcsDoUntilSection,
     HqcsSend,
     HqcsMarkStale,
-    HqcsEnsure,
+    HqcsExpect,
     HqcsVariable,
     HqcsPredicate,
     HqcsIsLive,
@@ -59,7 +59,7 @@ pub(crate) struct DslTypes<'a> {
     hqcs_do_until: Bound<'a, PyAny>,
     hqcs_send: Bound<'a, PyAny>,
     hqcs_mark_stale: Bound<'a, PyAny>,
-    hqcs_ensure: Bound<'a, PyAny>,
+    hqcs_expect: Bound<'a, PyAny>,
     hqcs_variable: Bound<'a, PyAny>,
     hqcs_predicate: Bound<'a, PyAny>,
     hqcs_is_live: Bound<'a, PyAny>,
@@ -135,9 +135,9 @@ impl<'a> DslTypes<'a> {
         let hqcs_mark_stale = py
             .import(intern!(py, "laboneq.dsl.coprocessor.operations"))?
             .getattr(intern!(py, "_MarkStale"))?;
-        let hqcs_ensure = py
+        let hqcs_expect = py
             .import(intern!(py, "laboneq.dsl.coprocessor.operations"))?
-            .getattr(intern!(py, "_Ensure"))?;
+            .getattr(intern!(py, "_Expect"))?;
         let hqcs_predicate = py
             .import(intern!(py, "laboneq.dsl.coprocessor.predicate"))?
             .getattr(intern!(py, "_Predicate"))?;
@@ -172,7 +172,7 @@ impl<'a> DslTypes<'a> {
             hqcs_do_until,
             hqcs_send,
             hqcs_mark_stale,
-            hqcs_ensure,
+            hqcs_expect,
             hqcs_variable,
             hqcs_predicate,
             hqcs_is_live,
@@ -204,7 +204,7 @@ impl<'a> DslTypes<'a> {
             DslType::HqcsDoUntilSection => &self.hqcs_do_until,
             DslType::HqcsSend => &self.hqcs_send,
             DslType::HqcsMarkStale => &self.hqcs_mark_stale,
-            DslType::HqcsEnsure => &self.hqcs_ensure,
+            DslType::HqcsExpect => &self.hqcs_expect,
             DslType::HqcsVariable => &self.hqcs_variable,
             DslType::HqcsPredicate => &self.hqcs_predicate,
             DslType::HqcsIsLive => &self.hqcs_is_live,

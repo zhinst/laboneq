@@ -24,6 +24,7 @@ impl SweepBuilder {
                 chunk_count: 1.try_into().unwrap(),
                 auto_chunking: false,
                 section_timing_mode: Default::default(),
+                reserved_signals: Vec::new(),
             },
         }
     }

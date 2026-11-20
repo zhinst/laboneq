@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import operator
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from laboneq.workflow.exceptions import WorkflowError
 
@@ -150,7 +151,7 @@ def add_overwrite(one: Reference, other: Reference | object) -> None:
         one._overwrites.append(obj)
 
 
-def resolve_to_value(ref: Reference, states: dict, *, only_ref: bool = False) -> Any:  # noqa: ANN401
+def resolve_to_value(ref: Reference, states: dict, *, only_ref: bool = False) -> Any:
     """Resolve reference.
 
     The resolve order is following:

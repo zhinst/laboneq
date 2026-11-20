@@ -3,12 +3,13 @@
 
 """Parsing of OpenQASM 3 programs with OpenPulse calibration blocks.
 
-Both backends build the same `openpulse.ast` classes.
+Both backends build `openpulse.ast` trees.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
@@ -40,7 +41,7 @@ def parse(text: str) -> ast.Program:
         QASM3ParsingError: The program does not parse.
     """
     if selected_backend() == OPENPULSE:
-        program = openpulse.parse(text)
+        program = openpulse.parse(_extern_port_as_port(text))
         relative = True
     else:
         builtin = _builtin_parser()
@@ -86,6 +87,14 @@ def calibration_spans_are_relative(node: ast.QASMNode) -> bool:
     return getattr(node, RELATIVE_CALIBRATION_SPANS, True)
 
 
+def _extern_port_as_port(text: str) -> str:
+    # openpulse 1.0.1 parses `port p;` but not `extern port p;`. Spaces in place
+    # of `extern` keep every column where the source has it.
+    # TODO: Delete once LabOne Q requires an openpulse release that parses
+    #       'extern port'.
+    return re.sub(r"\bextern(?=\s+port\b)", " " * len("extern"), text)
+
+
 @lru_cache(maxsize=1)
 def _builtin_parser() -> ModuleType | None:
     try:
@@ -114,6 +123,5 @@ def _openpulse_error_class(base: type[Exception]) -> type[Exception]:
 
 def _openpulse_error(base: type[Exception], error: Exception) -> Exception:
     wrapped = _openpulse_error_class(base)(*error.args)
-    if (data := getattr(error, "error_data", None)) is not None:
-        wrapped.error_data = data
+    wrapped.__dict__.update(vars(error))
     return wrapped

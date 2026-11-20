@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 import attrs
 
@@ -21,5 +21,5 @@ class Port:
     direction: IODirection
     uid: str | None = attrs.field(default=None)
     connector_labels: list[str] = attrs.field(factory=list)
-    physical_port_ids: List[str] = attrs.field(factory=list)
+    physical_port_ids: list[str] = attrs.field(factory=list)
     signal_type: IOSignalType | None = attrs.field(default=None)

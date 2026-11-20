@@ -5,8 +5,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from enum import Enum
-from typing import TYPE_CHECKING, Generic, Literal, Sequence, TypeVar
+from typing import TYPE_CHECKING, Generic, Literal, TypeVar
 
 import attrs
 

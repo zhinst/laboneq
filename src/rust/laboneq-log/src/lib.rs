@@ -69,7 +69,7 @@ pub fn is_diagnostics_enabled() -> bool {
 pub fn init_logging(with_diagnostics: bool) {
     // TODO: We could implement a custom logger, or use an existing one, e.g. `env_logger` or `tracing`,
     // to have more control over the logging output format and destination.
-    // However for now we skip that and just use the default logger, which is currently initialized by `pyo3-log`.
+    // However for now we skip that and just use the logger that forwards records to Python logging.
     // Here we just initialize the diagnostics flag, as its logging level is specific to `laboneq` Python,
     // and not a general Rust logging level.
     DIAGNOSTICS_ENABLED.store(with_diagnostics, Ordering::Release);

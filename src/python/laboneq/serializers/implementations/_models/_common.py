@@ -7,7 +7,7 @@ import typing
 from collections.abc import Iterable
 from enum import Enum
 from types import ModuleType
-from typing import ClassVar, Type, TypeVar
+from typing import ClassVar, TypeVar
 
 import attrs
 import numpy
@@ -83,7 +83,7 @@ def _unstructure_bytes(obj: bytes) -> str:
     return pybase64.b64encode(obj).decode("ascii")
 
 
-def _structure_bytes(obj: str, _: Type) -> bytes:
+def _structure_bytes(obj: str, _: type) -> bytes:
     """Decode base64 string to bytes."""
     return pybase64.b64decode(obj.encode("ascii"))
 
@@ -93,7 +93,7 @@ def _unstructure_set(obj: set[str]) -> list[str]:
     return sorted(obj)
 
 
-def _structure_set(obj: list[str], _: Type) -> set[str]:
+def _structure_set(obj: list[str], _: type) -> set[str]:
     """Convert list back to set."""
     return set(obj)
 
@@ -112,7 +112,7 @@ def _structure_set(obj: list[str], _: Type) -> set[str]:
 
 @attrs.define
 class BytesModel:
-    _target_class: ClassVar[Type] = bytes
+    _target_class: ClassVar[type] = bytes
 
     @classmethod
     def _unstructure(cls, obj):
@@ -125,7 +125,7 @@ class BytesModel:
 
 @attrs.define
 class ComplexModel:
-    _target_class: ClassVar[Type] = complex
+    _target_class: ClassVar[type] = complex
 
     @classmethod
     def _unstructure(cls, obj):
@@ -140,7 +140,7 @@ class ComplexModel:
 
 
 def unstructure_union_generic_type(
-    obj, types: Iterable[Type], converter: Converter
+    obj, types: Iterable[type], converter: Converter
 ) -> None:
     """
     Unstructure the object using the first type in the list that matches the object type.
@@ -158,7 +158,7 @@ def unstructure_union_generic_type(
 
 
 def structure_union_generic_type(
-    d, types: Iterable[Type], converter: Converter
+    d, types: Iterable[type], converter: Converter
 ) -> None:
     """
     Structure the object using the first type in the list that matches the object type.
@@ -325,7 +325,7 @@ def unstructure_enum(obj) -> str:
 E = TypeVar("E", bound=Enum)
 
 
-def structure_enum(d: str, cls: Type[E]) -> E:
+def structure_enum(d: str, cls: type[E]) -> E:
     """
     Structure a string to an Enum object.
     Required for cattrs >=25.1 to handle Enum objects correctly.

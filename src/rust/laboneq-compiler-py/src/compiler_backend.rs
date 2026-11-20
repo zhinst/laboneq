@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::num::NonZeroU32;
 
 use laboneq_dsl::experiment_signal::ExperimentSignal;
@@ -10,7 +11,7 @@ use tracing::instrument;
 
 use laboneq_common::compiler_settings::CompilerSettings;
 use laboneq_common::settings::SettingSpec;
-use laboneq_ir::ExperimentIr;
+use laboneq_ir::{ExperimentIr, ParameterLookup};
 use laboneq_py_utils::py_object_store::PyObjectStore;
 use numeric_array::NumericArray;
 
@@ -69,7 +70,16 @@ pub trait CompilerBackend {
     type CodeGenArtifact;
     type CompilerArtifact: CompilerArtifact;
     type CombinedOutput: CombinedOutput;
-    type Linker: Linker<Artifact = Self::CodeGenArtifact, Output = Self::CombinedOutput>;
+    type Linker: Linker<
+            Artifact = Self::CodeGenArtifact,
+            Output = Self::CombinedOutput,
+            JobSettings = Self::JobSettings,
+        >;
+    /// The part of the resolved settings a compiled variant of the real-time program
+    /// depends on.
+    type ProgramKey: Clone + Eq + Hash;
+    /// The device state a job sets outside its real-time program.
+    type JobSettings;
 
     /// The compiler settings this backend accepts, each declared with its
     /// type, default and documentation. The frontend validates the caller's
@@ -126,8 +136,18 @@ pub trait CompilerBackend {
         Ok(Self::EmulatedHqcsProgram::default())
     }
 
-    /// Lower HQCS operations retained for result-shape extraction.
-    fn lower_hqcs_for_scheduler(&self, _root: &mut ExperimentNode) -> CompilerBackendResult<()> {
+    /// Lower the HQCS operations that were kept for result-shape extraction.
+    ///
+    /// The compiler calls this after it extracts the result shapes and before scheduling.
+    /// This hook is necessary for the emulated coprocessor. There, we erase `do_until`
+    /// loops before scheduling, but we must still consider them for the result shapes first.
+    ///
+    /// TODO: remove once code generator accepts `do_until`.
+    fn lower_hqcs_for_scheduler(
+        &self,
+        _root: &mut ExperimentNode,
+        _emulated_program: &Self::EmulatedHqcsProgram,
+    ) -> CompilerBackendResult<()> {
         Ok(())
     }
 
@@ -146,9 +166,24 @@ pub trait CompilerBackend {
         ))
     }
 
+    /// Resolves backend settings using the near-time `values` for one real-time job.
+    ///
+    /// Returns a program key identifying settings that affect code generation, and
+    /// settings applied separately for the job.
+    ///
+    /// Jobs can share a compiled variant when their program keys and chunk index match,
+    /// and their values match for the parameters read during compilation. Reading
+    /// `values` here does not itself add a parameter dependency to the variant.
+    fn resolve_settings(
+        &self,
+        backend_data: &Self::Output,
+        values: &dyn ParameterLookup,
+    ) -> CompilerBackendResult<(Self::ProgramKey, Self::JobSettings)>;
+
     fn generate_code(
         &self,
         experiment: &ExperimentIr,
+        program_key: &Self::ProgramKey,
         compiler_settings: &CompilerSettings,
         external_parameters: &PyObjectStore<ExternalParameterUid>,
         backend_data: &Self::Output,
@@ -158,12 +193,14 @@ pub trait CompilerBackend {
     fn generate_code_traced(
         &self,
         experiment: &ExperimentIr,
+        program_key: &Self::ProgramKey,
         compiler_settings: &CompilerSettings,
         external_parameters: &PyObjectStore<ExternalParameterUid>,
         backend_data: &Self::Output,
     ) -> CompilerBackendResult<Self::CodeGenArtifact> {
         self.generate_code(
             experiment,
+            program_key,
             compiler_settings,
             external_parameters,
             backend_data,
@@ -237,18 +274,20 @@ pub trait Linker {
     type Artifact;
     /// A variant added to this linker.
     type Variant;
+    type JobSettings;
     type Output: CombinedOutput;
 
     /// Adds `artifact`, the code generation output of one variant, and returns the
     /// variant that jobs run.
     fn add_artifact(&mut self, artifact: Self::Artifact) -> CompilerBackendResult<Self::Variant>;
 
-    /// Records that the real-time job `key` runs `variant`, which this linker returned.
-    /// `first_run` is true for the first job that runs `variant`.
+    /// Records that the real-time job `key` runs `variant`, which this linker returned,
+    /// with `settings`. `first_run` is true for the first job that runs `variant`.
     fn add_job(
         &mut self,
         key: &NtStepKey,
         variant: &Self::Variant,
+        settings: Self::JobSettings,
         first_run: bool,
     ) -> CompilerBackendResult<()>;
 
@@ -283,6 +322,8 @@ pub struct ExperimentView<'a> {
 
     /// The target setup, in this backend's own Cap'n Proto schema.
     pub setup_description: SetupDescriptionPayload,
+
+    pub hqcs: &'a HqcsDeclarations,
 }
 
 impl<'a> ExperimentView<'a> {
@@ -293,6 +334,7 @@ impl<'a> ExperimentView<'a> {
         pulses: &'a FxHashMap<PulseUid, PulseDef>,
         experiment_signals: Vec<ExperimentSignal>,
         setup_description: SetupDescriptionPayload,
+        hqcs: &'a HqcsDeclarations,
     ) -> Self {
         ExperimentView {
             root,
@@ -301,6 +343,7 @@ impl<'a> ExperimentView<'a> {
             pulses,
             experiment_signals,
             setup_description,
+            hqcs,
         }
     }
 }

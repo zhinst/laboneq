@@ -56,7 +56,7 @@ fn collect_acquisition_schedules<'a>(
             .push(&mut node.schedule);
     } else {
         for child in node.children.iter_mut() {
-            collect_acquisition_schedules(child.node.make_mut(), target_signals, acquires);
+            collect_acquisition_schedules(&mut child.node, target_signals, acquires);
         }
     }
 }

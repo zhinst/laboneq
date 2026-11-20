@@ -12,7 +12,6 @@ version.workspace = true
 [dependencies]
 num-complex = { workspace = true }
 pyo3 = { workspace = true }
-pyo3-log = { workspace = true }
 log = { workspace = true }
 twox-hash = { workspace = true, features = ["xxhash3_64"] }
 

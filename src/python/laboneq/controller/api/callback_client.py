@@ -13,67 +13,22 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from laboneq.controller.callback_protocol import MessageType, json_failure
 from laboneq.core.exceptions import AbortExecution, LabOneQException
 from laboneq.dsl.experiment.pulse import Pulse
-from laboneq.executor.executor import ExecutorBase, LoopingMode
 from laboneq.serializers.implementations.numpy_array import NumpyArraySerializer
 
 if TYPE_CHECKING:
     from numpy import typing as npt
 
     from laboneq.controller.toolkit_adapter import ToolkitDevices
-    from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.dsl.result.results import Results
-
-
-class _ClientCallCollector(ExecutorBase):
-    """Collect the near-time calls of an execution tree."""
-
-    def __init__(self) -> None:
-        super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY | LoopingMode.ONCE)
-        self.calls: list[tuple[str, dict[str, Any]]] = []
-
-    def nt_callback_handler(
-        self,
-        func_name: str,
-        args: dict[str, Any],
-    ) -> None:
-        self.calls.append((func_name, args))
-
-
-def preflight_client_callbacks(
-    scheduled_experiment: ScheduledExperiment,
-    callbacks: Mapping[str, Callable[..., Any]],
-) -> set[str]:
-    """Validate the client near-time callbacks of an experiment before submission.
-
-    Callbacks on the controller service are not checked here. Only calls
-    whose name is provided in *callbacks* are dispatched to the client.
-    These calls must have JSON-serializable arguments. Complex values are not
-    supported and must be decomposed into real/imaginary parts. Returns the
-    names of the client-served callbacks; an empty set means the client has
-    nothing to serve and skips the callback channel.
-    """
-    collector = _ClientCallCollector()
-    collector.run(scheduled_experiment.execution)
-    served: set[str] = set()
-    for name, args in collector.calls:
-        if name not in callbacks:
-            continue
-        failure = json_failure(args)
-        if failure is not None:
-            raise LabOneQException(
-                f"Arguments of client near-time callback '{name}' must be"
-                f" JSON-serializable: {failure}"
-            )
-        served.add(name)
-    return served
 
 
 class ClientRuntimeContext:
@@ -257,7 +212,7 @@ class ClientCallbackSession:
                 value = await value
         except AbortExecution:
             return self._abort_reply(call)
-        except Exception as exc:  # noqa: BLE001 - reported as an error reply
+        except Exception as exc:
             return self._error_reply(call, exc)
         return self._result_reply(call, value)
 

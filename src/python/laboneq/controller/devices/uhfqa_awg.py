@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -523,13 +522,14 @@ class UHFQAAwg(CoreBase):
                 for integrator in range(self._integrators)
             ]
         )
-        return [RawReadoutData(data) for data in all_data]
+        return [RawReadoutData(data, errors=errors) for data, errors in all_data]
 
     async def _get_integrator_measurement_data(
         self, result_index, num_results, averages_divider: int, timeout_s: float
-    ):
+    ) -> tuple[NumPyArray, list[tuple[int | None, str]]]:
         result_path = self.nodes.readout_result_wave[result_index]
         ch_repr_readout = f"{self._unit_repr}:readout{result_index}"
+        errors: list[tuple[int | None, str]] = []
         try:
             integrator_result = await self._subscriber.get_result(
                 result_path, timeout_s=timeout_s
@@ -540,9 +540,14 @@ class UHFQAAwg(CoreBase):
                 ch_repr=ch_repr_readout,
             )
             # Not dividing by averages_divider - it appears poll data is already divided.
-            return integrator_result.vector[0:num_results]
-        except (TimeoutError, asyncio.TimeoutError):
-            _logger.error(
-                f"{ch_repr_readout}: Failed to receive a result from {result_path} within {timeout_s} seconds."
-            )
-            return np.array([], dtype=np.complex128)
+            vector = integrator_result.vector[0:num_results]
+        except TimeoutError:
+            message = f"{ch_repr_readout}: Failed to receive a result from {result_path} within {timeout_s} seconds."
+            _logger.error(message)
+            errors.append((None, message))
+            vector = np.array([], dtype=np.complex128)
+        errors.extend(
+            (None, f"{ch_repr_readout}: {message}")
+            for message in self._subscriber.take_stream_errors(result_path)
+        )
+        return vector, errors

@@ -122,6 +122,16 @@ def pre_process_compiled_qccs(
     return recipe_data
 
 
+def _get_signals(init: Initialization, awg_id: int) -> set[str]:
+    signals = set()
+
+    for io in init.inputs + init.outputs:
+        if io.awg_id == awg_id:
+            signals |= io.signals
+
+    return signals
+
+
 def _calculate_awg_configs(
     rt_execution_info: RtExecutionInfo,
     artifacts: ArtifactsCodegen,
@@ -137,7 +147,7 @@ def _calculate_awg_configs(
                     if awg.signal_type == AWGSignalType.IQ
                     else AwgSignalType.SINGLE
                 ),
-                signals=awg.signals,
+                signals=_get_signals(init=initialization, awg_id=awg.awg),
                 result_length=awg.result_length,
                 source_feedback_register=awg.source_feedback_register,
                 command_table_match_offset=awg.command_table_match_offset,
@@ -216,9 +226,13 @@ def _pre_process_iq_settings_hdawg(
         # Determine I and Q output elements for the IQ pair with index awg_idxs.
         if output.channel % 2 == 0:
             i_out = output
-            q_out = next((o for o in outputs if o.channel == output.channel + 1), IO(0))
+            q_out = next(
+                (o for o in outputs if o.channel == output.channel + 1), IO(0, awg_id=0)
+            )
         else:
-            i_out = next((o for o in outputs if o.channel == output.channel - 1), IO(0))
+            i_out = next(
+                (o for o in outputs if o.channel == output.channel - 1), IO(0, awg_id=0)
+            )
             q_out = output
 
         if i_out.gains is None or q_out.gains is None:

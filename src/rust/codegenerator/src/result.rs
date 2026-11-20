@@ -7,7 +7,7 @@ use std::num::NonZero;
 use indexmap::IndexMap;
 use laboneq_common::types::{AuxiliaryDevice, ChannelKey};
 use laboneq_dsl::signal_calibration::{PortMode, Precompensation};
-use laboneq_dsl::types::{ParameterUid, PumpCancellationSource, Quantity};
+use laboneq_dsl::types::{FixedValueOrParameter, PumpCancellationSource, Quantity};
 
 use laboneq_units::duration::{Duration, Second};
 
@@ -115,6 +115,7 @@ pub struct DeviceProperties {
     pub sampling_rate: Option<f64>,
     /// How long the device takes before its output starts.
     pub lead_delay: Duration<Second>,
+    pub is_shfqc: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -250,12 +251,6 @@ pub struct InputChannelProperties {
     pub lo_frequency: Option<FixedValueOrParameter<f64>>,
     pub oscillator: Option<ChannelOscillator>,
     pub requires_long_readout: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum FixedValueOrParameter<T> {
-    Value(T),
-    Parameter(ParameterUid),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

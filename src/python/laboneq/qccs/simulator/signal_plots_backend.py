@@ -3,16 +3,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from itertools import chain
-from typing import TYPE_CHECKING, Literal, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Literal, Protocol
 
 import attrs
 import numpy as np
 
 from laboneq.core.exceptions import LabOneQException
-from laboneq.core.types.enums import IODirection, PhysicalChannelType
+from laboneq.core.types.enums import AWGSignalType
 from laboneq.core.types.enums.acquisition_type import is_spectroscopy
-from laboneq.simulator.output_simulator import OutputSimulator
+from laboneq.core.utilities.shfqc import VIRTUAL_SHFSG_UID_SUFFIX
+from laboneq.simulator.output_simulator import OutputSimulator, parse_channel_uid
 from laboneq.simulator.signal_plots import (
     Channel,
     ChannelSimulationResult,
@@ -24,9 +26,12 @@ from laboneq.simulator.signal_plots import (
 
 if TYPE_CHECKING:
     from laboneq.core.types import CompiledExperiment
-    from laboneq.data.artifacts_qccs import WeightInfo
-    from laboneq.dsl.device.io_units import PhysicalChannel
-    from laboneq.dsl.experiment import Experiment
+    from laboneq.data.artifacts_qccs import (
+        IO,
+        ArtifactsCodegen,
+        Initialization,
+        WeightInfo,
+    )
 
 
 @attrs.define(frozen=True)
@@ -77,7 +82,7 @@ class QCCSSignalPlotsBackend(SignalPlotsBackend[QCCSChannelSimulationResult]):
             QCCS channel simulation results, one for each simulated signal.
         """
         channels = map_experiment_signals(
-            compiled_experiment=compiled_experiment,
+            compiler_artifacts=compiled_experiment.scheduled_experiment.artifacts,
             experiment_signals=experiment_signals,
         )
 
@@ -161,63 +166,35 @@ class QCCSSignalPlotsBackend(SignalPlotsBackend[QCCSChannelSimulationResult]):
         return deduplicate(
             plots=list(
                 chain.from_iterable(
-                    (
-                        prepare_plots(result=r, types=plot_types)
-                        for r in simulated_outputs
-                    )
+                    prepare_plots(result=r, types=plot_types) for r in simulated_outputs
                 )
             )
         )
 
 
-def map_channel_type(channel: PhysicalChannel, direction: IODirection) -> ChannelType:
-    """Determine ``ChannelType`` from QCCS-specific data structures."""
-    if direction == IODirection.IN:
-        return ChannelType.INPUT
-
-    if channel.type == PhysicalChannelType.IQ_CHANNEL:
-        return ChannelType.IQ
-
-    return ChannelType.RF
-
-
 def map_experiment_signals(
-    *, compiled_experiment: CompiledExperiment, experiment_signals: Sequence[str]
+    *, compiler_artifacts: ArtifactsCodegen, experiment_signals: Sequence[str]
 ) -> list[Channel]:
     """Produce ``Channel`` objects for the provided experiment signals."""
     channels = []
+    channel_signal_map = get_channel_signal_map(compiler_artifacts)
     for signal in experiment_signals:
-        logical_signal_uid = to_logical_signal(
-            experiment=compiled_experiment.experiment, experiment_signal=signal
+        channel_uid, (channel_type, _) = next(
+            (c, (t, s)) for c, (t, s) in channel_signal_map.items() if signal in s
         )
 
-        logical_signal = compiled_experiment.device_setup.logical_signal_by_uid(
-            logical_signal_uid
-        )
-
-        physical_channel = logical_signal.physical_channel
+        _, channel_name = parse_channel_uid(channel_uid)
 
         channels.append(
             Channel(
-                uid=physical_channel.uid,
-                name=physical_channel.name,
-                type=map_channel_type(
-                    channel=physical_channel, direction=logical_signal.direction
-                ),
+                uid=channel_uid,
+                name=channel_name,
+                type=channel_type,
                 experiment_signal=signal,
             )
         )
 
     return channels
-
-
-def to_logical_signal(*, experiment: Experiment, experiment_signal: str) -> str:
-    """Map an experiment signal to a logical signal."""
-    logical_signal = experiment.signals[
-        experiment_signal
-    ].mapped_logical_signal_path.removeprefix("/logical_signal_groups/")
-
-    return logical_signal
 
 
 class PlotType(Protocol):
@@ -525,3 +502,75 @@ def deduplicate(*, plots: Sequence[Plot]) -> list[Plot]:
         deduplicated_plots.append(plot)
 
     return deduplicated_plots
+
+
+def reconstruct_channel_uid(
+    *, io: IO, init: Initialization, channel_type: ChannelType, is_input: bool
+) -> str:
+    device_uid = init.device_uid
+
+    channel_ids = [
+        str(c.channel)
+        for c in (init.inputs if is_input else init.outputs)
+        if c.awg_id == io.awg_id
+    ]
+
+    match init.device_type:
+        case "UHFQA" if is_input:
+            return f"{device_uid}/qas_{'_'.join(channel_ids)}"
+        case "UHFQA":
+            return f"{device_uid}/sigouts_{'_'.join(channel_ids)}"
+        case "HDAWG" if channel_type == ChannelType.IQ:
+            return f"{device_uid}/sigouts_{'_'.join(channel_ids)}"
+        case "HDAWG":
+            return f"{device_uid}/sigouts_{io.channel}"
+        case "SHFSG" if init.is_shfqc:
+            return f"{device_uid.removesuffix(VIRTUAL_SHFSG_UID_SUFFIX)}/sgchannels_{io.channel}_output"
+
+    direction = "input" if is_input else "output"
+    channel_group = "qachannels" if init.device_type == "SHFQA" else "sgchannels"
+
+    return f"{init.device_uid}/{channel_group}_{io.channel}_{direction}"
+
+
+def reconstruct_channel_type(io: IO, init: Initialization) -> ChannelType:
+    awg = next(a for a in init.awgs if a.awg == io.awg_id)
+
+    if awg.signal_type != AWGSignalType.IQ:
+        return ChannelType.RF
+
+    return ChannelType.IQ
+
+
+def get_channel_signal_map(
+    compiler_artifacts: ArtifactsCodegen,
+) -> dict[str, tuple[ChannelType, set[str]]]:
+    channel_signal_map = {}
+
+    init: Initialization
+    for init in compiler_artifacts.initializations:
+        for inp in init.inputs:
+            channel_type = reconstruct_channel_type(io=inp, init=init)
+
+            channel_signal_map[
+                reconstruct_channel_uid(
+                    io=inp, init=init, is_input=True, channel_type=channel_type
+                )
+            ] = (
+                ChannelType.INPUT,
+                inp.signals,
+            )
+
+        for out in init.outputs:
+            channel_type = reconstruct_channel_type(io=out, init=init)
+
+            channel_signal_map[
+                reconstruct_channel_uid(
+                    io=out, init=init, is_input=False, channel_type=channel_type
+                )
+            ] = (
+                channel_type,
+                out.signals,
+            )
+
+    return channel_signal_map

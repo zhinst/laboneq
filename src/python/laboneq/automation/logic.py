@@ -1,6 +1,8 @@
 # Copyright 2026 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, final
 
@@ -27,7 +29,7 @@ class AutomationLogic(ABC):
     iterations: int | None = None
 
     @final
-    def run_executable(self, layer: "AutomationLayer") -> tuple[str | None, dict]:
+    def run_executable(self, layer: AutomationLayer) -> tuple[str | None, dict]:
         """Run the executable.
 
         Arguments:
@@ -40,7 +42,7 @@ class AutomationLogic(ABC):
         return self.run_executable_core(layer)
 
     @abstractmethod
-    def run_executable_core(self, layer: "AutomationLayer") -> tuple[str | None, dict]:
+    def run_executable_core(self, layer: AutomationLayer) -> tuple[str | None, dict]:
         """The core of the `run_executable` method.
 
         !!! note
@@ -78,7 +80,7 @@ class FixedParameterUpdate(AutomationLogic):
     parameter_changes: dict[str, dict]
     relative: bool = attrs.field(default=False, kw_only=True)
 
-    def run_executable_core(self, layer: "AutomationLayer") -> tuple[str, dict]:
+    def run_executable_core(self, layer: AutomationLayer) -> tuple[str, dict]:
         """Run fixed parameters update."""
         new_params = nested_parameter_update(
             layer.target_parameters, self.parameter_changes, self.relative

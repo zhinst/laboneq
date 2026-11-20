@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import functools
 import threading
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import Any, Callable, Generator, Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 from laboneq.dsl.experiment.pulse import Pulse
 from laboneq.dsl.experiment.section import Section
@@ -62,7 +63,7 @@ class ObjectCache(Generic[_T]):
 
     @classmethod
     @contextmanager
-    def create_object_cache(cls) -> Generator["ObjectCache", None, None]:
+    def create_object_cache(cls) -> Generator[ObjectCache, None, None]:
         if cls._contexts._object_cache is not None:
             raise RuntimeError("Object cache was already initialized.")
         object_cache = cls()
@@ -73,7 +74,7 @@ class ObjectCache(Generic[_T]):
             cls._contexts._object_cache = None
 
     @classmethod
-    def get_object_cache(cls) -> "ObjectCache":
+    def get_object_cache(cls) -> ObjectCache:
         if cls._contexts._object_cache is None:
             raise RuntimeError("Object cache was not initialized.")
         return cls._contexts._object_cache

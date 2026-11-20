@@ -80,6 +80,8 @@ class AsyncControllerAPI(ABC):
 
         Raises:
             HardwareNotReadyError: The hardware cannot run experiments now.
+            InvalidCallbackArgumentsError: A near-time callback that runs on the
+                client is called with arguments that are not JSON-serializable.
         """
 
     @abstractmethod

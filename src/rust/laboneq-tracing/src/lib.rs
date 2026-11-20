@@ -1,7 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-//! This crate provides tracing utilities for LabOneQ Rust code, including integration with OpenTelemetry.
+//! This crate provides tracing utilities for LabOne Q Rust code, including integration with OpenTelemetry.
 //!
 //! The main entry point is the `with_tracing` function, which configures tracing for the duration of a provided closure.
 //! Tracing can be enabled and configured via environment variables, allowing for flexible integration with different tracing backends and exporters.

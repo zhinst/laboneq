@@ -17,7 +17,7 @@ import attrs
 
 _T = TypeVar("_T", bound="SetupDescription")
 
-_REGISTRY: dict[str, type["SetupDescription"]] = {}
+_REGISTRY: dict[str, type[SetupDescription]] = {}
 
 
 def register_setup_description(cls: type[_T]) -> type[_T]:
@@ -30,7 +30,7 @@ def register_setup_description(cls: type[_T]) -> type[_T]:
     return cls
 
 
-def get_setup_description_class(name: str) -> type["SetupDescription"]:
+def get_setup_description_class(name: str) -> type[SetupDescription]:
     """Look up a registered `SetupDescription` subclass by name.
 
     Raises:

@@ -3,6 +3,8 @@
 
 use num_complex::Complex64;
 
+use laboneq_common::near_time::FixedValueOrParameter;
+
 use crate::types::{NumericLiteral, ParameterUid};
 
 #[derive(Debug, Clone, PartialEq, Copy)]
@@ -26,6 +28,19 @@ impl<T> ValueOrParameter<T> {
         }
     }
 
+    /// Returns the fixed value or the parameter's resolved value, `None` for an unresolved parameter.
+    pub fn value(&self) -> Option<T>
+    where
+        T: Copy,
+    {
+        match self {
+            ValueOrParameter::Value(value) | ValueOrParameter::ResolvedParameter { value, .. } => {
+                Some(*value)
+            }
+            ValueOrParameter::Parameter(_) => None,
+        }
+    }
+
     /// Return the parameter UID if this is a parameter (resolved or not). Otherwise, return None.
     pub fn parameter_uid(&self) -> Option<ParameterUid> {
         match self {
@@ -33,6 +48,17 @@ impl<T> ValueOrParameter<T> {
                 Some(*uid)
             }
             ValueOrParameter::Value(_) => None,
+        }
+    }
+}
+
+impl<T> From<ValueOrParameter<T>> for FixedValueOrParameter<T> {
+    fn from(value: ValueOrParameter<T>) -> Self {
+        match value {
+            ValueOrParameter::Value(value) | ValueOrParameter::ResolvedParameter { value, .. } => {
+                Self::Value(value)
+            }
+            ValueOrParameter::Parameter(uid) => Self::Parameter(uid),
         }
     }
 }

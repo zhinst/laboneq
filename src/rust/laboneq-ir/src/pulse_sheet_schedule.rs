@@ -398,7 +398,6 @@ impl<'a> EventListGenerator<'a> {
             IrKind::Case(case_ir) => self.visit_case(node, case_ir, start, max_events),
             IrKind::SetOscillatorFrequency(_) => TraversalResult::complete(Vec::new()),
             IrKind::InitialOscillatorFrequency(_) => TraversalResult::complete(Vec::new()),
-            IrKind::InitialLocalOscillatorFrequency(_) => TraversalResult::complete(Vec::new()),
             IrKind::ChangeOscillatorPhase(change) => {
                 self.visit_change_oscillator_phase(node, change, start, max_events)
             }
@@ -1476,8 +1475,7 @@ impl PulseSheetSchedule {
         ) -> Vec<String> {
             let mut signals = Vec::new();
 
-            let node_signals = node.kind.signals();
-            for signal_uid in node_signals {
+            for signal_uid in node.kind.signals() {
                 let signal_name = id_store
                     .resolve(*signal_uid)
                     .unwrap_or(UNKNOWN_LABEL)
@@ -1739,6 +1737,7 @@ mod tests {
             kernels: vec![],
             parameters: vec![],
             pulse_parameters: vec![],
+            acquisition_type: Default::default(),
         };
         root.add_child(
             tiny_samples(1000),

@@ -26,7 +26,6 @@ use crate::ir::compilation_job::ChannelIndex;
 use crate::ir::compilation_job::InitialSignalProperties;
 use crate::ir::compilation_job::Signal;
 use crate::ir::compilation_job::SignalKind;
-use crate::ir_adapter::value_or_parameter_to_fixed;
 use crate::passes::MeasurementAnalysis;
 use crate::passes::analyze_awg::AwgCompilationInfo;
 use crate::passes::analyze_awg::analyze_awg_ir;
@@ -41,7 +40,6 @@ use crate::result::ChannelOscillator;
 use crate::result::ChannelProperties;
 use crate::result::CommandTable;
 use crate::result::FeedbackRegisterConfig;
-use crate::result::FixedValueOrParameter;
 use crate::result::Gains;
 use crate::result::InputChannelProperties;
 use crate::result::IntegratorAllocation;
@@ -65,6 +63,7 @@ use codegenerator_utils::tracing::ParallelTraceContext;
 
 use laboneq_common::types::ChannelKey;
 use laboneq_dsl::signal_calibration::MixerCalibration;
+use laboneq_dsl::types::FixedValueOrParameter;
 use laboneq_error::LabOneQError;
 use laboneq_error::WithContext;
 use laboneq_error::resource_usage::ResourceExhaustionError;
@@ -464,9 +463,9 @@ fn build_channel_properties(
                     channel,
                     scheduler_delay,
                     port_mode: properties.port_mode.clone(),
-                    port_delay: properties.port_delay.clone(),
+                    port_delay: properties.port_delay,
                     range: properties.range.clone(),
-                    lo_frequency: properties.lo_frequency.clone(),
+                    lo_frequency: properties.lo_frequency,
                     oscillator: oscillator.clone(),
                     requires_long_readout,
                 });
@@ -484,19 +483,18 @@ fn build_channel_properties(
                 marker_mode: awg_info.marker_modes.get(&channel).cloned(),
                 scheduler_delay: scheduler_delay + properties.signal_alignment_delay,
                 precompensation: properties.precompensation.clone(),
-                amplitude: properties.amplitude.clone(),
+                amplitude: properties.amplitude,
                 voltage_offset: match signal.kind {
                     SignalKind::IQ => mixer_props.voltage_offset,
                     _ => properties
                         .voltage_offset
-                        .clone()
                         .unwrap_or(FixedValueOrParameter::Value(0.0)),
                 },
                 gains: mixer_props.gains,
                 port_mode: properties.port_mode.clone(),
-                port_delay: properties.port_delay.clone(),
+                port_delay: properties.port_delay,
                 range: properties.range.clone(),
-                lo_frequency: properties.lo_frequency.clone(),
+                lo_frequency: properties.lo_frequency,
                 routed_outputs: properties.routed_outputs.clone(),
                 output_mute_enable: awg.output_mute_enable,
                 oscillator: oscillator.clone(),
@@ -523,7 +521,6 @@ fn channel_oscillator(
         index,
         frequency: properties
             .oscillator_frequency
-            .clone()
             .expect("Expected a frequency for hardware oscillator"),
     })
 }
@@ -570,7 +567,7 @@ fn calculate_mixer_properties(
             IqChannel::I => mc.voltage_offset_i,
             IqChannel::Q => mc.voltage_offset_q,
         })
-        .map(value_or_parameter_to_fixed)
+        .map(FixedValueOrParameter::from)
         .unwrap_or(FixedValueOrParameter::Value(0.0));
 
     let gains = mixer_calibration
@@ -580,8 +577,8 @@ fn calculate_mixer_properties(
                 IqChannel::Q => mc.gains_q(),
             }?;
             Some(Gains {
-                diagonal: value_or_parameter_to_fixed(diagonal),
-                off_diagonal: value_or_parameter_to_fixed(off_diagonal),
+                diagonal: FixedValueOrParameter::from(diagonal),
+                off_diagonal: FixedValueOrParameter::from(off_diagonal),
             })
         })
         .or_else(|| default_gains.cloned());

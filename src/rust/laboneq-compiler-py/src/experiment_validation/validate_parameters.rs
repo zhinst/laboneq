@@ -30,11 +30,7 @@ pub(super) fn digest_sweep_parameters(node: &Sweep, declared_parameters: &mut Ve
     declared_parameters.retain(|p| !params_set.contains(p));
 }
 
-pub(super) fn validate_chunked_sweep(
-    sweep: &Sweep,
-    ctx: &VisitContext,
-    found_chunked_sweep: &mut bool,
-) -> Result<()> {
+pub(super) fn validate_chunked_sweep(sweep: &Sweep, ctx: &VisitContext) -> Result<()> {
     if !sweep.is_chunked() {
         return Ok(());
     }
@@ -43,11 +39,6 @@ pub(super) fn validate_chunked_sweep(
         let err_msg = "Sweeps that are not inside real-time execution cannot be chunked.";
         return Err(Error::new(err_msg));
     }
-    if *found_chunked_sweep {
-        let err_msg = "Found multiple chunked sweeps.";
-        return Err(Error::new(err_msg));
-    }
-    *found_chunked_sweep = true;
     Ok(())
 }
 

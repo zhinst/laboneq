@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import abc
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from laboneq.dsl.experiment.pulse import Pulse, PulseSampled
 from laboneq.openqasm3.openqasm_error import OpenQasmException
@@ -56,7 +57,7 @@ class Waveform(ClassicalRef):
 
     def __post_init__(self):
         if not isinstance(self.value, (list, Pulse)):
-            msg = "Waveform must be a list of samples or a LabOneQ Pulse object."
+            msg = "Waveform must be a list of samples or a LabOne Q Pulse object."
             raise OpenQasmException(msg)
 
     def pulse(self) -> Pulse:
@@ -217,7 +218,7 @@ class DefaultNamespace(BaseNamespace):
     def declare_waveform(self, name: str, value: Any) -> Waveform:
         self._check_duplicate(name)
         if not isinstance(value, (list, Pulse)):
-            msg = "Waveform must be a list of samples or a LabOneQ Pulse object."
+            msg = "Waveform must be a list of samples or a LabOne Q Pulse object."
             raise OpenQasmException(msg)
         self.local_scope[name] = Waveform(name, value)
         return self.local_scope[name]

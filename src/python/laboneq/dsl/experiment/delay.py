@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import attrs
 
@@ -26,4 +26,4 @@ class Delay(Operation):
     time: float | Parameter | None = attrs.field(default=None)
 
     #: Clear the precompensation filter of the signal.
-    precompensation_clear: Optional[bool] = attrs.field(default=None)
+    precompensation_clear: bool | None = attrs.field(default=None)

@@ -8,15 +8,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import reduce
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, ParamSpec
 
 import numpy as np
 from numpy import random as nprnd
 from scipy.linalg import expm as matrix_exponential
-from typing_extensions import (
-    ParamSpec,  # FIXME: Reconsider when python>=3.10 is enforced.
-)
 
 from laboneq.dsl.experiment.pulse_library import PulseFunctional, gaussian
 

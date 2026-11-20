@@ -73,7 +73,7 @@ class TranspileResult:
 
     Attributes:
         section:
-            LabOneQ section.
+            LabOne Q section.
         acquire_loop_options:
             Acquire loop options set in zi pragma.
         implicit_calibration:

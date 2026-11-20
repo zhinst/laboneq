@@ -9,13 +9,12 @@ from typing import TYPE_CHECKING
 
 import networkx as nx
 
-from laboneq.core.utilities.add_exception_note import add_note
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.dsl.quantum import QuantumElement
 from laboneq.dsl.quantum._qpu_topology_theme import zi_draw_nx_theme
 
 if TYPE_CHECKING:
-    from typing import Generator
+    from collections.abc import Generator
 
     from matplotlib.axes._axes import Axes
 
@@ -170,14 +169,14 @@ class QPUTopology:
                 return [edge for edge in self.edges()]
             else:
                 err = KeyError(key)
-                add_note(err, "Non-null slices are not supported.")
+                err.add_note("Non-null slices are not supported.")
                 raise err
 
         if isinstance(key, tuple) and len(key) == 3:
             for element in key:
                 if isinstance(element, slice) and element != slice(None):
                     err = KeyError(element)
-                    add_note(err, "Non-null slices are not supported.")
+                    err.add_note("Non-null slices are not supported.")
                     raise err
 
             tag, source_node, target_node = key
@@ -320,7 +319,7 @@ class QPUTopology:
             self._graph.nodes[node]
         except KeyError:
             err = KeyError(node)
-            add_note(err, f"Quantum element {node!r} is not a topology node.")
+            err.add_note(f"Quantum element {node!r} is not a topology node.")
             raise err from None
 
         return self._node_lookup[node]
@@ -529,8 +528,7 @@ class QPUTopology:
             # Raise a KeyError for the edge and add a note with
             # an explanation for the user.
             err = KeyError((tag, source_node, target_node))
-            add_note(
-                err,
+            err.add_note(
                 f"There is no connection between quantum elements {source_node, target_node} "
                 f"with edge tag {tag} (in this direction).",
             )
@@ -679,8 +677,7 @@ class QPUTopology:
             # Raise a KeyError for the edge and add a note with
             # an explanation for the user.
             err = KeyError((tag, source_node, target_node))
-            add_note(
-                err,
+            err.add_note(
                 f"There is no connection between quantum elements {source_node, target_node} "
                 f"with edge tag {tag} (in this direction).",
             )

@@ -53,6 +53,13 @@ struct Section {
 
   contentItems @9 :List(SectionItem);
   # Ordered section content. Each item is either a child section or a leaf operation.
+
+  reservedSignals @11 :List(Common.Id);
+  # `Experiment.signals` indices of signals reserved for the section.
+  #
+  # Other sections cannot use a reserved signal while this section runs. Order and
+  # duplicates do not matter. Must be empty on the root section and on `match`
+  # sections.
 }
 
 struct SectionItem {
@@ -62,8 +69,45 @@ struct SectionItem {
     section @0 :Section;
     # Child section.
 
-    operation @1 :Operation.Operation;
-    # Leaf operation.
+    operation :group {
+      # Leaf operation.
+      #
+      # Operations are the leaf-level actions in the experiment timing hierarchy. Each
+      # operation acts on one or more signals and executes atomically within its parent
+      # section's time span.
+
+      union {
+        none @1 :Void;
+        # (Catches when someone forgets to specify the operation kind. Do not set this.)
+
+        play @2 :Operation.PlayOp;
+        # Play a pulse on a signal.
+
+        delay @3 :Operation.DelayOp;
+        # Insert an explicit delay on a signal.
+
+        acquire @4 :Operation.AcquireOp;
+        # Perform an acquisition (measurement).
+
+        call @5 :Operation.CallOp;
+        # Invoke a near-time callback.
+
+        setNode @6 :Operation.SetNodeOp;
+        # Set an instrument node value at near-time.
+
+        resetOscillatorPhase @7 :Operation.ResetOscillatorPhaseOp;
+        # Reset oscillator phase to zero.
+
+        send @8 :Operation.SendOp;
+        # HQCS: commit one logical packet on an outbound stream.
+
+        markStale @9 :Operation.MarkStaleOp;
+        # HQCS: open an acceptance window on a stream-bound variable or pulse.
+
+        expect @10 :Operation.ExpectOp;
+        # HQCS: assert a condition, e.g. that a stream-bound variable is live.
+      }
+    }
   }
 }
 
@@ -149,7 +193,9 @@ struct AcquireLoopSection {
   # How results are averaged across iterations. Defaults to cyclic.
 
   acquisitionType @3 :Operation.AcquisitionType;
-  # Type of acquisition for all acquire operations in this loop. Defaults to integration.
+  # Type of acquisition for all acquire operations in this loop, unless overridden by
+  # individual acquire commands.
+  # Defaults to integration.
 
   repetition :union {
     # How the repetition interval between iterations is determined.
@@ -270,7 +316,7 @@ struct CaseSection {
   # Execution follows this branch when the match target equals the specified state value.
 
   state @0 :Common.Value;
-  # Discriminator result value to match against.
+  # Discriminator result value to match against. Must be a fixed value.
 
   sectionTimingMode @1 :SectionTimingMode;
   # Timing mode for this case branch. Controls whether rounding of pulse and delay

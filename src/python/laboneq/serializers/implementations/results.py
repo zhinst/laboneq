@@ -110,6 +110,7 @@ class ResultsSerializer(VersionedClassSerializer[Results]):
                         "axis_name": v.axis_name,
                         "axis": v.axis,
                         "last_nt_step": v.last_nt_step,
+                        "sampling_rate": v.sampling_rate,
                         **cls._acquired_data_to_dict(v.data),
                     }
                     for k, v in obj.acquired_results.items()
@@ -135,6 +136,7 @@ class ResultsSerializer(VersionedClassSerializer[Results]):
                 axis=_acquired_axis_to_ndarrays(v["axis"]),
                 data=cls._acquired_data_from_dict_v3(v["data"], v["is_scalar"]),
                 last_nt_step=v["last_nt_step"],
+                sampling_rate=v.get("sampling_rate"),
             )
             for k, v in data["acquired_results"].items()
         }

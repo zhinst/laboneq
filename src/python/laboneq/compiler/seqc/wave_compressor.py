@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import groupby
-from typing import Dict, List, Tuple, Union
 
 import numpy as np
 
@@ -23,9 +22,9 @@ class PlaySamples:
 def compress_wave(
     samples: dict[str, np.ndarray],
     sample_multiple: int,
-    compressible_segments: List[Tuple[int, int]] | None = None,
+    compressible_segments: list[tuple[int, int]] | None = None,
     threshold: int = 32,
-) -> List[Union[PlayHold, PlaySamples]] | None:
+) -> list[PlayHold | PlaySamples] | None:
     return _WaveCompressor().compress_wave(
         samples,
         sample_multiple,
@@ -38,7 +37,7 @@ class _WaveCompressor:
     def _samples_constant(self, samples: np.ndarray) -> bool:
         return np.all(samples[0] == samples)
 
-    def _sample_dict_constant(self, sample_dict: Dict[str, np.ndarray]) -> bool:
+    def _sample_dict_constant(self, sample_dict: dict[str, np.ndarray]) -> bool:
         return all(self._samples_constant(sample) for sample in sample_dict.values())
 
     def _stacked_samples_constant(self, stacked_samples: np.ndarray, lo: int, hi: int):
@@ -50,31 +49,31 @@ class _WaveCompressor:
         )
 
     def _frames_compatible(
-        self, last_vals_frame: Dict[str, np.ndarray], sample_dict: Dict[str, np.ndarray]
+        self, last_vals_frame: dict[str, np.ndarray], sample_dict: dict[str, np.ndarray]
     ) -> bool:
         return all(
             last_vals_frame[k] == sample_dict[k][0] for k in last_vals_frame.keys()
         )
 
     def _merge_samples(
-        self, samples: List[Dict[str, np.ndarray]]
-    ) -> Dict[str, np.ndarray]:
-        arrays: Dict[str, List[np.ndarray]] = {k: [] for k in samples[0].keys()}
+        self, samples: list[dict[str, np.ndarray]]
+    ) -> dict[str, np.ndarray]:
+        arrays: dict[str, list[np.ndarray]] = {k: [] for k in samples[0].keys()}
         for sample in samples:
             for k, v in sample.items():
                 arrays[k].append(v)
         return {k: np.concatenate(v) for k, v in arrays.items()}
 
     def _get_frame(
-        self, sample_dict: Dict[str, np.ndarray], size: int, i: int, num_frames: int
-    ) -> Dict[str, np.ndarray]:
+        self, sample_dict: dict[str, np.ndarray], size: int, i: int, num_frames: int
+    ) -> dict[str, np.ndarray]:
         if i == num_frames - 1:
             return {k: sample_dict[k][i * size :] for k in sample_dict}
         return {k: v[i * size : (i + 1) * size] for k, v in sample_dict.items()}
 
     def _get_frame_idx(
-        self, sample_dict: Dict[str, np.ndarray], size: int, i: int, num_frames: int
-    ) -> Tuple[int, int]:
+        self, sample_dict: dict[str, np.ndarray], size: int, i: int, num_frames: int
+    ) -> tuple[int, int]:
         if i == num_frames - 1:
             return (i * size, len(list(sample_dict.values())[0]))
         return (i * size, (i + 1) * size)
@@ -109,11 +108,11 @@ class _WaveCompressor:
 
     def _compress_wave_simple(
         self,
-        samples: Dict[str, np.ndarray],
+        samples: dict[str, np.ndarray],
         sample_multiple: int,
         ref_length: int,
-        run: Tuple[int, int],
-    ) -> Union[List[Union[PlayHold, PlaySamples]], None]:
+        run: tuple[int, int],
+    ) -> list[PlayHold | PlaySamples] | None:
         start_run, end_run = run
 
         start_run_on_grid = (start_run // sample_multiple + 1) * sample_multiple
@@ -152,14 +151,14 @@ class _WaveCompressor:
 
     def _compress_wave_general(
         self,
-        samples: Dict[str, np.ndarray],
+        samples: dict[str, np.ndarray],
         stacked_samples: np.ndarray,
-        compressable_segments: List[Tuple[int, int]],
+        compressable_segments: list[tuple[int, int]],
         num_sample_channles: int,
         num_frames: int,
         num_samples: int,
         sample_multiple: int,
-    ) -> Union[List[Union[PlayHold, PlaySamples]], None]:
+    ) -> list[PlayHold | PlaySamples] | None:
         last_vals = np.zeros((num_sample_channles, num_frames))
         for i in range(0, num_frames):
             _, hi = self._get_frame_idx(samples, sample_multiple, i, num_frames)
@@ -216,11 +215,11 @@ class _WaveCompressor:
 
     def compress_wave(
         self,
-        samples: Dict[str, np.ndarray],
+        samples: dict[str, np.ndarray],
         sample_multiple: int,
-        compressible_segments: List[Tuple[int, int]] | None = None,
+        compressible_segments: list[tuple[int, int]] | None = None,
         threshold: int = 32,
-    ) -> Union[List[Union[PlayHold, PlaySamples]], None]:
+    ) -> list[PlayHold | PlaySamples] | None:
         ref_length = len(list(samples.values())[0])
         num_sample_channels = len(list(samples.values()))
         if not all(len(v) == ref_length for v in samples.values()):

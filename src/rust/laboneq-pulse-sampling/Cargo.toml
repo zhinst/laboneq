@@ -1,0 +1,21 @@
+[package]
+name = "laboneq-pulse-sampling"
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+log = { workspace = true }
+num-complex = { workspace = true }
+rustc-hash = { workspace = true }
+
+laboneq-error = { workspace = true }
+numeric-array = { workspace = true }

@@ -39,7 +39,7 @@ class OptionBuilder:
             return _retrieve_option_attributes(self._base, field_name)
         return super().__getattribute__(field_name)
 
-    def __setattr__(self, field_name: str, value: typing.Any) -> None:  # noqa: ANN401
+    def __setattr__(self, field_name: str, value: typing.Any) -> None:
         if field_name.startswith("_"):
             return super().__setattr__(field_name, value)
         if field_name in self._flatten_opts:
@@ -72,7 +72,7 @@ class OptionBuilder:
         """
         return self._base._task_options.get(task_name)
 
-    def _repr_pretty_(self, p, _cycle):  # noqa: ANN001, ANN202
+    def _repr_pretty_(self, p, _cycle):
         p.text(str(self))
 
     def _overview(self) -> str:
@@ -128,7 +128,7 @@ class OptionBuilder:
 
 def show_fields(opt: OptionBuilder) -> None:
     """Print the overview of the option fields."""
-    print(opt._overview())  # noqa: T201
+    print(opt._overview())
 
 
 def _retrieve_option_attributes(
@@ -175,12 +175,12 @@ class OptionNodeList(UserList):
     def __init__(self, elements: list[OptionNode] | OptionNodeList | None = None):
         super().__init__(elements or [])
 
-    def __getitem__(self, item: typing.Any) -> OptionNode | OptionNodeList:  # noqa: ANN401
+    def __getitem__(self, item: typing.Any) -> OptionNode | OptionNodeList:
         if isinstance(item, slice):
             return type(self)(self.data[item])
         return self.data[item]
 
-    def __call__(self, value: typing.Any, selector: str | None = None) -> None:  # noqa: ANN401
+    def __call__(self, value: typing.Any, selector: str | None = None) -> None:
         """Set the value of option fields, selected by a path name of a task/workflow.
 
         Arguments:
@@ -261,7 +261,7 @@ class OptionNodeList(UserList):
             ]
         )
 
-    def _repr_pretty_(self, p, _cycle):  # noqa: ANN001, ANN202
+    def _repr_pretty_(self, p, _cycle):
         p.text(str(self))
 
 
@@ -291,16 +291,16 @@ class OptionNode:
         return self._description
 
     @property
-    def default_value(self):  # noqa: ANN201
+    def default_value(self):
         """Return the default value of the option field."""
         return self._default_value
 
     def is_top_level(self) -> bool:
         """Return True if the option is a top-level field."""
         splitted = self.name.split(".")
-        return splitted[0] == "base" and len(splitted) <= 2  # noqa: PLR2004
+        return splitted[0] == "base" and len(splitted) <= 2
 
-    def __call__(self, value: typing.Any) -> None:  # noqa: ANN401
+    def __call__(self, value: typing.Any) -> None:
         """Set the value of the option."""
         setattr(self.option, self.field, value)
 
@@ -317,5 +317,5 @@ class OptionNode:
     def __str__(self) -> str:
         return f"{self.name} : {self._value}"
 
-    def _repr_pretty_(self, p, _cycle):  # noqa: ANN001, ANN202
+    def _repr_pretty_(self, p, _cycle):
         p.text(str(self))

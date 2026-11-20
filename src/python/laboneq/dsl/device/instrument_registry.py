@@ -4,7 +4,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Iterator
+from collections.abc import Callable, Iterator
+from typing import TYPE_CHECKING
 
 import attrs
 

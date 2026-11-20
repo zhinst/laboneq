@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import abc
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from laboneq.workflow.recorder import ExecutionRecorder
@@ -58,4 +58,4 @@ class Logbook(ExecutionRecorder):
 
 def format_time(time: datetime) -> str:
     """Format a datetime object as a string."""
-    return time.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%fZ")
+    return time.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S.%fZ")

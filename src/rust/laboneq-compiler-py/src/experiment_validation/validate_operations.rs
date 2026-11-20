@@ -3,10 +3,9 @@
 
 use laboneq_common::types::SignalKind;
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::operation::{Acquire, AveragingLoop, Operation, PlayPulse};
+use laboneq_dsl::operation::{Acquire, Operation, PlayPulse};
 use laboneq_dsl::types::{
-    AcquisitionType, AveragingMode, ComplexOrFloat, ParameterUid, PulseKind, SectionTimingMode,
-    ValueOrParameter,
+    ComplexOrFloat, ParameterUid, PulseKind, SectionTimingMode, ValueOrParameter,
 };
 use numeric_array::NumericArray;
 
@@ -20,7 +19,6 @@ use crate::signal_view::SignalView;
 pub(super) struct OperationValidator {
     amplitude_check_done: Vec<ParameterUid>,
     declared_sweep_parameters: Vec<ParameterUid>,
-    found_chunked_sweep: bool,
 }
 
 impl OperationValidator {
@@ -28,7 +26,6 @@ impl OperationValidator {
         OperationValidator {
             amplitude_check_done: Vec::with_capacity(ctx.pulses.len()),
             declared_sweep_parameters: ctx.parameters.keys().copied().collect(),
-            found_chunked_sweep: false,
         }
     }
 }
@@ -54,13 +51,10 @@ impl<'a> Validator<'a> for OperationValidator {
             Operation::Acquire(op) => {
                 check_acquire_only_on_acquire_line(op, ctx)?;
             }
-            Operation::AveragingLoop(op) => {
-                validate_averaging_loop(op)?;
-            }
             Operation::Sweep(op) => {
                 validate_parallel_sweep(op, ctx)?;
                 digest_sweep_parameters(op, &mut self.declared_sweep_parameters);
-                validate_chunked_sweep(op, ctx, &mut self.found_chunked_sweep)?;
+                validate_chunked_sweep(op, ctx)?;
                 validate_no_nt_parameter_in_rt_sweep(op, ctx)?;
             }
             Operation::RealTimeBoundary => {
@@ -226,11 +220,10 @@ fn validate_no_mixed_operations(node: &ExperimentNode, ctx: &VisitContext) -> Re
     if !ctx.inside_rt_bound || node.children.len() <= 1 {
         return Ok(());
     }
-    // Reserve is allowed to be mixed with sections
     let operations = node
         .children
         .iter()
-        .filter(|child| !matches!(&child.kind, Operation::Reserve(_)));
+        .filter(|child| !matches!(&child.kind, Operation::MarkStale(_) | Operation::Expect(_)));
     let (mut has_pulses, mut has_sections) = (false, false);
     for child in operations {
         if child.kind.section_info().is_none() {
@@ -266,18 +259,6 @@ fn validate_strict_timing_only_in_rt(node: &ExperimentNode, ctx: &VisitContext) 
             "Section '{}': SectionTimingMode.STRICT is only allowed inside the real-time loop",
             uid.0,
         )));
-    }
-    Ok(())
-}
-
-fn validate_averaging_loop(op: &AveragingLoop) -> Result<()> {
-    if matches!(op.acquisition_type, AcquisitionType::Raw)
-        && matches!(op.averaging_mode, AveragingMode::Sequential)
-        && op.count.get() > 1
-    {
-        return Err(Error::new(
-            "Sequential averaging is not supported for raw acquisitions.",
-        ));
     }
     Ok(())
 }

@@ -7,6 +7,7 @@ import asyncio
 import hmac
 import json
 import logging
+import re
 import uuid as _uuid_mod
 from functools import wraps
 from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
@@ -18,8 +19,8 @@ from fastapi import (
     APIRouter,
     Depends,
     Header,
-    Request,  # noqa: TC002 - used in dependency, required for FastAPI injection / validation
-    WebSocket,  # noqa: TC002 - annotation is evaluated by FastAPI's dependency injection
+    Request,
+    WebSocket,
     WebSocketDisconnect,
     status,
 )
@@ -39,7 +40,11 @@ from laboneq.controller.callback_protocol import (
     check_protocol_version,
     json_default,
 )
-from laboneq.controller.constants import PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER
+from laboneq.controller.constants import (
+    CLIENT_ID_HEADER,
+    PROTOCOL_VERSION,
+    PROTOCOL_VERSION_HEADER,
+)
 from laboneq.controller.controller_core import SubmissionStatus
 from laboneq.controller.results import slice_results
 from laboneq.controller.service.advertised_url import advertised_base_url
@@ -59,6 +64,7 @@ from laboneq.controller.service.models import (
 )
 from laboneq.controller.utilities.exception import (
     HardwareNotReadyError,
+    InvalidCallbackArgumentsError,
     LabOneQControllerException,
     UnknownCallbackError,
 )
@@ -89,6 +95,8 @@ class ServiceError(Exception):
         self.body = body
         super().__init__(body.error.message)
 
+
+_CLIENT_ID_PATTERN = re.compile(r"[0-9a-fA-F]{32}")
 
 # Minimum client LabOne Q version required (major, minor).
 MIN_CLIENT_VERSION: tuple[int, int] = (26, 10)
@@ -171,6 +179,10 @@ def map_service_errors(fn: Callable[..., Any]) -> Callable[..., Any]:
             raise
         except UnknownCallbackError as exc:
             raise _error_response(ErrorCode.UNKNOWN_CALLBACK, str(exc)) from exc
+        except InvalidCallbackArgumentsError as exc:
+            raise _error_response(
+                ErrorCode.INVALID_CALLBACK_ARGUMENTS, str(exc)
+            ) from exc
         except HardwareNotReadyError as exc:
             raise _error_response(
                 ErrorCode.NOT_READY,
@@ -229,36 +241,22 @@ def _validate_client_version(
     ignore_mismatch: bool,
     protocol_version: str | None = None,
 ) -> str:
-    """Validate the client version header, or admit by protocol version alone.
+    """Validate the client and protocol versions of a request.
 
-    A caller with no LabOne Q client version but a *protocol_version*, e.g.,
-    a plugin host implemented by the user, is admitted or refused solely on
-    the protocol version. The LabOne Q version is irrelevant here.
-    Returns the accepted version string:
-    *protocol_version* in that path, otherwise *client_version*.
+    A request with a *protocol_version* and no *client_version* (for example
+    from a user-written plugin host) is admitted or refused on the protocol
+    version alone.
+
+    Returns:
+        *protocol_version* for such a request, otherwise *client_version*.
 
     Raises:
-        ServiceError: Missing, unparseable, or too-old client version; or, in
-            the protocol-version-only path, an unparseable or unsupported
-            protocol version.
+        ServiceError: A version is missing, unparseable or unsupported.
     """
-    if client_version is None and protocol_version is not None:
-        # A participant that ships no LabOne Q (a plugin host fetching results)
-        # is admitted by the service protocol version alone.
-        try:
-            major = _parse_major_minor(protocol_version)[0]
-        except ValueError as exc:
-            raise _error_response(
-                ErrorCode.VERSION_MISMATCH,
-                f"Cannot parse protocol version: {protocol_version!r}",
-            ) from exc
-        if major != _parse_major_minor(PROTOCOL_VERSION)[0]:
-            raise _error_response(
-                ErrorCode.VERSION_MISMATCH,
-                f"Unsupported protocol version {protocol_version}; this service "
-                f"speaks {PROTOCOL_VERSION}.",
-            )
-        return protocol_version
+    if protocol_version is not None:
+        _check_protocol_version(protocol_version)
+        if client_version is None:
+            return protocol_version
 
     if client_version is None:
         raise _error_response(
@@ -298,6 +296,22 @@ def _validate_client_version(
     return client_version
 
 
+def _check_protocol_version(protocol_version: str) -> None:
+    try:
+        major = _parse_major_minor(protocol_version)[0]
+    except ValueError as exc:
+        raise _error_response(
+            ErrorCode.VERSION_MISMATCH,
+            f"Cannot parse protocol version: {protocol_version!r}",
+        ) from exc
+    if major != _parse_major_minor(PROTOCOL_VERSION)[0]:
+        raise _error_response(
+            ErrorCode.VERSION_MISMATCH,
+            f"Unsupported protocol version {protocol_version}; this service "
+            f"speaks {PROTOCOL_VERSION}.",
+        )
+
+
 async def require_client_version(
     client_version: Annotated[
         str | None, Header(alias="X-LabOneQ-Client-Version")
@@ -314,6 +328,27 @@ async def require_client_version(
     return _validate_client_version(
         client_version, _parse_flag_header(ignore_mismatch), protocol_version
     )
+
+
+async def read_client_id(
+    client_id: Annotated[str | None, Header(alias=CLIENT_ID_HEADER)] = None,
+) -> str | None:
+    """FastAPI dependency returning the id the client sends in `CLIENT_ID_HEADER`.
+
+    Returns None if the client sends none. A blank id counts as none. Ids that
+    differ only in case are the same id, returned in lower case. Raises
+    `ServiceError` if the id is not 32 hexadecimal digits.
+    """
+    if client_id is None or not client_id.strip():
+        return None
+    if _CLIENT_ID_PATTERN.fullmatch(client_id) is None:
+        raise _error_response(
+            ErrorCode.INVALID_CLIENT_ID,
+            f"The {CLIENT_ID_HEADER} header must be 32 hexadecimal digits.",
+        )
+    # The service trusts its clients. A client that sends the id of another shares
+    # that client's queue.
+    return client_id.lower()
 
 
 # =============================================================================
@@ -426,6 +461,7 @@ async def submit_experiment(
     request: Request,
     controller_container: ControllerContainer = Depends(get_controller_container),
     client_version: str = Depends(require_client_version),
+    client_id: str | None = Depends(read_client_id),
 ) -> SubmitExperimentResponse:
     """Submit an experiment for execution.
 
@@ -444,15 +480,17 @@ async def submit_experiment(
         ) from exc
 
     scheduled_experiment, coprocessor_payload_overrides = _deserialize_submission(body)
-    await controller_container.submit_experiment(
+    client_callbacks = await controller_container.submit_experiment(
         experiment_id=handle_id,
         scheduled_experiment=scheduled_experiment,
         coprocessor_payload_overrides=coprocessor_payload_overrides,
+        client_id=client_id,
     )
     return SubmitExperimentResponse(
         id=uuid,
         status=ExperimentStatus.QUEUED,
         queue_position=-1,
+        client_callbacks=client_callbacks,
     )
 
 
@@ -599,7 +637,7 @@ async def cancel_experiment(
 ) -> dict[str, str]:
     """Cancel or release an experiment.
 
-    Queued → dropped; running → stopped (best-effort); complete → released.
+    Queued → dropped; running → waited for; complete → released.
     """
     await controller_container.cancel_experiment(_get_handle_id(uuid))
     return {"status": "ok"}

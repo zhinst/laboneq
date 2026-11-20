@@ -132,11 +132,8 @@ mod tests {
     use laboneq_common::named_id::NamedIdStore;
     use laboneq_dsl::{
         node_structure,
-        operation::{AveragingLoop, Reserve, Sweep, builders::SweepBuilder},
-        types::{
-            AcquisitionType, RepetitionMode, SectionAlignment, SectionTimingMode, SectionUid,
-            SignalUid,
-        },
+        operation::{AveragingLoop, ResetOscillatorPhase, Sweep, builders::SweepBuilder},
+        types::{AcquisitionType, RepetitionMode, SectionAlignment, SectionTimingMode, SectionUid},
     };
 
     fn make_sweep(store: &mut NamedIdStore, name: &str) -> Sweep {
@@ -163,6 +160,7 @@ mod tests {
             reset_oscillator_phase: false,
             alignment,
             section_timing_mode: SectionTimingMode::Relaxed,
+            reserved_signals: Vec::new(),
         }
     }
 
@@ -170,9 +168,7 @@ mod tests {
     #[test]
     fn test_resolve_averaging_sequential_averaging() {
         let mut store = NamedIdStore::new();
-        let reserve = Reserve {
-            signal: SignalUid(store.get_or_insert("reserve")),
-        };
+        let leaf = Operation::ResetOscillatorPhase(ResetOscillatorPhase::default());
 
         let mut tree = node_structure!(
             Operation::Root,
@@ -188,10 +184,7 @@ mod tests {
                         Operation::Sweep(make_sweep(&mut store, "sweep0")),
                         [(
                             Operation::Sweep(make_sweep(&mut store, "sweep1")),
-                            [
-                                (Operation::Reserve(reserve.clone()), []),
-                                (Operation::Reserve(reserve.clone()), [])
-                            ]
+                            [(leaf.clone(), []), (leaf.clone(), [])]
                         )]
                     )]
                 )]
@@ -212,10 +205,7 @@ mod tests {
                                 AveragingMode::Sequential,
                                 SectionAlignment::Right // Averaging inherits alignment from innermost sweep
                             )),
-                            [
-                                (Operation::Reserve(reserve.clone()), []),
-                                (Operation::Reserve(reserve.clone()), [])
-                            ]
+                            [(leaf.clone(), []), (leaf.clone(), [])]
                         )]
                     )]
                 )]
@@ -228,9 +218,7 @@ mod tests {
     #[test]
     fn test_resolve_averaging_non_sequential_averaging() {
         let mut store = NamedIdStore::new();
-        let reserve = Reserve {
-            signal: SignalUid(store.get_or_insert("reserve")),
-        };
+        let leaf = Operation::ResetOscillatorPhase(ResetOscillatorPhase::default());
 
         let mut tree = node_structure!(
             Operation::Root,
@@ -244,7 +232,7 @@ mod tests {
                     Operation::Sweep(make_sweep(&mut store, "sweep0")),
                     [(
                         Operation::Sweep(make_sweep(&mut store, "sweep1")),
-                        [(Operation::Reserve(reserve.clone()), [])]
+                        [(leaf.clone(), [])]
                     )]
                 )]
             )]
@@ -258,9 +246,7 @@ mod tests {
     #[test]
     fn test_invalid_experiment_structure() {
         let mut store = NamedIdStore::new();
-        let reserve = Reserve {
-            signal: SignalUid(store.get_or_insert("reserve")),
-        };
+        let leaf = Operation::ResetOscillatorPhase(ResetOscillatorPhase::default());
 
         // AveragingLoop with sequential averaging children cannot have siblings
         let mut tree = node_structure!(
@@ -276,10 +262,10 @@ mod tests {
                         Operation::Sweep(make_sweep(&mut store, "sweep0")),
                         [(
                             Operation::Sweep(make_sweep(&mut store, "sweep1")),
-                            [(Operation::Reserve(reserve.clone()), [])]
+                            [(leaf.clone(), [])]
                         )]
                     ),
-                    (Operation::Reserve(reserve.clone()), [])
+                    (leaf.clone(), [])
                 ]
             )]
         );
@@ -308,9 +294,9 @@ mod tests {
                     [
                         (
                             Operation::Sweep(make_sweep(&mut store, "sweep1")),
-                            [(Operation::Reserve(reserve.clone()), [])]
+                            [(leaf.clone(), [])]
                         ),
-                        (Operation::Reserve(reserve.clone()), [])
+                        (leaf.clone(), [])
                     ]
                 ),]
             ),]

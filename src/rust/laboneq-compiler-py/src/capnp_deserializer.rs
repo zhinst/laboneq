@@ -34,8 +34,8 @@ use laboneq_dsl::hqcs::{
     Predicate, StreamDecl, StreamEndpoint, StreamFieldDecl, VarType, VariableDecl, VariableValue,
 };
 use laboneq_dsl::operation::{
-    Acquire, AveragingLoop, Case, Delay, DoUntil, Ensure, ExternalOrValue, MarkStale,
-    MarkStaleTarget, Match, NearTimeCallback, Operation, PlayPulse, PrngLoop, PrngSetup, Reserve,
+    Acquire, AveragingLoop, Case, Delay, DoUntil, Expect, ExternalOrValue, MarkStale,
+    MarkStaleTarget, Match, NearTimeCallback, Operation, PlayPulse, PrngLoop, PrngSetup,
     ResetOscillatorPhase, Section, Send, SendArg, SetNode, Sweep, ValueEntry,
 };
 use laboneq_dsl::signal_calibration::{
@@ -283,10 +283,10 @@ fn deserialize_explicit_sweep(
 }
 
 fn deserialize_constant_numeric(
-    reader: &common_capnp::constant::Reader<'_>,
+    constant: common_capnp::value::WhichReader<'_>,
 ) -> Result<NumericLiteral> {
-    use common_capnp::constant::Which;
-    match reader.which().map_err(Error::new)? {
+    use common_capnp::value::Which;
+    match constant {
         Which::Real(v) => Ok(NumericLiteral::Float(v)),
         Which::Integer(v) => Ok(NumericLiteral::Int(v)),
         Which::Complex(cv) => {
@@ -301,12 +301,15 @@ fn deserialize_constant_numeric(
         Which::PythonValue(_) | Which::RawBytesValue(_) => {
             Err(Error::new("Bytes values not supported as numeric"))
         }
+        Which::None(()) | Which::ParameterRef(_) => {
+            unreachable!("callers handle `none` and `parameterRef` before converting a constant")
+        }
     }
 }
 
-fn deserialize_constant(reader: &common_capnp::constant::Reader<'_>) -> Result<Literal> {
-    use common_capnp::constant::Which;
-    match reader.which().map_err(Error::new)? {
+fn deserialize_constant(constant: common_capnp::value::WhichReader<'_>) -> Result<Literal> {
+    use common_capnp::value::Which;
+    match constant {
         Which::Real(v) => Ok(v.into()),
         Which::Integer(v) => Ok(v.into()),
         Which::Complex(cv) => {
@@ -318,6 +321,9 @@ fn deserialize_constant(reader: &common_capnp::constant::Reader<'_>) -> Result<L
         Which::PythonValue(_) | Which::RawBytesValue(_) => {
             Err(Error::new("Bytes values not supported"))
         }
+        Which::None(()) | Which::ParameterRef(_) => {
+            unreachable!("callers handle `none` and `parameterRef` before converting a constant")
+        }
     }
 }
 
@@ -327,13 +333,10 @@ fn deserialize_value_as_numeric(
     use common_capnp::value::Which;
     match reader.which().map_err(Error::new)? {
         Which::None(()) => Ok(None),
-        Which::Constant(constant) => {
-            let constant = constant.map_err(Error::new)?;
-            Ok(Some(deserialize_constant_numeric(&constant)?))
-        }
         Which::ParameterRef(_) => Err(Error::new(
             "Expected a constant value, got parameter reference",
         )),
+        constant => Ok(Some(deserialize_constant_numeric(constant)?)),
     }
 }
 
@@ -464,6 +467,7 @@ fn deserialize_acquire_loop(
         reset_oscillator_phase: reader.get_reset_oscillator_phase(),
         alignment,
         section_timing_mode,
+        reserved_signals: Vec::new(),
     })
 }
 
@@ -481,6 +485,7 @@ fn deserialize_case_section(
         uid: section_uid,
         state,
         section_timing_mode,
+        reserved_signals: Vec::new(),
     })
 }
 
@@ -1027,6 +1032,7 @@ impl Deserializer {
             uid: section_uid,
             condition,
             max_count: reader.get_max_count(),
+            reserved_signals: Vec::new(),
         })
     }
 
@@ -1102,20 +1108,20 @@ impl Deserializer {
         Ok(MarkStale { target })
     }
 
-    fn deserialize_ensure_op(
+    fn deserialize_expect_op(
         &mut self,
-        reader: &operation_capnp::ensure_op::Reader<'_>,
+        reader: &operation_capnp::expect_op::Reader<'_>,
         parent_section_name: &str,
-    ) -> Result<Ensure> {
+    ) -> Result<Expect> {
         let condition_reader = reader.get_condition().map_err(Error::new)?;
         let owner = || {
             format!(
-                "ensure in {}",
+                "expect in {}",
                 section_label_for_errors(parent_section_name)
             )
         };
         let condition = self.deserialize_predicate(&condition_reader, &owner)?;
-        Ok(Ensure { condition })
+        Ok(Expect { condition })
     }
 
     // === Section tree deserialization ===
@@ -1126,6 +1132,15 @@ impl Deserializer {
         experiment: &experiment_capnp::experiment::Reader<'_>,
     ) -> Result<ExperimentNode> {
         let root_section = experiment.get_root_section().map_err(Error::new)?;
+        if !root_section
+            .get_reserved_signals()
+            .map_err(Error::new)?
+            .is_empty()
+        {
+            return Err(Error::new(
+                "Unexpected reserved signals at root level of experiment",
+            ));
+        }
         let root_child_index = self.index_child_sections(&root_section)?;
         let content_items = root_section.get_content_items().map_err(Error::new)?;
         let mut root = ExperimentNode::new(Operation::Root);
@@ -1199,7 +1214,7 @@ impl Deserializer {
         let name = text_to_str(reader.get_name().map_err(Error::new)?)?;
 
         use section_capnp::section::Which;
-        let operation = match reader.which().map_err(Error::new)? {
+        let mut operation = match reader.which().map_err(Error::new)? {
             Which::Unspecified(()) => {
                 return Err(Error::new(format!(
                     "Section '{}' has no section kind set",
@@ -1268,10 +1283,19 @@ impl Deserializer {
                     children.push(child);
                 }
                 ItemWhich::Operation(op) => {
-                    let op = op.map_err(Error::new)?;
                     let child = self.deserialize_operation(&op, name)?;
                     children.push(child);
                 }
+            }
+        }
+        let reserved_signals = reader.get_reserved_signals().map_err(Error::new)?;
+        if !reserved_signals.is_empty() {
+            let signals = operation
+                .reserved_signals_mut()
+                .ok_or_else(|| Error::new(format!("Section '{name}' cannot reserve signals.")))?;
+            signals.reserve_exact(reserved_signals.len() as usize);
+            for idx in reserved_signals.iter() {
+                signals.push(self.resolve_signal(idx)?);
             }
         }
 
@@ -1310,6 +1334,7 @@ impl Deserializer {
             triggers,
             on_system_grid: reader.get_on_system_grid(),
             section_timing_mode,
+            reserved_signals: Vec::new(),
         })
     }
 
@@ -1372,6 +1397,7 @@ impl Deserializer {
             })?,
             auto_chunking,
             section_timing_mode,
+            reserved_signals: Vec::new(),
         })
     }
 
@@ -1427,6 +1453,7 @@ impl Deserializer {
             uid: section_uid,
             range: reader.get_range(),
             seed: reader.get_seed(),
+            reserved_signals: Vec::new(),
         })
     }
 
@@ -1443,6 +1470,7 @@ impl Deserializer {
             count: NonZeroU32::new(count)
                 .ok_or_else(|| Error::new("PrngLoop count must be > 0"))?,
             sample_uid: PrngSampleUid(sample_named_id),
+            reserved_signals: Vec::new(),
         })
     }
 
@@ -1466,10 +1494,10 @@ impl Deserializer {
 
     fn deserialize_operation(
         &mut self,
-        reader: &operation_capnp::operation::Reader<'_>,
+        reader: &section_capnp::section_item::operation::Reader<'_>,
         parent_section_name: &str,
     ) -> Result<ExperimentNode> {
-        use operation_capnp::operation::Which;
+        use section_capnp::section_item::operation::Which;
         let operation = match reader.which().map_err(Error::new)? {
             Which::Play(play) => {
                 let play = play.map_err(Error::new)?;
@@ -1478,10 +1506,6 @@ impl Deserializer {
             Which::Delay(delay) => {
                 let delay = delay.map_err(Error::new)?;
                 Operation::Delay(self.deserialize_delay_op(&delay)?)
-            }
-            Which::Reserve(reserve) => {
-                let reserve = reserve.map_err(Error::new)?;
-                Operation::Reserve(self.deserialize_reserve_op(&reserve)?)
             }
             Which::Acquire(acquire) => {
                 let acquire = acquire.map_err(Error::new)?;
@@ -1507,9 +1531,9 @@ impl Deserializer {
                 let mark_stale = mark_stale.map_err(Error::new)?;
                 Operation::MarkStale(self.deserialize_mark_stale_op(&mark_stale)?)
             }
-            Which::Ensure(ensure) => {
-                let ensure = ensure.map_err(Error::new)?;
-                Operation::Ensure(self.deserialize_ensure_op(&ensure, parent_section_name)?)
+            Which::Expect(expect) => {
+                let expect = expect.map_err(Error::new)?;
+                Operation::Expect(self.deserialize_expect_op(&expect, parent_section_name)?)
             }
             Which::None(()) => {
                 let label = section_label_for_errors(parent_section_name);
@@ -1649,15 +1673,6 @@ impl Deserializer {
         })
     }
 
-    fn deserialize_reserve_op(
-        &self,
-        reader: &operation_capnp::reserve_op::Reader<'_>,
-    ) -> Result<Reserve> {
-        Ok(Reserve {
-            signal: self.resolve_signal(reader.get_signal())?,
-        })
-    }
-
     fn deserialize_acquire_op(
         &mut self,
         reader: &operation_capnp::acquire_op::Reader<'_>,
@@ -1678,14 +1693,13 @@ impl Deserializer {
         let length_reader = reader.get_length().map_err(Error::new)?;
         let length = match length_reader.which().map_err(Error::new)? {
             common_capnp::value::Which::None(()) => None,
-            common_capnp::value::Which::Constant(constant) => {
-                let constant = constant.map_err(Error::new)?;
-                let numeric = deserialize_constant_numeric(&constant)?;
-                let f: f64 = numeric.try_into().map_err(Error::new)?;
-                Some(seconds(f))
-            }
             common_capnp::value::Which::ParameterRef(_) => {
                 return Err(Error::new("Acquire length cannot be a parameter reference"));
+            }
+            constant => {
+                let numeric = deserialize_constant_numeric(constant)?;
+                let f: f64 = numeric.try_into().map_err(Error::new)?;
+                Some(seconds(f))
             }
         };
 
@@ -1713,6 +1727,11 @@ impl Deserializer {
             })
             .collect();
 
+        let acquisition_type = match reader.get_acquisition_type().map_err(Error::new)? {
+            operation_capnp::AcquisitionType::Unspecified => None,
+            acquisition_type => Some(deserialize_acquisition_type(acquisition_type)),
+        };
+
         Ok(Acquire {
             signal,
             handle,
@@ -1720,6 +1739,7 @@ impl Deserializer {
             kernel,
             parameters,
             pulse_parameters,
+            acquisition_type,
         })
     }
 
@@ -1783,14 +1803,12 @@ impl Deserializer {
         use common_capnp::value::Which;
         match reader.which().map_err(Error::new)? {
             Which::None(()) => Ok(None),
-            Which::Constant(constant) => {
-                let constant = constant.map_err(Error::new)?;
-                let value = deserialize_constant(&constant)?;
-                Ok(Some(ValueOrParameter::Value(value)))
-            }
             Which::ParameterRef(idx) => Ok(Some(ValueOrParameter::Parameter(ParameterUid(
                 self.resolve_parameter_index(idx)?,
             )))),
+            constant => Ok(Some(ValueOrParameter::Value(deserialize_constant(
+                constant,
+            )?))),
         }
     }
 
@@ -1801,16 +1819,15 @@ impl Deserializer {
         use common_capnp::value::Which;
         match reader.which().map_err(Error::new)? {
             Which::None(()) => Ok(None),
-            Which::Constant(constant) => {
-                let constant = constant.map_err(Error::new)?;
-                let f: f64 = deserialize_constant_numeric(&constant)?
+            Which::ParameterRef(idx) => Ok(Some(ValueOrParameter::Parameter(ParameterUid(
+                self.resolve_parameter_index(idx)?,
+            )))),
+            constant => {
+                let f: f64 = deserialize_constant_numeric(constant)?
                     .try_into()
                     .map_err(Error::new)?;
                 Ok(Some(ValueOrParameter::Value(f)))
             }
-            Which::ParameterRef(idx) => Ok(Some(ValueOrParameter::Parameter(ParameterUid(
-                self.resolve_parameter_index(idx)?,
-            )))),
         }
     }
 
@@ -1825,16 +1842,15 @@ impl Deserializer {
         use common_capnp::value::Which;
         match reader.which().map_err(Error::new)? {
             Which::None(()) => Ok(None),
-            Which::Constant(constant) => {
-                let constant = constant.map_err(Error::new)?;
-                let f: f64 = deserialize_constant_numeric(&constant)?
+            Which::ParameterRef(idx) => Ok(Some(ValueOrParameter::Parameter(ParameterUid(
+                self.resolve_parameter_index(idx)?,
+            )))),
+            constant => {
+                let f: f64 = deserialize_constant_numeric(constant)?
                     .try_into()
                     .map_err(Error::new)?;
                 Ok(Some(ValueOrParameter::Value(seconds(f))))
             }
-            Which::ParameterRef(idx) => Ok(Some(ValueOrParameter::Parameter(ParameterUid(
-                self.resolve_parameter_index(idx)?,
-            )))),
         }
     }
 
@@ -1845,16 +1861,15 @@ impl Deserializer {
         use common_capnp::value::Which;
         match reader.which().map_err(Error::new)? {
             Which::None(()) => Ok(None),
-            Which::Constant(constant) => {
-                let constant = constant.map_err(Error::new)?;
-                let cf: ComplexOrFloat = deserialize_constant_numeric(&constant)?
+            Which::ParameterRef(idx) => Ok(Some(ValueOrParameter::Parameter(ParameterUid(
+                self.resolve_parameter_index(idx)?,
+            )))),
+            constant => {
+                let cf: ComplexOrFloat = deserialize_constant_numeric(constant)?
                     .try_into()
                     .map_err(Error::new)?;
                 Ok(Some(ValueOrParameter::Value(cf)))
             }
-            Which::ParameterRef(idx) => Ok(Some(ValueOrParameter::Parameter(ParameterUid(
-                self.resolve_parameter_index(idx)?,
-            )))),
         }
     }
 
@@ -1891,35 +1906,27 @@ impl Deserializer {
         use common_capnp::value::Which;
         match reader.which().map_err(Error::new)? {
             Which::None(()) => Ok(ExternalOrValue::None),
-            Which::Constant(constant) => {
-                let constant = constant.map_err(Error::new)?;
-                use common_capnp::constant::Which as ConstantWhich;
-                match constant.which().map_err(Error::new)? {
-                    ConstantWhich::StringValue(value) => {
-                        let value = text_to_str(value.map_err(Error::new)?)?;
-                        self.store_external(PyObjectPayload::Str(value))
-                    }
-                    // `pythonValue` carries values that the Rust compiler never interprets:
-                    // they are evaluated in Python during waveform sampling, or handed to the
-                    // Controller as-is. Only JSON-representable values are accepted; the
-                    // serializer rejects anything else.
-                    ConstantWhich::PythonValue(data) => {
-                        let data = data.map_err(Error::new)?;
-                        self.store_external(PyObjectPayload::Json(data))
-                    }
-                    ConstantWhich::RawBytesValue(data) => {
-                        let data = data.map_err(Error::new)?;
-                        self.store_external(PyObjectPayload::RawBytes(data))
-                    }
-                    ConstantWhich::Boolean(value) => Ok(ExternalOrValue::Bool(value)),
-                    _ => Ok(ExternalOrValue::ValueOrParameter(ValueOrParameter::Value(
-                        deserialize_constant_numeric(&constant)?,
-                    ))),
-                }
+            Which::StringValue(value) => {
+                let value = text_to_str(value.map_err(Error::new)?)?;
+                self.store_external(PyObjectPayload::Str(value))
             }
+            // The Compiler never interprets `pythonValue`. The payload is stored as JSON and
+            // passed through unchanged.
+            Which::PythonValue(data) => {
+                let data = data.map_err(Error::new)?;
+                self.store_external(PyObjectPayload::Json(data))
+            }
+            Which::RawBytesValue(data) => {
+                let data = data.map_err(Error::new)?;
+                self.store_external(PyObjectPayload::RawBytes(data))
+            }
+            Which::Boolean(value) => Ok(ExternalOrValue::Bool(value)),
             Which::ParameterRef(idx) => Ok(ExternalOrValue::ValueOrParameter(
                 ValueOrParameter::Parameter(ParameterUid(self.resolve_parameter_index(idx)?)),
             )),
+            numeric => Ok(ExternalOrValue::ValueOrParameter(ValueOrParameter::Value(
+                deserialize_constant_numeric(numeric)?,
+            ))),
         }
     }
 

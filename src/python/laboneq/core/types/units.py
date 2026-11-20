@@ -2,19 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-from enum import Enum
+from enum import StrEnum
 
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 
 
-# StrEnum is part of Python 3.11. Until then, let's make our own!
-# Downside: auto() does not work...
-class _StrEnum(str, Enum):
-    def __str__(self):
-        return str.__str__(self)
-
-
-class Unit(_StrEnum):
+class Unit(StrEnum):
     """An Enum of available calibration units."""
 
     volt = "volt"

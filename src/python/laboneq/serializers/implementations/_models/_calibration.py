@@ -7,7 +7,7 @@ import logging
 import sys
 from enum import Enum
 from functools import partial
-from typing import ClassVar, Type, Union
+from typing import ClassVar
 
 import attrs
 import numpy
@@ -83,7 +83,7 @@ class SweepParameterModel:
     values: ArrayLike_Model | None
     axis_name: str | None
     driven_by: list[ParameterModel] | None
-    _target_class: ClassVar[Type] = SweepParameter
+    _target_class: ClassVar[type] = SweepParameter
 
 
 @attrs.define
@@ -93,10 +93,10 @@ class LinearSweepParameterModel:
     stop: float | None
     count: int | None
     axis_name: str | None
-    _target_class: ClassVar[Type] = LinearSweepParameter
+    _target_class: ClassVar[type] = LinearSweepParameter
 
 
-ParameterModel = Union[SweepParameterModel, LinearSweepParameterModel]
+ParameterModel = SweepParameterModel | LinearSweepParameterModel
 
 
 def _structure_list_parameter_model(
@@ -137,7 +137,7 @@ class OscillatorModel:
     frequency: float | ParameterModel | None
     modulation_type: ModulationTypeModel
     carrier_type: CarrierTypeModel | None
-    _target_class: ClassVar[Type] = Oscillator
+    _target_class: ClassVar[type] = Oscillator
 
 
 @attrs.define
@@ -145,7 +145,7 @@ class MixerCalibrationModel:
     uid: str
     voltage_offsets: list[float | ParameterModel] | None
     correction_matrix: list[list[float | ParameterModel]] | None
-    _target_class: ClassVar[Type] = MixerCalibration
+    _target_class: ClassVar[type] = MixerCalibration
 
 
 @attrs.define
@@ -164,7 +164,7 @@ class AmplifierPumpModel:
     probe_on: bool
     probe_frequency: float | ParameterModel | None
     probe_power: float | ParameterModel | None
-    _target_class: ClassVar[Type] = AmplifierPump
+    _target_class: ClassVar[type] = AmplifierPump
 
 
 @attrs.define
@@ -172,7 +172,7 @@ class OutputRouteModel:
     source: str
     amplitude_scaling: float | ParameterModel
     phase_shift: float | ParameterModel | None
-    _target_class: ClassVar[Type] = OutputRoute
+    _target_class: ClassVar[type] = OutputRoute
     # TODO: source is in fact str | LogicalSignalModel | ExperimentSignalModel
     # Including the above two models would create a circular dependency
     # between the models. Use str for now.
@@ -185,40 +185,40 @@ class PrecompensationModel:
     high_pass: HighPassCompensationModel | None
     bounce: BounceCompensationModel | None
     FIR: FIRCompensationModel | None
-    _target_class: ClassVar[Type] = Precompensation
+    _target_class: ClassVar[type] = Precompensation
 
 
 @attrs.define
 class FIRCompensationModel:
     coefficients: ArrayLike_Model
-    _target_class: ClassVar[Type] = FIRCompensation
+    _target_class: ClassVar[type] = FIRCompensation
 
 
 @attrs.define
 class ExponentialCompensationModel:
     timeconstant: float
     amplitude: float
-    _target_class: ClassVar[Type] = ExponentialCompensation
+    _target_class: ClassVar[type] = ExponentialCompensation
 
 
 @attrs.define
 class HighPassCompensationModel:
     timeconstant: float
-    _target_class: ClassVar[Type] = HighPassCompensation
+    _target_class: ClassVar[type] = HighPassCompensation
 
 
 @attrs.define
 class BounceCompensationModel:
     delay: float
     amplitude: float
-    _target_class: ClassVar[Type] = BounceCompensation
+    _target_class: ClassVar[type] = BounceCompensation
 
 
 @attrs.define
 class QuantityModel:
     value: float
     unit: UnitModel
-    _target_class: ClassVar[Type] = Quantity
+    _target_class: ClassVar[type] = Quantity
 
 
 @attrs.define
@@ -237,13 +237,13 @@ class SignalCalibrationModel:
     amplifier_pump: AmplifierPumpModel | None
     added_outputs: list[OutputRouteModel] | None
     automute: bool
-    _target_class: ClassVar[Type] = SignalCalibration
+    _target_class: ClassVar[type] = SignalCalibration
 
 
 @attrs.define
 class CalibrationModel:
     calibration_items: dict[str, SignalCalibrationModel]
-    _target_class: ClassVar[Type] = Calibration
+    _target_class: ClassVar[type] = Calibration
 
 
 def remove_high_pass_clearing(

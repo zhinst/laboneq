@@ -55,13 +55,20 @@ struct AxisParameter {
     # `CompiledExperiment.parameters` index.
 
     shots @2 :UInt64;
-    # The axis is a plain `0..shots` index count -- e.g. averaging-loop iterations, raw
-    # acquisition sample indices, or merged-handle indices -- with no backing parameter or
-    # explicit values. Unpacking `0..shots` into concrete index values, if needed, is left
-    # to the consumer.
+    # The axis is a plain `0..shots` index count -- e.g. averaging-loop iterations or
+    # merged-handle indices -- with no backing parameter or explicit values. Unpacking
+    # `0..shots` into concrete index values, if needed, is left to the consumer.
 
     explicitRef @3 :Common.Id;
     # `ResultShapeInfo.explicitValues` index.
+
+    rawSamples :group {
+      # The axis is the `0..count` sample index of a raw acquisition, acquired at
+      # `samplingRate` Sa/s.
+
+      count @4 :UInt64;
+      samplingRate @5 :Float64;
+    }
   }
 }
 

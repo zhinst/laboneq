@@ -44,6 +44,12 @@ impl FromIterator<(ParameterUid, NumericLiteral)> for Environment {
     }
 }
 
+impl ParameterLookup for Environment {
+    fn value(&self, uid: ParameterUid) -> Option<NumericLiteral> {
+        self.get(uid)
+    }
+}
+
 /// A [`ParameterLookup`] over an [`Environment`] that records which parameters are read.
 pub(crate) struct RecordingLookup<'a> {
     env: &'a Environment,
@@ -56,14 +62,15 @@ impl<'a> RecordingLookup<'a> {
         Self { env, read }
     }
 
-    /// Returns the parameters read so far, in the order of the environment's values.
-    pub(crate) fn reads(&self) -> Vec<ParameterUid> {
+    /// Returns the parameters read so far with the values read, in the order of the
+    /// environment's values.
+    pub(crate) fn reads(&self) -> Vec<(ParameterUid, NumericLiteral)> {
         self.env
             .values
             .iter()
             .zip(&self.read)
             .filter(|(_, read)| read.get())
-            .map(|((uid, _), _)| *uid)
+            .map(|(value, _)| *value)
             .collect()
     }
 }
@@ -108,7 +115,7 @@ mod tests {
         assert_eq!(lookup.value(2.into()), Some(float(0.2)));
         assert_eq!(lookup.value(3.into()), None);
 
-        assert_eq!(lookup.reads(), vec![ParameterUid::from(2)]);
+        assert_eq!(lookup.reads(), vec![(ParameterUid::from(2), float(0.2))]);
     }
 
     #[test]
@@ -122,7 +129,7 @@ mod tests {
 
         assert_eq!(lookup.value(1.into()), Some(float(0.3)));
 
-        assert_eq!(lookup.reads(), vec![ParameterUid::from(1)]);
+        assert_eq!(lookup.reads(), vec![(ParameterUid::from(1), float(0.3))]);
     }
 
     #[test]
@@ -135,7 +142,10 @@ mod tests {
 
         assert_eq!(
             lookup.reads(),
-            vec![ParameterUid::from(2), ParameterUid::from(1)]
+            vec![
+                (ParameterUid::from(2), float(0.2)),
+                (ParameterUid::from(1), float(0.1)),
+            ]
         );
     }
 

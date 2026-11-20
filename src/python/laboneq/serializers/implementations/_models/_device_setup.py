@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
+import builtins
 import sys
 from enum import Enum
-from typing import ClassVar, Type, Union
+from typing import ClassVar
 
 import attrs
 
@@ -36,7 +37,7 @@ from ._common import collect_models, register_models
 class IODirectionModel(Enum):
     IN = "IN"
     OUT = "OUT"
-    _target_class: ClassVar[Type] = IODirection
+    _target_class: ClassVar[type] = IODirection
 
 
 class IOSignalTypeModel(Enum):
@@ -49,19 +50,19 @@ class IOSignalTypeModel(Enum):
     DIO = "DIO"
     ZSYNC = "ZSYNC"
     PPC = "PPC"
-    _target_class: ClassVar[Type] = IOSignalType
+    _target_class: ClassVar[type] = IOSignalType
 
 
 class ReferenceClockSourceModel(Enum):
     INTERNAL = "internal"
     EXTERNAL = "external"
-    _target_class: ClassVar[Type] = ReferenceClockSource
+    _target_class: ClassVar[type] = ReferenceClockSource
 
 
 class PhysicalChannelTypeModel(Enum):
     IQ_CHANNEL = "iq_channel"
     RF_CHANNEL = "rf_channel"
-    _target_class: ClassVar[Type] = PhysicalChannelType
+    _target_class: ClassVar[type] = PhysicalChannelType
 
 
 @attrs.define
@@ -70,7 +71,7 @@ class DataServerModel:
     host: str
     port: str | int
     api_level: int
-    _target_class: ClassVar[Type] = DataServer
+    _target_class: ClassVar[type] = DataServer
 
 
 @attrs.define
@@ -79,7 +80,7 @@ class ConnectionModel:
     local_port: str | None
     remote_path: str | None
     signal_type: IOSignalTypeModel | None
-    _target_class: ClassVar[Type] = Connection
+    _target_class: ClassVar[type] = Connection
 
 
 @attrs.define
@@ -91,7 +92,7 @@ class ZIStandardInstrumentModel:
     address: str | None
     device_options: str | None
     reference_clock_source: ReferenceClockSourceModel | str | None
-    _target_class: ClassVar[Type] = ZIStandardInstrument
+    _target_class: ClassVar[type] = ZIStandardInstrument
 
     @classmethod
     def _unstructure(cls, obj):
@@ -110,7 +111,7 @@ class ZIStandardInstrumentModel:
             "address": obj.address,
             "device_options": obj.device_options,
             "reference_clock_source": _converter.unstructure(
-                obj.reference_clock_source, Union[ReferenceClockSourceModel, str, None]
+                obj.reference_clock_source, ReferenceClockSourceModel | str | None
             ),
             "_instrument_type": type(obj).__name__,
         }
@@ -152,14 +153,14 @@ class PhysicalChannelModel:
     type: PhysicalChannelTypeModel | None
     path: str | None
     calibration: SignalCalibrationModel | None
-    _target_class: ClassVar[Type] = PhysicalChannel
+    _target_class: ClassVar[builtins.type] = PhysicalChannel
 
 
 @attrs.define
 class PhysicalChannelGroupModel:
     uid: str
     channels: dict[str, PhysicalChannelModel]
-    _target_class: ClassVar[Type] = PhysicalChannelGroup
+    _target_class: ClassVar[type] = PhysicalChannelGroup
 
 
 @attrs.define
@@ -170,7 +171,7 @@ class LogicalSignalModel:
     _physical_channel: PhysicalChannelModel | None
     path: str | None
     direction: IODirectionModel | None
-    _target_class: ClassVar[Type] = LogicalSignal
+    _target_class: ClassVar[type] = LogicalSignal
 
     @classmethod
     def _structure(cls, obj, _):
@@ -203,13 +204,13 @@ class LogicalSignalModel:
 class LogicalSignalGroupModel:
     uid: str | None
     logical_signals: dict[str, LogicalSignalModel]
-    _target_class: ClassVar[Type] = LogicalSignalGroup
+    _target_class: ClassVar[type] = LogicalSignalGroup
 
 
 @attrs.define
 class CoprocessorInventoryEntryModel:
     key: str
-    _target_class: ClassVar[Type] = CoprocessorInventoryEntry
+    _target_class: ClassVar[type] = CoprocessorInventoryEntry
 
 
 def make_converter():

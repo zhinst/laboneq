@@ -7,23 +7,29 @@ import asyncio
 import contextlib
 import logging
 import time
-import traceback
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
+
+import attrs
 
 from laboneq import __version__
 from laboneq.controller.constants import CONNECT_CHECK_HOLDOFF
-from laboneq.controller.controller_backend import create_controller_backend
+from laboneq.controller.controller_backend import (
+    StepSubmission,
+    create_controller_backend,
+)
 from laboneq.controller.devices.device_utils import labone_client_version
 from laboneq.controller.near_time_replacement import NearTimeReplacements
 from laboneq.controller.near_time_runner import NearTimeRunner
 from laboneq.controller.recipe_processor import validate_scheduled_experiment
-from laboneq.controller.results import ResultsBuilder
+from laboneq.controller.results import ResultsBuilder, error_message
 from laboneq.controller.toolkit_adapter import toolkit_instruments
 from laboneq.controller.utilities.exception import (
     HardwareNotReadyError,
     LabOneQControllerException,
+    RecoverableExecutionError,
 )
 from laboneq.controller.versioning import (
     RECOMMENDED_MINIMUM_LABONE_VERSION,
@@ -45,6 +51,7 @@ if TYPE_CHECKING:
     from laboneq.controller.utilities.sweep_params_tracker import SweepParamsTracker
     from laboneq.controller.versioning import LabOneVersion
     from laboneq.data.experiment_results import ExperimentResults
+    from laboneq.data.instrument_topology import InstrumentTopology
     from laboneq.data.nt_step_key import NtStepKey
     from laboneq.data.scheduled_experiment import (
         ScheduledExperiment,
@@ -61,39 +68,30 @@ _logger = logging.getLogger(__name__)
 class ControllerSubmission:
     scheduled_experiment: ScheduledExperiment
     completion_future: asyncio.Future[ResultsBuilder]
-    temp_run_future: asyncio.Future[None]  # TODO(2K): Temporary
     results_builder: ResultsBuilder
     callback_channel: CallbackChannel | None = None
     coprocessor_payload_overrides: dict[str, bytes] = field(default_factory=dict)
+    # Set once the terminal message went to the callback channel.
+    outcome_reported: bool = False
 
 
-async def _wait_callback_channel(submission: ControllerSubmission) -> bool:
-    """Gate the run start on the client callback channel being attached."""
-    channel = submission.callback_channel
-    if channel is None or await channel.wait_attached(restart_window=True):
-        return True
-    submission.results_builder.add_execution_error(
-        (
-            [],
-            "",
-            f"The client callback channel was not attached within "
-            f"{channel.absence_timeout_s:.0f} s of the experiment becoming "
-            f"ready to run.",
-        )
-    )
-    # completion_future/temp_run_future maybe cancelled by SIGINT handler, avoid InvalidStateError in that case
+def _complete_submission(submission: ControllerSubmission) -> None:
+    """Resolves the submission with its results and reports the outcome to the client."""
+    # The SIGINT handler may have cancelled `completion_future`.
     if not submission.completion_future.done():
         submission.completion_future.set_result(submission.results_builder)
-    if not submission.temp_run_future.done():
-        submission.temp_run_future.set_result(None)
-    return False
+    _notify_callback_channel_done(submission)
 
 
 def _notify_callback_channel_done(submission: ControllerSubmission) -> None:
-    """Send the terminal channel message reflecting how the run ended."""
+    """Sends the terminal channel message for how the run ended.
+
+    Later calls send nothing.
+    """
     channel = submission.callback_channel
-    if channel is None:
+    if channel is None or submission.outcome_reported:
         return
+    submission.outcome_reported = True
     future = submission.completion_future
     error: dict[str, Any] | None = None
     if future.cancelled():
@@ -127,17 +125,33 @@ class ExecutionContext:
     submission: ControllerSubmission
     recipe_data: RecipeData
     backend_runtime_state: BackendRuntimeState | None = None
-    #: Resolves once the result collector has finished the most recent step
-    #: queued on it. The collector takes steps in order, so the earlier ones
-    #: are finished too.
-    last_nt_step_result_completed: asyncio.Future[None] | None = None
+    # Whether any near-time step has reached the instruments.
+    anything_submitted: bool = False
 
 
 @dataclass
 class NtStepResultContext:
-    nt_step: NtStepKey | None
-    nt_step_result_completed: asyncio.Future[None]
     execution_context: ExecutionContext
+    # None for the item that finalizes the run.
+    step_submission: StepSubmission | None = None
+    # Resolves once the step's results are read. None for the finalizing item.
+    nt_step_result_completed: asyncio.Future[None] | None = None
+
+    @classmethod
+    def finalizing(cls, execution_context: ExecutionContext) -> NtStepResultContext:
+        """Returns the item that makes the result collector finalize the run."""
+        return cls(execution_context=execution_context)
+
+
+class _NothingSubmitted(Exception):
+    """The first near-time step reached no instrument; the run cannot proceed."""
+
+    def __init__(self, step_submission: StepSubmission):
+        super().__init__(
+            "The first near-time step reached no instrument, as the errors of its "
+            "submission report. Execution stopped."
+        )
+        self.step_submission = step_submission
 
 
 class ControllerCore:
@@ -184,7 +198,6 @@ class ControllerCore:
             {} if neartime_callbacks is None else neartime_callbacks
         )
 
-        self._experiment_runner = AsyncWorker(run_one=self._run_one_experiment)
         self._result_collector = AsyncWorker(run_one=self._collect_nt_step_results)
 
         _logger.debug("Controller debug logging is on")
@@ -271,46 +284,37 @@ class ControllerCore:
     ) -> asyncio.Future[None]:
         recipe_data = execution_context.recipe_data
 
-        await self._prepare_nt_step(
-            recipe_data=recipe_data,
-            sweep_params_tracker=sweep_params_tracker,
-            user_set_nodes=user_set_nodes,
-            nt_step=nt_step,
-        )
-
-        nt_step_result_completed = asyncio.get_running_loop().create_future()
-        nt_step_result_context = NtStepResultContext(
-            nt_step=nt_step,
-            nt_step_result_completed=nt_step_result_completed,
-            execution_context=execution_context,
-        )
-
-        async def results_pending():
-            execution_context.last_nt_step_result_completed = nt_step_result_completed
-            await self._result_collector.submit(nt_step_result_context)
-
         try:
-            await self._backend.execute_nt_step(
+            await self._prepare_nt_step(
                 recipe_data=recipe_data,
+                sweep_params_tracker=sweep_params_tracker,
+                user_set_nodes=user_set_nodes,
                 nt_step=nt_step,
-                timeout_s=timeout_s,
-                results_pending=results_pending,
             )
-        except (asyncio.TimeoutError, TimeoutError, LabOneQControllerException) as e:
-            if not isinstance(e, LabOneQControllerException):
-                e = LabOneQControllerException(
-                    "Timeout during execution of a near-time step",
-                    cause=e,
-                )
-            # TODO(2K): introduce "hard" controller exceptions
-            execution_context.submission.results_builder.add_execution_error(
-                (
-                    list(nt_step.indices),
-                    "real-time-loop",
-                    "".join(traceback.format_exception(e)),
-                )
+        except RecoverableExecutionError as e:
+            step_submission = StepSubmission.not_submitted(nt_step, e)
+        else:
+            step_submission = await self._backend.execute_nt_step(
+                recipe_data=recipe_data, nt_step=nt_step, timeout_s=timeout_s
             )
-        await self._backend.after_nt_step()
+        if step_submission.anything_submitted:
+            execution_context.anything_submitted = True
+        elif not execution_context.anything_submitted:
+            raise _NothingSubmitted(step_submission)
+        nt_step_result_completed = asyncio.get_running_loop().create_future()
+        await self._result_collector.submit(
+            NtStepResultContext(
+                execution_context=execution_context,
+                step_submission=step_submission,
+                nt_step_result_completed=nt_step_result_completed,
+            )
+        )
+        try:
+            await self._backend.after_nt_step()
+        except RecoverableExecutionError as e:
+            execution_context.submission.results_builder.add_step_error(
+                nt_step, None, "", error_message(e)
+            )
         return nt_step_result_completed
 
     async def connect(
@@ -373,6 +377,24 @@ class ControllerCore:
         await self._raise_if_not_ready_async()
         await self._backend.ensure_setup_description()
 
+    async def merge_setup_description(
+        self, instrument_topology: InstrumentTopology
+    ) -> InstrumentTopology:
+        """Returns `instrument_topology` with the setup description of the instruments.
+
+        Fetches the setup description if needed. Returns `instrument_topology`
+        unchanged under emulation, or if the instruments have no setup
+        description. Raises `HardwareNotReadyError` if the instruments cannot
+        run experiments now.
+        """
+        await self.ensure_setup_description()
+        # A client rebuilds a `DeviceSetup` from the topology, and compiles for it
+        # with the setup description. Emulation has no instruments to fetch one from.
+        setup_description = self.setup_description
+        if self._do_emulation or setup_description is None:
+            return instrument_topology
+        return attrs.evolve(instrument_topology, setup_description=setup_description)
+
     async def disable_outputs(
         self,
         device_uids: list[str] | None = None,
@@ -403,55 +425,65 @@ class ControllerCore:
             return SubmissionStatus.FAILED
         return SubmissionStatus.COMPLETED
 
-    async def submit_compiled(
+    async def prepare_submission(
         self,
         scheduled_experiment: ScheduledExperiment,
         callback_channel: CallbackChannel | None = None,
         coprocessor_payload_overrides: dict[str, bytes] | None = None,
     ) -> ControllerSubmission:
+        """Validates `scheduled_experiment` and returns a submission for it.
+
+        Nothing runs until a caller passes the submission to `execute_submission`.
+        """
         await self._raise_if_not_ready_async()
         validate_scheduled_experiment(
             scheduled_experiment,
             self._backend.device_setup_fingerprint,
             self._neartime_callbacks,
-            allow_client_callbacks=callback_channel is not None,
+            callback_channel=callback_channel,
         )
         submission = ControllerSubmission(
             scheduled_experiment=scheduled_experiment,
             completion_future=asyncio.get_running_loop().create_future(),
-            temp_run_future=asyncio.get_running_loop().create_future(),
             results_builder=ResultsBuilder.from_scheduled_experiment(
                 scheduled_experiment
             ),
             callback_channel=callback_channel,
             coprocessor_payload_overrides=dict(coprocessor_payload_overrides or {}),
         )
-        await self._experiment_runner.submit(submission)
         return submission
 
     async def wait_submission(self, submission: ControllerSubmission):
         await submission.completion_future
-        await submission.temp_run_future  # TODO(2K): Temporary
+
+    def abort_submission(self, submission: ControllerSubmission, reason: str) -> None:
+        """Ends `submission` with `reason` recorded as its execution error."""
+        submission.results_builder.add_execution_error(([], "", reason))
+        _complete_submission(submission)
 
     async def stop_workers(self):
-        await self._experiment_runner.stop()
         await self._result_collector.stop()
 
-    async def _run_one_experiment(self, submission: ControllerSubmission):
+    async def abort_result_reads(self):
+        """Stops reading the results of the submitted near-time steps.
+
+        Drops the queued reads. A submission with a read in progress or queued
+        stays unfinished.
+        """
+        await self._result_collector.cancel()
+
+    async def execute_submission(self, submission: ControllerSubmission):
+        """Runs `submission` to its end, and records errors in its results."""
         try:
-            if await _wait_callback_channel(submission):
-                await self._execute_compiled_async(submission=submission)
+            await self._execute_compiled_async(submission=submission)
         except Exception as e:
-            # A remote client sees the failure only through the status and
-            # results of the submission.
-            submission.results_builder.add_execution_error(
-                ([], "", "".join(traceback.format_exception(e)))
-            )
-            # completion_future maybe cancelled by SIGINT handler, avoid InvalidStateError in that case
-            if not submission.completion_future.done():
-                submission.completion_future.set_exception(e)
-        finally:
+            # Raised before the near-time loop ended, so it stopped the run.
+            submission.results_builder.add_fatal_error(([], "", error_message(e)))
+            _complete_submission(submission)
+        except BaseException:
+            # A cancelled run queues no finalizing item, so report its outcome here.
             _notify_callback_channel_done(submission)
+            raise
 
     async def _execute_compiled_async(self, submission: ControllerSubmission):
         recipe_data = self._backend.pre_process(
@@ -467,48 +499,52 @@ class ControllerCore:
             ),
         )
 
+        loop_ended = False
+        nothing_submitted = False
         try:
             async with self._backend.experiment(recipe_data):
                 # Ensure no side effects from the previous execution in the same session
                 self._neartime_replacements.clear()
 
                 _logger.info("Starting near-time execution...")
+                runner = NearTimeRunner(
+                    controller=self,
+                    execution_context=execution_context,
+                    do_emulation=self._do_emulation,
+                )
                 try:
-                    await NearTimeRunner(
-                        controller=self,
-                        execution_context=execution_context,
-                        do_emulation=self._do_emulation,
-                    ).run(recipe_data.execution)
+                    await runner.run(recipe_data.execution)
                 except AbortExecution:
                     # eat the exception
                     pass
-                except Exception:
-                    # The run must not complete while the collector still reads
-                    # its results, and the reading has to end inside the experiment.
-                    if execution_context.last_nt_step_result_completed is not None:
-                        await execution_context.last_nt_step_result_completed
-                    raise
-
-                # In case of an exception in the preceding flow, we skip this finalization step,
-                # as the `completion_future` will be set with the exception, that should take precedence.
-                nt_step_result_context = NtStepResultContext(
-                    nt_step=None,  # Finalize the execution
-                    nt_step_result_completed=asyncio.get_running_loop().create_future(),
-                    execution_context=execution_context,
-                )
-                await self._result_collector.submit(nt_step_result_context)
-                # TODO(2K): Waiting for the results here is a temporary workaround, as the
-                # result collector has to finish before the experiment context ends. For the
-                # future, result nodes subscription lifecycle should be outside the experiment
-                # execution.
-                await nt_step_result_context.execution_context.submission.completion_future
+                except _NothingSubmitted as e:
+                    submission.results_builder.add_fatal_error(
+                        (list(e.step_submission.nt_step.indices), "", str(e))
+                    )
+                    _record_chunk_errors(submission.results_builder, e.step_submission)
+                    nothing_submitted = True
+                except Exception as e:
+                    submission.results_builder.add_fatal_error(
+                        (list(runner.nt_loop_indices), "", error_message(e))
+                    )
+                loop_ended = True
 
                 _logger.info("Finished near-time execution.")
-        finally:
-            # TODO(2K): This is another workaround to ensure that the experiment context
-            # has ended before the test run completes, so that the nodes it touches on
-            # exit are still captured.
-            execution_context.submission.temp_run_future.set_result(None)
+        except Exception as e:
+            if not loop_ended:
+                raise
+            # The near-time loop has ended, so this error did not stop the run and
+            # is not its fatal error.
+            submission.results_builder.add_execution_error(([], "", error_message(e)))
+
+        if nothing_submitted:
+            _complete_submission(submission)
+            return
+        # Finalizing completes the submission, so it is queued only after the
+        # experiment has exited and any error of the exit is recorded.
+        await self._result_collector.submit(
+            NtStepResultContext.finalizing(execution_context)
+        )
 
     def register_pulse_replacement(
         self,
@@ -527,49 +563,80 @@ class ControllerCore:
     async def _collect_nt_step_results(
         self, nt_step_result_context: NtStepResultContext
     ):
+        execution_context = nt_step_result_context.execution_context
         try:
-            if nt_step_result_context.nt_step is None:
-                # Indicates end of the near-time execution.
-                # Resolve the overall submission future with the results.
-                await self._backend.process_step_results(
-                    recipe_data=nt_step_result_context.execution_context.recipe_data,
-                    results_builder=nt_step_result_context.execution_context.submission.results_builder,
-                    backend_runtime_state=nt_step_result_context.execution_context.backend_runtime_state,
-                    nt_step=None,
-                )
-                nt_step_result_context.execution_context.submission.completion_future.set_result(
-                    nt_step_result_context.execution_context.submission.results_builder
-                )
+            step_submission = nt_step_result_context.step_submission
+            if step_submission is None:
+                await self._finalize_results(execution_context)
             else:
+                await self._collect_one_step(execution_context, step_submission)
+        finally:
+            if nt_step_result_context.nt_step_result_completed is not None:
+                nt_step_result_context.nt_step_result_completed.set_result(None)
+
+    async def _collect_one_step(
+        self, execution_context: ExecutionContext, step_submission: StepSubmission
+    ):
+        # An error of one step leaves the results of the other steps intact.
+        results_builder = execution_context.submission.results_builder
+        nt_step = step_submission.nt_step
+        _record_chunk_errors(results_builder, step_submission)
+        if step_submission.anything_submitted:
+            try:
                 await self._read_one_step_results(
-                    recipe_data=nt_step_result_context.execution_context.recipe_data,
-                    results_builder=nt_step_result_context.execution_context.submission.results_builder,
-                    nt_step=nt_step_result_context.nt_step,
+                    recipe_data=execution_context.recipe_data,
+                    results_builder=results_builder,
+                    step_submission=step_submission,
                 )
-                await self._backend.process_step_results(
-                    recipe_data=nt_step_result_context.execution_context.recipe_data,
-                    results_builder=nt_step_result_context.execution_context.submission.results_builder,
-                    backend_runtime_state=nt_step_result_context.execution_context.backend_runtime_state,
-                    nt_step=nt_step_result_context.nt_step,
-                )
-        except Exception as exc:
-            if not nt_step_result_context.execution_context.submission.completion_future.done():
-                wrapper = RuntimeError("operation failed")
-                wrapper.__cause__ = exc
-                nt_step_result_context.execution_context.submission.completion_future.set_exception(
-                    wrapper
-                )
-        # Indicate that the results for this step are ready.
-        nt_step_result_context.nt_step_result_completed.set_result(None)
+            except Exception as e:
+                results_builder.add_step_error(nt_step, None, "", error_message(e))
+        try:
+            await self._backend.process_step_results(
+                recipe_data=execution_context.recipe_data,
+                results_builder=results_builder,
+                backend_runtime_state=execution_context.backend_runtime_state,
+                nt_step=nt_step,
+            )
+        except Exception as e:
+            results_builder.add_step_error(nt_step, None, "", error_message(e))
+
+    async def _finalize_results(self, execution_context: ExecutionContext):
+        submission = execution_context.submission
+        try:
+            await self._backend.process_step_results(
+                recipe_data=execution_context.recipe_data,
+                results_builder=submission.results_builder,
+                backend_runtime_state=execution_context.backend_runtime_state,
+                nt_step=None,
+            )
+        except Exception as e:
+            submission.results_builder.add_execution_error(([], "", error_message(e)))
+        finally:
+            # Runs on cancellation too, so a cancelled collector still completes
+            # the submission.
+            _complete_submission(submission)
 
     async def _read_one_step_results(
         self,
         recipe_data: RecipeData,
         results_builder: ResultsBuilder,
-        nt_step: NtStepKey,
+        step_submission: StepSubmission,
     ):
         await self._backend.read_results(
             recipe_data=recipe_data,
-            nt_step=nt_step,
+            step_submission=step_submission,
             results_builder=results_builder,
         )
+
+
+def _record_chunk_errors(
+    results_builder: ResultsBuilder, step_submission: StepSubmission
+):
+    for chunk in step_submission.chunks:
+        if chunk.error is not None:
+            results_builder.add_step_error(
+                step_submission.nt_step,
+                chunk.chunk_index,
+                "real-time-loop",
+                error_message(chunk.error),
+            )

@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import sys
-from typing import Any, Callable, ClassVar, Type
+from collections.abc import Callable
+from typing import Any, ClassVar
 
 import attrs
 import numpy
@@ -39,13 +40,13 @@ class RtLoopPropertiesModel:
     shots: int
     chunk_count: int | None
 
-    _target_class: ClassVar[Type] = RtLoopProperties
+    _target_class: ClassVar[type] = RtLoopProperties
 
 
 @attrs.define
 class SoftwareVersionsModel:
     laboneq: str
-    _target_class: ClassVar[Type] = SoftwareVersions
+    _target_class: ClassVar[type] = SoftwareVersions
 
 
 @attrs.define
@@ -55,15 +56,16 @@ class HandleResultShapeModel:
     axis_values: list[numpy.ndarray | list[numpy.ndarray]]
     chunked_axis_index: int | None
     match_case_mask: dict[int, list[int]] | None
+    sampling_rate: float | None
 
-    _target_class: ClassVar[Type] = HandleResultShape
+    _target_class: ClassVar[type] = HandleResultShape
 
 
 @attrs.define
 class ResultShapeInfoModel:
     shapes: dict[str, HandleResultShapeModel]
 
-    _target_class: ClassVar[Type] = ResultShapeInfo
+    _target_class: ClassVar[type] = ResultShapeInfo
 
 
 # Plugin registry for CompilerArtifact subclasses
@@ -75,7 +77,7 @@ _compiler_artifact_plugins: dict[str, tuple[type, Callable, Callable]] = {}
 class CompilerArtifactModel:
     """Polymorphic model for CompilerArtifact using plugin registry."""
 
-    _target_class: ClassVar[Type] = None
+    _target_class: ClassVar[type] = None
 
     @classmethod
     def _unstructure(cls, obj: CompilerArtifact):
@@ -129,7 +131,7 @@ class ScheduledExperimentModel:
     coprocessor_payloads: dict[str, bytes] = attrs.field(factory=dict)
     coprocessor_mappings: dict[str, str] = attrs.field(factory=dict)
 
-    _target_class: ClassVar[Type] = ScheduledExperiment
+    _target_class: ClassVar[type] = ScheduledExperiment
 
 
 def _old_serialize(obj):

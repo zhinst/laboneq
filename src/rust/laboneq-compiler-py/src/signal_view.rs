@@ -5,9 +5,7 @@ use std::collections::HashMap;
 
 use laboneq_common::device_traits::DeviceTraits;
 use laboneq_common::types::{AwgKey, PhysicalDeviceUid, SignalKind};
-use laboneq_dsl::types::{
-    AmplifierPump, DeviceUid, Oscillator, OscillatorKind, SignalUid, ValueOrParameter,
-};
+use laboneq_dsl::types::{AmplifierPump, DeviceUid, Oscillator, OscillatorKind, SignalUid};
 use laboneq_ir::signal::Signal;
 use laboneq_scheduler::SignalInfo;
 
@@ -102,20 +100,8 @@ impl SignalInfo for SignalView<'_> {
         self.signal.oscillator.as_ref()
     }
 
-    fn lo_frequency(&self) -> Option<&ValueOrParameter<f64>> {
-        self.signal.lo_frequency.as_ref()
-    }
-
     fn supports_initial_oscillator_frequency(&self) -> bool {
         self.device_traits().supports_initial_oscillator_frequency
-    }
-
-    fn voltage_offset(&self) -> Option<&ValueOrParameter<f64>> {
-        self.signal.voltage_offset.as_ref()
-    }
-
-    fn supports_initial_voltage_offset(&self) -> bool {
-        self.device_traits().supports_initial_voltage_offset
     }
 
     fn amplifier_pump(&self) -> Option<&AmplifierPump> {

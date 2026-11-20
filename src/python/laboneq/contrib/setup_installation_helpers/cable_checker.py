@@ -395,7 +395,7 @@ def check_cable_experiment(
                 with exp.section(uid=s.base_signal_id):
                     if qa_sig := get_matching_acquire(s.base_signal_id, qa_signals):
                         # The SHFQA is much more restricted in the way measurement pulses can be played.
-                        # We also need at least one acquire to set the acquisition mode to readout.
+                        # We also need at least one acquire to put the QA channel in readout mode.
                         # So let's just measure everything, which can be used later to check the arriving
                         # signal pattern.
                         qa_sig_name = qa_sig.signal_ids[""]

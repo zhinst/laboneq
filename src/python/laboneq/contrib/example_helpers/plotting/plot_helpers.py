@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, List
+from typing import TYPE_CHECKING
 
 import matplotlib
 
@@ -52,7 +52,7 @@ def plot_simulation(
     save: bool = False,
     filename: str = "filename",
     filetype: str = "svg",
-    signals: List[str] | None = None,
+    signals: list[str] | None = None,
 ):
     """Plot the signals that would be played by a compiled experiment.
 

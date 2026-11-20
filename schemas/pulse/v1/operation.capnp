@@ -7,52 +7,6 @@ using Common = import "common.capnp";
 using Coprocessor = import "coprocessor.capnp";
 
 # ========================================================================================
-# Operations
-
-struct Operation {
-  # A single operation within a section.
-  #
-  # Operations are the leaf-level actions in the experiment timing hierarchy. Each
-  # operation acts on one or more signals and executes atomically within its parent
-  # section's time span.
-
-  union {
-    none @0 :Void;
-    # (Catches when someone forgets to specify the operation kind. Do not set this.)
-
-    play @1 :PlayOp;
-    # Play a pulse on a signal.
-
-    delay @2 :DelayOp;
-    # Insert an explicit delay on a signal.
-
-    reserve @3 :ReserveOp;
-    # Reserve a signal without producing output.
-
-    acquire @4 :AcquireOp;
-    # Perform an acquisition (measurement).
-
-    call @5 :CallOp;
-    # Invoke a near-time callback.
-
-    setNode @6 :SetNodeOp;
-    # Set an instrument node value at near-time.
-
-    resetOscillatorPhase @7 :ResetOscillatorPhaseOp;
-    # Reset oscillator phase to zero.
-
-    send @8 :SendOp;
-    # HQCS: commit one logical packet on an outbound stream.
-
-    markStale @9 :MarkStaleOp;
-    # HQCS: open an acceptance window on a stream-bound variable or pulse.
-
-    ensure @10 :EnsureOp;
-    # HQCS: assert a condition, e.g. that a stream-bound variable is live.
-  }
-}
-
-# ========================================================================================
 # Play
 
 struct PlayOp {
@@ -131,7 +85,7 @@ struct MarkerSpec {
 }
 
 # ========================================================================================
-# Delay and Reserve
+# Delay
 
 struct DelayOp {
   # Insert an explicit delay on a signal.
@@ -147,16 +101,6 @@ struct DelayOp {
   precompensationClear @2 :Bool;
   # Reset the precompensation filter state during the delay. Use this when a long idle
   # period would cause the filter state to accumulate drift.
-}
-
-struct ReserveOp {
-  # Reserve a signal without producing output.
-  #
-  # Prevents other operations from using the signal during this time slot. Useful for
-  # maintaining timing alignment across signals without generating any waveform.
-
-  signal @0 :Common.Id;
-  # `Experiment.signals` index.
 }
 
 # ========================================================================================
@@ -183,10 +127,15 @@ struct AcquireOp {
 
   length @3 :Common.Value;
   # Explicit integration length in seconds. Overrides the kernel's own length.
+  # Must be a fixed value.
 
   kernelParameters @4 :List(PulseParameterMap);
   # Per-kernel pulse parameter overrides. Each entry corresponds to the kernel at the
   # same index in `kernels`.
+
+  acquisitionType @5 :AcquisitionType;
+  # Overrides `AcquireLoopSection.acquisitionType` of the real-time loop.
+  # `unspecified` inherits the acquisition type from the real-time loop.
 }
 
 struct PulseParameterMap {
@@ -263,7 +212,7 @@ struct MarkStaleOp {
   }
 }
 
-struct EnsureOp {
+struct ExpectOp {
   condition @0 :Coprocessor.Predicate;
 }
 

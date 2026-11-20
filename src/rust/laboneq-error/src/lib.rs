@@ -78,7 +78,7 @@ impl ContextualError {
 
 impl StdError for ContextualError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        Some(self.source.as_ref())
+        self.source.source()
     }
 }
 
@@ -324,6 +324,8 @@ impl From<LabOneQError> for pyo3::PyErr {
 
 #[cfg(test)]
 mod test {
+    use std::error::Error as _;
+
     use crate::{ContextualError, LabOneQError, WithContext};
 
     fn error() -> Result<(), std::num::ParseIntError> {
@@ -335,6 +337,32 @@ mod test {
     fn test_laboneq_error_display() {
         let err = ContextualError::from_str("o la la");
         assert_eq!(err.to_string(), "o la la");
+    }
+
+    #[test]
+    fn test_laboneq_error_has_no_duplicate_cause() {
+        let err = crate::laboneq_error!("Preprocessing failed");
+        assert_eq!(err.to_string(), "Preprocessing failed");
+        assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn test_contextual_error_preserves_nested_cause() {
+        #[derive(Debug, thiserror::Error)]
+        #[error("Parsing failed")]
+        struct ParseError(#[source] std::num::ParseIntError);
+
+        let cause = "abc".parse::<i32>().unwrap_err();
+        let err =
+            ContextualError::from_err(ParseError(cause)).with_context(|| "Preprocessing input");
+
+        assert_eq!(
+            err.to_string(),
+            "Parsing failed\n\nContext:\n    Preprocessing input\n"
+        );
+        let source = err.source().unwrap();
+        assert!(source.is::<std::num::ParseIntError>());
+        assert!(source.source().is_none());
     }
 
     #[test]

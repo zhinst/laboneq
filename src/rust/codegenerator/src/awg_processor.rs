@@ -157,13 +157,9 @@ pub(crate) fn allocate_oscillators(awg: &AwgCore) -> Result<HashMap<SignalUid, u
 }
 
 fn signal_can_share_osc(osc0: &Oscillator, osc1: &Oscillator) -> bool {
-    if osc0.kind == OscillatorKind::HARDWARE
+    osc0.kind == OscillatorKind::HARDWARE
         && osc1.kind == OscillatorKind::HARDWARE
         && osc0.frequency == osc1.frequency
-    {
-        return true;
-    }
-    false
 }
 
 /// Determine the available hardware oscillators for the given AWG.

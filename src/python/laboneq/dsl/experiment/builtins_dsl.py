@@ -24,6 +24,8 @@ __all__ = [  # noqa: RUF022
     "match",
     "measure",
     "play",
+    "prng_loop",
+    "prng_setup",
     "reserve",
     "reset_oscillator_phase",
     "section",
@@ -51,7 +53,7 @@ __all__ = [  # noqa: RUF022
     "send",
     "mark_stale",
     "is_live",
-    "ensure",
+    "expect",
     "do_until",
     "render_layout",
     "Phase",
@@ -74,7 +76,7 @@ __all__ = [  # noqa: RUF022
 
 # HQCS coprocessor surface
 from laboneq.dsl.coprocessor.builtins import (
-    ensure,
+    expect,
     is_live,
     mark_stale,
     register_stream,
@@ -105,6 +107,8 @@ from laboneq.dsl.experiment.builtins import (
     match,
     measure,
     play,
+    prng_loop,
+    prng_setup,
     reserve,
     reset_oscillator_phase,
     section,

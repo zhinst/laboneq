@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING, Iterable, Optional
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 import attrs
 
@@ -27,7 +28,7 @@ class Connection:
     direction: IODirection = attrs.field(default=IODirection.OUT)
     local_port: str | None = attrs.field(default=None)
     remote_path: str | None = attrs.field(default=None)
-    signal_type: Optional[IOSignalType] = attrs.field(default=None)
+    signal_type: IOSignalType | None = attrs.field(default=None)
 
 
 @classformatter

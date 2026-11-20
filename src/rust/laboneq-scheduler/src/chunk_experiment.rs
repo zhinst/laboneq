@@ -21,7 +21,7 @@ pub struct ChunkingInfo {
 
 impl ChunkingInfo {
     fn current_chunk_range(&self, total_iterations: NonZeroU32) -> std::ops::Range<usize> {
-        let chunk_size = total_iterations.get() / self.count.get();
+        let chunk_size = total_iterations.get() / self.count;
         let start = self.index * chunk_size as usize;
         let end = ((self.index + 1) * chunk_size as usize).min(total_iterations.get() as usize);
         start..end

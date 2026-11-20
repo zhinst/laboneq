@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import attrs
 
@@ -216,7 +216,7 @@ class QuantumElement:
     #                      assigned to `attrs.field(...)`.
 
     uid: str = attrs.field()
-    signals: Dict[str, str] = attrs.field(
+    signals: dict[str, str] = attrs.field(
         converter=attrs.Converter(_signals_converter, takes_self=True),
         default=None,
     )
@@ -355,7 +355,7 @@ class QuantumElement:
 
     def experiment_signals(
         self,
-    ) -> List[ExperimentSignal]:
+    ) -> list[ExperimentSignal]:
         """Return the list of the experiment signals for this quantum element.
 
         Returns:

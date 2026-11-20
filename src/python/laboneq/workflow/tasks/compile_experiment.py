@@ -1,7 +1,7 @@
 # Copyright 2024 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""This module provides a task to transform a DSL experiment into a compiled experiment."""  # noqa: E501
+"""This module provides a task to transform a DSL experiment into a compiled experiment."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def compile_experiment(
     """A task to compile the specified experiment for a given setup.
 
     This task is used to prepare a LabOne Q DSL experiment for execution on a quantum
-    processor. It will return the results of a LabOneQ Session.compile() call.
+    processor. It will return the results of a LabOne Q Session.compile() call.
 
     Args:
         session:

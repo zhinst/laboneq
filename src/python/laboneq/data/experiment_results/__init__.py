@@ -55,6 +55,11 @@ class AcquiredResult:
         handle (str | None): Acquire handle used for capturing the results.
 
             !!! version-added "Added in version 2.16.0"
+        sampling_rate (float | None):
+            The sampling rate of the raw-acquisition axis `"samples"`, in Sa/s. `None`
+            unless the acquisition type is RAW.
+
+            !!! version-added "Added in version 27.1.0"
     """
 
     data: npt.NDArray[Any] | np.complex128
@@ -62,6 +67,7 @@ class AcquiredResult:
     axis: list[npt.NDArray[Any] | list[npt.NDArray[Any]]]
     last_nt_step: list[int] | None = None
     handle: str | None = None
+    sampling_rate: float | None = None
 
     def __eq__(self, other: object):
         if not isinstance(other, AcquiredResult):
@@ -72,6 +78,7 @@ class AcquiredResult:
             and dicts_equal(self.axis, other.axis)
             and self.last_nt_step == other.last_nt_step
             and self.handle == other.handle
+            and self.sampling_rate == other.sampling_rate
         )
 
     def __repr__(self):
@@ -175,6 +182,7 @@ def slice_acquired_result(
         axis=list(acquired.axis[n_nt_axes:]),
         last_nt_step=list(nt_index),
         handle=acquired.handle,
+        sampling_rate=acquired.sampling_rate,
     )
 
 
@@ -282,9 +290,15 @@ class ExperimentResults:
     #: Any exceptions that occurred during the execution of the experiment. Entries are
     #: tuples of
     #:
-    #: * the indices of the loops where the error occurred,
+    #: * the indices of the loops where the error occurred, followed by the chunk
+    #:   index for an error of a single chunk,
     #: * the section uid,
     #: * the error message.
+    #:
+    #: A fatal error that stopped the run comes first; the others follow in the order
+    #: they were recorded. If the first near-time step reached no instrument, the error
+    #: that stopped the run ends with "Execution stopped." and the errors of the
+    #: step's chunks follow it.
     execution_errors: list[tuple[list[int], str, str]] = field(default_factory=list)
 
     # Pipeline job timestamps, by device channel id, then job id

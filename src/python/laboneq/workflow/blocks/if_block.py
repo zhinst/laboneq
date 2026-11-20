@@ -125,7 +125,7 @@ class ElseExpression(blocks.Block):
 
 @variable_tracker.track
 @contextmanager
-def if_(condition: Any) -> Generator[None, None, None]:  # noqa: ANN401
+def if_(condition: Any) -> Generator[None, None, None]:
     """Workflow if statement.
 
     The equivalent of Python's if-statement.
@@ -157,7 +157,7 @@ def if_(condition: Any) -> Generator[None, None, None]:  # noqa: ANN401
 
 @variable_tracker.track
 @contextmanager
-def elif_(condition: Any) -> Generator[None, None, None]:  # noqa: ANN401
+def elif_(condition: Any) -> Generator[None, None, None]:
     """Workflow else if statement.
 
     The equivalent of Python's elif-statement.

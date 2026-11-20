@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from itertools import zip_longest
+import traceback
+from itertools import compress, zip_longest
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -17,6 +18,8 @@ from laboneq.data.experiment_results import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from laboneq.core.types.numpy_support import NumPyArray
     from laboneq.data.nt_step_key import NtStepKey
     from laboneq.data.result_selector import ResultSelector
@@ -66,6 +69,7 @@ class ResultsBuilder:
                 axis_name=shape_info.axis_names,
                 axis=shape_info.axis_values,
                 handle=handle,
+                sampling_rate=shape_info.sampling_rate,
             )
             results.acquired_results[handle] = empty_result
         return results
@@ -117,7 +121,7 @@ class ResultsBuilder:
         nt_step: NtStepKey,
         chunk_index: int | None,
         mapping: list[set[str]],
-        acquired_data: NumPyArray,
+        acquired_data: NumPyArray | Sequence[NumPyArray],
         unaveraged: bool = False,
     ):
         """Add data acquired from a single full (i.e. all chunks) RT execution, or a single chunk (chunk_index not None).
@@ -136,7 +140,9 @@ class ResultsBuilder:
             nt_step: The near-time step for which the data was acquired
             chunk_index: The index of the chunk for which the data was acquired, if chunking is used
             mapping: Represents the info about which index in `acquired_data` corresponds to which handle(s)
-            acquired_data: 1D array containing results acquired during the execution of a portion (NT step, chunk) of an experiment
+            acquired_data: Results acquired during the execution of a portion (NT step, chunk) of an experiment, one per
+                acquisition event: an array, or a sequence of per-event arrays, which may differ in length between
+                handles
             unaveraged: Whether the acquired data should be averaged over shots
         """
         chunk_count = self._rt_loop_properties.chunk_count
@@ -148,13 +154,17 @@ class ResultsBuilder:
                 "Result data shape is not prepared"
             )
             result_for_handle.last_nt_step = list(nt_step.indices)
-            acquired_data_len = len(acquired_data)
-            handle_mask = np.fromiter(
-                (handle in mapping[i % len(mapping)] for i in range(acquired_data_len)),
+            mapping_mask = np.fromiter(
+                (handle in handles for handles in mapping),
                 dtype=np.bool,
-                count=acquired_data_len,
+                count=len(mapping),
             )
-            acquired_data_for_handle = acquired_data[handle_mask]
+            handle_mask = np.resize(mapping_mask, len(acquired_data))
+            acquired_data_for_handle = (
+                acquired_data[handle_mask]
+                if isinstance(acquired_data, np.ndarray)
+                else np.asarray(list(compress(acquired_data, handle_mask)))
+            )
 
             data_chunk_index = chunk_index
             if chunk_count is not None and handle_shape_info.chunked_axis_index is None:
@@ -191,25 +201,21 @@ class ResultsBuilder:
                     "and SEQUENTIAL averaging modes"
                 )
 
+                # RAW acquisitions store samples along the last axis
+                sample_shape = acquired_data_for_handle.shape[1:]
                 if averaging_mode is AveragingMode.CYCLIC:
                     acquired_data_for_handle = acquired_data_for_handle.reshape(
-                        (
-                            shots,
-                            *sliced_shape,
-                        )
+                        (shots, -1, *sample_shape)
                     ).mean(axis=0)
                 else:  # AveragingMode.SEQUENTIAL
                     acquired_data_for_handle = acquired_data_for_handle.reshape(
-                        (
-                            *sliced_shape,
-                            shots,
-                        )
-                    ).mean(axis=-1)
+                        (-1, shots, *sample_shape)
+                    ).mean(axis=1)
 
             if (acquired_len := np.prod(acquired_data_for_handle.shape)) != (
                 expected_len := np.prod(sliced_shape)
             ):
-                # This is allowed to happen only in RAW acquisition mode.
+                # This is allowed to happen only with 'RAW' acquisition type.
                 # When multiple signals are feeding from the same source, the number of acquired RAW samples
                 # is the max over all such signals. Thus, for some signals we have more samples than expected/requested.
                 # In such a case we assume that the acquire events across signals were aligned at the beginning, so we
@@ -271,6 +277,28 @@ class ResultsBuilder:
     def add_execution_error(self, error: tuple[list[int], str, str]):
         self._results.execution_errors.append(error)
 
+    def add_step_error(
+        self,
+        nt_step: NtStepKey,
+        chunk_index: int | None,
+        section_uid: str,
+        message: str,
+    ):
+        """Records an error of the near-time step, or of one of its chunks."""
+        indices = list(nt_step.indices)
+        if chunk_index is not None:
+            indices.append(chunk_index)
+        self.add_execution_error((indices, section_uid, message))
+
+    def add_fatal_error(self, error: tuple[list[int], str, str]):
+        """Records the error that stopped the run, ahead of all others."""
+        self._results.execution_errors.insert(0, error)
+
+
+def error_message(e: BaseException) -> str:
+    """Formats `e` with its traceback and chained causes."""
+    return "".join(traceback.format_exception(e))
+
 
 def slice_results(
     results: AcquiredResults, selector: ResultSelector
@@ -289,6 +317,7 @@ def slice_results(
                 axis=[],
                 last_nt_step=None,
                 handle=handle,
+                sampling_rate=acquired.sampling_rate,
             )
             continue
         if result is not acquired:

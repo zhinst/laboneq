@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING
 
 import attrs
 
@@ -27,14 +27,14 @@ if TYPE_CHECKING:
 @attrs.define(repr=False, slots=False)
 class LogicalSignal(Calibratable):
     uid: str
-    direction: Optional[IODirection] = None
+    direction: IODirection | None = None
     name: str | None = None
     calibration: SignalCalibration | None = attrs.field(
         default=None,
         on_setattr=lambda self, attr, value: self._set_calibration(attr, value),
     )
     path: str | None = None
-    _physical_channel: Optional[PhysicalChannel] = None
+    _physical_channel: PhysicalChannel | None = None
 
     def _set_calibration(self, attr, value):
         return value
@@ -242,7 +242,7 @@ class LogicalSignal(Calibratable):
         return self._physical_channel
 
 
-LogicalSignalRef = Union[LogicalSignal, str]
+LogicalSignalRef = LogicalSignal | str
 
 
 def resolve_logical_signal_ref(logical_signal_ref: LogicalSignalRef) -> str:

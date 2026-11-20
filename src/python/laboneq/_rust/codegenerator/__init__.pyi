@@ -132,6 +132,7 @@ class DeviceProperties:
     device_type: str
     sampling_rate: float | None
     lead_delay: float
+    is_shfqc: bool
 
 class PpcSettings:
     device: str

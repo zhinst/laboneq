@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import operator
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from functools import lru_cache
+from functools import cache
 
 # Note: The simulator may be used as a testing tool, so it must be independent of the production code
 # Do not add dependencies to the code being tested here (such as compiler, DSL asf.)
-from typing import TYPE_CHECKING, Any, Mapping, Sequence, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 from pycparser.c_ast import (
@@ -213,7 +214,7 @@ def parse_int_literal(s: str):
         raise ValueError(f"Invalid int literal: '{s}'") from None
 
 
-@lru_cache(maxsize=None)
+@cache
 def parse_constant(constant: Constant):
     if constant.type == "int":
         r = parse_int_literal(constant.value)
@@ -646,18 +647,10 @@ class SimpleRuntime:
             self._update_wave_refs(wave_names, known_wave)
 
             uses_marker_1 = any(
-                (
-                    wave.endswith("marker1.wave")
-                    for wave in wave_names
-                    if wave is not None
-                )
+                wave.endswith("marker1.wave") for wave in wave_names if wave is not None
             )
             uses_marker_2 = any(
-                (
-                    wave.endswith("marker2.wave")
-                    for wave in wave_names
-                    if wave is not None
-                )
+                wave.endswith("marker2.wave") for wave in wave_names if wave is not None
             )
             length_samples = known_wave.length_samples or 0
             wave_data_indices = known_wave.wave_data_idx

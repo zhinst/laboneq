@@ -119,7 +119,7 @@ pub(crate) fn resolve_oscillator_modulation(
                         warn!(
                             "Oscillator '{}' on signal \
                                  '{}' resolved to HARDWARE modulation \
-                                 in RAW acquisition mode. Set \
+                                 with 'RAW' acquisition type. Set \
                                 reset_oscillator_phase=True on the \
                                 acquire_loop_rt, or use \
                                 ModulationType.SOFTWARE explicitly, to avoid \
@@ -287,6 +287,7 @@ mod tests {
             kernel,
             parameters: vec![],
             pulse_parameters: vec![],
+            acquisition_type: None,
         }))
     }
 
@@ -304,6 +305,7 @@ mod tests {
             reset_oscillator_phase: false,
             alignment: SectionAlignment::Left,
             section_timing_mode: SectionTimingMode::default(),
+            reserved_signals: Vec::new(),
         }));
         node.children = children;
         node

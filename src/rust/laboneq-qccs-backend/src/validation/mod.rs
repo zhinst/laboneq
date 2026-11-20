@@ -27,7 +27,7 @@ pub(crate) fn validate(
 ) -> Result<()> {
     signals::validate(data, &experiment.parameters, experiment.acquisition_type)?;
 
-    let mut operations = operations::OperationRules::new(data);
+    let mut operations = operations::OperationRules::new(data, experiment.acquisition_type);
     let mut ppc_sweeps = ppc_sweeps::PpcSweepRules::new(data);
     walk(experiment.root, &mut |node, ctx| {
         ppc_sweeps.visit(node, ctx);

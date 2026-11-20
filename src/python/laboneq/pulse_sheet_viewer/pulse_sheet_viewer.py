@@ -216,7 +216,7 @@ class NpEncoder(json.JSONEncoder):
             return obj.tolist()
         if isinstance(obj, set):
             return list(obj)
-        return super(NpEncoder, self).default(obj)
+        return super().default(obj)
 
 
 class PulseSheetViewer:

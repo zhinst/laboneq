@@ -38,6 +38,7 @@ pub struct QccsVariant {
 impl Linker for QccsLinker {
     type Artifact = CodeGenArtifactQccs;
     type Variant = QccsVariant;
+    type JobSettings = ();
     type Output = QccsCombinedOutput;
 
     fn add_artifact(
@@ -53,6 +54,7 @@ impl Linker for QccsLinker {
         &mut self,
         key: &NtStepKey,
         variant: &QccsVariant,
+        _settings: (),
         first_run: bool,
     ) -> CompilerBackendResult<()> {
         Python::attach(|py| {

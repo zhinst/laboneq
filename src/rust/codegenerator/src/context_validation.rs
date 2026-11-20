@@ -48,7 +48,7 @@ fn validate_shfqa_configuration(codegen_ir: &CodegenIr) -> Result<()> {
         && !all_shfqa_port_delays.all(|d| d == first_delay)
     {
         bail!(
-            "Multiple different port delays defined for SHFQA acquisition signals in 'RAW' acquisition mode. Only 1 supported."
+            "Multiple different port delays defined for SHFQA acquisition signals with 'RAW' acquisition type. Only 1 supported."
         );
     }
 

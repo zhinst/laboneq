@@ -11,7 +11,7 @@ use laboneq_py_utils::{py_export::pulse_parameters_to_py_dict, py_object_store::
 use pyo3::prelude::*;
 
 #[derive(Debug, Clone)]
-#[pyclass(name = "PulseParameters", skip_from_py_object)]
+#[pyclass(name = "PulseParameters")]
 pub struct PulseParametersPy {
     pub id: PulseParametersId,
     // Original parameters from pulse (Python dictionary)

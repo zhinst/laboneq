@@ -18,15 +18,21 @@ use tracing::instrument;
 use crate::ChunkingInfo;
 use crate::ExperimentContext;
 use crate::FeedbackCalculator;
+use crate::add_initial_conditions::add_initial_conditions;
 use crate::adjust_acquire_lengths::adjust_acquisition_lengths;
 use crate::analysis::validate_ir;
+use crate::build_preambles::build_preambles;
 use crate::chunk_experiment::slice_chunked_parameters;
+use crate::collect_signals_and_accesses::collect_signals_and_accesses;
+use crate::compute_grids::compute_grids;
 use crate::error::Result;
 use crate::ir_unroll::unroll_loops;
 use crate::lower_experiment::lower_to_ir;
 use crate::resolve_parameters::resolve_parameters;
+use crate::resolve_ppc_steps_lengths::resolve_ppc_steps_lengths;
 use crate::resolve_repetition_mode::resolve_repetition_mode;
 use crate::scheduled_to_ir::scheduled_node_to_ir_node;
+use crate::signal_grids::SignalGrids;
 use crate::signal_info::SignalInfo;
 use crate::timing_resolver::calculate_timing;
 use crate::utils::check_tinysample_commensurability;
@@ -63,13 +69,23 @@ pub fn schedule_experiment<T: SignalInfo>(
     // TODO: Where in the IR tree `acquisition_type` should be stored?
     let acquisition_type =
         find_acquisition_type(real_time_root).expect("Unspecified acquisition type.");
-    let mut scheduled_node = lower_to_ir(real_time_root, &context, near_time_parameters)?;
+    let grids = SignalGrids::new(context.signals.values())?;
+    let mut scheduled_node = lower_to_ir(real_time_root, &context, near_time_parameters, &grids)?;
+    add_initial_conditions(
+        &mut scheduled_node,
+        &context,
+        near_time_parameters,
+        grids.system_grid(),
+    )?;
+    collect_signals_and_accesses(&mut scheduled_node);
+    build_preambles(&mut scheduled_node, &context, &grids)?;
 
     resolve_repetition_mode(&mut scheduled_node)?;
     validate_ir(&scheduled_node)?;
+    compute_grids(&mut scheduled_node, &grids);
+    resolve_ppc_steps_lengths(&mut scheduled_node, context.signals);
     adjust_acquisition_lengths(&mut scheduled_node, context.signals, acquisition_type);
-    let mut scheduled_node =
-        unroll_loops(scheduled_node, &context.parameters, near_time_parameters)?;
+    unroll_loops(&mut scheduled_node);
     resolve_parameters(
         &mut scheduled_node,
         &context.parameters,

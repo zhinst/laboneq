@@ -14,6 +14,7 @@ use laboneq_common::shfqc::to_sg_uid;
 use laboneq_common::types::PhysicalDeviceUid;
 use laboneq_dsl::types::DeviceUid;
 use laboneq_dsl::types::SignalUid;
+use laboneq_error::bail;
 
 use crate::Result;
 use crate::experiment_view::ExperimentViewWrapper;
@@ -39,6 +40,8 @@ pub(crate) struct AwgDevices {
 }
 
 pub(crate) fn create_awg_devices(experiment: &mut ExperimentViewWrapper) -> Result<AwgDevices> {
+    validate_virtual_shfsg_uids(experiment)?;
+
     let mut physical_instrument_uid_counter = 0;
     let mut instruments = experiment.instruments.values().map(|instrument| {
         let signals = experiment
@@ -211,4 +214,27 @@ fn split_shfqc(
         reassigned_signals,
     };
     Ok(result)
+}
+
+fn validate_virtual_shfsg_uids(experiment: &ExperimentViewWrapper) -> Result<()> {
+    let shfqcs = experiment
+        .instruments
+        .values()
+        .filter(|i| i.kind == InstrumentKind::Shfqc);
+
+    for shfqc in shfqcs {
+        let device_uid = experiment.id_store.resolve(shfqc.uid).unwrap();
+        let virtual_sg_uid = to_sg_uid(device_uid);
+        if let Some(sg) = experiment.id_store.get(&virtual_sg_uid)
+            && let Some(instrument) = experiment.instruments.get(&DeviceUid::from(sg))
+        {
+            let instrument_kind = instrument.kind;
+            bail!(
+                "The UID of {instrument_kind} '{virtual_sg_uid}' conflicts with the virtual SHFSG \
+                device of SHFQC {device_uid}. Rename one of them"
+            )
+        }
+    }
+
+    Ok(())
 }

@@ -4,7 +4,8 @@
 use std::collections::HashMap;
 
 use laboneq_dsl::types::{
-    ComplexOrFloat, HandleUid, MatchTarget, PulseUid, SectionUid, SignalUid, ValueOrParameter,
+    AcquisitionType, ComplexOrFloat, HandleUid, MatchTarget, PulseUid, SectionUid, SignalUid,
+    ValueOrParameter,
 };
 use laboneq_units::tinysample::{TinySamples, tiny_samples};
 
@@ -148,6 +149,7 @@ impl IrNodeBuilder {
         handle: HandleUid,
         kernels: &[PulseUid],
         length: TinySamples,
+        acquisition_type: AcquisitionType,
     ) -> &mut Self {
         self.add_node(IrNode::new(
             IrKind::Acquire(Acquire {
@@ -157,6 +159,7 @@ impl IrNodeBuilder {
                 kernels: kernels.to_vec(),
                 parameters: vec![HashMap::new(); kernels.len()],
                 pulse_parameters: vec![HashMap::new(); kernels.len()],
+                acquisition_type,
             }),
             length,
         ))

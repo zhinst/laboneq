@@ -10,6 +10,7 @@ use pyo3::types::{PyBytes, PyDict};
 
 use laboneq_capnp::compiled_experiment::v1::{compiled_experiment_capnp, rt_loop_properties_capnp};
 use laboneq_error::{WithContext, laboneq_error};
+use laboneq_py_utils::paused_gc::PausedGc;
 
 use crate::Result;
 use crate::context::DeserializerContext;
@@ -49,6 +50,7 @@ pub fn compiled_experiment_from_capnp<'py>(
     let metadata = root.get_metadata().map_err(capnp_err)?;
     validate_metadata(metadata)?;
 
+    let _paused_gc = PausedGc::new(py)?;
     let (parameter_names, parameter_arrays) =
         decode_parameters(py, &root).with_context(|| "Reading `parameters`.")?;
     let handle_names = decode_handles(&root).with_context(|| "Reading `acquisitionHandles`.")?;

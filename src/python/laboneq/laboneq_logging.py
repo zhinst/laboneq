@@ -222,7 +222,7 @@ def initialize_logging(
     LOG_CONFIG_FILE = "controller_log_config.yml"
     if os.path.exists(LOG_CONFIG_FILE):
         print("Loading log config from %s", LOG_CONFIG_FILE)
-        with open(LOG_CONFIG_FILE, "r") as stream:
+        with open(LOG_CONFIG_FILE) as stream:
             config = yaml.safe_load(stream)
         config_source = LOG_CONFIG_FILE
     elif logging_config_dict is not None:
@@ -344,17 +344,17 @@ def add_logging_level(level_name, level_num, method_name=None):
         logging.log(level_num, message, *args, **kwargs)
 
     if hasattr(logging, level_name):
-        logging.error("{} already defined in logging module".format(level_name))
+        logging.error(f"{level_name} already defined in logging module")
     else:
         setattr(logging, level_name, level_num)
 
     if hasattr(logging, method_name):
-        logging.error("{} already defined in logging module".format(method_name))
+        logging.error(f"{method_name} already defined in logging module")
     else:
         setattr(logging, method_name, log_to_root)
 
     if hasattr(logging.getLoggerClass(), method_name):
-        logging.error("{} already defined in logger class".format(method_name))
+        logging.error(f"{method_name} already defined in logger class")
     else:
         setattr(logging.getLoggerClass(), method_name, log_for_level)
 

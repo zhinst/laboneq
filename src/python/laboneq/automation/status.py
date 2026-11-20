@@ -1,6 +1,8 @@
 # Copyright 2026 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 from enum import Enum
 
 
@@ -18,9 +20,9 @@ class AutomationStatus(Enum):
         return self.value
 
     @classmethod
-    def inactive(cls) -> list["AutomationStatus"]:
+    def inactive(cls) -> list[AutomationStatus]:
         return [cls.DEACTIVATED]
 
     @classmethod
-    def active(cls) -> list["AutomationStatus"]:
+    def active(cls) -> list[AutomationStatus]:
         return [cls.READY, cls.RUNNING, cls.PASSED, cls.FAILED]

@@ -1,7 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-//! This crate provides common utilities for exporting LabOneQ data structures to Python.
+//! This crate provides common utilities for exporting LabOne Q data structures to Python.
 
 use std::collections::HashMap;
 

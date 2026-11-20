@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import abc
 import threading
+from collections.abc import Generator, Iterable
 from contextlib import contextmanager
-from typing import Generator, Iterable
 
 
 class Context(abc.ABC):

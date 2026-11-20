@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import attrs
 
@@ -119,7 +119,7 @@ class ExperimentSignal(Calibratable):
     """
 
     uid: str
-    calibration: Optional[SignalCalibration]
+    calibration: SignalCalibration | None
     mapped_logical_signal_path: str | None
 
     def __init__(

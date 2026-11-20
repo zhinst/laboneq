@@ -6,7 +6,7 @@ use laboneq_dsl::signal_calibration::PortMode;
 use pyo3::prelude::*;
 
 #[allow(clippy::upper_case_acronyms)]
-#[pyclass(name = "SignalType", eq, skip_from_py_object)]
+#[pyclass(name = "SignalType", eq)]
 #[derive(PartialEq, Clone)]
 pub(crate) enum SignalTypePy {
     IQ,
@@ -25,7 +25,7 @@ impl SignalTypePy {
 }
 
 #[allow(clippy::upper_case_acronyms)]
-#[pyclass(name = "DeviceType", eq, skip_from_py_object)]
+#[pyclass(name = "DeviceType", eq)]
 #[derive(PartialEq, Clone)]
 pub(crate) enum DeviceTypePy {
     HDAWG,
@@ -45,7 +45,7 @@ impl DeviceTypePy {
     }
 }
 
-#[pyclass(name = "PortMode", eq, hash, frozen, skip_from_py_object)]
+#[pyclass(name = "PortMode", eq, hash, frozen)]
 #[derive(PartialEq, Clone, Hash)]
 pub(crate) enum PortModePy {
     RF,

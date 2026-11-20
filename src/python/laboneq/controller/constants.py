@@ -21,9 +21,18 @@ PROTOCOL_VERSION = "1.0"
 PROTOCOL_VERSION_HEADER = "X-LabOneQ-Protocol-Version"
 """Header carrying :data:`PROTOCOL_VERSION` on REST requests."""
 
+CLIENT_ID_HEADER = "X-LabOneQ-Client-Id"
+"""Header carrying the id by which the service tells its clients apart.
+
+The id is 32 hexadecimal digits.
+"""
+
 # How long a run may be without its client callback channel. Covers both the
 # initial attach, measured from run-eligibility, and mid-run reconnect windows.
 CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S = 60.0
+
+SERVICE_SHUTDOWN_TIMEOUT_S = 5.0
+"""How long the controller service waits for a running experiment when it shuts down."""
 
 PIPELINER_RELOAD_WORST_CASE = 1500e-6  # sec
 

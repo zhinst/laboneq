@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import KeysView
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import (
     TYPE_CHECKING,
     Any,
-    KeysView,
     Literal,
     TypeVar,
     cast,
@@ -44,6 +44,7 @@ from laboneq.executor.executor import (
 if TYPE_CHECKING:
     from collections.abc import Callable, ItemsView, Iterator
 
+    from laboneq.controller.callback_channel import CallbackChannel
     from laboneq.controller.devices.device_setup_dao import DeviceUID
     from laboneq.core.types.numpy_support import NumPyArray
     from laboneq.data.artifacts_qccs import (
@@ -386,33 +387,35 @@ class RecipeData:
         return refs
 
 
-class _NeartimeCallbackCollector(ExecutorBase):
-    """Walk the execution tree and collect near-time callback names."""
+def collect_neartime_calls(execution: Statement) -> list[tuple[str, dict[str, Any]]]:
+    """Return the near-time callback calls of an execution tree, in order.
 
+    A call inside a sweep is listed once, with the sweep parameters at their
+    first values.
+    """
+    collector = _NeartimeCallCollector()
+    collector.run(execution)
+    return collector.calls
+
+
+class _NeartimeCallCollector(ExecutorBase):
     def __init__(self) -> None:
         super().__init__(looping_mode=LoopingMode.NEAR_TIME_ONLY | LoopingMode.ONCE)
-        self.names: set[str] = set()
+        self.calls: list[tuple[str, dict[str, Any]]] = []
 
     def nt_callback_handler(
         self,
         func_name: str,
         args: dict[str, Any],
     ):
-        self.names.add(func_name)
-
-
-def collect_neartime_callback_names(execution: Statement) -> set[str]:
-    """Collect the near-time callback names referenced by an execution tree."""
-    collector = _NeartimeCallbackCollector()
-    collector.run(execution)
-    return collector.names
+        self.calls.append((func_name, args))
 
 
 def validate_scheduled_experiment(
     scheduled_experiment: ScheduledExperiment,
     device_setup_fingerprint: str,
     neartime_callbacks: dict[str, Callable[..., Any]],
-    allow_client_callbacks: bool = False,
+    callback_channel: CallbackChannel | None = None,
 ):
     # Compiled experiment version is correct
     try:
@@ -439,16 +442,20 @@ def validate_scheduled_experiment(
 
     assert scheduled_experiment.execution is not None
 
-    # Names not registered on the controller are dispatched to the client when a
-    # callback channel is available; without one they must all resolve locally.
-    names = collect_neartime_callback_names(scheduled_experiment.execution)
-    missing = names - set(neartime_callbacks)
-    if missing and not allow_client_callbacks:
+    # Callbacks not registered on the controller run on the client
+    calls = collect_neartime_calls(scheduled_experiment.execution)
+    missing = {name for name, _ in calls} - set(neartime_callbacks)
+    if not missing:
+        return
+    if callback_channel is None:
         raise UnknownCallbackError(
             f"Experiment requires callbacks not registered on the "
             f"controller: {sorted(missing)}. "
             f"Available: {sorted(neartime_callbacks)}."
         )
+    for name, args in calls:
+        if name in missing:
+            callback_channel.check_arguments(name, args)
 
 
 def _resolve_coprocessor_payloads(

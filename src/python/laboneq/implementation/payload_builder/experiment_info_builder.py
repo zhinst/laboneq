@@ -205,7 +205,7 @@ def _resolve_calibration(
     return calibration or SignalCalibration()
 
 
-class AttributeOverrider(object):
+class AttributeOverrider:
     def __init__(self, base, overrider):
         if overrider is None:
             raise RuntimeError("overrider must not be none")

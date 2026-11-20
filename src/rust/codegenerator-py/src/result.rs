@@ -15,15 +15,17 @@ use pyo3::{IntoPyObjectExt, intern, prelude::*};
 use std::collections::HashMap;
 
 use laboneq_common::named_id::NamedIdStore;
-use laboneq_dsl::types::{ExternalParameterUid, PumpCancellationSource, Quantity, Unit};
+use laboneq_dsl::types::{
+    ExternalParameterUid, FixedValueOrParameter, PumpCancellationSource, Quantity, Unit,
+};
 use laboneq_units::duration::{Duration, Second};
 
 use codegenerator::ir::compilation_job::ChannelIndex;
 use codegenerator::ir::compilation_job::DeviceUid;
 use codegenerator::ir::{Samples, compilation_job::AwgKind};
+use codegenerator::result::ParameterPhaseIncrement;
 use codegenerator::result::{AwgCodeGenerationResult, MarkerMode, SignalIntegrationInfo};
 use codegenerator::result::{ChannelOscillator, CodegenWaveform, SignalType};
-use codegenerator::result::{FixedValueOrParameter, ParameterPhaseIncrement};
 use codegenerator::result::{PpcSettings, RoutedOutput, SeqCGenOutput};
 use codegenerator::waveform_sampler::{SampleBuffer, WaveformStore};
 
@@ -33,7 +35,7 @@ use crate::utils::{mixer_type_to_py, precompensation_to_py};
 type DeviceUidString = String;
 type SignalUidString = String;
 
-#[pyo3::pyclass(name = "FeedbackRegisterConfig", skip_from_py_object)]
+#[pyo3::pyclass(name = "FeedbackRegisterConfig")]
 #[derive(Debug, Clone)]
 pub(crate) struct FeedbackRegisterConfigPy {
     #[pyo3(get)]
@@ -184,7 +186,7 @@ pub(crate) struct AwgCodeGenerationResultPy {
     result_length: Option<usize>,
 }
 
-#[pyclass(name = "DeviceProperties", skip_from_py_object, eq, frozen)]
+#[pyclass(name = "DeviceProperties", eq, frozen)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DevicePropertiesPy {
     #[pyo3(get)]
@@ -195,9 +197,11 @@ pub(crate) struct DevicePropertiesPy {
     pub sampling_rate: Option<f64>,
     #[pyo3(get)]
     pub lead_delay: f64,
+    #[pyo3(get)]
+    pub is_shfqc: bool,
 }
 
-#[pyclass(name = "AwgProperties", skip_from_py_object)]
+#[pyclass(name = "AwgProperties")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AwgPropertiesPy {
     awg_id: i64,
@@ -205,7 +209,7 @@ pub struct AwgPropertiesPy {
     kind: AwgKind,
 }
 
-#[pyclass(name = "QuantityPy", eq, skip_from_py_object)]
+#[pyclass(name = "QuantityPy", eq)]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct QuantityPy {
     #[pyo3(get)]
@@ -214,7 +218,7 @@ pub(crate) struct QuantityPy {
     unit: Option<String>,
 }
 
-#[pyclass(name = "RoutedOutput", skip_from_py_object)]
+#[pyclass(name = "RoutedOutput")]
 #[derive(Debug)]
 pub(crate) struct RoutedOutputPy {
     #[pyo3(get)]
@@ -719,6 +723,7 @@ fn create_device_properties(
                 device_type: dp.kind.as_str().to_string(),
                 sampling_rate: dp.sampling_rate,
                 lead_delay: dp.lead_delay.into(),
+                is_shfqc: dp.is_shfqc,
             };
             Py::new(py, dp_py).unwrap()
         })
@@ -733,6 +738,7 @@ fn create_device_properties(
                 device_type: dp.kind().to_string(),
                 sampling_rate: None, // Auxiliary devices don't have sampling rates
                 lead_delay: 0.0,
+                is_shfqc: false,
             };
             Py::new(py, dp_py).unwrap()
         })
@@ -799,7 +805,7 @@ impl SeqCGenOutputPy {
     }
 }
 
-#[pyclass(name = "Measurement", skip_from_py_object)]
+#[pyclass(name = "Measurement")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeasurementPy {
     pub device: DeviceUid,
@@ -817,7 +823,7 @@ impl MeasurementPy {
     }
 }
 
-#[pyclass(name = "ResultSource", skip_from_py_object)]
+#[pyclass(name = "ResultSource")]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ResultSourcePy {
     #[pyo3(get)]
@@ -828,13 +834,7 @@ pub(crate) struct ResultSourcePy {
     pub integrator_idx: Option<u8>,
 }
 
-#[pyclass(
-    name = "IntegrationUnitAllocation",
-    eq,
-    ord,
-    frozen,
-    skip_from_py_object
-)]
+#[pyclass(name = "IntegrationUnitAllocation", eq, ord, frozen)]
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub(crate) struct IntegrationUnitAllocationPy {
     #[pyo3(get)]
@@ -847,7 +847,7 @@ pub(crate) struct IntegrationUnitAllocationPy {
     pub thresholds: Vec<f64>,
 }
 
-#[pyclass(name = "ChannelProperties", skip_from_py_object)]
+#[pyclass(name = "ChannelProperties")]
 #[derive(Debug)]
 pub(crate) struct ChannelPropertiesPy {
     #[pyo3(get)]
@@ -913,7 +913,7 @@ impl ChannelPropertiesPy {
     }
 }
 
-#[pyclass(name = "Gains", skip_from_py_object)]
+#[pyclass(name = "Gains")]
 #[derive(Debug)]
 pub(crate) struct Gains {
     #[pyo3(get)]
@@ -930,7 +930,7 @@ impl Gains {
     }
 }
 
-#[pyclass(name = "SeqCProgram", skip_from_py_object)]
+#[pyclass(name = "SeqCProgram")]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SeqCProgramPy {
     #[pyo3(get)]
@@ -947,7 +947,7 @@ pub(crate) struct SeqCProgramPy {
     sampling_rate: Option<f64>,
 }
 
-#[pyclass(name = "IntegrationWeight", skip_from_py_object)]
+#[pyclass(name = "IntegrationWeight")]
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct IntegrationWeightPy {
     #[pyo3(get)]
@@ -958,7 +958,7 @@ pub(crate) struct IntegrationWeightPy {
     pub downsampling_factor: u8,
 }
 
-#[pyclass(name = "Oscillator", skip_from_py_object)]
+#[pyclass(name = "Oscillator")]
 #[derive(Debug)]
 pub(crate) struct HardwareOscillatorPy {
     #[pyo3(get)]

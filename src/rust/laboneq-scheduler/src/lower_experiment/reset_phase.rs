@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use laboneq_dsl::types::{OscillatorKind, SectionUid, SignalUid};
+use laboneq_ir::IrKind;
 use laboneq_log::diagnostic;
 use laboneq_units::tinysample::{
     TinySamples, seconds_to_tinysamples, tiny_samples, tinysamples_to_seconds,
@@ -13,13 +14,12 @@ use crate::experiment_context::ExperimentContext;
 use crate::schedule_info::ScheduleInfoBuilder;
 use crate::utils::{ceil_to_grid, lcm};
 use crate::{ScheduleInfo, ScheduledNode, SignalInfo};
-use laboneq_ir::IrKind;
 
 /// Creates a [ScheduledNode] that represents a [IrKind::ResetOscillatorPhase] for the given signals.
 ///
 /// `length` and `grid` follow from the `oscillator_reset_duration` and
 /// `lo_frequency_granularity` of the hardware modulated signals.
-pub(super) fn handle_reset_oscillator_phase<T: SignalInfo>(
+pub(crate) fn handle_reset_oscillator_phase<T: SignalInfo>(
     signals: &[&T],
     ctx: &ExperimentContext<T>,
     system_grid: TinySamples,

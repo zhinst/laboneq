@@ -67,12 +67,13 @@ fn build_handle_result_shape<'py>(
 
     let mut axis_names = Vec::new();
     let mut axis_values = Vec::new();
+    let mut sampling_rate: Option<f64> = None;
     for axis in reader.get_axes().map_err(capnp_err)?.iter() {
         let mut names = Vec::new();
         let mut values = Vec::new();
         for param in axis.get_parameters().map_err(capnp_err)?.iter() {
             let name = text_to_string(param.get_name().map_err(capnp_err)?)?;
-            let value = decode_axis_parameter(py, param, ctx, explicit_values)?;
+            let value = decode_axis_parameter(py, param, ctx, explicit_values, &mut sampling_rate)?;
             names.push(name);
             values.push(value);
         }
@@ -105,6 +106,7 @@ fn build_handle_result_shape<'py>(
     kwargs.set_item("axis_values", PyList::new(py, axis_values)?)?;
     kwargs.set_item("chunked_axis_index", chunked_axis_index)?;
     kwargs.set_item("match_case_mask", match_case_mask)?;
+    kwargs.set_item("sampling_rate", sampling_rate)?;
     Ok(handle_result_shape_class.call((), Some(&kwargs))?)
 }
 
@@ -113,18 +115,24 @@ fn decode_axis_parameter<'py>(
     reader: result_shape_capnp::axis_parameter::Reader<'_>,
     ctx: &DeserializerContext,
     explicit_values: &[Bound<'py, PyAny>],
+    sampling_rate: &mut Option<f64>,
 ) -> Result<Bound<'py, PyAny>> {
     use result_shape_capnp::axis_parameter::Which;
     match reader.which().map_err(capnp_err)? {
         Which::ParameterRef(idx) => Ok(ctx.parameter_array(py, idx)?.into_bound(py)),
-        Which::Shots(count) => {
-            Ok(numpy::PyArray1::from_iter(py, (0..count).map(|v| v as f64))
-                .into_bound_py_any(py)?)
+        Which::Shots(count) => Ok(index_array(py, count)?),
+        Which::RawSamples(raw_samples) => {
+            *sampling_rate = Some(raw_samples.get_sampling_rate());
+            Ok(index_array(py, raw_samples.get_count())?)
         }
         Which::ExplicitRef(idx) => explicit_values.get(idx as usize).cloned().ok_or_else(|| {
             laboneq_error!("ResultShapeInfo.explicitValues has no entry at index {idx}")
         }),
     }
+}
+
+fn index_array(py: Python<'_>, count: u64) -> PyResult<Bound<'_, PyAny>> {
+    numpy::PyArray1::from_iter(py, (0..count).map(|v| v as f64)).into_bound_py_any(py)
 }
 
 /// Unwraps a single-element axis to its bare value, matching how the Python-side dataclass

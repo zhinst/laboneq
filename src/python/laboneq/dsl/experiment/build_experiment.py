@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, Any, Callable, overload
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, overload
 
 from typing_extensions import ParamSpec
 
@@ -356,11 +357,13 @@ def _qubits_from_args_and_kws(
 def _exp_signals_from_qubits(qubits: list[QuantumElement]) -> list[ExperimentSignal]:
     """Return a list of experiment signals from a list of qubits."""
     signals = []
+    uids = set()
     for qubit in qubits:
         for exp_signal in qubit.experiment_signals():
-            if exp_signal in signals:
+            if exp_signal.uid in uids:
                 msg = f"Signal with id {exp_signal.uid} already assigned."
                 raise LabOneQException(msg)
+            uids.add(exp_signal.uid)
             signals.append(exp_signal)
     return signals
 

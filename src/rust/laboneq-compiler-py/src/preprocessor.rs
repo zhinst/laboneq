@@ -60,6 +60,7 @@ pub(crate) fn preprocess_experiment<B: CompilerBackend>(
             &deserialized.pulses,
             deserialized.experiment_signals.clone(),
             deserialized.setup_description,
+            &deserialized.hqcs,
         ))
         .resolve_err(&deserialized.id_store)?;
 
@@ -69,6 +70,7 @@ pub(crate) fn preprocess_experiment<B: CompilerBackend>(
         parameters: deserialized.parameters,
         pulses: deserialized.pulses,
         external_parameters: deserialized.external_parameters.into(),
+        hqcs: deserialized.hqcs,
     };
 
     let signals = process_setup(
@@ -90,13 +92,14 @@ pub(crate) fn preprocess_experiment<B: CompilerBackend>(
     let result_shapes = extract_result_shapes(
         &experiment.root,
         experiment.parameters.iter(),
+        &signals,
         Arc::get_mut(&mut experiment.id_store).expect("Expected no additional ID stores"),
         backend,
     )
     .resolve_err(&experiment.id_store)?;
 
     backend
-        .lower_hqcs_for_scheduler(&mut experiment.root)
+        .lower_hqcs_for_scheduler(&mut experiment.root, &hqcs_program)
         .resolve_err(&experiment.id_store)?;
 
     let res = PreprocessedExperiment {

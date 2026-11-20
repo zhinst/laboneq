@@ -61,6 +61,6 @@ class WorkflowGraphTree:
         displ = _BlockTreeDisplay().visit(self._root)
         return "\n".join(displ)
 
-    def _repr_pretty_(self, pp, cycle):  # noqa: ANN001, ARG002, ANN202
+    def _repr_pretty_(self, pp, cycle):
         # For Notebooks
         pp.text(str(self))

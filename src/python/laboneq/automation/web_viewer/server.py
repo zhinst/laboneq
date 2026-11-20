@@ -118,7 +118,7 @@ class AutomationViewer:
 
         self._server = server
         self.port = server.socket.getsockname()[1]  # resolve real port
-        print(f"Web viewer started at {self.url}")  # noqa: T201
+        print(f"Web viewer started at {self.url}")
 
         if open_browser and self.url is not None:
             webbrowser.open(self.url)

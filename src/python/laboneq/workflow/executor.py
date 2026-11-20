@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from laboneq.workflow.typing import SimpleDict
 
 
-class _ExecutorSignal(Exception):  # noqa: N818
+class _ExecutorSignal(Exception):
     """A base signal class for executor control flow."""
 
 
@@ -211,7 +211,7 @@ class ExecutorState:
         """Add executed task result."""
         self._workflow_contexts[-1].result._tasks.append(task)
 
-    def set_execution_output(self, output: Any) -> None:  # noqa: ANN401
+    def set_execution_output(self, output: Any) -> None:
         """Set an output for the workflow being executed."""
         self._workflow_contexts[-1].result._output = output
 
@@ -275,7 +275,7 @@ class ExecutorState:
         # TODO: Move to executor blocks once a proper executor is ready.
         self._runtime_variables[id(ref)] = value
 
-    def get_variable(self, ref: reference.Reference) -> Any:  # noqa: ANN401
+    def get_variable(self, ref: reference.Reference) -> Any:
         """Get reference."""
         # TODO: Move to executor blocks once a proper executor is ready.
         return self._runtime_variables[id(ref)]

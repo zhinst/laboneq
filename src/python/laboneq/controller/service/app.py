@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi import (
     APIRouter,
     FastAPI,
-    Request,  # noqa: TC002 - required at runtime for FastAPI injection
+    Request,
     status,
 )
 from fastapi.exceptions import RequestValidationError
@@ -37,6 +37,7 @@ from laboneq.controller.constants import (
     CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S,
     PROTOCOL_VERSION,
     PROTOCOL_VERSION_HEADER,
+    SERVICE_SHUTDOWN_TIMEOUT_S,
 )
 from laboneq.controller.service.controller_container import ControllerContainer
 from laboneq.controller.service.models import (
@@ -165,6 +166,11 @@ def create_app(
         starts anyway.  Records a failure that aborts startup in
         `app.state.startup_error`.  An ASGI server only logs the exception and
         exits, so whoever started the server would not see it otherwise.
+
+        On shutdown, drops the queued experiments, waits up to
+        `SERVICE_SHUTDOWN_TIMEOUT_S` for a running one to end and stops it if it
+        has not, and disconnects from the instruments. Logs a failure during
+        shutdown.
         """
         logger.info("Starting LabOne Q Controller Service v%s", __version__)
         try:
@@ -181,6 +187,10 @@ def create_app(
             app.state.startup_error = exc
             raise
         yield
+        try:
+            await app.state.controller_container.aclose(SERVICE_SHUTDOWN_TIMEOUT_S)
+        except Exception:
+            logger.exception("Disconnecting from the instruments failed")
 
     app = FastAPI(
         title="LabOne Q Controller Service",

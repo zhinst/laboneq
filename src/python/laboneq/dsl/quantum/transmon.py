@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar, Optional
+from typing import ClassVar
 
 import attrs
 
@@ -29,25 +29,25 @@ class TransmonParameters(QuantumParameters):
     """
 
     #: resonance frequency of the qubits g-e transition.
-    resonance_frequency_ge: Optional[float] = None
+    resonance_frequency_ge: float | None = None
     #: resonance frequency of the qubits e-f transition.
-    resonance_frequency_ef: Optional[float] = None
+    resonance_frequency_ef: float | None = None
     #: local oscillator frequency for the drive signals.
-    drive_lo_frequency: Optional[float] = None
+    drive_lo_frequency: float | None = None
     #: readout resonator frequency of the qubit.
-    readout_resonator_frequency: Optional[float] = None
+    readout_resonator_frequency: float | None = None
     #: local oscillator frequency for the readout lines.
-    readout_lo_frequency: Optional[float] = None
+    readout_lo_frequency: float | None = None
     #: integration delay between readout pulse and data acquisition, defaults to 20 ns.
-    readout_integration_delay: Optional[float] = 20e-9
+    readout_integration_delay: float | None = 20e-9
     #: drive power setting, defaults to 10 dBm.
-    drive_range: Optional[float] = 10.0
+    drive_range: float | None = 10.0
     #: readout output power setting, defaults to 5 dBm.
-    readout_range_out: Optional[float] = 5.0
+    readout_range_out: float | None = 5.0
     #: readout input power setting, defaults to 10 dBm.
-    readout_range_in: Optional[float] = 10.0
+    readout_range_in: float | None = 10.0
     #: offset voltage for flux control line - defaults to 0.
-    flux_offset_voltage: Optional[float] = 0.0
+    flux_offset_voltage: float | None = 0.0
 
     @property
     def drive_frequency_ge(self) -> float | None:

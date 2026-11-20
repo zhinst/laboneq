@@ -87,7 +87,7 @@ class Block(abc.ABC):
     def __enter__(self):
         BlockBuilderContext.enter(self)
 
-    def __exit__(self, exc_type, exc_value, traceback):  # noqa: ANN001
+    def __exit__(self, exc_type, exc_value, traceback):
         BlockBuilderContext.exit()
         active_ctx = BlockBuilderContext.get_active()
         if active_ctx:

@@ -35,6 +35,8 @@ pub use sweep_parameter::*;
 pub use trigger::Trigger;
 pub use value_or_parameter::*;
 
+pub use laboneq_common::near_time::FixedValueOrParameter;
+
 pub type UserRegister = u16;
 
 #[doc(inline)]

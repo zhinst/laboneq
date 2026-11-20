@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from typing import List
-
 import attrs
 import numpy as np
 from numpy.typing import ArrayLike
@@ -251,7 +249,7 @@ class Precompensation:
     uid: str = validated_field(factory=precompensation_id_generator)
 
     # Exponential precompensation filter
-    exponential: List[ExponentialCompensation] | None = validated_field(default=None)
+    exponential: list[ExponentialCompensation] | None = validated_field(default=None)
 
     # High-pass compensation
     high_pass: HighPassCompensation | None = validated_field(default=None)

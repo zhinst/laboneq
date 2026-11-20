@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import inspect
-from typing import Callable
+from collections.abc import Callable
 
 
 def create_argument_map(func: Callable, *args: object, **kwargs: object) -> dict:

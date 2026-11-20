@@ -4,8 +4,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, fields
-from typing import Callable, Iterable, Protocol, TypeVar, cast
+from typing import Protocol, TypeVar, cast
 
 
 @dataclass

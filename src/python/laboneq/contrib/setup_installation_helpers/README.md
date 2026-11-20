@@ -25,7 +25,10 @@ UHFQA devices are not yet supported.
 The script can be used as follows:
 
 ```python
-from laboneq.contrib.setup_installation_helpers.cable_checker import check_cable_experiment, Device
+from laboneq.contrib.setup_installation_helpers.cable_checker import (
+    check_cable_experiment,
+    Device,
+)
 
 devices = {
     "DEV10001": Device(type="PQSC"),
@@ -107,5 +110,4 @@ for id, signal in lsg.items():
             range=5,
             local_oscillator=Oscillator(frequency=1e9),
         )
-
 ```

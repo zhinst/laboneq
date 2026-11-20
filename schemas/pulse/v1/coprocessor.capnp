@@ -122,7 +122,7 @@ enum CmpOp {
 
 struct Predicate {
   # Runtime condition: the exit condition of a do-until loop, or the assertion of an
-  # `ensure`.
+  # `expect`.
 
   union {
     unspecified @0 :Void;
@@ -140,7 +140,7 @@ struct Predicate {
     }
 
     isLive :group {
-      # Arrival-based: `do_until(is_live(x), ...)`, `ensure(is_live(x))`.
+      # Arrival-based: `do_until(is_live(x), ...)`, `expect(is_live(x))`.
 
       union {
         variable @4 :Common.Id;

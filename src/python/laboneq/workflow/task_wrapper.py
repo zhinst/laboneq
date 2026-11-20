@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import inspect
 import textwrap
+from collections.abc import Callable
 from functools import partial, update_wrapper
-from typing import Callable, Generic, TypeVar, cast, overload
+from typing import Generic, TypeVar, cast, overload
 
 from typing_extensions import ParamSpec
 
@@ -20,7 +21,7 @@ T = ParamSpec("T")
 B = TypeVar("B")
 
 
-class task_(Generic[T, B]):  # noqa: N801
+class task_(Generic[T, B]):
     """A task that wraps a Python function.
 
     Arguments:
@@ -75,7 +76,7 @@ class task_(Generic[T, B]):  # noqa: N801
         return self._save
 
     @variable_tracker.track
-    def __call__(self, *args: T.args, **kwargs: T.kwargs) -> B:  # noqa: D102
+    def __call__(self, *args: T.args, **kwargs: T.kwargs) -> B:
         root = BlockBuilderContext.get_active()
         if root:
             block = TaskBlock(

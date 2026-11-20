@@ -122,7 +122,8 @@ mod tests {
     use laboneq_common::named_id::NamedId;
     use laboneq_common::types::{AwgKey, SignalKind};
     use laboneq_dsl::node_structure;
-    use laboneq_dsl::operation::{Acquire, Match, Reserve};
+    use laboneq_dsl::operation::{Acquire, Case, Match};
+    use laboneq_dsl::types::{NumericLiteral, SectionTimingMode};
     use laboneq_ir::signal::Signal;
     use laboneq_ir::signal::builder::SignalBuilder;
     use std::collections::HashMap;
@@ -213,6 +214,7 @@ mod tests {
                         kernel: vec![],
                         parameters: vec![],
                         pulse_parameters: vec![],
+                        acquisition_type: None,
                     }),
                     []
                 ),
@@ -224,11 +226,14 @@ mod tests {
                         play_after: vec![],
                     }),
                     [(
-                        Operation::Reserve(Reserve {
-                            signal: measure_signal,
+                        Operation::Case(Case {
+                            uid: NamedId::debug_id(124).into(),
+                            state: NumericLiteral::Int(0),
+                            section_timing_mode: SectionTimingMode::Relaxed,
+                            reserved_signals: vec![measure_signal],
                         }),
                         []
-                    ),]
+                    )]
                 )
             ]
         )

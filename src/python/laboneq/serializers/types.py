@@ -4,19 +4,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Generic, Protocol, TypeAlias, TypeVar
 
 from numpy import integer
-from typing_extensions import TypeAlias, runtime_checkable
+from typing_extensions import runtime_checkable
 
 if TYPE_CHECKING:
     from laboneq.serializers.serializer_registry import SerializerRegistry
 
 # This type represents what orjson can serialize to JSON
-JsonBasicTypes: TypeAlias = Union[str, int, float, bool, integer[Any], None]
-JsonSerializableType: TypeAlias = Union[
-    JsonBasicTypes, dict[str, "JsonSerializableType"], list["JsonSerializableType"]
-]
+JsonBasicTypes: TypeAlias = str | int | float | bool | integer[Any] | None
+JsonSerializableType: TypeAlias = (
+    JsonBasicTypes | dict[str, "JsonSerializableType"] | list["JsonSerializableType"]
+)
 
 
 @dataclass

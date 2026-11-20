@@ -9,9 +9,12 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import TYPE_CHECKING, Any, Literal
 
-from laboneq.controller.callback_protocol import MessageType
+from laboneq.controller.callback_protocol import MessageType, json_failure
 from laboneq.controller.constants import CALLBACK_CHANNEL_ABSENCE_TIMEOUT_S
-from laboneq.controller.utilities.exception import LabOneQControllerException
+from laboneq.controller.utilities.exception import (
+    InvalidCallbackArgumentsError,
+    LabOneQControllerException,
+)
 from laboneq.core.utilities.async_helpers import wait_for
 
 if TYPE_CHECKING:
@@ -24,6 +27,10 @@ DoneStatus = Literal["completed", "failed", "cancelled"]
 
 class CallbackChannelBusy(LabOneQControllerException):
     """A live transport is already attached to the channel."""
+
+
+class ClientCallbackChannelLost(LabOneQControllerException):
+    """The client callback channel stayed detached beyond its absence window."""
 
 
 class ClientCallbackError(LabOneQControllerException):
@@ -182,6 +189,20 @@ class CallbackChannel:
     # Controller side
     # ------------------------------------------------------------------
 
+    def check_arguments(self, name: str, args: dict[str, Any]) -> None:
+        """Check that *args* of a call to callback *name* can be sent to the client.
+
+        Raises:
+            InvalidCallbackArgumentsError: *args* are not JSON-serializable.
+        """
+        failure = json_failure(args)
+        if failure is not None:
+            raise InvalidCallbackArgumentsError(
+                f"Arguments of client near-time callback '{name}' must be"
+                f" JSON-serializable: {failure}. Pass a complex number as its"
+                " real and imaginary parts, and an array as a list."
+            )
+
     async def wait_attached(self, *, restart_window: bool = False) -> bool:
         """Wait for a transport within the absence timeout.
 
@@ -202,7 +223,7 @@ class CallbackChannel:
             return False
         try:
             await wait_for(self._attached.wait(), remaining)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
         return True
 
@@ -216,10 +237,13 @@ class CallbackChannel:
         """Send a callback invocation and await the client's reply.
 
         Raises:
-            LabOneQControllerException: The channel stayed detached beyond the
-                absence window, or the reply was malformed.
+            InvalidCallbackArgumentsError: *args* are not JSON-serializable.
+            ClientCallbackChannelLost: The channel stayed detached beyond the
+                absence window.
+            LabOneQControllerException: The reply was malformed.
             ClientCallbackError: The callback raised on the client.
         """
+        self.check_arguments(name, args)
         if self._reply_future is not None:
             raise LabOneQControllerException(
                 "A near-time callback is already outstanding on this channel."
@@ -247,7 +271,7 @@ class CallbackChannel:
             # timeout, then blocks until the reply arrives or the transport drops.
             while not reply_future.done():
                 if not await self.wait_attached():
-                    raise LabOneQControllerException(
+                    raise ClientCallbackChannelLost(
                         f"Client callback channel was absent for more than "
                         f"{self._absence_timeout_s:.0f} s while waiting for "
                         f"callback {name!r}."

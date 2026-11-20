@@ -3,27 +3,20 @@
 
 use std::collections::HashMap;
 
-use crate::error::{Error, Result};
-
-use crate::experiment_context::ExperimentContext;
-use crate::lower_experiment::local_context::LocalContext;
-use crate::lower_experiment::{adjust_node_grids, lower_children, lower_section};
-use crate::schedule_info::ScheduleInfoBuilder;
-use laboneq_ir::{Case, IrKind, Match};
-
-use crate::{ScheduledNode, SignalInfo};
 use laboneq_dsl::ExperimentNode;
 use laboneq_dsl::operation::{
     Case as CaseDsl, Match as MatchDsl, Operation, Section as SectionDsl,
 };
 use laboneq_dsl::types::{MatchTarget, NumericLiteral, SectionAlignment, SweepParameter};
-use laboneq_units::tinysample::{seconds_to_tinysamples, tiny_samples};
+use laboneq_ir::{Case, IrKind, Match};
+use laboneq_units::tinysample::tiny_samples;
 
-/// Grid size for local feedback
-const LOCAL_FEEDBACK_GRID_SAMPLES: u8 = 8;
-
-/// Grid size for global feedback
-const GLOBAL_FEEDBACK_GRID_SAMPLES: u8 = 200;
+use crate::error::{Error, Result};
+use crate::experiment_context::ExperimentContext;
+use crate::lower_experiment::local_context::LocalContext;
+use crate::lower_experiment::{lower_children, lower_section};
+use crate::schedule_info::{Access, CoprocessorValue, ScheduleInfoBuilder};
+use crate::{ScheduledNode, SignalInfo};
 
 /// Lower a match section from the experiment definition to the scheduled IR.
 ///
@@ -53,19 +46,10 @@ pub(super) fn lower_match(
     let mut schedule_builder = ScheduleInfoBuilder::new()
         .play_after(section.play_after.clone())
         .section_timing_mode(local_ctx.section_timing_mode);
-    if let MatchTarget::Handle(handle) = &match_.target {
-        // TODO (PW) is this correct? should it not be 100 ns regardless of the sampling rate?
-        let signal = ctx.get_signal(local_ctx.handle_signal(handle)?)?;
-        let grid = if match_.local {
-            LOCAL_FEEDBACK_GRID_SAMPLES
-        } else {
-            GLOBAL_FEEDBACK_GRID_SAMPLES
-        };
-        schedule_builder = schedule_builder.compressed_loop_grid(seconds_to_tinysamples(
-            (grid as f64 / signal.sampling_rate()).into(),
-        ));
+    if let MatchTarget::Variable(variable) = match_.target {
+        schedule_builder =
+            schedule_builder.access(CoprocessorValue::Variable(variable), Access::Read);
     }
-
     let mut root = ScheduledNode::new_with_capacity(
         IrKind::Match(match_),
         schedule_builder.build(),
@@ -92,28 +76,18 @@ pub(super) fn lower_match(
             });
             let mut case_node = ScheduledNode::new_with_capacity(
                 kind,
-                ScheduleInfoBuilder::new().build(),
+                ScheduleInfoBuilder::new()
+                    .signals(case.reserved_signals.iter().copied().collect())
+                    .section_timing_mode(case.section_timing_mode)
+                    .build(),
                 child.children.len(),
             );
-            let reserved_signals =
-                local_ctx.with_section(case.uid, case.section_timing_mode, |local| {
-                    lower_children(&mut case_node, &child.children, ctx, local)
-                })?;
-            case_node.schedule.signals.extend(reserved_signals);
-            let (grid, sequencer_grid) =
-                local_ctx.calculate_grids(case_node.schedule.signals.iter().cloned(), false, false);
-            case_node.schedule.grid = grid;
-            case_node.schedule.sequencer_grid = sequencer_grid;
-            adjust_node_grids(&mut case_node);
+            local_ctx.with_section(case.uid, case.section_timing_mode, |local| {
+                lower_children(&mut case_node, &child.children, ctx, local)
+            })?;
             root.add_child(tiny_samples(0), case_node);
         }
-        let (grid, sequencer_grid) =
-            local_ctx.calculate_grids(root.schedule.signals.iter().cloned(), false, false);
-        root.schedule.grid = grid;
-        root.schedule.sequencer_grid = sequencer_grid;
     } else {
-        root.schedule.grid = local_ctx.system_grid;
-        root.schedule.sequencer_grid = local_ctx.system_grid;
         for child in &node.children {
             let case =
                 cast_case(&child.kind).ok_or_else(|| Error::new("Expected a case operation."))?;
@@ -129,24 +103,17 @@ pub(super) fn lower_match(
             let mut case_node = ScheduledNode::new_with_capacity(
                 kind,
                 ScheduleInfoBuilder::new()
-                    .grid(local_ctx.system_grid)
+                    .signals(case.reserved_signals.iter().copied().collect())
+                    .section_timing_mode(case.section_timing_mode)
                     .build(),
                 child.children.len(),
             );
-            let reserved_signals =
-                local_ctx.with_section(case.uid, case.section_timing_mode, |local| {
-                    lower_children(&mut case_node, &child.children, ctx, local)
-                })?;
-            case_node.schedule.signals.extend(reserved_signals);
-            let (grid, sequencer_grid) =
-                local_ctx.calculate_grids(case_node.schedule.signals.iter().cloned(), false, false);
-            case_node.schedule.grid = grid;
-            case_node.schedule.sequencer_grid = sequencer_grid;
-            adjust_node_grids(&mut case_node);
+            local_ctx.with_section(case.uid, case.section_timing_mode, |local| {
+                lower_children(&mut case_node, &child.children, ctx, local)
+            })?;
             root.add_child(tiny_samples(0), case_node);
         }
     }
-    adjust_node_grids(&mut root);
     Ok(root)
 }
 
@@ -181,6 +148,7 @@ fn lower_near_time_match(
         triggers: vec![],
         on_system_grid: false,
         section_timing_mode: local_ctx.section_timing_mode,
+        reserved_signals: case.reserved_signals.clone(),
     };
     lower_section(&synthetic_section, &case_child.children, ctx, local_ctx)
 }

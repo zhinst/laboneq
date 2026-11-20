@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterator
 from dataclasses import fields as dataclass_fields
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING
 
 from laboneq.controller.attribute_value_tracker import (
     AttributeName,

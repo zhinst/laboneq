@@ -205,7 +205,7 @@ fn validate_freq_sweep_on_acquire_line(
     }
 
     // SHFQA devices with LRT option support hardware oscillator sweeps
-    // in non-spectroscopy acquisition modes.
+    // with non-spectroscopy acquisition types.
     if signal.has_lrt {
         return Ok(());
     }

@@ -35,7 +35,7 @@ from laboneq.dsl.calibration import (
     units,
 )
 from laboneq.dsl.coprocessor.builtins import (
-    ensure,
+    expect,
     is_live,
     mark_stale,
     register_stream,
@@ -199,9 +199,9 @@ __all__ = [
     "create_connection",
     "do_until",
     "dsl",
-    "ensure",
     "exp_from_qasm",
     "exp_from_qasm_list",
+    "expect",
     "from_dict",
     "from_json",
     "get_instrument_topology",

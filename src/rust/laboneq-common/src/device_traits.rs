@@ -13,7 +13,6 @@ pub const DEFAULT_HDAWG_LEAD_DESKTOP_SETUP_2GHZ: Duration<Second> = seconds(24e-
 pub const DEFAULT_UHFQA_LEAD_PQSC: Duration<Second> = seconds(80e-9);
 pub const DEFAULT_SHFQA_LEAD_PQSC: Duration<Second> = seconds(80e-9);
 pub const DEFAULT_SHFSG_LEAD_PQSC: Duration<Second> = seconds(80e-9);
-pub const DEFAULT_ZQCS_LEAD: Duration<Second> = seconds(1600e-9);
 
 /// Default sampling rates for various devices and channels
 pub const SHFSG_SAMPLING_RATE: Frequency<Hertz> = hertz(2e9);
@@ -42,9 +41,6 @@ pub struct DeviceTraits {
     /// A calibrated oscillator frequency reaches the device as an initial value,
     /// so the schedule needs no operation to set it.
     pub supports_initial_oscillator_frequency: bool,
-    /// A calibrated voltage offset reaches the device as an initial value, so
-    /// the schedule needs no operation to set it.
-    pub supports_initial_voltage_offset: bool,
     /// The output can mute itself while it plays nothing.
     pub supports_output_mute: bool,
     /// Acquisitions on one signal may differ in length.
@@ -81,7 +77,6 @@ pub const TEST_DEVICE_TRAITS: DeviceTraits = DeviceTraits {
     port_delay_granularity: 1,
     supports_precompensation: false,
     supports_initial_oscillator_frequency: false,
-    supports_initial_voltage_offset: false,
     supports_output_mute: false,
     supports_multiple_acquisition_lengths: false,
     supports_baseband_phase_modulation: false,

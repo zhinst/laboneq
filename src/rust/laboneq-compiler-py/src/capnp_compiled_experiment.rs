@@ -381,6 +381,14 @@ fn serialize_axis_parameter(
             builder.set_parameter_ref(narrow(idx, "parameterRef")?);
         }
         AxisValues::Shots(count) => builder.set_shots(narrow(*count, "shots")?),
+        AxisValues::RawSamples {
+            count,
+            sampling_rate,
+        } => {
+            let mut raw_samples = builder.reborrow().init_raw_samples();
+            raw_samples.set_count(narrow(*count, "rawSamples.count")?);
+            raw_samples.set_sampling_rate(*sampling_rate);
+        }
         AxisValues::Explicit(arr) => {
             let idx = explicit_value_indices[&Arc::as_ptr(arr)];
             builder.set_explicit_ref(idx);

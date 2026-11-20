@@ -221,7 +221,7 @@ pub fn find_hqcs_construct(node: &ExperimentNode, id_store: &NamedIdStore) -> Op
     match &node.kind {
         Operation::Send(_) => return Some("send operation".to_owned()),
         Operation::MarkStale(_) => return Some("mark_stale operation".to_owned()),
-        Operation::Ensure(_) => return Some("ensure operation".to_owned()),
+        Operation::Expect(_) => return Some("expect operation".to_owned()),
         Operation::DoUntil(do_until) => {
             let name = id_store.resolve(do_until.uid.0).unwrap_or("<unknown>");
             return Some(format!("do_until section '{name}'"));
@@ -239,7 +239,7 @@ pub fn find_hqcs_construct(node: &ExperimentNode, id_store: &NamedIdStore) -> Op
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operation::{DoUntil, Ensure, MarkStale, MarkStaleTarget, Match, Operation, Send};
+    use crate::operation::{DoUntil, Expect, MarkStale, MarkStaleTarget, Match, Operation, Send};
     use crate::types::{SectionUid, StreamUid, VariableUid};
 
     fn store() -> NamedIdStore {
@@ -360,6 +360,7 @@ mod tests {
             uid,
             condition: Predicate::IsLive(IsLiveTarget::Variable(VariableUid(0))),
             max_count: 1,
+            reserved_signals: Vec::new(),
         }));
         section
             .children
@@ -374,15 +375,15 @@ mod tests {
     }
 
     #[test]
-    fn finds_ensure() {
+    fn finds_expect() {
         let mut root = ExperimentNode::new(Operation::Root);
         root.children
-            .push(ExperimentNode::new(Operation::Ensure(Ensure {
+            .push(ExperimentNode::new(Operation::Expect(Expect {
                 condition: Predicate::IsLive(IsLiveTarget::Variable(VariableUid(0))),
             })));
         assert_eq!(
             find_hqcs_construct(&root, &store()),
-            Some("ensure operation".to_owned())
+            Some("expect operation".to_owned())
         );
     }
 

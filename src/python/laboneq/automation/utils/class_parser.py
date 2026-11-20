@@ -39,7 +39,7 @@ def find_logic_class(class_path: str) -> type[AutomationLogic]:
     for part in qualname.split("."):
         try:
             cls = getattr(cls, part)
-        except AttributeError:  # noqa: PERF203
+        except AttributeError:
             raise ValueError(
                 f"Cannot find {part!r} in {module_name!r} for logic class {class_path!r}."
             ) from None

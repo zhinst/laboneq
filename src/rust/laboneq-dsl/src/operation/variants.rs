@@ -15,12 +15,6 @@ use laboneq_common::named_id::NamedId;
 use laboneq_common::types::Literal;
 use laboneq_units::duration::{Duration, Second};
 
-impl Reserve {
-    pub fn new(signal: SignalUid) -> Self {
-        Self { signal }
-    }
-}
-
 impl ResetOscillatorPhase {
     pub fn new(signals: Vec<SignalUid>) -> Self {
         Self { signals }
@@ -69,6 +63,7 @@ pub struct Acquire {
     pub kernel: Vec<PulseUid>,
     pub parameters: Vec<HashMap<PulseParameterUid, ExternalOrValue>>,
     pub pulse_parameters: Vec<HashMap<PulseParameterUid, ExternalOrValue>>,
+    pub acquisition_type: Option<AcquisitionType>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -80,6 +75,7 @@ pub struct Section {
     pub triggers: Vec<Trigger>,
     pub on_system_grid: bool,
     pub section_timing_mode: SectionTimingMode,
+    pub reserved_signals: Vec<SignalUid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +83,7 @@ pub struct PrngSetup {
     pub uid: SectionUid,
     pub range: u32,
     pub seed: u32,
+    pub reserved_signals: Vec<SignalUid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -94,11 +91,7 @@ pub struct PrngLoop {
     pub uid: SectionUid,
     pub count: NonZeroU32,
     pub sample_uid: PrngSampleUid,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Reserve {
-    pub signal: SignalUid,
+    pub reserved_signals: Vec<SignalUid>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -122,6 +115,7 @@ pub struct Sweep {
     pub chunk_count: NonZeroU32,
     pub auto_chunking: bool,
     pub section_timing_mode: SectionTimingMode,
+    pub reserved_signals: Vec<SignalUid>,
 }
 
 impl Sweep {
@@ -136,6 +130,7 @@ pub struct Case {
     pub uid: SectionUid,
     pub state: NumericLiteral,
     pub section_timing_mode: SectionTimingMode,
+    pub reserved_signals: Vec<SignalUid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -156,6 +151,7 @@ pub struct AveragingLoop {
     pub reset_oscillator_phase: bool,
     pub alignment: SectionAlignment,
     pub section_timing_mode: SectionTimingMode,
+    pub reserved_signals: Vec<SignalUid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -185,15 +181,16 @@ pub enum MarkStaleTarget {
 
 /// Asserts that `condition` holds at this point.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Ensure {
+pub struct Expect {
     pub condition: Predicate,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DoUntil {
     pub uid: SectionUid,
     pub condition: Predicate,
     pub max_count: u32,
+    pub reserved_signals: Vec<SignalUid>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -202,7 +199,6 @@ pub enum Operation {
     Section(Section),
     PrngSetup(PrngSetup),
     PrngLoop(PrngLoop),
-    Reserve(Reserve),
     Sweep(Sweep),
     PlayPulse(PlayPulse),
     Acquire(Acquire),
@@ -217,7 +213,7 @@ pub enum Operation {
     SetNode(SetNode),
     Send(Send),
     MarkStale(MarkStale),
-    Ensure(Ensure),
+    Expect(Expect),
     DoUntil(DoUntil),
 }
 
@@ -254,6 +250,7 @@ pub struct LoopInfo<'a> {
 }
 
 impl Operation {
+    /// The signals of this operation itself, not of its children.
     pub fn signals(&self) -> impl Iterator<Item = SignalUid> + '_ {
         // The implementation of this function may look weird - it goes to great
         // lengths to make returning an iterator possible without any Vec alloc.
@@ -263,7 +260,6 @@ impl Operation {
             Operation::PlayPulse(p) => Some(p.signal),
             Operation::Acquire(a) => Some(a.signal),
             Operation::Delay(d) => Some(d.signal),
-            Operation::Reserve(r) => Some(r.signal),
             _ => None,
         };
         let reset_signals: &[SignalUid] = match self {
@@ -277,7 +273,57 @@ impl Operation {
         single
             .into_iter()
             .chain(reset_signals.iter().copied())
+            .chain(self.reserved_signals().iter().copied())
             .chain(trigger_signals.iter().map(|t| t.signal))
+    }
+
+    /// Signals reserved for the section.
+    pub fn reserved_signals(&self) -> &[SignalUid] {
+        match self {
+            Operation::Section(s) => &s.reserved_signals,
+            Operation::PrngSetup(s) => &s.reserved_signals,
+            Operation::PrngLoop(s) => &s.reserved_signals,
+            Operation::Sweep(s) => &s.reserved_signals,
+            Operation::AveragingLoop(s) => &s.reserved_signals,
+            Operation::Case(s) => &s.reserved_signals,
+            Operation::DoUntil(s) => &s.reserved_signals,
+            Operation::Root
+            | Operation::Match(_)
+            | Operation::PlayPulse(_)
+            | Operation::Acquire(_)
+            | Operation::Delay(_)
+            | Operation::ResetOscillatorPhase(_)
+            | Operation::RealTimeBoundary
+            | Operation::NearTimeCallback(_)
+            | Operation::SetNode(_)
+            | Operation::Send(_)
+            | Operation::MarkStale(_)
+            | Operation::Expect(_) => &[],
+        }
+    }
+
+    pub fn reserved_signals_mut(&mut self) -> Option<&mut Vec<SignalUid>> {
+        match self {
+            Operation::Section(s) => Some(&mut s.reserved_signals),
+            Operation::PrngSetup(s) => Some(&mut s.reserved_signals),
+            Operation::PrngLoop(s) => Some(&mut s.reserved_signals),
+            Operation::Sweep(s) => Some(&mut s.reserved_signals),
+            Operation::AveragingLoop(s) => Some(&mut s.reserved_signals),
+            Operation::Case(s) => Some(&mut s.reserved_signals),
+            Operation::DoUntil(s) => Some(&mut s.reserved_signals),
+            Operation::Root
+            | Operation::Match(_)
+            | Operation::PlayPulse(_)
+            | Operation::Acquire(_)
+            | Operation::Delay(_)
+            | Operation::ResetOscillatorPhase(_)
+            | Operation::RealTimeBoundary
+            | Operation::NearTimeCallback(_)
+            | Operation::SetNode(_)
+            | Operation::Send(_)
+            | Operation::MarkStale(_)
+            | Operation::Expect(_) => None,
+        }
     }
 
     pub fn section_info<'a>(self: &'a Operation) -> Option<SectionInfo<'a>> {
@@ -291,7 +337,6 @@ impl Operation {
             Operation::Case(s) => SectionInfo { uid: &s.uid }.into(),
             Operation::DoUntil(s) => SectionInfo { uid: &s.uid }.into(),
             Operation::Root
-            | Operation::Reserve(_)
             | Operation::PlayPulse(_)
             | Operation::Acquire(_)
             | Operation::Delay(_)
@@ -301,7 +346,7 @@ impl Operation {
             | Operation::SetNode(_)
             | Operation::Send(_)
             | Operation::MarkStale(_)
-            | Operation::Ensure(_) => None,
+            | Operation::Expect(_) => None,
         }
     }
 
@@ -342,7 +387,6 @@ impl Operation {
             | Operation::PrngSetup(_)
             | Operation::Match(_)
             | Operation::Case(_)
-            | Operation::Reserve(_)
             | Operation::PlayPulse(_)
             | Operation::Acquire(_)
             | Operation::Delay(_)
@@ -352,7 +396,7 @@ impl Operation {
             | Operation::SetNode(_)
             | Operation::Send(_)
             | Operation::MarkStale(_)
-            | Operation::Ensure(_)
+            | Operation::Expect(_)
             | Operation::DoUntil(_) => None,
         }
     }
@@ -374,7 +418,6 @@ impl Operation {
             | Operation::PrngSetup(_)
             | Operation::Match(_)
             | Operation::Case(_)
-            | Operation::Reserve(_)
             | Operation::PlayPulse(_)
             | Operation::Acquire(_)
             | Operation::Delay(_)
@@ -382,7 +425,7 @@ impl Operation {
             | Operation::RealTimeBoundary
             | Operation::Send(_)
             | Operation::MarkStale(_)
-            | Operation::Ensure(_)
+            | Operation::Expect(_)
             | Operation::DoUntil(_) => Ok(()),
         }
     }

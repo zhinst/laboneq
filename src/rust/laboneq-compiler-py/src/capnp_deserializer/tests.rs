@@ -39,7 +39,7 @@ fn test_play_keeps_pulse_parameter_references_and_values() {
         sigma.init_value().set_parameter_ref(PARAM);
         let mut beta = entries.get(1);
         beta.set_key("beta");
-        beta.init_value().init_constant().set_real(0.5);
+        beta.init_value().set_real(0.5);
     });
 
     let [play_node] = sweep_node(&experiment).children.as_slice() else {
@@ -103,6 +103,34 @@ fn test_unsupported_sampler_uri_is_rejected() {
     }
 }
 
+#[test]
+fn test_other_development_schema_versions_are_rejected() {
+    let minor: u32 = experiment_capnp::SCHEMA_VERSION
+        .strip_prefix("0.")
+        .and_then(|minor| minor.parse().ok())
+        .expect("a 0.x schema version");
+    for version in [format!("0.{}", minor - 1), format!("0.{}", minor + 1)] {
+        let Err(error) = deserialize_empty_experiment(&version) else {
+            panic!("schema version '{version}' was accepted");
+        };
+        assert!(
+            error.to_string().contains("Schema version mismatch"),
+            "{error}"
+        );
+    }
+}
+
+/// Deserializes an experiment that contains nothing but its schema version.
+fn deserialize_empty_experiment(schema_version: &str) -> Result<DeserializedExperiment> {
+    let mut message = capnp::message::Builder::new_default();
+    message
+        .init_root::<experiment_capnp::experiment::Builder<'_>>()
+        .init_metadata()
+        .set_schema_version(schema_version);
+    let bytes = capnp::serialize::write_message_to_words(&message);
+    deserialize_experiment(&bytes, false)
+}
+
 /// Deserializes an experiment whose only pulse is a functional pulse sampled
 /// by `sampler_uri`, and returns its corresponding [`PulseFunction`].
 fn deserialize_functional_pulse(sampler_uri: &str) -> Result<PulseFunction> {
@@ -142,7 +170,7 @@ fn deserialize_functional_pulse(sampler_uri: &str) -> Result<PulseFunction> {
 /// ```
 fn deserialize_sweep(
     parameters: &[Parameter<'_>],
-    write_operation: impl FnOnce(operation_capnp::operation::Builder<'_>),
+    write_operation: impl FnOnce(section_capnp::section_item::operation::Builder<'_>),
 ) -> DeserializedExperiment {
     let mut message = capnp::message::Builder::new_default();
     let mut experiment = message.init_root::<experiment_capnp::experiment::Builder<'_>>();

@@ -490,7 +490,7 @@ mod tests {
             assert_eq!(amplitude, 0.5_f64.sqrt());
             // By convention, we consider a positive frequency to correspond to e^( - jwt).
             // Hence, when multiplying the samples by a number with a negative phase, the
-            // actual phase in LabOneQ lingo is positive.
+            // actual phase in LabOne Q lingo is positive.
             assert_eq!(phase, PI / 4.0);
         }
 

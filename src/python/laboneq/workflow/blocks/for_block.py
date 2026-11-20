@@ -5,8 +5,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Callable, TypeVar, cast
+from typing import TYPE_CHECKING, TypeVar, cast
 
 from laboneq.workflow import variable_tracker
 from laboneq.workflow.blocks.block import Block

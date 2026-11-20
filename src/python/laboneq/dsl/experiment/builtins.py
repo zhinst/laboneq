@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import logging
 import typing
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
 
@@ -37,7 +38,7 @@ from laboneq.dsl.experiment.uid_generator import (
 )
 
 if typing.TYPE_CHECKING:
-    from typing import Callable
+    from collections.abc import Callable
 
     from laboneq.core.types.enums.section_timing_mode import SectionTimingMode
     from laboneq.dsl import Parameter
@@ -552,6 +553,7 @@ def acquire(
     kernel: Pulse | list[Pulse] | None = None,
     length: float | None = None,
     pulse_parameters: dict[str, Any] | list[dict[str, Any] | None] | None = None,
+    acquisition_type: AcquisitionType | None = None,
 ):
     """Perform an acquisition on the given signal in the active section.
 
@@ -570,6 +572,14 @@ def acquire(
         pulse_parameters:
             An optional dictionary that contains pulse parameters for the integration kernel.
             In case of multistate discrimination, a list of dictionaries.
+        acquisition_type:
+            Acquisition type for this acquire operation.
+            Defaults to the type set in the enclosing real-time loop.
+            Supported only on ZQCS.
+
+    !!! version-changed "Changed in version 27.1.0"
+        Added `acquisition_type` parameter that overrides the acquisition type
+        set in the real-time loop.
 
     Raises:
         LabOneQException:
@@ -581,6 +591,7 @@ def acquire(
         kernel=kernel,
         length=length,
         pulse_parameters=pulse_parameters,
+        acquisition_type=acquisition_type,
     )
 
 
@@ -923,14 +934,60 @@ def map_coprocessor(
     _active_experiment().map_coprocessor(experiment_coprocessor, setup_coprocessor)
 
 
-def prng_setup(range: int, seed=1, uid=None, name=None):
+def prng_setup(
+    range: int,
+    seed: int = 1,
+    uid: str | None = None,
+    name: str | None = None,
+) -> PRNGSetupContextManager:
+    """Returns a context manager for a section that seeds the on-device PRNG.
+
+    Upon entering the returned context manager, the seeded PRNG is returned.
+    Pass it to `prng_loop` inside the context block to draw values from it.
+    Within the block, the PRNG draws values from this seed and range. PRNG
+    setups cannot be nested, but a later setup may reseed the PRNG.
+
+    Arguments:
+        range:
+            Number of distinct values the PRNG draws, from 0 to `range - 1`.
+        seed:
+            Seed of the PRNG.
+        uid:
+            Unique identifier for the section.
+        name:
+            Name of the section.
+    """
     from laboneq.dsl.prng import PRNG
 
     prng = PRNG(range, seed)
     return PRNGSetupContextManager(prng=prng, uid=uid, name=name)
 
 
-def prng_loop(prng: PRNG, count=1, uid=None, name=None):
+def prng_loop(
+    prng: PRNG,
+    count: int = 1,
+    uid: str | None = None,
+    name: str | None = None,
+) -> PRNGLoopContextManager:
+    """Returns a context manager for a section that draws values from the PRNG.
+
+    The section repeats its body `count` times, drawing a new value from the
+    PRNG on each iteration. Upon entering the returned context manager, the
+    PRNG sample is returned. Match on the sample with
+    `match(prng_sample=...)`. The sample's `values` attribute simulates the
+    drawn values of a freshly seeded PRNG.
+
+    Arguments:
+        prng:
+            The PRNG returned by `prng_setup`.
+        count:
+            Number of values to draw.
+        uid:
+            Unique identifier for the section and the PRNG sample. The
+            sample's uid names the loop's axis in the results.
+        name:
+            Name of the section.
+    """
     from laboneq.dsl.prng import PRNGSample
 
     maybe_uid = {"uid": uid} if uid is not None else {}

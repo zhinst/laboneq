@@ -43,14 +43,14 @@ fn resolve_parameters_impl(ir: &mut ScheduledNode, resolver: &ParameterResolver)
                 for param in parameters.iter() {
                     resolver.set_iteration(*param, iteration)?;
                 }
-                resolve_parameters_impl(child.node.make_mut(), &resolver)?;
+                resolve_parameters_impl(&mut child.node, &resolver)?;
             }
             Ok(())
         }
         _ => {
             resolve_parameter_fields(ir, resolver)?;
             for child in ir.children.iter_mut() {
-                resolve_parameters_impl(child.node.make_mut(), resolver)?;
+                resolve_parameters_impl(&mut child.node, resolver)?;
             }
             Ok(())
         }

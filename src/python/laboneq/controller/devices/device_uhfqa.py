@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING, NoReturn
 
@@ -45,6 +44,7 @@ if TYPE_CHECKING:
         RecipeData,
         RtExecutionInfo,
     )
+    from laboneq.core.types.numpy_support import NumPyArray
     from laboneq.data.artifacts_qccs import IO
     from laboneq.data.scheduled_experiment import ScheduledExperiment
 
@@ -351,8 +351,9 @@ class DeviceUHFQA(DeviceBase):
 
     async def _get_input_monitor_data(
         self, ch: int, acquire_length: int, timeout_s: float
-    ):
+    ) -> tuple[NumPyArray, list[tuple[int | None, str]]]:
         result_path = self._awg_cores[0].nodes.monitor_result_wave[ch]
+        errors: list[tuple[int | None, str]] = []
         try:
             monitor_result = await self._subscriber.get_result(
                 result_path, timeout_s=timeout_s
@@ -363,20 +364,26 @@ class DeviceUHFQA(DeviceBase):
                 ch_repr=self._ch_repr_monitor(ch),
             )
             # Truncate returned vectors to the expected length -> hotfix for GCE-681
-            return monitor_result.vector[0:acquire_length]
-        except (TimeoutError, asyncio.TimeoutError):
-            _logger.error(
-                f"{self._ch_repr_monitor(ch)}: Failed to receive a result from {result_path} within {timeout_s} seconds."
-            )
-            return np.array([], dtype=np.complex128)
+            vector = monitor_result.vector[0:acquire_length]
+        except TimeoutError:
+            message = f"{self._ch_repr_monitor(ch)}: Failed to receive a result from {result_path} within {timeout_s} seconds."
+            _logger.error(message)
+            errors.append((None, message))
+            vector = np.array([], dtype=np.complex128)
+        errors.extend(
+            (None, f"{self._ch_repr_monitor(ch)}: {message}")
+            for message in self._subscriber.take_stream_errors(result_path)
+        )
+        return vector, errors
 
     async def get_raw_data(
         self, channel: int, acquire_length: int, acquires: int | None, timeout_s: float
     ) -> RawReadoutData:
-        ch0, ch1 = await _gather(
+        (ch0, errors0), (ch1, errors1) = await _gather(
             self._get_input_monitor_data(0, acquire_length, timeout_s),
             self._get_input_monitor_data(1, acquire_length, timeout_s),
         )
         return RawReadoutData(
-            np.array([[complex(real, imag) for real, imag in zip(ch0, ch1)]])
+            np.array([[complex(real, imag) for real, imag in zip(ch0, ch1)]]),
+            errors=[*errors0, *errors1],
         )

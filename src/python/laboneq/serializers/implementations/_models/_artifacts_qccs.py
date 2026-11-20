@@ -9,7 +9,7 @@ import sys
 import warnings
 from dataclasses import replace
 from enum import Enum
-from typing import Any, ClassVar, Type, Union
+from typing import Any, ClassVar
 
 import attrs
 import orjson
@@ -46,20 +46,20 @@ class AWGSignalTypeModel(Enum):
     IQ = "iq"
     SINGLE = "single"
     DOUBLE = "double"
-    _target_class: ClassVar[Type] = AWGSignalType  # type: ignore[misc]
+    _target_class: ClassVar[type] = AWGSignalType  # type: ignore[misc]
 
 
 @attrs.define
 class NtStepKeyModel:
     indices: tuple[int, ...]
-    _target_class: ClassVar[Type] = NtStepKey
+    _target_class: ClassVar[type] = NtStepKey
 
 
 @attrs.define
 class GainsModel:
-    diagonal: Union[float, str]
-    off_diagonal: Union[float, str]
-    _target_class: ClassVar[Type] = Gains
+    diagonal: float | str
+    off_diagonal: float | str
+    _target_class: ClassVar[type] = Gains
 
 
 @attrs.define
@@ -67,13 +67,13 @@ class RoutedOutputModel:
     from_channel: int
     amplitude: float | str | None
     phase: float | str | None
-    _target_class: ClassVar[Type] = RoutedOutput
+    _target_class: ClassVar[type] = RoutedOutput
 
 
 @attrs.define
 class PrecompensationModel:
     precompensation: dict | None
-    _target_class: ClassVar[Type] = dict
+    _target_class: ClassVar[type] = dict
 
     @classmethod
     def _unstructure(cls, obj):
@@ -87,6 +87,7 @@ class PrecompensationModel:
 @attrs.define
 class IOModel:
     channel: int
+    awg_id: int | None
     enable: bool | None
     modulation: bool | None
     offset: float | str | None
@@ -102,14 +103,14 @@ class IOModel:
     amplitude: float | str | None
     routed_outputs: list[RoutedOutputModel]
     enable_output_mute: bool
-    _target_class: ClassVar[Type] = IO
+    signals: set[str]
+    _target_class: ClassVar[type] = IO
 
 
 @attrs.define
 class AWGModel:
     awg: int
     signal_type: AWGSignalTypeModel
-    signals: set[str]
     source_feedback_register: int | str | None
     codeword_bitshift: int | None
     codeword_bitmask: int | None
@@ -117,21 +118,21 @@ class AWGModel:
     command_table_match_offset: int | None
     target_feedback_register: int | str | None
     result_length: int | None
-    _target_class: ClassVar[Type] = AWG
+    _target_class: ClassVar[type] = AWG
 
 
 @attrs.define
 class MeasurementModel:
     length: int
     channel: int = 0
-    _target_class: ClassVar[Type] = Measurement
+    _target_class: ClassVar[type] = Measurement
 
 
 @attrs.define
 class ConfigModel:
     lead_delay: float
     sampling_rate: float | None
-    _target_class: ClassVar[Type] = Config
+    _target_class: ClassVar[type] = Config
 
 
 @attrs.define
@@ -151,7 +152,7 @@ class PPChannelModel:
     cancellation_phase: float | str | None
     cancellation_attenuation: float | str | None
     sweep_config: str | None
-    _target_class: ClassVar[Type] = PPChannel
+    _target_class: ClassVar[type] = PPChannel
 
 
 @attrs.define
@@ -164,7 +165,8 @@ class InitializationModel:
     inputs: list[IOModel]
     measurements: list[MeasurementModel]
     ppchannels: list[PPChannelModel]
-    _target_class: ClassVar[Type] = Initialization
+    is_shfqc: bool
+    _target_class: ClassVar[type] = Initialization
 
 
 @attrs.define
@@ -176,7 +178,7 @@ class OscillatorParamModel:
     allocated_index: int
     frequency: float | None
     param: str | None
-    _target_class: ClassVar[Type] = OscillatorParam
+    _target_class: ClassVar[type] = OscillatorParam
 
 
 @attrs.define
@@ -187,14 +189,14 @@ class IntegratorAllocationModel:
     channels: list[int]
     kernel_count: int
     thresholds: list[float]
-    _target_class: ClassVar[Type] = IntegratorAllocation
+    _target_class: ClassVar[type] = IntegratorAllocation
 
 
 @attrs.define
 class AcquireLengthModel:
     signal_id: str
     acquire_length: int
-    _target_class: ClassVar[Type] = AcquireLength
+    _target_class: ClassVar[type] = AcquireLength
 
 
 @attrs.define
@@ -205,7 +207,7 @@ class RealtimeExecutionInitModel:
     nt_step: NtStepKeyModel
     wave_indices_ref: str | None
     kernel_indices_ref: str | None
-    _target_class: ClassVar[Type] = RealtimeExecutionInit
+    _target_class: ClassVar[type] = RealtimeExecutionInit
 
 
 @attrs.define
@@ -214,7 +216,7 @@ class ResultSourceModel:
     awg_id: int
     integrator_idx: int | None
 
-    _target_class: ClassVar[Type] = ResultSource
+    _target_class: ClassVar[type] = ResultSource
 
     @classmethod
     def _unstructure(cls, obj: ResultSource):
@@ -241,7 +243,7 @@ class ArtifactsCodegenModel:
     oscillator_params: list[OscillatorParamModel]
     integrator_allocations: list[IntegratorAllocationModel]
     acquire_lengths: list[AcquireLengthModel]
-    _target_class: ClassVar[Type] = ArtifactsCodegen
+    _target_class: ClassVar[type] = ArtifactsCodegen
 
 
 def _old_serialize(obj):

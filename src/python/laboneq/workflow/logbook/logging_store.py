@@ -18,8 +18,8 @@ from laboneq.workflow.logbook import Logbook, LogbookStore, format_time
 from laboneq.workflow.timestamps import utc_now
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from datetime import datetime
-    from typing import Callable
 
     from laboneq.workflow import Workflow, WorkflowResult
     from laboneq.workflow.recorder import Artifact
@@ -39,7 +39,7 @@ class LoggingStore(LogbookStore):
         self._logger = logger
         self._rich = rich
 
-    def create_logbook(self, workflow: Workflow, start_time: datetime) -> Logbook:  # noqa: ARG002
+    def create_logbook(self, workflow: Workflow, start_time: datetime) -> Logbook:
         """Create a new logbook for the given workflow."""
         return LoggingLogbook(workflow, self._logger, rich=self._rich)
 

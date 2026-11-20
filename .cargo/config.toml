@@ -1,0 +1,5 @@
+[build]
+target-dir = "target"
+
+[registry]
+global-min-publish-age = "7 days"

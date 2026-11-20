@@ -27,7 +27,7 @@ def _classformatter(cls):
     def __format__(self, _):
         return repr(self)
 
-    def repr_pretty(self, p, _cycle):  # noqa: ANN001, ANN202
+    def repr_pretty(self, p, _cycle):
         # For Notebooks
         p.text(str(self))
 

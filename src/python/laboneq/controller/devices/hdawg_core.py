@@ -171,7 +171,7 @@ class HDOutput:
                     raise LabOneQControllerException(
                         "FIR coefficients must be a list of at most 40 doubles"
                     )
-                fir = np.concatenate((fir, np.zeros((40 - len(fir)))))
+                fir = np.concatenate((fir, np.zeros(40 - len(fir))))
                 nc.add(fir_p + "enable", 1)
                 nc.add(fir_p + "coefficients", fir)
             except (KeyError, IndexError, TypeError):

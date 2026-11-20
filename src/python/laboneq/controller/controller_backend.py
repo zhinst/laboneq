@@ -11,13 +11,13 @@ its device setup.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
 
 from laboneq._backend_plugin import resolve_backend
 from laboneq.controller.utilities.exception import LabOneQControllerException
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
     from contextlib import AbstractAsyncContextManager
 
     from laboneq.controller.backend_runtime_state import BackendRuntimeState
@@ -30,6 +30,35 @@ if TYPE_CHECKING:
     from laboneq.data.scheduled_experiment import ScheduledExperiment
     from laboneq.data.setup_descriptions import SetupDescription
     from laboneq.dsl.device.device_setup import DeviceSetup
+
+
+@dataclass
+class ChunkSubmission:
+    """Outcome of submitting one chunk of a near-time step, or all of its chunks."""
+
+    # None if the step is not chunked, or if the outcome covers all its chunks.
+    chunk_index: int | None
+    # Why the submission failed, if it did.
+    error: Exception | None = None
+    # The backend's own state for reading the chunk's results. None if nothing
+    # reached the instruments, so no results are awaited.
+    handle: Any = None
+
+
+@dataclass
+class StepSubmission:
+    """Outcome of submitting one near-time step."""
+
+    nt_step: NtStepKey
+    chunks: list[ChunkSubmission] = field(default_factory=list)
+
+    @property
+    def anything_submitted(self) -> bool:
+        return any(chunk.handle is not None for chunk in self.chunks)
+
+    @classmethod
+    def not_submitted(cls, nt_step: NtStepKey, error: Exception) -> StepSubmission:
+        return cls(nt_step, [ChunkSubmission(None, error=error)])
 
 
 class ControllerBackend(ABC):
@@ -132,11 +161,12 @@ class ControllerBackend(ABC):
         recipe_data: RecipeData,
         nt_step: NtStepKey,
         timeout_s: float,
-        results_pending: Callable[[], Awaitable[None]],
-    ):
-        """Runs the real-time part of a near-time step until it completes.
+    ) -> StepSubmission:
+        """Submits the near-time step to the instruments.
 
-        Awaits `results_pending` once the results of the step can be collected.
+        Returns what reached the instruments, per chunk or for all chunks at once.
+        Reports a failure confined to the step in the returned outcome, and raises
+        any other failure.
         """
 
     @abstractmethod
@@ -147,10 +177,13 @@ class ControllerBackend(ABC):
     async def read_results(
         self,
         recipe_data: RecipeData,
-        nt_step: NtStepKey,
+        step_submission: StepSubmission,
         results_builder: ResultsBuilder,
     ):
-        """Reads the results of a near-time step into `results_builder`."""
+        """Reads the results of the submitted chunks into `results_builder`.
+
+        Records the errors of reading. Raises only for a problem with the whole step.
+        """
 
     @abstractmethod
     async def process_step_results(

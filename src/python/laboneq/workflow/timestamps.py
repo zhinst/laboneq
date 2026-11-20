@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from dateutil.tz import tzlocal
 
@@ -15,7 +15,7 @@ def utc_now(timestamp: datetime | None = None) -> datetime:
 
     Uses UTC timezone.
     """
-    return (timestamp or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    return (timestamp or datetime.now(UTC)).astimezone(UTC)
 
 
 def local_now(dt: datetime | None = None) -> datetime:

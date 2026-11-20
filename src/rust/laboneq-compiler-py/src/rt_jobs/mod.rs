@@ -19,7 +19,9 @@ use laboneq_error::LabOneQError;
 use laboneq_ir::pulse_sheet_schedule::PulseSheetSchedule;
 use laboneq_ir::signal::Signal;
 use laboneq_ir::{ExperimentIr, ParameterLookup};
-use laboneq_scheduler::{ChunkingInfo, ExperimentContext as SchedulerContext, schedule_experiment};
+use laboneq_scheduler::{
+    ChunkingInfo, ExperimentContext as SchedulerContext, check_liveness, schedule_experiment,
+};
 
 use crate::compiler_backend::{CompilerBackend, FeedbackCalculator, Linker, SignalDelays};
 use crate::error::Error;
@@ -35,17 +37,17 @@ pub(crate) struct CompiledRtJobs<C> {
     pub(crate) combined_output: C,
     /// The schedule of the first program compiled.
     pub(crate) pulse_sheet_schedule: Option<PulseSheetSchedule>,
-    /// The number of chunks the chunked sweep is split into, or `None` when the experiment
+    /// The number of chunks the chunked sweeps are split into, or `None` when the experiment
     /// runs unchunked.
     pub(crate) chunk_count: Option<NonZeroU32>,
 }
 
-/// Compiles and links the real-time program of every real-time job.
+/// Compiles and links the real-time jobs of `experiment`.
 ///
-/// A job reuses the program of an earlier job in the same chunk when both hold
-/// the same values for the near-time parameters that the earlier compilation read.
-/// With auto-chunking, the chunked sweep is split into more chunks while the
-/// output exceeds a resource limit.
+/// Compiling a job's program reads some of the near-time parameters. A later job
+/// with the same program key and chunk, and the same values for those parameters,
+/// reuses the program instead of compiling again. With auto-chunking, an attempt
+/// that exceeds a resource limit is retried with more chunks.
 pub(crate) fn compile_rt_jobs<B: CompilerBackend>(
     backend: &B,
     experiment: &Experiment,
@@ -53,7 +55,7 @@ pub(crate) fn compile_rt_jobs<B: CompilerBackend>(
     backend_data: &B::Output,
     compiler_settings: &CompilerSettings,
 ) -> Result<CompiledRtJobs<B::CombinedOutput>, LabOneQError> {
-    let chunking_mode = collect_chunking_mode(experiment)?;
+    let chunking_mode = collect_chunking_mode(&experiment.root)?;
     let real_time_root = find_real_time_root(&experiment.root)
         .ok_or_else(|| Error::new("Internal error: Experiment has no real-time boundary."))?;
     let signal_delays = signals
@@ -78,7 +80,8 @@ pub(crate) fn compile_rt_jobs<B: CompilerBackend>(
         for_each_rt_job(root, &experiment.parameters, chunk_count, |job| {
             step += 1;
             let start = Instant::now();
-            let (variant, compiled) = match cache.get(job.env, job.chunk) {
+            let (program_key, settings) = backend.resolve_settings(backend_data, job.env)?;
+            let (variant, compiled) = match cache.get(&program_key, job.chunk, job.env) {
                 Some(variant) => (variant, false),
                 None => {
                     let chunk = job
@@ -94,6 +97,7 @@ pub(crate) fn compile_rt_jobs<B: CompilerBackend>(
                         &lookup,
                         chunk,
                     )?;
+                    check_liveness(&ir.root, &experiment.hqcs)?;
                     if variants.is_empty() {
                         pulse_sheet_schedule = prepare_schedule(&ir, compiler_settings);
                     }
@@ -101,17 +105,18 @@ pub(crate) fn compile_rt_jobs<B: CompilerBackend>(
                         let _timing = laboneq_log::StageTiming::start("Code generation");
                         backend.generate_code_traced(
                             &ir,
+                            &program_key,
                             compiler_settings,
                             &experiment.external_parameters,
                             backend_data,
                         )?
                     };
-                    cache.insert(lookup.reads(), job.env, job.chunk, variants.len());
+                    cache.insert(program_key, job.chunk, lookup.reads(), variants.len());
                     variants.push(linker.add_artifact(artifact)?);
                     (variants.len() - 1, true)
                 }
             };
-            linker.add_job(job.key, &variants[variant], compiled)?;
+            linker.add_job(job.key, &variants[variant], settings, compiled)?;
             if compiled {
                 skipping = false;
                 laboneq_log::info!(

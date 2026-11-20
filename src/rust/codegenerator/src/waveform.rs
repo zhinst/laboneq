@@ -1,6 +1,7 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
+use std::hash::Hash as _;
 use std::sync::Arc;
 
 use indexmap::IndexMap;
@@ -49,14 +50,13 @@ pub enum SampleBuffer {
 /// Hash `SampleBuffer` contents using bitwise f64 identity — consistent with sample equality:
 /// two buffers are equal if they produce the same hash.
 pub(crate) fn hash_sample_buffer<H: std::hash::Hasher>(buf: &SampleBuffer, state: &mut H) {
+    std::mem::discriminant(buf).hash(state);
     match buf {
         SampleBuffer::Float64(v) => {
-            state.write_u8(0);
             state.write_usize(v.len());
             hash_f64_slice(state, v);
         }
         SampleBuffer::Complex64(v) => {
-            state.write_u8(1);
             state.write_usize(v.len());
             // re and im are laid out sequentially — treat as flat f64 pairs
             let mut buf = [0u8; 128]; // 8 × Complex64 = 8 × 16 bytes
@@ -71,7 +71,6 @@ pub(crate) fn hash_sample_buffer<H: std::hash::Hasher>(buf: &SampleBuffer, state
             }
         }
         SampleBuffer::U8(v) => {
-            state.write_u8(2);
             state.write(v);
         }
     }

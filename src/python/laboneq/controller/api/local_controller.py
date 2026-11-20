@@ -4,19 +4,16 @@
 from __future__ import annotations
 
 import logging
-from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
-import attrs
-
-from laboneq.controller.api.commons import SubmissionRegistry, to_results
 from laboneq.controller.api.controller_api import ControllerAPI
 from laboneq.controller.constants import DEFAULT_TIMEOUT_S, READY_TIMEOUT_S
 from laboneq.controller.controller_core import ControllerCore
+from laboneq.controller.experiment_dispatcher import ExperimentDispatcher
 from laboneq.core.utilities.async_helpers import EventLoopHolder
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Hashable
 
     from laboneq.controller.api.commons import SubmissionHandle
     from laboneq.controller.controller_core import SubmissionStatus
@@ -60,7 +57,7 @@ class LocalController(ControllerAPI):
         )
         local_controller = LocalController(
             device_setup=device_setup,
-            controller=controller,
+            dispatcher=ExperimentDispatcher(controller, device_setup),
             instrument_topology=instrument_topology,
             do_emulation=do_emulation,
         )
@@ -77,19 +74,17 @@ class LocalController(ControllerAPI):
     def __init__(
         self,
         device_setup: DeviceSetup,
-        controller: ControllerCore,
+        dispatcher: ExperimentDispatcher,
         instrument_topology: InstrumentTopology | None = None,
         do_emulation: bool = True,
     ):
         self._device_setup = device_setup
-        # Keep reference to avoid garbage collection
-        self._controller = controller
-        # Runs every coroutine of `controller`, which must all run on one loop.
+        self._dispatcher = dispatcher
+        # Runs every coroutine of `dispatcher`, which must all run on one loop.
         self._event_loop = EventLoopHolder()
         self._event_loop.start()
         self._instrument_topology = instrument_topology
         self._do_emulation = do_emulation
-        self._submissions = SubmissionRegistry()
 
     def connect(
         self,
@@ -104,21 +99,23 @@ class LocalController(ControllerAPI):
         service connects to the instruments.
         """
         self._event_loop.run(
-            self._controller.connect,
+            self._dispatcher.connect,
             do_emulation=self._do_emulation,
             reset_devices=reset_devices,
             disable_runtime_checks=disable_runtime_checks,
             timeout_s=timeout_s,
         )
 
-    def close(self):
-        for handle in self._submissions:
-            # A failed submission has already reached the caller through
-            # `get_experiment`; teardown has to reach the disconnect regardless.
-            with suppress(Exception):
-                self.cancel_experiment(handle)
+    def close(self, timeout_s: float | None = None):
+        """Shut down the controller and release all resources.
+
+        Drops the queued experiments. Waits up to `timeout_s` seconds, or without
+        limit if None, for a running experiment to end, and stops it if it has
+        not. The interfaces do not declare `timeout_s`, which matters only to a
+        caller that bounds its shutdown, such as the controller service.
+        """
         try:
-            self._event_loop.run(self._controller.disconnect)
+            self._event_loop.run(self._dispatcher.aclose, timeout_s)
         finally:
             self._event_loop.stop()
 
@@ -128,32 +125,26 @@ class LocalController(ControllerAPI):
     def get_instrument_topology(self) -> InstrumentTopology | None:
         if self._instrument_topology is None:
             return None
-        self._event_loop.run(self._controller.ensure_setup_description)
-        # A client rebuilds a `DeviceSetup` from the topology, and compiles for it
-        # with the setup description. Emulation has no instruments to fetch one from.
-        setup_description = self._controller.setup_description
-        if self._do_emulation or setup_description is None:
-            return self._instrument_topology
-        return attrs.evolve(
-            self._instrument_topology, setup_description=setup_description
+        return self._event_loop.run(
+            self._dispatcher.merge_setup_description, self._instrument_topology
         )
 
     def get_not_ready_reason(self) -> str | None:
-        return self._event_loop.run(self._controller.get_not_ready_reason)
+        return self._event_loop.run(self._dispatcher.get_not_ready_reason)
 
     def wait_until_ready(self, timeout_s: float = READY_TIMEOUT_S):
-        self._event_loop.run(self._controller.wait_until_ready, timeout_s)
+        self._event_loop.run(self._dispatcher.wait_until_ready, timeout_s)
 
     @property
     def neartime_callbacks(self) -> dict[str, Callable]:
-        return self._controller.neartime_callbacks
+        return self._dispatcher.neartime_callbacks
 
     def update_neartime_callbacks(self, neartime_callbacks: dict[str, Callable]):
         """Update the neartime callbacks used by the controller.
 
         This is only present to support the legacy session, don't use it in new code.
         """
-        self._controller.neartime_callbacks.update(neartime_callbacks)
+        self._dispatcher.neartime_callbacks.update(neartime_callbacks)
 
     def disable_outputs(
         self,
@@ -162,7 +153,7 @@ class LocalController(ControllerAPI):
         unused_only: bool = False,
     ):
         self._event_loop.run(
-            self._controller.disable_outputs, device_uids, logical_signals, unused_only
+            self._dispatcher.disable_outputs, device_uids, logical_signals, unused_only
         )
 
     def submit_experiment(
@@ -170,40 +161,41 @@ class LocalController(ControllerAPI):
         scheduled_experiment: ScheduledExperiment,
         handle: SubmissionHandle | None = None,
         coprocessor_payload_overrides: dict[str, bytes] | None = None,
+        queue_id: Hashable = None,
     ) -> SubmissionHandle:
-        handle = self._submissions.ensure_unique_handle(handle)
-        self._submissions.add(
-            handle,
-            self._event_loop.run(
-                self._controller.submit_compiled,
-                scheduled_experiment=scheduled_experiment,
-                coprocessor_payload_overrides=coprocessor_payload_overrides,
-            ),
+        """Submit an experiment for execution and return a handle.
+
+        The experiment waits in the queue `queue_id`. Each queue runs its
+        experiments in submission order, and the queues take turns. The
+        interfaces do not declare `queue_id`, which matters only to a caller that
+        queues the experiments of several clients, such as the controller service.
+
+        Raises:
+            HardwareNotReadyError: The hardware cannot run experiments now.
+        """
+        return self._event_loop.run(
+            self._dispatcher.submit_experiment,
+            scheduled_experiment,
+            queue_id=queue_id,
+            handle=handle,
+            coprocessor_payload_overrides=coprocessor_payload_overrides,
         )
-        return handle
 
     def wait_for_experiment(self, handle: SubmissionHandle):
-        self._event_loop.run(
-            self._controller.wait_submission, self._submissions.get(handle)
-        )
+        self._event_loop.run(self._dispatcher.wait_for_experiment, handle)
 
     def get_experiment_status(self, handle: SubmissionHandle) -> SubmissionStatus:
-        return self._controller.submission_status(self._submissions.get(handle))
+        return self._dispatcher.get_experiment_status(handle)
 
     def get_experiment(self, handle: SubmissionHandle) -> Results:
         self.wait_for_experiment(handle)
         return self.get_experiment_results(handle)
 
     def get_experiment_results(self, handle: SubmissionHandle) -> Results:
-        return to_results(
-            self._device_setup,
-            self._controller.submission_results(self._submissions.get(handle)),
-        )
+        return self._dispatcher.get_experiment_results(handle)
 
     def cancel_experiment(self, handle: SubmissionHandle):
-        # TODO(2K): No mechanism to cancel yet. Implement proper cancellation.
-        self.wait_for_experiment(handle)
+        self._event_loop.run(self._dispatcher.cancel_experiment, handle)
 
     def close_submission(self, handle: SubmissionHandle):
-        self.cancel_experiment(handle)
-        self._submissions.remove(handle)
+        self._event_loop.run(self._dispatcher.close_submission, handle)

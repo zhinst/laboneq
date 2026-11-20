@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import functools
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np

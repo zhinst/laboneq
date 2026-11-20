@@ -7,9 +7,10 @@ import json
 import logging
 import re
 from collections import defaultdict
+from collections.abc import Callable, Coroutine, Iterator
 from contextlib import asynccontextmanager
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Iterator
+from typing import TYPE_CHECKING, Any
 
 from laboneq._rust.utils import device_setup_fingerprint
 from laboneq.controller.constants import DEFAULT_TIMEOUT_S
@@ -67,6 +68,7 @@ class DeviceCollection:
         self._timeout_s: float = DEFAULT_TIMEOUT_S
         self._data_servers = DataServerConnections()
         self._devices: dict[str, DeviceBase] = {}
+        self._reported_error_counts: dict[str, int] = {}
 
     @property
     def device_setup_fingerprint(self) -> str:
@@ -84,8 +86,7 @@ class DeviceCollection:
 
     @property
     def all(self) -> Iterator[tuple[str, DeviceBase]]:
-        for uid, device in self._devices.items():
-            yield uid, device
+        yield from self._devices.items()
 
     @property
     def has_qhub(self) -> bool:
@@ -254,6 +255,19 @@ class DeviceCollection:
         """Call an async method on all devices of a given class in parallel."""
         await for_each(self._devices.values(), device_method, *args, **kwargs)
 
+    async def for_each_collect(
+        self,
+        device_method: Callable[..., Coroutine[Any, Any, list[str]]],
+        *args,
+        **kwargs,
+    ) -> list[str]:
+        """Call an async method on all devices of a given class in parallel.
+
+        Returns the concatenated lists the calls return.
+        """
+        results = await for_each(self._devices.values(), device_method, *args, **kwargs)
+        return [item for result in results for item in result]
+
     async def _prepare_data_servers(self, do_emulation: bool):
         updated_data_servers = DataServerConnections()
         for server_uid, server_qualifier in self._ds.servers:
@@ -334,6 +348,22 @@ class DeviceCollection:
         if len(all_errors) == 0:
             return None
         all_messages = "\n".join(all_errors)
+        return f"Error(s) happened on device(s) during the execution of the experiment. Error messages:\n{all_messages}"
+
+    def reset_reported_device_errors(self):
+        self._reported_error_counts.clear()
+
+    async def fetch_new_device_errors(self) -> str | None:
+        """Returns the device errors not returned by an earlier call."""
+        new_errors: list[str] = []
+        for uid, device in self.all:
+            errors = decode_errors(await device.fetch_errors(), device.dev_repr)
+            reported = self._reported_error_counts.get(uid, 0)
+            new_errors.extend(errors[reported:])
+            self._reported_error_counts[uid] = len(errors)
+        if not new_errors:
+            return None
+        all_messages = "\n".join(new_errors)
         return f"Error(s) happened on device(s) during the execution of the experiment. Error messages:\n{all_messages}"
 
 

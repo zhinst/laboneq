@@ -12,6 +12,8 @@ from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from .operation import Operation
 
 if TYPE_CHECKING:
+    from laboneq.core.types.enums import AcquisitionType
+
     from .pulse import Pulse
 
 
@@ -36,3 +38,8 @@ class Acquire(Operation):
     pulse_parameters: dict[str, Any] | list[dict[str, Any] | None] | None = attrs.field(
         default=None
     )
+
+    #: Acquisition type for this acquire operation.
+    #: Defaults to the type set in the enclosing real-time loop.
+    #: Supported only on ZQCS.
+    acquisition_type: AcquisitionType | None = attrs.field(default=None)

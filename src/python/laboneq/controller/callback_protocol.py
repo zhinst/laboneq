@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import numpy as np
@@ -75,7 +75,7 @@ def json_failure(value: Any) -> str | None:
         for name, entry in value.items():
             try:
                 json.dumps(entry, default=json_default)
-            except (TypeError, ValueError) as inner:  # noqa: PERF203
+            except (TypeError, ValueError) as inner:
                 offenders.append(f"{name!r} ({inner})")
         return ", ".join(offenders) or str(exc)
     return None
@@ -107,7 +107,7 @@ def check_protocol_version(value: str | None) -> None:
         )
 
 
-class MessageType(str, Enum):
+class MessageType(StrEnum):
     """Kind of a callback channel message, carried in its ``type`` field.
 
     The values are the wire format and are compared against messages decoded

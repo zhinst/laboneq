@@ -3,7 +3,7 @@
 
 use laboneq_common::device_options::DeviceOptions;
 use laboneq_dsl::signal_calibration::{MixerCalibration, PortMode, Precompensation};
-use laboneq_dsl::types::Quantity;
+use laboneq_dsl::types::{FixedValueOrParameter, Quantity};
 use laboneq_error::{LabOneQError, laboneq_error};
 use laboneq_units::duration::{Duration, Second};
 use numeric_array::NumericArray;
@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crate::device_traits;
 use crate::ir::SignalUid;
-use crate::result::{FixedValueOrParameter, PpcSettings, RoutedOutput};
+use crate::result::{PpcSettings, RoutedOutput};
 use crate::utils::normalize_f64;
 
 pub type Samples = i64;

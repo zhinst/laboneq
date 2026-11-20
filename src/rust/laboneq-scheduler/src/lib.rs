@@ -3,29 +3,36 @@
 
 pub mod error;
 
+mod add_initial_conditions;
 mod adjust_acquire_lengths;
 mod analysis;
+mod build_preambles;
 mod chunk_experiment;
+mod collect_signals_and_accesses;
+mod compute_grids;
 mod experiment_context;
 mod ir_unroll;
 mod lower_experiment;
 mod parameter_resolver;
 mod resolve_parameters;
+mod resolve_ppc_steps_lengths;
 mod resolve_repetition_mode;
 mod schedule_info;
 mod scheduled_node;
 mod scheduled_to_ir;
 mod scheduler;
+mod signal_grids;
 mod signal_info;
 mod timing_resolver;
 mod utils;
 
+pub(crate) use schedule_info::RepetitionMode;
+pub(crate) use schedule_info::ScheduleInfo;
+pub(crate) use scheduled_node::Node as ScheduledNode;
+pub use timing_resolver::FeedbackCalculator;
+
+pub use crate::analysis::check_liveness;
 pub use crate::chunk_experiment::ChunkingInfo;
 pub use crate::experiment_context::ExperimentContext;
 pub use crate::scheduler::{ScheduledExperiment, schedule_experiment};
 pub use crate::signal_info::SignalInfo;
-pub use timing_resolver::FeedbackCalculator;
-
-pub(crate) use schedule_info::RepetitionMode;
-pub(crate) use schedule_info::ScheduleInfo;
-pub(crate) use scheduled_node::Node as ScheduledNode;

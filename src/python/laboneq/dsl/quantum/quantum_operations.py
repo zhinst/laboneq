@@ -9,8 +9,9 @@ import contextlib
 import functools
 import inspect
 import textwrap
+from collections.abc import Callable
 from numbers import Number
-from typing import TYPE_CHECKING, Callable, ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 import numpy as np
 

@@ -2,14 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """HQCS DSL builtins: set_coprocessor_payload, register_stream, send, mark_stale,
-is_live, ensure, render_layout."""
+is_live, expect, render_layout."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any
 
 from laboneq.core.exceptions import LabOneQException
-from laboneq.dsl.coprocessor.operations import _Ensure, _MarkStale, _Send
+from laboneq.dsl.coprocessor.operations import _Expect, _MarkStale, _Send
 from laboneq.dsl.coprocessor.predicate import _IsLive
 from laboneq.dsl.coprocessor.stream import InboundStream, OutboundStream
 from laboneq.dsl.experiment.experiment_context import current_experiment_context
@@ -67,7 +67,7 @@ def register_stream(
     schema: Struct,
     link: str | None = None,
     uid: str | None = None,
-) -> Union[OutboundStream, InboundStream]:
+) -> OutboundStream | InboundStream:
     """Declare a typed stream between two endpoints.
 
     Must be called inside an `@experiment` body. Dispatches on (src, dst):
@@ -135,7 +135,7 @@ def send(stream, **kwargs) -> None:
 
 
 def mark_stale(target) -> None:
-    """Open an acceptance window on a stream-bound Variable or Pulse."""
+    """Mark a stream-bound Variable or Pulse stale, ready for its next update."""
     ctx = _require_section("mark_stale")
     ctx.section.add(_MarkStale(target=target))
 
@@ -144,17 +144,15 @@ def is_live(target) -> _IsLive:
     """Arrival predicate on a stream-bound Variable or Pulse.
 
     `do_until(is_live(x), max_count=...)` exits the loop when an inbound
-    arrival flips `x` from stale to live during the loop body. Does not
-    implicitly mark `x` stale; open the acceptance window explicitly with
-    `mark_stale(x)`.
+    arrival flips `x` from stale to live during the loop body.
     """
     return _IsLive(target=target)
 
 
-def ensure(condition: _IsLive) -> None:
+def expect(condition: _IsLive) -> None:
     """Assert that a condition holds at this point of the section.
 
-    `ensure(is_live(x))` states that an arrival has made `x` live since its
+    `expect(is_live(x))` states that an arrival has made `x` live since its
     last `mark_stale(x)`. The experiment aborts if the arrival is missing.
 
     Args:
@@ -162,11 +160,11 @@ def ensure(condition: _IsLive) -> None:
     """
     if not isinstance(condition, _IsLive):
         raise TypeError(
-            f"ensure(...) supports only is_live(...) conditions, not "
+            f"expect(...) supports only is_live(...) conditions, not "
             f"{type(condition).__name__}."
         )
-    ctx = _require_section("ensure")
-    ctx.section.add(_Ensure(condition=condition))
+    ctx = _require_section("expect")
+    ctx.section.add(_Expect(condition=condition))
 
 
 def render_layout(compiled: Any, *, target: str, coprocessor: str) -> str:

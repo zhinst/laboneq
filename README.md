@@ -13,7 +13,7 @@ from setups with a single qubit to those with 100 and more.
 
 ## Requirements
 
-> ⚠️ **This software requires Python 3.10 or higher.** We assume that
+> ⚠️ **This software requires Python 3.11 or higher.** We assume that
 > `pip` and `python` use a corresponding Python version.
 
 > 💡 To ease the maintenance of multiple installations, we recommended to

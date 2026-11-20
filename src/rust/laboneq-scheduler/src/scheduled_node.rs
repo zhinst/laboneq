@@ -1,11 +1,9 @@
 // Copyright 2025 Zurich Instruments AG
 // SPDX-License-Identifier: Apache-2.0
 
-use std::rc::Rc;
+use laboneq_ir::IrKind;
 
 use crate::schedule_info::ScheduleInfo;
-use laboneq_ir::IrKind;
-pub(crate) type NodeRef = Rc<Node>;
 
 /// A node that hold the scheduling information of an IR node and its children.
 #[derive(Debug, Clone, PartialEq)]
@@ -18,7 +16,7 @@ pub(crate) struct Node {
 
 impl Node {
     pub(crate) fn new(kind: IrKind, mut schedule: ScheduleInfo) -> Self {
-        schedule.signals.extend(kind.signals().into_iter().cloned());
+        schedule.signals.extend(kind.signals().cloned());
         Self {
             kind,
             schedule,
@@ -31,7 +29,7 @@ impl Node {
         mut schedule: ScheduleInfo,
         capacity: usize,
     ) -> Self {
-        schedule.signals.extend(kind.signals().into_iter().cloned());
+        schedule.signals.extend(kind.signals().cloned());
         Self {
             kind,
             schedule,
@@ -40,26 +38,34 @@ impl Node {
     }
 
     pub(crate) fn add_child(&mut self, offset: TinySamples, child: Node) {
-        self.schedule.signals.extend(&child.schedule.signals);
         self.children.push(NodeChild {
             offset,
-            node: Rc::new(child),
+            node: child,
         });
     }
 
-    pub(crate) fn insert_child(&mut self, index: usize, offset: TinySamples, child: Node) {
-        self.schedule.signals.extend(&child.schedule.signals);
-        self.children.insert(
-            index,
-            NodeChild {
-                offset,
-                node: Rc::new(child),
-            },
-        );
-    }
-
-    pub(crate) fn make_mut(self: &mut Rc<Node>) -> &mut Self {
-        Rc::make_mut(self)
+    /// Returns whether the node is of a kind that holds children, even if it holds none.
+    pub(crate) fn holds_children(&self) -> bool {
+        match self.kind {
+            IrKind::Root
+            | IrKind::Section(_)
+            | IrKind::Loop(_)
+            | IrKind::LoopIteration
+            | IrKind::LoopIterationPreamble
+            | IrKind::Match(_)
+            | IrKind::Case(_) => true,
+            IrKind::InitialOscillatorFrequency(_)
+            | IrKind::PlayPulse(_)
+            | IrKind::ChangeOscillatorPhase(_)
+            | IrKind::Acquire(_)
+            | IrKind::SetOscillatorFrequency(_)
+            | IrKind::ResetOscillatorPhase { .. }
+            | IrKind::PpcStep(_)
+            | IrKind::Delay { .. }
+            | IrKind::ClearPrecompensation { .. }
+            | IrKind::Expect(_)
+            | IrKind::MarkStale(_) => false,
+        }
     }
 
     /// Returns the length of the node.
@@ -75,42 +81,10 @@ impl Node {
     }
 }
 
-/// Rc version of Node implementing helper methods for easier handling of reference counted nodes.
-impl Node {
-    pub(crate) fn add_rc_child(&mut self, offset: TinySamples, child: Rc<Node>) {
-        self.schedule.signals.extend(&child.schedule.signals);
-        self.children.push(NodeChild {
-            offset,
-            node: child,
-        });
-    }
-
-    /// Returns a clone of the node with a new reference counted pointer.
-    ///
-    /// Wrapper around `Rc::clone`.
-    pub(crate) fn clone_ref(self: &Rc<Node>) -> Rc<Node> {
-        Rc::clone(self)
-    }
-
-    /// Unwraps the node if it is uniquely owned, otherwise clones it.
-    ///
-    /// Wrapper around `Rc::unwrap_or_clone`.
-    pub(crate) fn unwrap_or_clone(self: Rc<Node>) -> Node {
-        Rc::unwrap_or_clone(self)
-    }
-
-    /// Unwraps the node if it is uniquely owned, otherwise clones it.
-    ///
-    /// Wrapper around `Rc::try_unwrap`.
-    pub(crate) fn try_unwrap(self: Rc<Node>) -> Option<Node> {
-        Rc::try_unwrap(self).ok()
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct NodeChild {
     pub offset: TinySamples,
-    pub node: NodeRef,
+    pub node: Node,
 }
 
 #[cfg(test)]
@@ -151,10 +125,10 @@ use laboneq_units::tinysample::TinySamples;
 
 #[cfg(test)]
 mod tests {
-    use crate::scheduled_node::ir_node_structure;
     use laboneq_units::tinysample::tiny_samples;
 
     use super::*;
+    use crate::scheduled_node::ir_node_structure;
 
     #[test]
     fn test_node_structure_macro() {

@@ -1,0 +1,26 @@
+[package]
+name = "laboneq-pulse-sampling-py"
+authors.workspace = true
+description.workspace = true
+documentation.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+num-complex = { workspace = true }
+numpy = { workspace = true }
+pyo3 = { workspace = true }
+
+codegenerator-utils = { workspace = true }
+laboneq-common = { workspace = true }
+laboneq-dsl = { workspace = true }
+laboneq-error = { workspace = true, features = ["pyo3"] }
+laboneq-pulse-sampling = { workspace = true }
+laboneq-py-utils = { workspace = true }
+numeric-array = { workspace = true, features = ["pyo3"] }

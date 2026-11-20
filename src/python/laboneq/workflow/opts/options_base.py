@@ -7,9 +7,10 @@ from __future__ import annotations
 
 import sys
 import typing
+from collections.abc import Callable
 from functools import wraps
 from io import StringIO
-from typing import Callable, Type, final
+from typing import final
 
 import attr
 from attrs import setters
@@ -19,7 +20,7 @@ from rich.pretty import pprint
 from laboneq.workflow.opts.options_parser import check_type
 
 
-def _type_validator(inst, attr: attr.Attribute, value) -> None:  # noqa: ANN001
+def _type_validator(inst, attr: attr.Attribute, value) -> None:
     """A validator for common type checking.
 
     Raises:
@@ -42,7 +43,7 @@ def _type_validator(inst, attr: attr.Attribute, value) -> None:  # noqa: ANN001
 
 
 def option_field(
-    default: typing.Any = attr.NOTHING,  # noqa: ANN401
+    default: typing.Any = attr.NOTHING,
     *,
     factory: typing.Callable[[], typing.Any] | None = None,
     validators: list[typing.Callable[[typing.Any, attr.Attribute, typing.Any], None]]
@@ -52,7 +53,7 @@ def option_field(
     eq: bool = False,
     alias: str | None = None,
     converter: typing.Callable[[typing.Any], typing.Any] | None = None,
-    repr: bool = True,  # noqa: A002
+    repr: bool = True,
 ) -> attr.Attribute:
     """Create a field for an options class.
 
@@ -110,11 +111,11 @@ class BaseOptions:
             return buffer.getvalue()
 
     @final
-    def __format__(self, _):  # noqa: ANN001
+    def __format__(self, _):
         return self.__repr__()
 
     @final
-    def _repr_pretty_(self, p, _cycle):  # noqa: ANN001, ANN202
+    def _repr_pretty_(self, p, _cycle):
         # For Notebooks
         p.text(str(self))
 
@@ -131,7 +132,7 @@ class BaseOptions:
         """Create an instance of the class from a dictionary."""
         return cls(**data)
 
-    def _exclude_fields_to_dict(self, attribute, _) -> bool:  # noqa: ANN001
+    def _exclude_fields_to_dict(self, attribute, _) -> bool:
         return not attribute.metadata.get("exclude", False)
 
     @property
@@ -143,9 +144,9 @@ class BaseOptions:
 
 
 def options(
-    cls: Type | None = None,
+    cls: type | None = None,
     *,
-    base_class: Type[BaseOptions] = BaseOptions,
+    base_class: type[BaseOptions] = BaseOptions,
 ) -> type:
     """Decorator to register a class as an options class.
 
@@ -180,14 +181,14 @@ def options(
 
 
 def _options_decorator(
-    cls: Type | None, base_class: Type, default_base_class: Type, wrapper: Callable
+    cls: type | None, base_class: type, default_base_class: type, wrapper: Callable
 ) -> type:
     if not issubclass(base_class, default_base_class):
         raise TypeError(
             f"Base class must be a subclass of {default_base_class.__name__}."
         )
 
-    def decorator(cls: Type) -> Type:
+    def decorator(cls: type) -> type:
         return wrapper(cls)
 
     if cls is not None:

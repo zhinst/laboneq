@@ -7,7 +7,8 @@ import copy
 import math
 import operator
 import re
-from typing import TYPE_CHECKING, Any, Callable, Union
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, NoReturn
 
 import openqasm3.visitor
 from openpulse import ast
@@ -115,9 +116,8 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
         self._relative_calibration_spans = relative_calibration_spans
         # Default operations used when supplied `qops` does not implement them.
         self._default_ops = _DefaultOperations()
-        # NOTE: The workaround of extern port declaration in the importer
-        # and declaration of hardware qubits inject info into the namespace.
-        # When these workaround are removed, the namespace should be created internally.
+        # NOTE: The importer declares the hardware qubits in the namespace.
+        # Once it no longer does, the namespace should be created internally.
         self.namespace = (
             NamespaceStack() if namespace is None else copy.deepcopy(namespace)
         )
@@ -203,7 +203,7 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
 
     def generic_visit(self, node: QASMNode, context=None):
         raise OpenQasmException(
-            f"Statement type {type(node)} not supported", mark=node.span
+            f"Statement type {type(node).__name__} not supported", mark=node.span
         )
 
     def visit_QubitDeclaration(self, node: QASMNode):
@@ -220,6 +220,12 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
 
     def visit_ExternDeclaration(self, node: QASMNode):
         return self._handle_extern_declaration(node)
+
+    def visit_ExternFrameStatement(self, node: QASMNode):
+        return self._handle_extern_frame(node)
+
+    def visit_ExternPortStatement(self, node: QASMNode):
+        return self._declare_port(node.name.name)
 
     def visit_AliasStatement(self, node: QASMNode):
         return self._handle_alias_statement(node)
@@ -271,7 +277,7 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
 
     def _transpile(
         self,
-        parent: Union[ast.Program, ast.Box, ast.ForInLoop],
+        parent: ast.Program | ast.Box | ast.ForInLoop,
         uid_hint="",
     ) -> Section | None:
         """Transpile an OpenQASM construct into a section.
@@ -289,7 +295,7 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
         elif isinstance(parent, ast.ForInLoop):
             body = parent.block
         else:
-            msg = f"Unsupported block type {type(parent)!r}"
+            msg = f"Unsupported block type {type(parent).__name__}"
             raise OpenQasmException(msg, mark=parent.span)
         sect_children = []
         try:
@@ -318,7 +324,7 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
 
     def transpile(
         self,
-        parent: Union[ast.Program, ast.Box, ast.ForInLoop],
+        parent: ast.Program | ast.Box | ast.ForInLoop,
         uid_hint="",
     ) -> TranspileResult:
         sect = self._transpile(parent, uid_hint=uid_hint) or Section(
@@ -414,18 +420,7 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
             )
             self.namespace.current.declare_waveform(name, value)
         elif isinstance(statement.type, ast.PortType):
-            try:
-                signal_path = self.supplied_externs[name]
-            except KeyError:
-                msg = f"Port {name!r} not provided."
-                raise OpenQasmException(msg) from None
-            for qname, qubit in self.qubits.items():
-                if signal_path in qubit.signals.values():
-                    self.namespace.current.declare_port(name, qname, signal_path)
-                    break
-            else:
-                msg = f"Port {name} maps to non-existed signal {signal_path}."
-                raise ValueError(msg)
+            self._declare_port(name)
         else:
             # TODO: We should set a clear boundary on what types are supported here
             # else should raise an exception
@@ -436,6 +431,20 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
             else:
                 value = None
             self.namespace.current.declare_classical_value(name, value)
+
+    def _declare_port(self, name: str) -> None:
+        try:
+            signal_path = self.supplied_externs[name]
+        except KeyError:
+            msg = f"Port {name!r} not provided."
+            raise OpenQasmException(msg) from None
+        for qname, qubit in self.qubits.items():
+            if signal_path in qubit.signals.values():
+                self.namespace.current.declare_port(name, qname, signal_path)
+                break
+        else:
+            msg = f"Port {name} maps to non-existed signal {signal_path}."
+            raise ValueError(msg)
 
     def _handle_io_declaration(self, statement: ast.IODeclaration):
         # The openqasm parse itself checks that IODeclarations
@@ -478,7 +487,6 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
         self.namespace.current.declare_classical_value(name, value)
 
     def _handle_extern_declaration(self, statement: ast.ExternDeclaration) -> None:
-        # TODO: currently unused for 'extern port' due to _workaround_extern_port.
         name = statement.name.name
         # TODO: check that the scope is suitably top-level or
         #       delegate this check to declare_function
@@ -489,6 +497,14 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
         arguments = statement.arguments
         return_type = statement.return_type
         self.namespace.current.declare_function(name, arguments, return_type, func)
+
+    def _handle_extern_frame(self, statement: QASMNode) -> NoReturn:
+        name = statement.name.name
+        msg = (
+            f"Extern frame {name!r} is not supported. "
+            f"Declare it as 'frame {name} = newframe(port, frequency, phase);'."
+        )
+        raise OpenQasmException(msg, mark=statement.span)
 
     def _handle_alias_statement(self, statement: ast.AliasStatement):
         if not isinstance(statement.target, ast.Identifier):
@@ -889,7 +905,7 @@ class TranspilerVisitor(openqasm3.visitor.QASMVisitor):
             )
         else:
             raise OpenQasmException(
-                f"Loop set declaration type {type(loop_set_decl)!r} is not"
+                f"Loop set declaration type {type(loop_set_decl).__name__} is not"
                 f" yet supported by the LabOne Q OpenQASM importer.",
                 mark=statement.set_declaration.span,
             )

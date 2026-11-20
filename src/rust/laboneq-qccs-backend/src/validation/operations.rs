@@ -5,8 +5,10 @@ use std::collections::{HashMap, HashSet};
 
 use laboneq_common::types::SignalKind;
 use laboneq_dsl::ExperimentNode;
-use laboneq_dsl::operation::{Operation, PlayPulse};
-use laboneq_dsl::types::{MarkerSelector, PulseUid, SignalUid, Trigger};
+use laboneq_dsl::operation::{Acquire, AveragingLoop, Operation, PlayPulse};
+use laboneq_dsl::types::{
+    AcquisitionType, AveragingMode, MarkerSelector, PulseUid, SignalUid, Trigger,
+};
 use laboneq_error::{bail, laboneq_error};
 
 use crate::Result;
@@ -17,13 +19,18 @@ use crate::validation::NodeContext;
 /// device playing them.
 pub(super) struct OperationRules<'a> {
     data: &'a QccsBackendPreprocessedData,
+    acquisition_type: AcquisitionType,
     signal_pulse_map: HashMap<SignalUid, HashSet<PulseUid>>,
 }
 
 impl<'a> OperationRules<'a> {
-    pub(super) fn new(data: &'a QccsBackendPreprocessedData) -> Self {
+    pub(super) fn new(
+        data: &'a QccsBackendPreprocessedData,
+        acquisition_type: AcquisitionType,
+    ) -> Self {
         OperationRules {
             data,
+            acquisition_type,
             signal_pulse_map: HashMap::new(),
         }
     }
@@ -37,6 +44,12 @@ impl<'a> OperationRules<'a> {
                     .ok_or_else(|| laboneq_error!("Signal '{}' not found.", op.signal.0))?;
                 check_markers(op, &signal, ctx)?;
                 self.shfqa_unique_measure_pulse(op, &signal)?;
+            }
+            Operation::Acquire(op) => {
+                self.check_acquisition_type(op)?;
+            }
+            Operation::AveragingLoop(op) => {
+                check_no_sequential_raw_averaging(op)?;
             }
             Operation::Section(op) => {
                 self.check_triggers(&op.triggers)?;
@@ -76,6 +89,23 @@ impl<'a> OperationRules<'a> {
         Ok(())
     }
 
+    /// QCCS requires all acquire commands in a real-time loop to have the same type.
+    fn check_acquisition_type(&self, acquire: &Acquire) -> Result<()> {
+        if let Some(acquisition_type) = acquire.acquisition_type
+            && acquisition_type != self.acquisition_type
+        {
+            bail!(
+                "Acquisition on handle '{}' uses acquisition type {:?}, but the \
+                real-time acquisition loop uses {:?}. QCCS does not support mixed \
+                acquisition types.",
+                acquire.handle.0,
+                acquisition_type,
+                self.acquisition_type,
+            );
+        }
+        Ok(())
+    }
+
     /// Muting the output would swallow the trigger the section drives.
     fn check_triggers(&self, triggers: &[Trigger]) -> Result<()> {
         for trigger in triggers.iter() {
@@ -90,6 +120,17 @@ impl<'a> OperationRules<'a> {
         }
         Ok(())
     }
+}
+
+/// QCCS averages on the hardware, which cannot average sequential RAW traces.
+fn check_no_sequential_raw_averaging(averaging_loop: &AveragingLoop) -> Result<()> {
+    if averaging_loop.averaging_mode == AveragingMode::Sequential
+        && averaging_loop.acquisition_type == AcquisitionType::Raw
+        && averaging_loop.count.get() > 1
+    {
+        bail!("Sequential averaging is not supported for raw acquisitions.");
+    }
+    Ok(())
 }
 
 fn check_markers(pulse: &PlayPulse, signal: &SignalProperties, ctx: NodeContext) -> Result<()> {

@@ -43,13 +43,13 @@ class DeviceSetup:
     """Data object describing the device setup of a QCCS system.
 
     Attributes:
-        uid (Optional[str]): Unique identifier of the setup.
-        servers (Optional[dict[str, DataServer]]): Servers of the device setup.
-        instruments (Optional[list[Instrument]]): Instruments of the device setup.
+        uid (str): Unique identifier of the setup.
+        servers (dict[str, DataServer]): Servers of the device setup.
+        instruments (list[Instrument]): Instruments of the device setup.
             Instruments must have unique UIDs.
-        physical_channel_groups (Optional[dict[str, PhysicalChannelGroup]]): Physical channels of this device setup, by name of the device.
-        logical_signal_groups (Optional[dict[str, LogicalSignalGroup]]): Logical signal groups of this device setup, by name of the group.
-        qubits (Optional[dict[str, quantum.QuantumElement]]): Experimental: Qubits of this device setup, by the name of the qubit.
+        physical_channel_groups (dict[str, PhysicalChannelGroup]): Physical channels of this device setup, by name of the device.
+        logical_signal_groups (dict[str, LogicalSignalGroup]): Logical signal groups of this device setup, by name of the group.
+        qubits (dict[str, quantum.QuantumElement]): Experimental: Qubits of this device setup, by the name of the qubit.
             Qubits are generated from the descriptor `qubits` section.
         setup_description (SetupDescription | None): Hardware-generation-tagged
             opaque setup description, or `None` if no description is attached.
@@ -82,7 +82,7 @@ class DeviceSetup:
     instruments: list[Instrument] = attrs.field(factory=list)
     physical_channel_groups: dict[str, PhysicalChannelGroup] = attrs.field(factory=dict)
     logical_signal_groups: dict[str, LogicalSignalGroup] = attrs.field(factory=dict)
-    qubits: dict[str, "quantum.QuantumElement"] = attrs.field(factory=dict)
+    qubits: dict[str, quantum.QuantumElement] = attrs.field(factory=dict)
     setup_description: SetupDescription | None = attrs.field(default=None, repr=False)
     coprocessors: dict[str, CoprocessorInventoryEntry] = attrs.field(
         factory=dict, repr=False

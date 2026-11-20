@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import Callable
 from contextlib import suppress
 from copy import deepcopy
 from textwrap import indent
-from typing import TYPE_CHECKING, Any, Callable, Dict, Union
+from typing import TYPE_CHECKING, Any
 
 from laboneq import laboneq_logging
 from laboneq.controller import LabOneQControllerException
@@ -129,9 +130,9 @@ class Session:
                 and `.device_setup` attributes populated. Otherwise, it will
                 return a `Results` object with these attributes not populated.
             server_log:
-                If `True`, the data server log - including device firmware logs - will be forwarded to the LabOneQ
+                If `True`, the data server log - including device firmware logs - will be forwarded to the LabOne Q
                 log under the logger named `server.log.<server_uid>`. Additionally, it will be written to the file
-                `server.log` alongside the regular LabOneQ log, assuming the standard logging configuration is used.
+                `server.log` alongside the regular LabOne Q log, assuming the standard logging configuration is used.
         !!! version-removed "Removed in version 2.57.0"
             Removed the `register_user_function` method that was deprecated in 2.19.0.
             Use `register_neartime_callback` instead.
@@ -192,7 +193,7 @@ class Session:
             self._logger = logging.getLogger("laboneq")
         else:
             self._logger = logging.getLogger("null")
-        self._neartime_callbacks: Dict[str, Callable] = {}
+        self._neartime_callbacks: dict[str, Callable] = {}
 
     def __del__(self):
         self.disconnect()
@@ -568,7 +569,7 @@ class Session:
 
     def run(
         self,
-        experiment: Union[Experiment, CompiledExperiment] | None = None,
+        experiment: Experiment | CompiledExperiment | None = None,
         include_results_metadata: bool | None = None,
     ) -> Results:
         """Executes the compiled experiment.

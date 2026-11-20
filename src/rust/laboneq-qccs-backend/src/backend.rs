@@ -20,7 +20,7 @@ use laboneq_compiler_py::compiler_backend::{
 use laboneq_compiler_py::compiler_backend::{CompilerBackendResult, PreprocessOutput};
 use laboneq_dsl::types::{ExternalParameterUid, HandleUid, SignalUid};
 use laboneq_error::{LabOneQError, laboneq_error};
-use laboneq_ir::ExperimentIr;
+use laboneq_ir::{ExperimentIr, ParameterLookup};
 use laboneq_py_utils::py_object_store::PyObjectStore;
 
 use crate::BACKEND_NAME;
@@ -38,6 +38,8 @@ impl CompilerBackend for QccsBackend {
     type CompilerArtifact = CompilationArtifactsQccs;
     type CombinedOutput = QccsCombinedOutput;
     type Linker = QccsLinker;
+    type ProgramKey = ();
+    type JobSettings = ();
     type EmulatedHqcsProgram = ();
     fn settings(&self) -> &'static [SettingSpec] {
         codegenerator_py::CODE_GENERATOR_SETTINGS
@@ -68,9 +70,18 @@ impl CompilerBackend for QccsBackend {
         Ok(Box::new(generator))
     }
 
+    fn resolve_settings(
+        &self,
+        _backend_data: &Self::Output,
+        _values: &dyn ParameterLookup,
+    ) -> CompilerBackendResult<((), ())> {
+        Ok(((), ()))
+    }
+
     fn generate_code(
         &self,
         experiment: &ExperimentIr,
+        _program_key: &(),
         compiler_settings: &CompilerSettings,
         external_parameters: &PyObjectStore<ExternalParameterUid>,
         backend_data: &Self::Output,

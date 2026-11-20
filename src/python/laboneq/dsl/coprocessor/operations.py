@@ -1,7 +1,7 @@
 # Copyright 2026 Zurich Instruments AG
 # SPDX-License-Identifier: Apache-2.0
 
-"""HQCS section-level operation IR nodes: _Send, _MarkStale, _Ensure."""
+"""HQCS section-level operation IR nodes: _Send, _MarkStale, _Expect."""
 
 from __future__ import annotations
 
@@ -36,8 +36,8 @@ class _MarkStale:
 
 
 @attrs.define
-class _Ensure:
-    """An `ensure(condition)` operation attached to a section.
+class _Expect:
+    """An `expect(condition)` operation attached to a section.
 
     Asserts that `condition` holds at this point.
     """

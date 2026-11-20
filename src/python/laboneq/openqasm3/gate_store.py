@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 from itertools import takewhile
-from typing import TYPE_CHECKING, Callable, Dict, Tuple
+from typing import TYPE_CHECKING
 
 from laboneq._utils import id_generator
 from laboneq.dsl import quantum
@@ -29,15 +30,15 @@ class GateStore:
             FutureWarning,
             stacklevel=2,
         )
-        self.gates: Dict[Tuple[str, Tuple[str, ...]], Callable[..., Section]] = {}
-        self.gate_map: Dict[str, str] = {}
-        self.waveforms: Dict[str, Callable] = {}
+        self.gates: dict[tuple[str, tuple[str, ...]], Callable[..., Section]] = {}
+        self.gate_map: dict[str, str] = {}
+        self.waveforms: dict[str, Callable] = {}
         self.ports = {}
 
     def lookup_gate(
         self,
         name: str,
-        qubits: Tuple[str, ...],
+        qubits: tuple[str, ...],
         args: tuple | None = None,
         kwargs: dict | None = None,
     ) -> Section:

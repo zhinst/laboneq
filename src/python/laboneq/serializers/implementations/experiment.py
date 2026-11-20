@@ -50,7 +50,7 @@ class ExperimentSerializer(VersionedClassSerializer[Experiment]):
         from laboneq.dsl.coprocessor.inventory import CoprocessorInventoryEntry
 
         # The streams are serialized before the sections, so that the identity
-        # caches are populated when a _Send / _MarkStale / _Ensure /
+        # caches are populated when a _Send / _MarkStale / _Expect /
         # DoUntilSection node resolves its $ref. Variables and Pulses are
         # cached transitively via the stream field accessors.
         with create_caches():

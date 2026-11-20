@@ -56,10 +56,8 @@ def _make_physical_channel(
 ) -> PhysicalChannel:
     split_ports = [port.split(qct_path.Separator) for port in ports if port is not None]
     signal_name = "_".join(
-        (
-            group[0]
-            for group in itertools.groupby([x for y in zip(*split_ports) for x in y])
-        )
+        group[0]
+        for group in itertools.groupby([x for y in zip(*split_ports) for x in y])
     ).lower()
     return PhysicalChannel(
         uid=f"{instrument}/{signal_name}",

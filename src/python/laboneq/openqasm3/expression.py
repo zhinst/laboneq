@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import math
 import operator
-from typing import Iterable, Type
+from collections.abc import Iterable
 
 from openqasm3 import ast
 
@@ -150,7 +150,7 @@ def _eval_expression(
                     retval.extend([collection[i] for i in index])
                 else:
                     retval.append(collection[index])
-            except IndexError as e:  # noqa: PERF203
+            except IndexError as e:
                 raise OpenQasmException(str(e), mark=expression.span) from None
         if len(retval) == 1:
             retval = retval[0]
@@ -180,7 +180,7 @@ def _eval_expression(
         return func.func(*func_args)
 
     raise OpenQasmException(
-        f"Unsupported expression: {type(expression)}",
+        f"Unsupported expression: {type(expression).__name__}",
         mark=expression.span,
     )
 
@@ -189,7 +189,7 @@ def eval_expression(
     expression: ast.Expression | None,
     *,
     namespace: NamespaceStack | None = None,
-    type_: Type | None = None,
+    type_: type | None = None,
 ):
     if namespace is None:
         namespace = NamespaceStack()

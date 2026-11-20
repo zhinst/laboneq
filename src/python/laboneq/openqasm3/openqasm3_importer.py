@@ -3,10 +3,9 @@
 
 from __future__ import annotations
 
-import re
 import warnings
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable, Sequence
+from typing import TYPE_CHECKING, Any
 
 from openpulse import ast
 
@@ -55,7 +54,7 @@ def define_qubit_names(qubits: dict) -> dict[str, str]:
             for name, qubit in zip(_unwrap_qubit_register(name=k, size=len(q)), q):
                 if name in out:
                     raise OpenQasmException(f"Duplicate qubit definition {name}")
-                out[name] = qubit  # noqa: PERF403
+                out[name] = qubit
         else:
             if k in out:
                 raise OpenQasmException(f"Duplicate qubit definition {k}")
@@ -114,18 +113,9 @@ class OpenQasm3Importer:
 
     def program_to_ast(self, text: str) -> ast.Program:
         """Convert OpenQASM program into an AST tree."""
-        text = self._preprocess(text)
         tree = parse(text)
         assert isinstance(tree, ast.Program)
         return tree
-
-    def _workaround_extern_port(self, text: str) -> str:
-        # NOTE: 'extern port' declaration is not yet supported by the openpulse parser.
-        pattern = r"extern port (\S+);"
-        return re.sub(pattern, r"port \1;", text)
-
-    def _preprocess(self, text: str) -> str:
-        return self._workaround_extern_port(text)
 
     def transpile(
         self,

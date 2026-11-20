@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import math
 from enum import Flag
-from typing import TYPE_CHECKING, List, Optional, Set
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -166,7 +166,7 @@ class WaveScroller:
     def __init__(
         self,
         *,
-        ch: List[int],
+        ch: list[int],
         sim_targets: SimTarget,
         sim: SeqCSimulation,
         channel_type: PhysicalChannelType = PhysicalChannelType.IQ_CHANNEL,
@@ -192,7 +192,7 @@ class WaveScroller:
         self.last_freq = np.nan
         self.last_played_value = 0
         self.last_marker_value: int = 0
-        self.oscillator_phase: Optional[float] = None
+        self.oscillator_phase: float | None = None
 
         # Only HDAWG supports 4 registers, for other devices, the simulator simply does
         # not use the extra registers.
@@ -233,8 +233,8 @@ class WaveScroller:
         if SimTarget.FREQUENCY in self.sim_targets:
             self.frequency_snippet = np.full(snippet_length, np.nan, dtype=np.float64)
 
-    def target_ops(self) -> Set[Operation]:
-        target_ops: Set[Operation] = set()
+    def target_ops(self) -> set[Operation]:
+        target_ops: set[Operation] = set()
         if (
             SimTarget.ACQUIRE in self.sim_targets
             or SimTarget.TRIGGER in self.sim_targets

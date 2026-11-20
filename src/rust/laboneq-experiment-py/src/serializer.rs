@@ -30,6 +30,7 @@ use laboneq_capnp::pulse::v1::{
 };
 use laboneq_error::{LabOneQError, WithContext, bail, laboneq_error};
 use laboneq_py_utils::constant_serializer;
+use laboneq_py_utils::pulse_library::builtin_names;
 use laboneq_py_utils::py_constant::{PyConstant, classify_constant, classify_value};
 use numeric_array::NumericArray;
 
@@ -78,7 +79,7 @@ struct CollectedParameter {
 
 #[derive(Debug)]
 enum PulseShape {
-    Functional { function: String },
+    Functional { function: String, builtin: bool },
     Sampled { samples: Vec<u8>, is_complex: bool },
 }
 
@@ -219,6 +220,8 @@ impl<'py> HqcsIndex<'py> {
 struct Serializer<'py> {
     dsl_types: DslTypes<'py>,
     np: Bound<'py, PyModule>,
+    /// Functional pulse names with native compiler sampling support.
+    builtin_names: HashSet<&'static str>,
     entities: EntityIndex,
     /// Signals in alphabetically-sorted definition order.
     signal_order: Vec<String>,
@@ -237,6 +240,7 @@ impl<'py> Serializer<'py> {
         Ok(Self {
             dsl_types: DslTypes::new(py)?,
             np: py.import(intern!(py, "numpy"))?,
+            builtin_names: builtin_names(py)?,
             entities: EntityIndex::new(),
             signal_order: Vec::new(),
             signal_indices: FxHashMap::default(),
@@ -420,6 +424,7 @@ impl<'py> Serializer<'py> {
         let mut pulses_builder = exp_builder
             .reborrow()
             .init_pulses(self.entities.pulses.len() as u32);
+        let mut uri = String::new();
         for (i, pulse) in self.entities.pulses.iter().enumerate() {
             let mut pb = pulses_builder.reborrow().get(i as u32);
             pb.set_uid(&pulse.alias);
@@ -440,12 +445,14 @@ impl<'py> Serializer<'py> {
 
             // Shape
             match &pulse.shape {
-                PulseShape::Functional { function } => {
+                PulseShape::Functional { function, builtin } => {
                     let mut func = pb.reborrow().init_functional();
-                    let uri = match function.as_str() {
-                        "const" => "py://const".to_owned(),
-                        other => format!("py://{other}"),
-                    };
+                    uri.clear();
+                    uri.push_str(match builtin {
+                        true => "builtin://",
+                        false => "py://",
+                    });
+                    uri.push_str(function);
                     func.reborrow().set_sampler_uri(&uri);
                     // Write definition-level pulse parameters (already resolved at collection time).
                     if !pulse.functional_params.is_empty() {
@@ -457,24 +464,24 @@ impl<'py> Serializer<'py> {
                             let mut val = entry.init_value();
                             match &param.value {
                                 PulseParamValue::Real(v) => {
-                                    val.reborrow().init_constant().set_real(*v);
+                                    val.set_real(*v);
                                 }
                                 PulseParamValue::Complex(re, im) => {
-                                    let mut c = val.reborrow().init_constant().init_complex();
+                                    let mut c = val.reborrow().init_complex();
                                     c.set_real(*re);
                                     c.set_imag(*im);
                                 }
                                 PulseParamValue::Int(v) => {
-                                    val.reborrow().init_constant().set_integer(*v);
+                                    val.set_integer(*v);
                                 }
                                 PulseParamValue::Bool(v) => {
-                                    val.reborrow().init_constant().set_boolean(*v);
+                                    val.set_boolean(*v);
                                 }
                                 PulseParamValue::Json(bytes) => {
-                                    val.reborrow().init_constant().set_python_value(bytes);
+                                    val.set_python_value(bytes);
                                 }
                                 PulseParamValue::RawBytes(bytes) => {
-                                    val.reborrow().init_constant().set_raw_bytes_value(bytes);
+                                    val.set_raw_bytes_value(bytes);
                                 }
                                 PulseParamValue::ParameterRef(idx) => {
                                     // idx is already the final parameter index.
@@ -804,7 +811,7 @@ impl<'py> Serializer<'py> {
     fn serialize_send_op(
         &mut self,
         obj: &Bound<'py, PyAny>,
-        builder: &mut operation_capnp::operation::Builder<'_>,
+        builder: &mut section_capnp::section_item::operation::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
         let mut send = builder.reborrow().init_send();
@@ -839,7 +846,7 @@ impl<'py> Serializer<'py> {
     fn serialize_mark_stale_op(
         &mut self,
         obj: &Bound<'py, PyAny>,
-        builder: &mut operation_capnp::operation::Builder<'_>,
+        builder: &mut section_capnp::section_item::operation::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
         let mark_stale = builder.reborrow().init_mark_stale();
@@ -859,14 +866,14 @@ impl<'py> Serializer<'py> {
         Ok(())
     }
 
-    fn serialize_ensure_op(
+    fn serialize_expect_op(
         &mut self,
         obj: &Bound<'py, PyAny>,
-        builder: &mut operation_capnp::operation::Builder<'_>,
+        builder: &mut section_capnp::section_item::operation::Builder<'_>,
     ) -> Result<()> {
         let condition_py = obj.getattr(intern!(obj.py(), "condition"))?;
-        let ensure = builder.reborrow().init_ensure();
-        self.serialize_hqcs_predicate(&condition_py, ensure.init_condition())
+        let expect = builder.reborrow().init_expect();
+        self.serialize_hqcs_predicate(&condition_py, expect.init_condition())
     }
 
     // === Section serialization ===
@@ -954,14 +961,21 @@ impl<'py> Serializer<'py> {
     ) -> Result<()> {
         let py = obj.py();
 
-        // Serialize children (sections and operations mixed).
         if let Some(children) = obj.getattr_opt(intern!(py, "children"))? {
-            let children_list: Vec<Bound<'_, PyAny>> =
-                children.try_iter()?.collect::<PyResult<_>>()?;
-            let mut items_builder = builder
-                .reborrow()
-                .init_content_items(children_list.len() as u32);
-            for (i, child) in children_list.iter().enumerate() {
+            let mut items = Vec::new();
+            let mut reserved_signals = Vec::new();
+            for child in children.try_iter()? {
+                let child = child?;
+                if self.is_reserve(&child) {
+                    let signal = child.getattr(intern!(py, "signal"))?;
+                    reserved_signals.push(self.get_signal_index(signal.extract()?)?);
+                } else {
+                    items.push(child);
+                }
+            }
+
+            let mut items_builder = builder.reborrow().init_content_items(items.len() as u32);
+            for (i, child) in items.iter().enumerate() {
                 let item = items_builder.reborrow().get(i as u32);
                 if self.is_section_type(child)? {
                     let section_builder = item.init_section();
@@ -971,9 +985,17 @@ impl<'py> Serializer<'py> {
                     self.serialize_operation(child, op_builder)?;
                 }
             }
+            builder
+                .set_reserved_signals(&reserved_signals[..])
+                .map_err(LabOneQError::from_err)?;
         }
 
         Ok(())
+    }
+
+    fn is_reserve(&self, obj: &Bound<'_, PyAny>) -> bool {
+        obj.get_type()
+            .is(self.dsl_types.laboneq_type(DslType::Reserve))
     }
 
     fn is_section_type(&self, obj: &Bound<'_, PyAny>) -> Result<bool> {
@@ -1419,7 +1441,7 @@ impl<'py> Serializer<'py> {
     fn serialize_operation(
         &mut self,
         obj: &Bound<'py, PyAny>,
-        mut builder: operation_capnp::operation::Builder<'_>,
+        mut builder: section_capnp::section_item::operation::Builder<'_>,
     ) -> Result<()> {
         let ty = obj.get_type();
 
@@ -1427,8 +1449,6 @@ impl<'py> Serializer<'py> {
             self.serialize_play_op(obj, &mut builder)?;
         } else if ty.is(self.dsl_types.laboneq_type(DslType::Delay)) {
             self.serialize_delay_op(obj, &mut builder)?;
-        } else if ty.is(self.dsl_types.laboneq_type(DslType::Reserve)) {
-            self.serialize_reserve_op(obj, &mut builder)?;
         } else if ty.is(self.dsl_types.laboneq_type(DslType::Acquire)) {
             self.serialize_acquire_op(obj, &mut builder)?;
         } else if ty.is(self.dsl_types.laboneq_type(DslType::Call)) {
@@ -1441,8 +1461,8 @@ impl<'py> Serializer<'py> {
             self.serialize_send_op(obj, &mut builder)?;
         } else if ty.is(self.dsl_types.laboneq_type(DslType::HqcsMarkStale)) {
             self.serialize_mark_stale_op(obj, &mut builder)?;
-        } else if ty.is(self.dsl_types.laboneq_type(DslType::HqcsEnsure)) {
-            self.serialize_ensure_op(obj, &mut builder)?;
+        } else if ty.is(self.dsl_types.laboneq_type(DslType::HqcsExpect)) {
+            self.serialize_expect_op(obj, &mut builder)?;
         } else {
             bail!("Unknown operation type: {}", obj.get_type());
         }
@@ -1453,7 +1473,7 @@ impl<'py> Serializer<'py> {
     fn serialize_set_node_op(
         &mut self,
         obj: &Bound<'py, PyAny>,
-        builder: &mut operation_capnp::operation::Builder<'_>,
+        builder: &mut section_capnp::section_item::operation::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
         let mut set_node = builder.reborrow().init_set_node();
@@ -1483,7 +1503,7 @@ impl<'py> Serializer<'py> {
     fn serialize_play_op(
         &mut self,
         obj: &Bound<'py, PyAny>,
-        builder: &mut operation_capnp::operation::Builder<'_>,
+        builder: &mut section_capnp::section_item::operation::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
         let mut play = builder.reborrow().init_play();
@@ -1673,7 +1693,7 @@ impl<'py> Serializer<'py> {
     fn serialize_delay_op(
         &mut self,
         obj: &Bound<'py, PyAny>,
-        builder: &mut operation_capnp::operation::Builder<'_>,
+        builder: &mut section_capnp::section_item::operation::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
         let mut delay = builder.reborrow().init_delay();
@@ -1701,24 +1721,10 @@ impl<'py> Serializer<'py> {
         Ok(())
     }
 
-    fn serialize_reserve_op(
-        &mut self,
-        obj: &Bound<'py, PyAny>,
-        builder: &mut operation_capnp::operation::Builder<'_>,
-    ) -> Result<()> {
-        let py = obj.py();
-        let mut reserve = builder.reborrow().init_reserve();
-        let signal_obj = obj.getattr(intern!(py, "signal"))?;
-        let signal_str: &str = signal_obj.extract()?;
-        let signal_id = self.get_signal_index(signal_str)?;
-        reserve.set_signal(signal_id);
-        Ok(())
-    }
-
     fn serialize_acquire_op(
         &mut self,
         obj: &Bound<'py, PyAny>,
-        builder: &mut operation_capnp::operation::Builder<'_>,
+        builder: &mut section_capnp::section_item::operation::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
         let mut acquire = builder.reborrow().init_acquire();
@@ -1764,7 +1770,6 @@ impl<'py> Serializer<'py> {
                 .reborrow()
                 .get_length()
                 .map_err(LabOneQError::from_err)?
-                .init_constant()
                 .set_real(length);
         }
 
@@ -1804,13 +1809,18 @@ impl<'py> Serializer<'py> {
             }
         }
 
+        let acquisition_type_py = obj.getattr(intern!(py, "acquisition_type"))?;
+        if !acquisition_type_py.is_none() {
+            acquire.set_acquisition_type(extract_acquisition_type_capnp(&acquisition_type_py)?);
+        }
+
         Ok(())
     }
 
     fn serialize_reset_oscillator_phase_op(
         &mut self,
         obj: &Bound<'py, PyAny>,
-        builder: &mut operation_capnp::operation::Builder<'_>,
+        builder: &mut section_capnp::section_item::operation::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
         let mut reset = builder.reborrow().init_reset_oscillator_phase();
@@ -1830,7 +1840,7 @@ impl<'py> Serializer<'py> {
     fn serialize_call_op(
         &mut self,
         obj: &Bound<'py, PyAny>,
-        builder: &mut operation_capnp::operation::Builder<'_>,
+        builder: &mut section_capnp::section_item::operation::Builder<'_>,
     ) -> Result<()> {
         let py = obj.py();
         let mut call = builder.reborrow().init_call();
@@ -1904,6 +1914,7 @@ impl<'py> Serializer<'py> {
 
         let (shape, functional_params) = if is_functional {
             let function: String = obj.getattr(intern!(py, "function"))?.extract()?;
+            let builtin = self.builtin_names.contains(function.as_str());
             // Collect definition-level pulse parameters, resolving parameter refs to final indices.
             let pulse_params_py = obj.getattr(intern!(py, "pulse_parameters"))?;
             let params = if !pulse_params_py.is_none() {
@@ -1940,7 +1951,7 @@ impl<'py> Serializer<'py> {
             } else {
                 vec![]
             };
-            (PulseShape::Functional { function }, params)
+            (PulseShape::Functional { function, builtin }, params)
         } else {
             let samples_py = obj.getattr(intern!(py, "samples"))?;
             let arr = self
@@ -2737,22 +2748,19 @@ fn set_constant(
 ) -> Result<()> {
     match constant {
         PyConstant::None => {}
-        PyConstant::Float(value) => builder.reborrow().init_constant().set_real(value),
-        PyConstant::Int(value) => builder.reborrow().init_constant().set_integer(value),
+        PyConstant::Float(value) => builder.set_real(value),
+        PyConstant::Int(value) => builder.set_integer(value),
         PyConstant::Complex(value) => {
-            let mut complex = builder.reborrow().init_constant().init_complex();
+            let mut complex = builder.reborrow().init_complex();
             complex.set_real(value.re);
             complex.set_imag(value.im);
         }
-        PyConstant::Str(value) => builder.reborrow().init_constant().set_string_value(value),
-        PyConstant::Bool(value) => builder.reborrow().init_constant().set_boolean(value),
-        PyConstant::RawBytes(value) => builder
-            .reborrow()
-            .init_constant()
-            .set_raw_bytes_value(value),
+        PyConstant::Str(value) => builder.set_string_value(value),
+        PyConstant::Bool(value) => builder.set_boolean(value),
+        PyConstant::RawBytes(value) => builder.set_raw_bytes_value(value),
         PyConstant::Opaque => {
             let bytes = constant_serializer::serialize_json(obj)?;
-            builder.reborrow().init_constant().set_python_value(&bytes);
+            builder.set_python_value(&bytes);
         }
     }
     Ok(())

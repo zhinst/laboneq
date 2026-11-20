@@ -24,6 +24,7 @@ use laboneq_dsl::types::ParameterUid;
 use laboneq_dsl::operation::{Acquire, AveragingLoop, DoUntil, Match};
 use laboneq_dsl::types::SignalUid;
 use laboneq_dsl::types::{MatchTarget, SweepParameter};
+use laboneq_ir::signal::Signal;
 
 use numeric_array::NumericArray;
 
@@ -41,15 +42,15 @@ use crate::error::{Error, Result};
 pub(crate) fn extract_result_shapes<'a, B: CompilerBackend>(
     root: &ExperimentNode,
     sweep_parameters: impl Iterator<Item = &'a SweepParameter> + 'a,
+    signals: &[Signal],
     id_store: &mut NamedIdStore,
     backend: &'a B,
 ) -> Result<ResultShapes> {
-    let mut extractor = ResultShapeExtractor::new(sweep_parameters, backend);
+    let mut extractor = ResultShapeExtractor::new(sweep_parameters, signals, backend);
     extractor.visit_node(root)?;
     Ok(ResultShapes {
         handle_result_shapes: extractor.handle_result_shapes,
         raw_acquisition_axis_name: id_store.get_or_insert("samples"),
-        needs_raw_acquisition_injection: extractor.needs_raw_acquisition_injection,
     })
 }
 
@@ -61,7 +62,6 @@ pub(crate) fn extract_result_shapes<'a, B: CompilerBackend>(
 pub(crate) struct ResultShapes {
     handle_result_shapes: Vec<HandleResultShape>,
     raw_acquisition_axis_name: NamedId,
-    needs_raw_acquisition_injection: bool,
 }
 
 impl ResultShapes {
@@ -70,7 +70,7 @@ impl ResultShapes {
         let mut seen = HashSet::new();
         self.handle_result_shapes
             .iter()
-            .filter(|_| self.needs_raw_acquisition_injection)
+            .filter(|shape| shape.raw)
             .filter(move |shape| seen.insert((shape.signal, shape.handle)))
             .map(|shape| (shape.signal, shape.handle))
     }
@@ -90,15 +90,16 @@ impl ResultShapes {
 
         // Extend the shape with an additional axis for the raw acquisition length.
         handle_result_shapes.iter_mut().for_each(|handle_shape| {
-            if let Some(length) = raw_length.get(&(handle_shape.signal, handle_shape.handle)) {
+            if let Some(&length) = raw_length.get(&(handle_shape.signal, handle_shape.handle)) {
                 // Inject a new axis for the raw acquisition.
-                handle_shape.shape.push(*length);
+                handle_shape.shape.push(length);
                 handle_shape
                     .axis_names
                     .push(vec![self.raw_acquisition_axis_name]);
-                handle_shape
-                    .axis_values
-                    .push(vec![AxisValues::Shots(*length)]);
+                handle_shape.axis_values.push(vec![AxisValues::RawSamples {
+                    count: length,
+                    sampling_rate: handle_shape.sampling_rate,
+                }]);
             }
         });
 
@@ -141,6 +142,11 @@ fn merge_shapes(shapes: Vec<HandleResultShape>) -> Result<HandleResultShape> {
         .collect();
 
     for shape in shapes {
+        assert_eq!(
+            shape.raw, first_shape.raw,
+            "Acquisitions sharing handle '{}' must have the same acquisition type",
+            handle.0
+        );
         if shape.shape != first_shape.shape {
             let msg = format!(
                 "Multiple acquire events with the same handle ('{}') and different result shapes are not allowed.",
@@ -219,6 +225,10 @@ pub(crate) struct HandleResultShape {
 
     // The signal associated with the handle.
     signal: SignalUid,
+    // Whether the acquisition is raw.
+    raw: bool,
+    // The sampling rate of the signal, in Sa/s.
+    sampling_rate: f64,
     // Each handle is associated with at most one match statement, so we can store the match context here.
     match_context_uid: Option<usize>,
 }
@@ -227,6 +237,11 @@ pub(crate) struct HandleResultShape {
 pub(crate) enum AxisValues {
     /// A plain `0..shots` index count, with no backing parameter or explicit values.
     Shots(usize),
+    /// The `0..count` sample index of a raw acquisition, acquired at `sampling_rate` Sa/s.
+    RawSamples {
+        count: usize,
+        sampling_rate: f64,
+    },
     Explicit(Arc<NumericArray>),
     Parameter(ParameterUid),
 }
@@ -263,6 +278,7 @@ impl MatchContext {
 struct ResultShapeExtractor<'a, B> {
     // --- Input data ---
     sweep_parameters: HashMap<ParameterUid, &'a SweepParameter>,
+    sampling_rates: HashMap<SignalUid, f64>,
     // Supplies the PRNG sequence of a PRNG loop.
     backend: &'a B,
 
@@ -278,19 +294,22 @@ struct ResultShapeExtractor<'a, B> {
 
     // --- Collected intermediate result shape information ---
     handle_result_shapes: Vec<HandleResultShape>,
-    needs_raw_acquisition_injection: bool,
 }
 
 impl<'a, B: CompilerBackend> ResultShapeExtractor<'a, B> {
-    fn new(sweep_parameters: impl Iterator<Item = &'a SweepParameter>, backend: &'a B) -> Self {
+    fn new(
+        sweep_parameters: impl Iterator<Item = &'a SweepParameter>,
+        signals: &[Signal],
+        backend: &'a B,
+    ) -> Self {
         Self {
             sweep_parameters: sweep_parameters.map(|sp| (sp.uid, sp)).collect(),
+            sampling_rates: signals.iter().map(|s| (s.uid, s.sampling_rate)).collect(),
             backend,
             loop_stack: Vec::new(),
             conditional_sweep_cases: Vec::new(),
             match_context: MatchContext::default(),
             handle_result_shapes: Vec::new(),
-            needs_raw_acquisition_injection: false,
             prng_stack: Vec::new(),
         }
     }
@@ -326,9 +345,6 @@ impl<B: CompilerBackend> ResultShapeExtractor<'_, B> {
     }
 
     fn visit_averaging_loop(&mut self, node: &ExperimentNode, op: &AveragingLoop) -> Result<()> {
-        if op.acquisition_type == AcquisitionType::Raw {
-            self.needs_raw_acquisition_injection = true;
-        }
         // Averaging loop in non single shot mode is irrelevant for result shapes (does not introduce an axis)
         if op.averaging_mode != AveragingMode::SingleShot {
             self.generic_visit(node)?;
@@ -496,10 +512,16 @@ impl<B: CompilerBackend> ResultShapeExtractor<'_, B> {
 
         // Assume that at most one loop is chunked.
         let chunked_axis_index = self.loop_stack.iter().position(|entry| entry.is_chunked);
+        let sampling_rate = *self
+            .sampling_rates
+            .get(&op.signal)
+            .ok_or_else(|| Error::new("Internal error: acquire signal not found"))?;
 
         let result_shape = HandleResultShape {
             handle: op.handle,
             signal: op.signal,
+            raw: op.acquisition_type == Some(AcquisitionType::Raw),
+            sampling_rate,
             shape,
             axis_names,
             axis_values,

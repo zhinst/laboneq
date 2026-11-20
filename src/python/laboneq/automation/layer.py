@@ -4,14 +4,14 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, final
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, final
 
 import attrs
 
 from laboneq.automation.node import AutomationNode, RootNode
 from laboneq.automation.status import AutomationStatus as Status
 from laboneq.automation.utils.class_parser import find_logic_class
-from laboneq.core.utilities.add_exception_note import add_note
 from laboneq.core.utilities.dsl_dataclass_decorator import classformatter
 from laboneq.workflow.timestamps import local_timestamp
 
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 
 def _node_keys_validator(
-    _instance: "AutomationLayer",
+    _instance: AutomationLayer,
     _attribute: attrs.Attribute,
     value: list[NodeKey],
 ) -> None:
@@ -42,7 +42,7 @@ class AutomationLayerResult:
     results: dict[NodeKey | tuple[NodeKey, ...], Any] = attrs.field(factory=dict)
     successes: dict[NodeKey, bool] = attrs.field(factory=dict)
 
-    def __or__(self, other: "AutomationLayerResult") -> "AutomationLayerResult":
+    def __or__(self, other: AutomationLayerResult) -> AutomationLayerResult:
         return AutomationLayerResult(
             results={**self.results, **other.results},
             successes={**self.successes, **other.successes},
@@ -166,7 +166,7 @@ class AutomationLayer(ABC):
         ]
 
     @final
-    def run_executable(self, auto: "Automation") -> AutomationLayerResult:
+    def run_executable(self, auto: Automation) -> AutomationLayerResult:
         """Run the executable.
 
         Runs the executable for the automation layer.
@@ -242,7 +242,7 @@ class AutomationLayer(ABC):
         return output
 
     @abstractmethod
-    def run_executable_core(self, auto: "Automation") -> AutomationLayerResult:
+    def run_executable_core(self, auto: Automation) -> AutomationLayerResult:
         """The core of the `run_executable` method.
 
         !!! note
@@ -285,7 +285,7 @@ class AutomationLayer(ABC):
             return self.nodes[node_key]
         else:
             err = KeyError(node_key)
-            add_note(err, f"Node {node_key!r} is not in the automation layer.")
+            err.add_note(f"Node {node_key!r} is not in the automation layer.")
             raise err
 
     @property
@@ -460,5 +460,5 @@ class RootLayer(AutomationLayer):
         """The node dictionary."""
         return {"root": RootNode()}
 
-    def run_executable_core(self, auto: "Automation") -> Any:
+    def run_executable_core(self, auto: Automation) -> Any:
         pass

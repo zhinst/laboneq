@@ -280,8 +280,7 @@ class ForLoop(Statement):
         ):
             yield 0
         else:
-            for i in range(self.count):
-                yield i
+            yield from range(self.count)
 
     def run(self, scope: ExecutionScope) -> Iterator[Notification]:
         sub_scope = scope.make_sub_scope()

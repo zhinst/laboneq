@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 
 import uvicorn
 
+from laboneq.controller.constants import SERVICE_SHUTDOWN_TIMEOUT_S
 from laboneq.core.exceptions import LabOneQException
 
 if TYPE_CHECKING:
@@ -63,8 +64,9 @@ class LocalControllerService:
 
     #: Total time to wait for the service to finish starting up.
     _STARTUP_TIMEOUT_S: float = 10.0
-    #: Time to wait for the server thread to wind down on `stop()`.
-    _SHUTDOWN_TIMEOUT_S: float = 10.0
+    #: Time to wait for the server thread to wind down on `stop()`. Covers the
+    #: wait of the service for a running experiment, and the disconnect after it.
+    _SHUTDOWN_TIMEOUT_S: float = SERVICE_SHUTDOWN_TIMEOUT_S + 5.0
     #: Delay between successive startup-progress checks.
     _POLL_INTERVAL_S: float = 0.02
 

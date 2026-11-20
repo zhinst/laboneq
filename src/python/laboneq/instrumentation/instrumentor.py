@@ -3,7 +3,7 @@
 
 """Instrumentors for LabOne Q."""
 
-from typing import Callable
+from collections.abc import Callable
 
 import wrapt
 from opentelemetry import trace

@@ -7,9 +7,7 @@ from __future__ import annotations
 
 import datetime
 from functools import singledispatch
-from typing import Union
-
-from typing_extensions import TypeAlias
+from typing import TypeAlias
 
 from laboneq.dsl.session import Session
 from laboneq.workflow.timestamps import utc_now
@@ -35,17 +33,17 @@ MAX_CONTAINER_ITEMS = 10
 # simple
 MAX_STR_LENGTH = 1000
 
-SimpleType: TypeAlias = Union[
-    str,
-    int,
-    float,
-    bool,
-    None,
-    NotSimpleType,
-    dict[str, "SimpleType"],
-    list["SimpleType"],
-    tuple["SimpleType"],
-]
+SimpleType: TypeAlias = (
+    str
+    | int
+    | float
+    | bool
+    | None
+    | NotSimpleType
+    | dict[str, "SimpleType"]
+    | list["SimpleType"]
+    | tuple["SimpleType"]
+)
 
 
 @singledispatch

@@ -12,11 +12,12 @@ import sched
 import time
 from abc import ABC, abstractmethod
 from collections import defaultdict
+from collections.abc import Callable, Iterator
 from dataclasses import InitVar, dataclass, field
 from enum import Enum
 from functools import partial
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Callable, Iterator, cast, overload
+from typing import TYPE_CHECKING, Any, cast, overload
 from weakref import ref
 
 import numpy as np
@@ -673,11 +674,15 @@ class DevEmuUHFQA(DevEmuHW):
             The argument 'averages' is provided for convenience, as the real device returns the
             sum of all the averaged readouts. The function may also return None, in which case
             the emulator falls back to the default emulated results for this integrator.
+        - number_executions - if true, each execution that produces readout results
+            gives them its 1-based number n: the real part of the default results is
+            n + integrator in place of 42 + integrator. Off by default.
     """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._armed_awg: bool = False
+        self._executions: int = 0
 
     def trigger(self):
         super().trigger()
@@ -691,6 +696,8 @@ class DevEmuUHFQA(DevEmuHW):
         result_enable = self._get_node("qas/0/result/enable").value
         monitor_enable = self._get_node("qas/0/monitor/enable").value
         if result_enable != 0:
+            self._executions += 1
+            base = self._executions if self._dev_opts.get("number_executions") else 42
             length = self._get_node("qas/0/result/length").value
             self._set_val("qas/0/result/acquired", 0)  # Wraps around to 0 on success
             for result_index in range(10):
@@ -701,7 +708,7 @@ class DevEmuUHFQA(DevEmuHW):
                     res = user_readout_data(result_index, length, averages)
                 if res is None:
                     integrator = result_index // 2
-                    res_c = (42 + integrator + 1j * np.arange(length)).view(float)
+                    res_c = (base + integrator + 1j * np.arange(length)).view(float)
                     res = res_c[result_index % 2 :: 2]
 
                 def _apply_averages_on_poll(v, averages):
@@ -921,6 +928,18 @@ class DevEmuSHFBase(Gen2Base):
 
 
 class DevEmuSHFQABase(DevEmuSHFBase):
+    """Emulated QA channels of the SHFQA and SHFQC.
+
+    Supported emulation options:
+        - number_executions - if true, each execution of a QA channel gives its
+            results its 1-based number n, counted per channel. All jobs of one
+            pipeliner run share its number. The results carry n as follows:
+            - readout: n + integrator in place of 42 + integrator in the real part;
+            - spectroscopy: n + 42j in place of 42 + 42j;
+            - scope: n * 100_000 added to the real part.
+            Off by default.
+    """
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._qa_pipeliner = PipelinerEmu(
@@ -929,6 +948,7 @@ class DevEmuSHFQABase(DevEmuSHFBase):
             pipeliner_stop_hook=self._pipeliner_done_qa,
         )
         self._armed_qa_awgs: set[int] = set()
+        self._executions: dict[int, int] = defaultdict(int)
         self._scope_max_segments: int = 1024
         self._scope_memory_size: int = 256 * 1024
 
@@ -962,9 +982,22 @@ class DevEmuSHFQABase(DevEmuSHFBase):
             in_ovr_count = self._get_node(in_ovr_node).value
             self._set_val(in_ovr_node, in_ovr_count + 1)
 
+    def _next_execution(self, channel: int) -> int | None:
+        """Counts an execution of the channel; returns its number if numbering is on."""
+        self._executions[channel] += 1
+        if self._dev_opts.get("number_executions"):
+            return self._executions[channel]
+        return None
+
     def _push_readout_result(
-        self, channel: int, length: int, averages: int, job_id: int = 0
+        self,
+        channel: int,
+        length: int,
+        averages: int,
+        execution: int | None,
+        job_id: int = 0,
     ):
+        base = 42 if execution is None else execution
         self._set_val(
             f"qachannels/{channel}/readout/result/acquired", length * averages
         )
@@ -972,21 +1005,27 @@ class DevEmuSHFQABase(DevEmuSHFBase):
             self._set_val(
                 f"qachannels/{channel}/readout/result/data/{integrator}/wave",
                 (
-                    (42 + integrator + 1j * np.arange(length)) / averages,
+                    (base + integrator + 1j * np.arange(length)) / averages,
                     self._make_measurement_properties(job_id),
                 ),
             )
 
     def _push_spectroscopy_result(
-        self, channel: int, length: int, averages: int, job_id: int = 0
+        self,
+        channel: int,
+        length: int,
+        averages: int,
+        execution: int | None,
+        job_id: int = 0,
     ):
+        base = 42 if execution is None else execution
         self._set_val(
             f"qachannels/{channel}/spectroscopy/result/acquired", length * averages
         )
         self._set_val(
             f"qachannels/{channel}/spectroscopy/result/data/wave",
             (
-                np.array([(42 + 42j)] * length),
+                np.array([(base + 42j)] * length),
                 self._make_measurement_properties(job_id),
             ),
         )
@@ -994,6 +1033,7 @@ class DevEmuSHFQABase(DevEmuSHFBase):
     def _pipeliner_done_qa(self, channel: int):
         self._side_effects_qa(channel)
         pipelined_nodes: dict[str, Any] = {}
+        execution = self._next_execution(channel)
         for job_id, slot in enumerate(self._qa_pipeliner._pipelined[channel]):
             pipelined_nodes |= slot
 
@@ -1006,13 +1046,15 @@ class DevEmuSHFQABase(DevEmuSHFBase):
                 length = pipelined_nodes.get("readout/result/length", 0)
                 # use default 1 for averages, to avoid division by zero if undefined
                 averages = pipelined_nodes.get("readout/result/averages", 1)
-                self._push_readout_result(channel, length, averages, job_id)
+                self._push_readout_result(channel, length, averages, execution, job_id)
 
             if spectroscopy_enable != 0:
                 length = pipelined_nodes.get("spectroscopy/result/length", 0)
                 # use default 1 for averages, to avoid division by zero if undefined
                 averages = pipelined_nodes.get("spectroscopy/result/averages", 1)
-                self._push_spectroscopy_result(channel, length, averages, job_id)
+                self._push_spectroscopy_result(
+                    channel, length, averages, execution, job_id
+                )
 
     def _measurement_done(self, channel: int):
         readout_enable = self._get_node(
@@ -1027,12 +1069,14 @@ class DevEmuSHFQABase(DevEmuSHFBase):
         if self._qa_pipeliner.is_active(channel):
             return
 
+        execution = self._next_execution(channel)
+
         if readout_enable != 0:
             length = self._get_node(f"qachannels/{channel}/readout/result/length").value
             averages = self._get_node(
                 f"qachannels/{channel}/readout/result/averages"
             ).value
-            self._push_readout_result(channel, length, averages)
+            self._push_readout_result(channel, length, averages, execution)
 
         if spectroscopy_enable != 0:
             length = self._get_node(
@@ -1041,7 +1085,7 @@ class DevEmuSHFQABase(DevEmuSHFBase):
             averages = self._get_node(
                 f"qachannels/{channel}/spectroscopy/result/averages"
             ).value
-            self._push_spectroscopy_result(channel, length, averages)
+            self._push_spectroscopy_result(channel, length, averages, execution)
 
         if self._get_node("scopes/0/enable").value != 0:
             # Assuming here that the scope was triggered by AWG and channels configured to capture
@@ -1057,6 +1101,8 @@ class DevEmuSHFQABase(DevEmuSHFBase):
             # of the results assignment. Each sample value is calculated as
             # <segment> * 10 + <channel> + <sample> * 1j
             segment_samples = np.arange(length) * 1j
+            if execution is not None:
+                segment_samples += execution * 100_000
             for scope_ch in enabled_channels:
                 data = [
                     segment * 10 + scope_ch + segment_samples

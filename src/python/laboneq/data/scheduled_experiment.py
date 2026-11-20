@@ -26,6 +26,8 @@ class HandleResultShape:
     # Maps axis to sorted indices of rows along that axis that correspond to this result
     # e.g. if shape = (3, 5, 7), and mask = {2: [6, 8]}, then this result fills the subarray [:, :, [6, 8]]
     match_case_mask: dict[int, list[int]] | None
+    # Sampling rate of the raw-acquisition axis, in Sa/s. `None` if the result has no such axis.
+    sampling_rate: float | None = None
 
     def __eq__(self, other):
         if id(self) == id(other):
@@ -38,11 +40,13 @@ class HandleResultShape:
             self.axis_names,
             self.chunked_axis_index,
             self.match_case_mask,
+            self.sampling_rate,
         ) == (
             other.shape,
             other.axis_names,
             other.chunked_axis_index,
             other.match_case_mask,
+            other.sampling_rate,
         )
 
 

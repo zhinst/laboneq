@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from functools import wraps
-from typing import TYPE_CHECKING, Type
+from typing import TYPE_CHECKING
 
 from laboneq.workflow.opts.options_base import (
     BaseOptions,
@@ -61,7 +61,7 @@ class WorkflowOptions:
 
 
 def workflow_options(
-    cls: Type | None = None, *, base_class: Type[WorkflowOptions] = WorkflowOptions
+    cls: type | None = None, *, base_class: type[WorkflowOptions] = WorkflowOptions
 ) -> type:
     """Decorator to make a class a workflow options class.
 
@@ -81,7 +81,7 @@ def workflow_options(
 
 
 def task_options(
-    cls: Type | None = None, *, base_class: Type[WorkflowOptions] = TaskOptions
+    cls: type | None = None, *, base_class: type[WorkflowOptions] = TaskOptions
 ) -> type:
     """Decorator to make a class a task options class.
 

@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Union
+from collections.abc import Callable
+from typing import Any
 
 import attrs
 
@@ -17,10 +18,10 @@ from .operation import Operation
 class Call(Operation):
     """Class abstracting a function call."""
 
-    func_name: Union[str, Callable] = attrs.field(default=None)
+    func_name: str | Callable = attrs.field(default=None)
     args: dict[str, Any] = attrs.field(default=None)
 
-    def __init__(self, func_name: Union[str, Callable], **kwargs):
+    def __init__(self, func_name: str | Callable, **kwargs):
         """Constructor.
 
         Args:

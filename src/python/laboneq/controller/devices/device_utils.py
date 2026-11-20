@@ -121,8 +121,7 @@ class NodeCollector:
         self._nodes.clear()
 
     def __iter__(self) -> Iterator[NodeAction]:
-        for node in self._nodes:
-            yield node
+        yield from self._nodes
 
     def set_actions(self) -> Iterator[NodeActionSet]:
         for node in self._nodes:

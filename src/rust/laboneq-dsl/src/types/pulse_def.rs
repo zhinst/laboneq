@@ -65,6 +65,9 @@ impl PulseFunction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BuiltinPulse {
     Const,
+    Gaussian,
+    Drag,
+    GaussianSquare,
 }
 
 impl BuiltinPulse {
@@ -72,6 +75,9 @@ impl BuiltinPulse {
     pub fn name(self) -> &'static str {
         match self {
             BuiltinPulse::Const => PulseFunction::CONSTANT_PULSE_NAME,
+            BuiltinPulse::Gaussian => "gaussian",
+            BuiltinPulse::Drag => "drag",
+            BuiltinPulse::GaussianSquare => "gaussian_square",
         }
     }
 
@@ -79,6 +85,9 @@ impl BuiltinPulse {
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             PulseFunction::CONSTANT_PULSE_NAME => Some(BuiltinPulse::Const),
+            "gaussian" => Some(BuiltinPulse::Gaussian),
+            "drag" => Some(BuiltinPulse::Drag),
+            "gaussian_square" => Some(BuiltinPulse::GaussianSquare),
             _ => None,
         }
     }

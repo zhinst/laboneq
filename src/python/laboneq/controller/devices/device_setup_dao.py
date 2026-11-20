@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from collections.abc import ItemsView, Iterator
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ItemsView, Iterator, cast
+from typing import TYPE_CHECKING, cast
 
 from laboneq.controller.devices.device_setup_context import build_setup_context
 from laboneq.core.types.enums.io_direction import IODirection

@@ -19,7 +19,8 @@ import numpy as np
 import orjson
 
 if TYPE_CHECKING:
-    from typing import IO, Any, Callable
+    from typing import IO, Any
+    from collections.abc import Callable
 
     import matplotlib.figure as mpl_figure
     import PIL

@@ -19,6 +19,7 @@ tracing = { workspace = true }
 
 laboneq-common = { workspace = true }
 laboneq-dsl = { workspace = true }
+laboneq-error = { workspace = true }
 laboneq-ir = { workspace = true }
 laboneq-units = { workspace = true }
 laboneq-log = { workspace = true }

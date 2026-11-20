@@ -6,6 +6,7 @@ use std::{num::NonZeroU16, sync::Arc};
 use laboneq_common::device_traits::DeviceTraits;
 use laboneq_common::types::{PhysicalDeviceUid, SignalKind};
 use laboneq_dsl::ExperimentNode;
+use laboneq_dsl::hqcs::HqcsDeclarations;
 use laboneq_dsl::signal_calibration::SignalCalibration;
 use laboneq_dsl::types::{
     DeviceUid, ExternalParameterUid, PulseDef, PulseUid, SignalUid, SweepParameter,
@@ -25,6 +26,7 @@ pub(crate) struct Experiment {
     pub parameters: Vec<SweepParameter>,
     pub pulses: FxHashMap<PulseUid, PulseDef>,
     pub external_parameters: Arc<PyObjectStore<ExternalParameterUid>>,
+    pub hqcs: HqcsDeclarations,
 }
 
 /// Device signal definition, representing a signal in the device setup.

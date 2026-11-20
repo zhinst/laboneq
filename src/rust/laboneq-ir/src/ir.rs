@@ -3,25 +3,24 @@
 
 //! Intermediate representation (IR) of the real-time portion of an experiment structure.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 
-use crate::TinySamples;
-use laboneq_dsl::operation::ExternalOrValue;
+use laboneq_dsl::hqcs::Predicate;
+use laboneq_dsl::operation::{ExternalOrValue, MarkStaleTarget};
+// Re-export for convenience
+pub use laboneq_dsl::types::MatchTarget;
 use laboneq_dsl::types::{
-    AveragingMode, ComplexOrFloat, HandleUid, Marker, ParameterUid, PrngSampleUid,
+    AcquisitionType, AveragingMode, ComplexOrFloat, HandleUid, Marker, ParameterUid, PrngSampleUid,
     PulseParameterUid, PulseUid, SectionUid, SignalUid, ValueOrParameter,
 };
 
-// Re-export for convenience
-pub use laboneq_dsl::types::MatchTarget;
+use crate::TinySamples;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrKind {
     Root,
     InitialOscillatorFrequency(InitialOscillatorFrequency),
-    InitialLocalOscillatorFrequency(InitialLocalOscillatorFrequency),
-    InitialVoltageOffset(InitialVoltageOffset),
     Loop(Loop),
     LoopIterationPreamble,
     LoopIteration,
@@ -43,6 +42,8 @@ pub enum IrKind {
     ClearPrecompensation {
         signal: SignalUid,
     },
+    MarkStale(MarkStaleTarget),
+    Expect(Predicate),
 }
 
 pub struct SectionInfo<'a> {
@@ -58,8 +59,6 @@ impl IrKind {
             IrKind::Case(obj) => Some(SectionInfo { uid: &obj.uid }),
             IrKind::Root => None,
             IrKind::InitialOscillatorFrequency(_) => None,
-            IrKind::InitialLocalOscillatorFrequency(_) => None,
-            IrKind::InitialVoltageOffset(_) => None,
             IrKind::LoopIterationPreamble => None,
             IrKind::LoopIteration => None,
             IrKind::PlayPulse(_) => None,
@@ -70,50 +69,45 @@ impl IrKind {
             IrKind::Delay { .. } => None,
             IrKind::ClearPrecompensation { .. } => None,
             IrKind::ChangeOscillatorPhase(_) => None,
+            IrKind::MarkStale(_) => None,
+            IrKind::Expect(_) => None,
         }
     }
 
-    pub fn signals(self: &IrKind) -> HashSet<&SignalUid> {
-        match self {
-            IrKind::Section(obj) => obj.triggers.iter().map(|trig| &trig.signal).collect(),
-            IrKind::InitialOscillatorFrequency(obj) => {
-                obj.values.iter().map(|(sig, _)| sig).collect()
+    /// Iterates over the signals of the node, without allocating.
+    pub fn signals(&self) -> impl Iterator<Item = &SignalUid> {
+        let (signals, triggers, values): (&[SignalUid], &[Trigger], &[(SignalUid, _)]) = match self
+        {
+            IrKind::Section(obj) => (&[], &obj.triggers, &[]),
+            IrKind::InitialOscillatorFrequency(obj) => (&[], &[], &obj.values),
+            IrKind::SetOscillatorFrequency(obj) => (&[], &[], &obj.values),
+            IrKind::PlayPulse(obj) => (std::slice::from_ref(&obj.signal), &[], &[]),
+            IrKind::Acquire(obj) => (std::slice::from_ref(&obj.signal), &[], &[]),
+            IrKind::ResetOscillatorPhase { signals } => (signals, &[], &[]),
+            IrKind::PpcStep(obj) => (std::slice::from_ref(&obj.signal), &[], &[]),
+            IrKind::Delay { signal } | IrKind::ClearPrecompensation { signal } => {
+                (std::slice::from_ref(signal), &[], &[])
             }
-            IrKind::InitialLocalOscillatorFrequency(obj) => HashSet::from_iter([&obj.signal]),
-            IrKind::InitialVoltageOffset(obj) => HashSet::from_iter([&obj.signal]),
-            IrKind::PlayPulse(obj) => HashSet::from_iter([&obj.signal]),
-            IrKind::Acquire(obj) => HashSet::from_iter([&obj.signal]),
-            IrKind::SetOscillatorFrequency(obj) => obj.values.iter().map(|(sig, _)| sig).collect(),
-            IrKind::ResetOscillatorPhase { signals } => HashSet::from_iter(signals.iter()),
-            IrKind::PpcStep(obj) => HashSet::from_iter([&obj.signal]),
-            IrKind::Delay { signal } => HashSet::from_iter([signal]),
-            IrKind::ClearPrecompensation { signal } => HashSet::from_iter([signal]),
-            IrKind::ChangeOscillatorPhase(obj) => HashSet::from_iter([&obj.signal]),
+            IrKind::ChangeOscillatorPhase(obj) => (std::slice::from_ref(&obj.signal), &[], &[]),
             IrKind::Loop(_)
             | IrKind::LoopIterationPreamble
             | IrKind::LoopIteration
             | IrKind::Root
             | IrKind::Match(_)
-            | IrKind::Case(_) => HashSet::new(),
-        }
+            | IrKind::Case(_)
+            | IrKind::MarkStale(_)
+            | IrKind::Expect(_) => (&[], &[], &[]),
+        };
+        signals
+            .iter()
+            .chain(triggers.iter().map(|trigger| &trigger.signal))
+            .chain(values.iter().map(|(signal, _)| signal))
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct InitialOscillatorFrequency {
     pub values: Vec<(SignalUid, ValueOrParameter<f64>)>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct InitialLocalOscillatorFrequency {
-    pub signal: SignalUid,
-    pub value: ValueOrParameter<f64>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct InitialVoltageOffset {
-    pub signal: SignalUid,
-    pub value: ValueOrParameter<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,6 +179,7 @@ pub struct Acquire {
     pub kernels: Vec<PulseUid>,
     pub parameters: Vec<HashMap<PulseParameterUid, ExternalOrValue>>,
     pub pulse_parameters: Vec<HashMap<PulseParameterUid, ExternalOrValue>>,
+    pub acquisition_type: AcquisitionType,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

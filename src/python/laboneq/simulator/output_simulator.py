@@ -6,8 +6,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from laboneq.core.exceptions import LabOneQException
+from laboneq.core.types.enums import AWGSignalType, PhysicalChannelType
 from laboneq.core.utilities.shfqc import VIRTUAL_SHFSG_UID_SUFFIX
-from laboneq.dsl.device.instruments.shfqc import SHFQC
 from laboneq.dsl.device.io_units.physical_channel import PhysicalChannel
 from laboneq.simulator.seqc_parser import simulate
 from laboneq.simulator.wave_scroller import SimTarget, WaveScroller
@@ -16,8 +17,11 @@ if TYPE_CHECKING:
     from numpy.typing import ArrayLike
 
     from laboneq.core.types.compiled_experiment import CompiledExperiment
-    from laboneq.data.artifacts_qccs import RealtimeExecutionInit
-    from laboneq.dsl.device.device_setup import DeviceSetup
+    from laboneq.data.artifacts_qccs import (
+        ArtifactsCodegen,
+        Initialization,
+        RealtimeExecutionInit,
+    )
 
 
 @dataclass
@@ -29,77 +33,138 @@ class OutputData:
     frequency: ArrayLike | None = None
 
 
-@dataclass
-class _AWG_ID:
-    is_out: bool
-    prog: str
-    channels: list[int]
-
-    def __init__(
-        self,
-        device_setup: DeviceSetup,
-        ch: PhysicalChannel,
-        realtime_inits: list[RealtimeExecutionInit],
-    ):
-        self._device_setup = device_setup
-        [self._dev_uid, pch] = ch.uid.split("/")
-        ch_attrs = pch.split("_")
-        {
-            "sigouts": self._decode_sigouts,
-            "qas": self._decode_qas,
-            "qachannels": self._decode_qachannels,
-            "sgchannels": self._decode_sgchannels,
-        }[ch_attrs[0]](ch_attrs[1:], realtime_inits)
-
-    def find_seqc(
-        self, device_name: str, awg_no: int, realtime_inits: list[RealtimeExecutionInit]
-    ):
-        self.prog = next(
+def _find_seqc(
+    *, device_uid: str, awg_no: int, rt_exec_inits: list[RealtimeExecutionInit]
+) -> str:
+    try:
+        return next(
             iter(
                 sorted(
                     (
                         rt_init
-                        for rt_init in realtime_inits
+                        for rt_init in rt_exec_inits
                         if rt_init.awg_index == awg_no
-                        and rt_init.device_id == device_name
+                        and rt_init.device_id == device_uid
                     ),
                     key=lambda rt_init: rt_init.nt_step.indices,
                 )
             )
         ).program_ref
+    except StopIteration:
+        raise LabOneQException(
+            f"Unable to find SeqC program for AWG {awg_no} of device {device_uid}."
+        ) from None
 
-    def _decode_sigouts(
-        self, chs: list[str], realtime_inits: list[RealtimeExecutionInit]
-    ):
-        self.is_out = True
-        self.channels = [int(ch) for ch in chs]
-        awg_no = self.channels[0] // 2
-        self.find_seqc(self._dev_uid, awg_no, realtime_inits)
 
-    def _decode_qas(self, chs: list[str], realtime_inits: list[RealtimeExecutionInit]):
-        self.is_out = False
-        self.channels = [int(ch) for ch in chs]
-        self.find_seqc(self._dev_uid, 0, realtime_inits)
+def _map_channel_type(
+    *, device_uid: str, awg_no: int, inits: list[Initialization]
+) -> PhysicalChannelType:
+    for i in inits:
+        if i.device_uid == device_uid:
+            for awg in i.awgs:
+                if awg.awg == awg_no:
+                    return {
+                        AWGSignalType.IQ: PhysicalChannelType.IQ_CHANNEL,
+                        AWGSignalType.SINGLE: PhysicalChannelType.RF_CHANNEL,
+                        AWGSignalType.DOUBLE: PhysicalChannelType.RF_CHANNEL,
+                    }[awg.signal_type]
 
-    def _is_qc(self):
-        return isinstance(self._device_setup.instrument_by_uid(self._dev_uid), SHFQC)
+    raise LabOneQException(
+        f"Unable to map channel type for AWG {awg_no} of device {device_uid}."
+    )
 
-    def _decode_qachannels(
-        self, chs: list[str], realtime_inits: list[RealtimeExecutionInit]
-    ):
-        self.is_out = chs[1] == "output"
-        self.channels = [0]
-        self.find_seqc(self._dev_uid, int(chs[0]), realtime_inits)
 
-    def _decode_sgchannels(
-        self, chs: list[str], realtime_inits: list[RealtimeExecutionInit]
-    ):
-        internal_device_name = self._dev_uid
-        if self._is_qc():
-            internal_device_name = f"{self._dev_uid}{VIRTUAL_SHFSG_UID_SUFFIX}"
-        self.is_out = True
-        self.channels = [0, 1]
-        self.find_seqc(internal_device_name, int(chs[0]), realtime_inits)
+def parse_channel_uid(channel_uid: str) -> tuple[str, str]:
+    """Split a channel UID into device UID and channel name.
+
+    A channel UID is of the format `<device uid>/<channel name>`
+    where the format of `channel_name` differs between device- and
+    channel types. Examples:
+
+        device/sigouts_0
+        device/sigouts_0_1
+        device/qas_0
+        device/qachannels_0_output
+        device/qachannels_0_input
+        device/sgchannels_0_output
+
+    Args:
+        channel_uid: A channel UID in the format `<device uid>/<channel name>`.
+
+    Returns:
+        A tuple containing the device UID and the channel name.
+    """
+    try:
+        device_uid, channel_name = channel_uid.split("/")
+    except ValueError:
+        raise LabOneQException(
+            f"Unable to parse channel UID {channel_uid}. "
+            "Expected format is '<device uid>/<channel name>'."
+        ) from None
+
+    return device_uid, channel_name
+
+
+@dataclass
+class _AWG_ID:
+    is_out: bool
+    prog: str
+    awg_channels: list[int]
+    channel_type: PhysicalChannelType
+
+    @classmethod
+    def from_artifacts(
+        cls,
+        *,
+        channel_uid: str,
+        artifacts: ArtifactsCodegen,
+    ) -> _AWG_ID:
+        device_uid, channel_name = parse_channel_uid(channel_uid)
+        port_type, *channel_attrs = channel_name.split("_")
+
+        match port_type:
+            case "sigouts":
+                is_out = True
+                awg_channels = [int(c) for c in channel_attrs]
+                awg_no = awg_channels[0] // 2
+            case "qas":
+                is_out = False
+                awg_channels = [int(c) for c in channel_attrs]
+                awg_no = 0
+            case "qachannels":
+                is_out = channel_attrs[-1] == "output"
+                awg_channels = [0]
+                awg_no = int(channel_attrs[0])
+            case "sgchannels":
+                qc_sg_uid = f"{device_uid}{VIRTUAL_SHFSG_UID_SUFFIX}"
+
+                device_uid = next(
+                    (
+                        qc_sg_uid
+                        for init in artifacts.initializations
+                        if init.device_uid == qc_sg_uid
+                    ),
+                    device_uid,
+                )
+
+                is_out = True
+                awg_channels = [0, 1]
+                awg_no = int(channel_attrs[0])
+            case _:
+                raise LabOneQException(f"Unknown port type '{port_type}'.")
+
+        return _AWG_ID(
+            is_out=is_out,
+            awg_channels=awg_channels,
+            prog=_find_seqc(
+                device_uid=device_uid,
+                awg_no=awg_no,
+                rt_exec_inits=artifacts.realtime_execution_init,
+            ),
+            channel_type=_map_channel_type(
+                device_uid=device_uid, awg_no=awg_no, inits=artifacts.initializations
+            ),
+        )
 
 
 class OutputSimulator:
@@ -179,19 +244,6 @@ class OutputSimulator:
     def max_output_length(self, max_output_length: float):
         self._max_output_length = max_output_length
 
-    def _uid_to_channel(self, uid: str) -> PhysicalChannel:
-        pcg = self._compiled_experiment.device_setup.physical_channel_groups
-        channel_by_uids = {
-            ch.uid: ch for g in pcg.values() for ch in g.channels.values()
-        }
-        try:
-            return channel_by_uids[uid]
-        except KeyError as e:
-            raise RuntimeError(
-                f"Can't find physical channel with uid '{uid}'."
-                f" Available channels: {', '.join(channel_by_uids.keys())}"
-            ) from e
-
     def get_snippet(
         self,
         physical_channel: str | PhysicalChannel,
@@ -225,15 +277,16 @@ class OutputSimulator:
                 requested.
         """
         channel = (
-            physical_channel
+            physical_channel.uid
             if isinstance(physical_channel, PhysicalChannel)
-            else self._uid_to_channel(physical_channel)
+            else physical_channel
         )
-        channel_type = channel.type
-        awg_id = _AWG_ID(
-            self._compiled_experiment.device_setup,
-            channel,
-            self._compiled_experiment.scheduled_experiment.artifacts.realtime_execution_init,
+
+        artifacts = self._compiled_experiment.scheduled_experiment.artifacts
+
+        awg_id = _AWG_ID.from_artifacts(
+            channel_uid=channel,
+            artifacts=artifacts,
         )
 
         sim = self._simulations[awg_id.prog]
@@ -249,10 +302,10 @@ class OutputSimulator:
         if get_frequency and awg_id.is_out:
             sim_targets |= SimTarget.FREQUENCY
         ws = WaveScroller(
-            ch=awg_id.channels,
+            ch=awg_id.awg_channels,
             sim_targets=sim_targets,
             sim=sim,
-            channel_type=channel_type,
+            channel_type=awg_id.channel_type,
         )
         ws.calc_snippet(start, output_length)
         return OutputData(

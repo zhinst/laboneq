@@ -42,7 +42,7 @@ class TaskView(Sequence):
     def __str__(self) -> str:
         return ", ".join([str(t) for t in self._tasks])
 
-    def _repr_pretty_(self, p, cycle):  # noqa: ANN001, ANN202, ARG002
+    def _repr_pretty_(self, p, cycle):
         # For Notebooks
         p.text(str(self))
 

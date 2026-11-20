@@ -7,15 +7,13 @@ import asyncio
 import json
 import logging
 import shlex
+from collections.abc import Awaitable, Coroutine, Iterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import Enum, IntFlag
 from typing import (
     TYPE_CHECKING,
     Any,
-    Awaitable,
-    Coroutine,
-    Iterator,
     Literal,
     TypeVar,
     cast,
@@ -471,8 +469,8 @@ async def _gather(
         for arg in args:
             try:
                 # No list comprehension in debug for cleaner stack trace
-                results.append(await arg)  # noqa: PERF401
-            except BaseException as ex:  # noqa: PERF203
+                results.append(await arg)
+            except BaseException as ex:
                 # Handle _all_ exceptions to match `asyncio.gather` behavior.
                 # Defer raising them to avoid "was never awaited" warnings,
                 # since tasks are awaited one by one here.
@@ -598,7 +596,7 @@ class ResponseWaiterAsync:
                 timeout_s=self._timeout_s,
             )
             for result, (path, expected) in zip(results, self._nodes.items()):
-                if isinstance(result, (asyncio.TimeoutError, TimeoutError)):
+                if isinstance(result, TimeoutError):
                     msg = self._messages.get(path)
                     if msg is None:
                         msg = f"{path}={expected}"
@@ -643,6 +641,7 @@ class AsyncSubscriber:
         self._use_control_connection = use_control_connection
         self._subscriptions: dict[str, DataQueue] = {}
         self._last: dict[str, AnnotatedValue] = {}
+        self._stream_errors: dict[str, list[str]] = {}
 
     async def subscribe(self, api: InstrumentConnection, path: str, get_initial=False):
         api_impl = api.impl if self._use_control_connection else api.readout_impl
@@ -671,6 +670,13 @@ class AsyncSubscriber:
                     value.value.__class__.__name__,
                     str(value.value),
                 )
+                self._stream_errors.setdefault(queue.path, []).append(
+                    f"{value.value.__class__.__name__}: {value.value}"
+                )
+
+    def take_stream_errors(self, path: str) -> list[str]:
+        """Returns and forgets the errors received on `path` since the last call."""
+        return self._stream_errors.pop(path, [])
 
     async def get(self, path: str, timeout_s: float | None = None) -> AnnotatedValue:
         queue = self._subscriptions.get(path)
@@ -701,6 +707,7 @@ class AsyncSubscriber:
             queue.disconnect()
         self._subscriptions.clear()
         self._last.clear()
+        self._stream_errors.clear()
 
     async def wait_for(self, path: str, expected: Any, timeout_s: float):
         self.get_updates(path)

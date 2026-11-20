@@ -41,8 +41,8 @@ from laboneq.data.artifacts_qccs import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-    from typing import Any, Iterator
+    from collections.abc import Iterable, Iterator
+    from typing import Any
     from weakref import ReferenceType
 
     from laboneq.controller.attribute_value_tracker import DeviceAttributesView
@@ -79,6 +79,10 @@ class RawReadoutData:
 
     # metadata by job_id
     metadata: dict[int, dict[str, Any]] = field(default_factory=dict)
+
+    # Readout errors, each a pipeliner job id (None for the whole step) and a
+    # message.
+    errors: list[tuple[int | None, str]] = field(default_factory=list)
 
 
 def delay_to_rounded_samples(
@@ -715,11 +719,17 @@ class DeviceBase:
     async def teardown_one_step_execution(self, recipe_data: RecipeData):
         pass
 
-    async def wait_for_execution_ready(self, recipe_data: RecipeData, timeout_s: float):
+    async def wait_for_execution_ready(
+        self, recipe_data: RecipeData, timeout_s: float
+    ) -> list[str]:
+        """Waits for the conditions to start RT on a follower.
+
+        Returns the conditions that are not met.
+        """
         if not self.is_follower():
             # Can't batch everything together, because PQSC/QHUB needs to start execution after HDs
             # otherwise it can finish before AWGs are started, and the trigger is lost.
-            return
+            return []
         rw = ResponseWaiterAsync(
             api=self._api, dev_repr=self.dev_repr, timeout_s=timeout_s
         )
@@ -740,6 +750,7 @@ class DeviceBase:
                 rw.timeout_s,
                 "\n".join(failed_nodes),
             )
+        return failed_nodes
 
     async def make_waiter_for_execution_done(self, recipe_data: RecipeData):
         min_wait_time, guarded_wait_time = get_execution_time(recipe_data)
@@ -759,7 +770,8 @@ class DeviceBase:
         self,
         response_waiter: ResponseWaiterAsync,
         min_wait_time: float,
-    ):
+    ) -> list[str]:
+        """Waits for the stop conditions. Returns the conditions that are not met."""
         failed_nodes = await response_waiter.wait()
         if len(failed_nodes) > 0:
             _logger.warning(
@@ -772,6 +784,7 @@ class DeviceBase:
                 min_wait_time,
                 "\n".join(failed_nodes),
             )
+        return failed_nodes
 
     async def read_results(
         self,
@@ -827,6 +840,9 @@ class DeviceBase:
                 mapping=result_handle_maps.get(result_source, []),
                 acquired_data=raw_results.vector,
             )
+            self._record_readout_errors(
+                results_builder, nt_step, rt_execution_info, [raw_results]
+            )
         else:
             await self._read_result_logger(
                 recipe_data,
@@ -854,6 +870,9 @@ class DeviceBase:
             recipe_data=recipe_data,
             num_results=awg_config.result_length,
             hw_averages=effective_averages,
+        )
+        self._record_readout_errors(
+            results_builder, nt_step, rt_execution_info, all_raw_readouts
         )
         result_handle_maps = recipe_data.get_artifacts(
             ArtifactsCodegen
@@ -890,6 +909,22 @@ class DeviceBase:
             )
 
             results_builder.add_pipeline_jobs_timestamps(signal, raw_readout.metadata)
+
+    @staticmethod
+    def _record_readout_errors(
+        results_builder: ResultsBuilder,
+        nt_step: NtStepKey,
+        rt_execution_info: RtExecutionInfo,
+        readouts: list[RawReadoutData],
+    ):
+        for readout in readouts:
+            for job_id, message in readout.errors:
+                chunk_index = (
+                    job_id
+                    if job_id is not None and rt_execution_info.is_chunked
+                    else None
+                )
+                results_builder.add_step_error(nt_step, chunk_index, "", message)
 
     async def get_raw_data(
         self, channel: int, acquire_length: int, acquires: int | None, timeout_s: float

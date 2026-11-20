@@ -80,16 +80,9 @@ impl<T: Clone> ParameterOperation<T> {
 impl Eq for ParameterOperation<f64> {}
 impl std::hash::Hash for ParameterOperation<f64> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        match self {
-            ParameterOperation::INCREMENT(value) => {
-                0.hash(state);
-                normalize_f64(*value).hash(state);
-            }
-            ParameterOperation::SET(value) => {
-                1.hash(state);
-                normalize_f64(*value).hash(state);
-            }
-        }
+        std::mem::discriminant(self).hash(state);
+        let (ParameterOperation::INCREMENT(value) | ParameterOperation::SET(value)) = self;
+        normalize_f64(*value).hash(state);
     }
 }
 

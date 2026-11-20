@@ -95,13 +95,11 @@ class ArtifactGenerator:
         awg_number: int,
         signal_type: AWGSignalType,
         feedback_register_config: FeedbackRegisterConfig | None,
-        signals: set[str],
         result_length: int | None = None,
     ):
         awg = AWG(
             awg=awg_number,
             signal_type=signal_type,
-            signals=signals,
             result_length=result_length,
         )
         if feedback_register_config is not None:
@@ -181,6 +179,8 @@ def calc_outputs(
         channel = channel_properties.channel
         signal_range = channel_properties.range
 
+        channels = combined_compiler_output.channel_properties[awg_key]
+
         output = IO(
             channel=channel,
             enable=True,
@@ -210,6 +210,12 @@ def calc_outputs(
             )
             if channel_properties.gains is not None
             else None,
+            awg_id=int(awg_key.awg_id),
+            signals={
+                c.signal
+                for c in channels
+                if c.channel == channel_properties.channel and c.direction == "OUT"
+            },
         )
 
         initialization = generator.find_initialization(awg_key.device_id)
@@ -227,6 +233,8 @@ def calc_inputs(
     for awg_key, channel_properties in channels_flat:
         if channel_properties.direction != "IN":
             continue
+
+        channels = combined_compiler_output.channel_properties[awg_key]
         signal_range = channel_properties.range
         input = IO(
             channel=channel_properties.channel,
@@ -237,6 +245,12 @@ def calc_inputs(
             port_delay=channel_properties.port_delay,
             scheduler_port_delay=channel_properties.scheduler_delay,
             port_mode=_PORT_MODE.get(channel_properties.port_mode),
+            awg_id=int(awg_key.awg_id),
+            signals={
+                c.signal
+                for c in channels
+                if c.channel == channel_properties.channel and c.direction == "IN"
+            },
         )
         initialization = generator.find_initialization(awg_key.device_id)
         initialization.inputs.append(input)
@@ -252,6 +266,7 @@ def populate_codegen_artifacts(
         init = Initialization(device_uid=device.uid, device_type=device.device_type)
         init.config.sampling_rate = device.sampling_rate
         init.config.lead_delay = device.lead_delay
+        init.is_shfqc = device.is_shfqc
         generator.artifacts.initializations.append(init)
 
     for ppc_settings in combined_compiler_output.ppc_settings:
@@ -286,7 +301,6 @@ def populate_codegen_artifacts(
     for step in combined_compiler_output.neartime_steps:
         generator.add_neartime_execution_step(step)
     for awg_key, awg_properties in combined_compiler_output.awg_properties.items():
-        channels = combined_compiler_output.channel_properties[awg_key]
         generator.add_awg(
             device_id=awg_key.device_id,
             awg_number=awg_key.awg_id,
@@ -294,7 +308,6 @@ def populate_codegen_artifacts(
             feedback_register_config=combined_compiler_output.feedback_register_configurations.get(
                 awg_key
             ),
-            signals={c.signal for c in channels},
             result_length=combined_compiler_output.result_lengths.get(awg_key),
         )
 

@@ -242,6 +242,7 @@ class Section:
         kernel: Pulse | list[Pulse] | None = None,
         length: float | None = None,
         pulse_parameters: dict[str, Any] | list[dict[str, Any] | None] | None = None,
+        acquisition_type: AcquisitionType | None = None,
     ):
         """Acquisition of results of a signal.
 
@@ -250,7 +251,17 @@ class Section:
             handle: Unique identifier of the handle that will be used to access the acquired result.
             kernel: Pulse base used for the acquisition. In case of multistate discrimination, a list of kernels.
             length: Integration length (only valid in spectroscopy mode).
-            pulse_parameters: Dictionary with user pulse function parameters (re)binding. In case of multistate discrimination, a list of dicts.
+            pulse_parameters:
+                Dictionary with user pulse function parameters (re)binding.
+                In case of multistate discrimination, a list of dicts.
+            acquisition_type:
+                Acquisition type for this acquire operation.
+                Defaults to the type set in the enclosing real-time loop.
+                Supported only on ZQCS.
+
+        !!! version-changed "Changed in version 27.1.0"
+            Added `acquisition_type` parameter that overrides the acquisition type
+            set in the real-time loop.
         """
         self.add(
             Acquire(
@@ -259,6 +270,7 @@ class Section:
                 kernel=kernel,
                 length=length,
                 pulse_parameters=pulse_parameters,
+                acquisition_type=acquisition_type,
             )
         )
 

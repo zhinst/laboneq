@@ -5,8 +5,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from laboneq.core.utilities.highlight import pygmentize
 from laboneq.workflow.taskview import TaskView
@@ -35,7 +36,7 @@ class TaskResult:
         self,
         task: task_,
         output: object,
-        input: dict | None = None,  # noqa: A002
+        input: dict | None = None,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         index: tuple[object] | None = None,
@@ -120,7 +121,7 @@ class TaskResult:
     def __str__(self) -> str:
         return f"TaskResult(name={self.name}, index={self.index})"
 
-    def _repr_pretty_(self, p, cycle):  # noqa: ANN001, ANN202, ARG002
+    def _repr_pretty_(self, p, cycle):
         # For Notebooks
         p.text(str(self))
 
@@ -142,8 +143,8 @@ class WorkflowResult:
     def __init__(
         self,
         name: str,
-        output: Any = None,  # noqa: ANN401
-        input: dict | None = None,  # noqa: A002
+        output: Any = None,
+        input: dict | None = None,
         start_time: datetime | None = None,
         end_time: datetime | None = None,
         index: tuple[object] | None = None,
@@ -162,7 +163,7 @@ class WorkflowResult:
         return self._name
 
     @property
-    def output(self) -> Any:  # # noqa: ANN401
+    def output(self) -> Any:  #
         """Output of the workflow."""
         return self._output
 
@@ -212,7 +213,7 @@ class WorkflowResult:
     def __str__(self) -> str:
         return f"WorkflowResult(name={self.name}, index={self.index})"
 
-    def _repr_pretty_(self, p, cycle):  # noqa: ANN001, ANN202, ARG002
+    def _repr_pretty_(self, p, cycle):
         # For Notebooks
         p.text(str(self))
 

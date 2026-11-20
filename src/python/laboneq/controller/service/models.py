@@ -9,13 +9,13 @@ All models use Pydantic for validation and serialization.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class ExperimentStatus(str, Enum):
+class ExperimentStatus(StrEnum):
     """Lifecycle status of an experiment submission."""
 
     QUEUED = "queued"
@@ -24,11 +24,12 @@ class ExperimentStatus(str, Enum):
     FAILED = "failed"
 
 
-class ErrorCode(str, Enum):
+class ErrorCode(StrEnum):
     """Machine-readable error identifiers used in all error responses."""
 
     CONTROLLER_ERROR = "CONTROLLER_ERROR"
     INVALID_EXPERIMENT_UUID = "INVALID_EXPERIMENT_UUID"
+    INVALID_CLIENT_ID = "INVALID_CLIENT_ID"
     INVALID_EXPERIMENT_PAYLOAD = "INVALID_EXPERIMENT_PAYLOAD"
     VERSION_MISMATCH = "VERSION_MISMATCH"
     INTERNAL_ERROR = "INTERNAL_ERROR"
@@ -36,6 +37,7 @@ class ErrorCode(str, Enum):
     UNKNOWN_RESULT_HANDLE = "UNKNOWN_RESULT_HANDLE"
     INVALID_QUERY_PARAMETER = "INVALID_QUERY_PARAMETER"
     UNKNOWN_CALLBACK = "UNKNOWN_CALLBACK"
+    INVALID_CALLBACK_ARGUMENTS = "INVALID_CALLBACK_ARGUMENTS"
     NOT_READY = "NOT_READY"
 
 
@@ -121,6 +123,10 @@ class SubmitExperimentResponse(BaseModel):
     )
     queue_position: int = Field(
         description="Zero-based position in the execution queue at submission time"
+    )
+    client_callbacks: list[str] = Field(
+        default_factory=list,
+        description="Names of the near-time callbacks dispatched to the client",
     )
 
 
